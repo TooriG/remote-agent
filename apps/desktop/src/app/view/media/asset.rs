@@ -2,12 +2,38 @@ use super::*;
 use base64::Engine;
 use gpui_kit::component::menu::ContextMenuExt;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq)]
 pub(in crate::app) struct ImageKey {
     pub(super) host: String,
     pub(super) cwd: String,
     pub(super) source: Arc<String>,
     pub(super) encoded: bool,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub(super) struct ImageId {
+    host: String,
+    cwd: String,
+    source: [u8; 32],
+    encoded: bool,
+}
+impl ImageId {
+    pub(super) fn new(host: &str, cwd: &str, source: &str, encoded: bool) -> Self {
+        Self {
+            host: host.into(),
+            cwd: cwd.into(),
+            encoded,
+            source: ring::digest::digest(&ring::digest::SHA256, source.as_bytes())
+                .as_ref()
+                .try_into()
+                .expect("SHA-256 digest length"),
+        }
+    }
+}
+impl ImageKey {
+    pub(super) fn id(&self) -> ImageId {
+        ImageId::new(&self.host, &self.cwd, &self.source, self.encoded)
+    }
 }
 
 pub(in crate::app) struct ImageAsset {
@@ -150,15 +176,19 @@ impl RenderOnce for ImagePreview {
                 let view = retained
                     .filter(|view| view.read(cx).asset == self.asset)
                     .unwrap_or_else(|| {
-                        cx.new(|cx| ImageView {
-                            _loaded: cx.observe(&self.asset, |_, _, cx| cx.notify()),
-                            asset: self.asset,
-                            media: self.media,
-                            session: self.session.clone(),
-                            height: self.height,
-                            clickable: self.clickable,
-                            #[cfg(test)]
-                            renders: 0,
+                        cx.new(|cx| {
+                            cx.observe_global::<crate::localization::Language>(|_, cx| cx.notify())
+                                .detach();
+                            ImageView {
+                                _loaded: cx.observe(&self.asset, |_, _, cx| cx.notify()),
+                                asset: self.asset,
+                                media: self.media,
+                                session: self.session.clone(),
+                                height: self.height,
+                                clickable: self.clickable,
+                                #[cfg(test)]
+                                renders: 0,
+                            }
                         })
                     });
                 view.update(cx, |view, cx| {

@@ -379,19 +379,32 @@ pub(in crate::app) struct SidebarView {
     app_updates: Option<Entity<crate::updates::Updates>>,
     pane: Option<Arc<agent_core::store::Pane>>,
     #[cfg(test)]
+    pub(in crate::app) projections: usize,
+    #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
 
 impl SidebarView {
-    pub(in crate::app) fn new(desktop: &Entity<Desktop>, state: &Desktop) -> Self {
+    pub(in crate::app) fn new(
+        desktop: &Entity<Desktop>,
+        model: Conversations,
+        search: Entity<InputState>,
+        app_updates: Option<Entity<crate::updates::Updates>>,
+        pane: Option<Arc<agent_core::store::Pane>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        cx.observe_global::<crate::localization::Language>(|_, cx| cx.notify())
+            .detach();
         Self {
             desktop: desktop.downgrade(),
-            model: state.sidebar_model(),
-            search: state.search.clone(),
-            app_updates: state.app_updates.clone(),
+            model,
+            search,
+            app_updates,
+            #[cfg(test)]
+            projections: 0,
             #[cfg(test)]
             renders: 0,
-            pane: state.session.as_ref().map(|session| session.pane.clone()),
+            pane,
         }
     }
 }
@@ -410,6 +423,10 @@ impl SidebarView {
         pane: Option<Arc<agent_core::store::Pane>>,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(test)]
+        {
+            self.projections += 1;
+        }
         self.pane = pane;
         if self.model != model {
             self.model = model;
@@ -828,7 +845,16 @@ mod tests {
                 if let Some(sidebar) = &desktop.sidebar_view {
                     return sidebar.clone();
                 }
-                let sidebar = cx.new(|_| super::SidebarView::new(&entity, desktop));
+                let sidebar = cx.new(|cx| {
+                    super::SidebarView::new(
+                        &entity,
+                        desktop.sidebar_model(),
+                        desktop.search.clone(),
+                        desktop.app_updates.clone(),
+                        desktop.session.as_ref().map(|s| s.pane.clone()),
+                        cx,
+                    )
+                });
                 desktop.sidebar_view = Some(sidebar.clone());
                 sidebar
             });
@@ -912,7 +938,16 @@ mod tests {
                 desktop.project_fixture();
                 desktop.session = Some(session);
                 let entity = cx.entity();
-                let sidebar = cx.new(|_| super::SidebarView::new(&entity, desktop));
+                let sidebar = cx.new(|cx| {
+                    super::SidebarView::new(
+                        &entity,
+                        desktop.sidebar_model(),
+                        desktop.search.clone(),
+                        desktop.app_updates.clone(),
+                        desktop.session.as_ref().map(|s| s.pane.clone()),
+                        cx,
+                    )
+                });
                 desktop.sidebar_view = Some(sidebar.clone());
                 sidebar
             });
@@ -1106,7 +1141,10 @@ mod tests {
             SettingsPage::Worktrees,
         ] {
             view.update(window, |view, cx| {
-                view.settings_page = page;
+                view.preferences.update(cx, |view, cx| {
+                    view.settings_page = page;
+                    cx.notify();
+                });
                 cx.notify();
             });
             window.run_until_parked();

@@ -8,6 +8,7 @@ use errors::ErrorRow;
 struct WorkbenchModel {
     standalone: bool,
     details_popover: bool,
+    workspace: Entity<workspace::WorkspaceView>,
     panel: PanelState,
     browsers: Vec<(u64, Entity<crate::browser::Browser>)>,
     sidebar: bool,
@@ -85,6 +86,8 @@ pub(in crate::app) struct WorkbenchView {
     titles: BTreeMap<u64, String>,
     _browsers: Vec<Subscription>,
     #[cfg(test)]
+    pub(in crate::app) projections: usize,
+    #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
 
@@ -94,6 +97,8 @@ impl WorkbenchView {
         explorer: &Entity<gpui_kit::component::resizable::ResizableState>,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.observe_global::<crate::localization::Language>(|_, cx| cx.notify())
+            .detach();
         Self {
             desktop: desktop.downgrade(),
             _explorer: cx.observe(explorer, |_, _, cx| cx.notify()),
@@ -101,11 +106,17 @@ impl WorkbenchView {
             titles: BTreeMap::new(),
             _browsers: Vec::new(),
             #[cfg(test)]
+            projections: 0,
+            #[cfg(test)]
             renders: 0,
         }
     }
 
     fn set_model(&mut self, model: Option<WorkbenchModel>, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        {
+            self.projections += 1;
+        }
         if self.model == model {
             return;
         }
@@ -383,6 +394,7 @@ impl Desktop {
                 && (panel.layout == PanelLayout::Expanded
                     || (panel.layout == PanelLayout::Right && width < px(1080.))),
             details_popover: self.details_popover,
+            workspace: self.workspace_view.clone(),
             panel,
             browsers,
             resource,
@@ -943,11 +955,12 @@ impl WorkbenchView {
                 )
                 // The panel covers the conversation header, so it carries the toggle.
                 .when(model.standalone, |bar| {
-                    bar.child(Desktop::details_toggle(
+                    bar.child(workspace::details_toggle(
                         false,
                         model.details_popover,
                         render_owner,
                         desktop,
+                        model.workspace.clone(),
                         cx,
                     ))
                 })

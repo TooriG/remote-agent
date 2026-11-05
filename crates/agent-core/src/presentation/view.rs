@@ -29,6 +29,9 @@ pub struct PresentationChanges {
     pub models: bool,
     pub conversation: bool,
     pub composer: bool,
+    pub composer_controls: bool,
+    pub attachments: bool,
+    pub sources: bool,
     pub context: bool,
     pub reconnected: bool,
 }
@@ -161,13 +164,24 @@ impl Presentation {
         let conversation = !self.conversation.same(&previous.conversation);
         let composer = !self.composer.equivalent(&previous.composer);
         let context = self.context.as_ref() != previous.context.as_ref();
+        let groups = self.snapshot.changes_from(&previous.snapshot);
+        let sources = self
+            .conversation
+            .as_ref()
+            .map(|value| &value.source_paths)
+            .zip(
+                previous
+                    .conversation
+                    .as_ref()
+                    .map(|value| &value.source_paths),
+            )
+            .map_or(
+                self.conversation.is_some() != previous.conversation.is_some(),
+                |(a, b)| !a.same(b),
+            );
         PresentationChanges {
-            changed: self.snapshot.changes_from(&previous.snapshot).any
-                || list
-                || conversation
-                || composer
-                || context,
-            groups: self.snapshot.changes_from(&previous.snapshot),
+            changed: groups.any || list || conversation || composer || context,
+            groups,
             list,
             models: !self
                 .snapshot
@@ -176,6 +190,9 @@ impl Presentation {
                 .same(&previous.snapshot.catalog.models),
             conversation,
             composer,
+            composer_controls: self.composer.controls != previous.composer.controls,
+            attachments: self.composer.draft.attachments != previous.composer.draft.attachments,
+            sources,
             context,
             reconnected: self.snapshot.connection.connected
                 && self.snapshot.connection.connection_generation
@@ -192,25 +209,39 @@ pub(crate) fn observe(
     mut snapshots: watch::Receiver<Arc<Snapshot>>,
     pane: String,
     stop: CancellationToken,
+    project: impl Fn(Arc<Snapshot>, Option<&Presentation>) -> Arc<Presentation> + Send + Sync + 'static,
 ) -> watch::Receiver<Arc<Presentation>> {
     let initial = Presentation::pending(Arc::new(
         snapshots.borrow().for_pane(&pane).unwrap_or_default(),
     ));
     let (publish, presentations) = watch::channel(initial);
+    let project = Arc::new(project);
     tokio::spawn(async move {
         let mut previous = None;
         loop {
             let Some(snapshot) = snapshots.borrow_and_update().for_pane(&pane).map(Arc::new) else {
                 return;
             };
+            publish_current(snapshot.clone(), &publish);
             let held = previous.clone();
-            let projecting = tokio::task::spawn_blocking(move || {
-                Presentation::project(snapshot, held.as_deref())
-            });
-            let next = tokio::select! {
-                biased;
-                _ = stop.cancelled() => return,
-                result = projecting => match result { Ok(next) => next, Err(_) => return },
+            let project = project.clone();
+            let mut projecting =
+                tokio::task::spawn_blocking(move || project(snapshot, held.as_deref()));
+            let mut catch_up = false;
+            let next = loop {
+                tokio::select! {
+                    biased;
+                    _ = stop.cancelled() => return,
+                    result = &mut projecting => match result { Ok(next) => break next, Err(_) => return },
+                    result = snapshots.changed() => {
+                        if result.is_err() { return; }
+                        let Some(latest) = snapshots.borrow_and_update().for_pane(&pane).map(Arc::new) else { return; };
+                        // Native input and navigation acknowledge immediately. Only
+                        // the coherent transcript prefix waits for the worker.
+                        publish_current(latest, &publish);
+                        catch_up = true;
+                    }
+                }
             };
             let Some(latest) = snapshots.borrow().for_pane(&pane).map(Arc::new) else {
                 return;
@@ -219,7 +250,7 @@ pub(crate) fn observe(
                 publish.send_replace(Presentation::current(latest, &next));
                 previous = Some(next);
             }
-            if snapshots.has_changed().unwrap_or(false) {
+            if catch_up || snapshots.has_changed().unwrap_or(false) {
                 continue;
             }
             tokio::select! {
@@ -230,4 +261,12 @@ pub(crate) fn observe(
         }
     });
     presentations
+}
+
+fn publish_current(snapshot: Arc<Snapshot>, publish: &watch::Sender<Arc<Presentation>>) {
+    let previous = publish.borrow().clone();
+    let current = Presentation::current(snapshot, &previous);
+    if current.changes(previous).changed {
+        publish.send_replace(current);
+    }
 }

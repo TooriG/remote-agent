@@ -2,13 +2,13 @@ use super::*;
 use agent_core::presentation::permissions::PERMISSION_CHOICES;
 use agent_protocol::{permissions::PermissionMode, session::ProviderKind};
 
-impl Desktop {
+impl Preferences {
     pub(super) fn permission_menu(
         label: &'static str,
         mode: Option<PermissionMode>,
         enabled: bool,
         render_owner: EntityId,
-        desktop: &WeakEntity<Desktop>,
+        desktop: &WeakEntity<Preferences>,
         cx: &App,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
@@ -49,7 +49,7 @@ impl Desktop {
                 }
             })
             .content(move |_, window, cx| {
-                observe_popup_desktop(&entity, render_owner, window, cx);
+                observe_popup(&entity, render_owner, window, cx);
                 entity
                     .update(cx, |view, cx| view.permission_menu_content(cx))
                     .unwrap_or_else(|_| div().into_any_element())

@@ -3,7 +3,7 @@ use super::sidebar::{SidebarEntry, SidebarRow};
 use super::*;
 use agent_protocol::session::ProviderKind;
 
-impl Desktop {
+impl Preferences {
     fn provider_settings(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let selected = self.account_provider();
@@ -129,20 +129,16 @@ impl Desktop {
             .into_any_element()
     }
 
-    pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.snapshot.catalog.account.login.is_some() || self.account.busy {
             return;
         }
-        self.tab = Tab::Chat;
-        self.composer
-            .input
-            .read(cx)
-            .focus_handle(cx)
-            .focus(window, cx);
+        self.opened = false;
+        cx.emit(super::super::preferences::PreferencesEvent::Closed);
         cx.notify();
     }
 
-    pub(super) fn settings_modal(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(in crate::app) fn settings_modal(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("settings-modal-backdrop")
             .debug_selector(|| "settings-modal-backdrop".into())
@@ -198,8 +194,11 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.tab = Tab::Settings;
+        self.opened = true;
         self.settings_page = page;
+        let query = self.settings_search.read(cx).value().to_string();
+        self.settings_navigation
+            .update(cx, |view, cx| view.sync(page, query, cx));
         self.settings_focus.focus(window, cx);
         match page {
             SettingsPage::General | SettingsPage::Connections => {}
@@ -244,7 +243,7 @@ impl Desktop {
             SettingsPage::Connections => self.connection_settings(cx),
             SettingsPage::Worktrees => self.worktree_settings(cx),
         };
-        let errors = self.error_rows(&ErrorScope::Settings);
+        let errors = self.settings_errors();
         let header = if self.settings_page == SettingsPage::General {
             h_flex()
                 .debug_selector(|| "settings-general-breadcrumb".into())
@@ -323,7 +322,7 @@ impl Desktop {
                                     ErrorScope::Settings,
                                     None,
                                     cx,
-                                    Desktop::notice_action,
+                                    Self::notice_action,
                                 ))
                             })
                             .child(body),
@@ -389,7 +388,13 @@ impl Desktop {
         let language = crate::localization::language(cx);
         v_flex()
             .gap_4()
-            .child(settings_group().p_5().child(self.language_settings(cx)))
+            .child(
+                settings_group()
+                    .p_5()
+                    .child(language_settings(cx, |view, error| {
+                        view.local_errors.insert(ErrorScope::Settings, error);
+                    })),
+            )
             .when_some(self.app_updates.as_ref(), |body, updates| {
                 body.child(
                     settings_group()
@@ -406,67 +411,6 @@ impl Desktop {
                     .child(language.text("この端末に保存されます。")),
             )
             .into_any_element()
-    }
-
-    pub(super) fn language_settings(&self, cx: &Context<Self>) -> Div {
-        use agent_core::localization::UiLanguage;
-        let language = crate::localization::language(cx);
-        let owner = cx.entity().downgrade();
-        h_flex()
-            .gap_4()
-            .items_center()
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(div().font_semibold().child(language.text("表示言語")))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(appearance::MUTED))
-                            .child(language.text("アプリで使用する言語を選択します。")),
-                    ),
-            )
-            .child(
-                Button::new("settings-language")
-                    .debug_selector(|| "settings-language".into())
-                    .accessibility_label(language.text("表示言語"))
-                    .label(match language {
-                        UiLanguage::English => "English",
-                        UiLanguage::Japanese => "日本語",
-                    })
-                    .icon(IconName::Globe)
-                    .dropdown_caret(true)
-                    .secondary()
-                    .outline()
-                    .w(px(180.))
-                    .h(px(36.))
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for (value, label) in [
-                            (UiLanguage::Japanese, "日本語"),
-                            (UiLanguage::English, "English"),
-                        ] {
-                            let owner = owner.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(value == language)
-                                    .on_click(move |_, _, cx| {
-                                        let _ = owner.update(cx, |view, cx| {
-                                            if let Err(error) =
-                                                crate::localization::select(value, cx)
-                                            {
-                                                view.local_errors
-                                                    .insert(ErrorScope::Settings, error);
-                                            }
-                                            cx.notify();
-                                        });
-                                    }),
-                            );
-                        }
-                        menu
-                    }),
-            )
     }
 
     fn connection_settings(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -489,7 +433,7 @@ impl Desktop {
                     "settings-import-projects",
                     language.text("既存のプロジェクトを取り込む"),
                     cx,
-                    |view, _, _| view.open_project_import(),
+                    |_, _, cx| cx.emit(super::super::preferences::PreferencesEvent::ImportProjects),
                 )
                 .secondary()
                 .outline()
@@ -698,256 +642,13 @@ impl Desktop {
                 }),
             )
     }
-    pub(super) fn workspace_card(&self, cx: &Context<Self>) -> AnyElement {
-        let language = crate::localization::language(cx);
-        let enabled =
-            self.snapshot.connection.connected && !self.snapshot.pane.navigation.cwd.is_empty();
-        let review_enabled = enabled && !self.snapshot.selected_directory().is_empty();
-        let review = self.snapshot.pane.workspace.review.as_ref();
-        let (additions, deletions) =
-            review.map_or((0, 0), |review| (review.additions, review.deletions));
-        let mut sources = v_flex().gap_1();
-        for (i, path) in self.source_paths.iter().enumerate() {
-            let path = path.clone();
-            sources = sources.child(
-                button(
-                    format!("source-{i}"),
-                    file_name(&path),
-                    cx,
-                    move |s, _, _| s.download(path.clone()),
-                )
-                .icon(IconName::FileText)
-                .w_full(),
-            );
-        }
-        if self.source_paths.is_empty() {
-            sources = sources.child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(appearance::MUTED))
-                    .py_2()
-                    .child(language.text("添付ファイルがここに表示されます")),
-            );
-        }
-        v_flex()
-            .id("workspace-card")
-            .child(self.error_notices(ErrorScope::Workspace, cx))
-            .w_full()
-            .h_full()
-            .p_4()
-            .gap_4()
-            .overflow_y_scroll()
-            .child(
-                v_flex()
-                    .gap_2()
-                    .p_4()
-                    .rounded(px(18.))
-                    .bg(rgb(appearance::RAISED))
-                    .child(
-                        h_flex()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .text_color(rgb(appearance::MUTED))
-                                    .child(language.text("ワークスペース")),
-                            )
-                            .child(
-                                icon_button(
-                                    "refresh-context",
-                                    IconName::RotateCw,
-                                    language.text("変更を更新"),
-                                    cx,
-                                    |s, _, _| s.refresh_review(),
-                                )
-                                .disabled(!review_enabled),
-                            ),
-                    )
-                    .child(
-                        button(
-                            "context-files",
-                            if self.snapshot.pane.navigation.cwd.is_empty() {
-                                language.text("フォルダを選択").into()
-                            } else if self.snapshot.selected_directory().is_empty() {
-                                language.text("チャット").into()
-                            } else {
-                                file_name(&self.snapshot.pane.navigation.cwd)
-                            },
-                            cx,
-                            |s, _, cx| {
-                                if s.snapshot.pane.navigation.cwd.is_empty() {
-                                    s.pick_folder();
-                                } else {
-                                    s.browse(s.snapshot.pane.navigation.cwd.clone(), cx);
-                                }
-                            },
-                        )
-                        .icon(IconName::FolderOpen)
-                        .w_full(),
-                    )
-                    .when(
-                        self.local_shell && self.snapshot.connection.connected,
-                        |body| body.child(self.open_in_editor_row(cx)),
-                    )
-                    .when_some(
-                        review.filter(|review| !review.branch.is_empty()),
-                        |body, review| {
-                            body.child(
-                                div()
-                                    .pl_2()
-                                    .text_sm()
-                                    .text_color(rgb(appearance::MUTED))
-                                    .child(review.branch.clone()),
-                            )
-                        },
-                    )
-                    .child(
-                        button(
-                            "context-changes",
-                            language.text("変更"),
-                            cx,
-                            |s, _, cx| s.open_review(None, cx),
-                        )
-                        .accessibility_label(agent_core::localization::localized_ui_format(
-                            language,
-                            "変更  +{0}  −{1}".into(),
-                            vec![additions.to_string(), deletions.to_string()],
-                        ))
-                        .child(review_counts(Some(additions), Some(deletions), language))
-                        .icon(IconName::Replace)
-                        .w_full()
-                        .disabled(!enabled),
-                    )
-                    .child(div().h(px(1.)).my_2().bg(rgb(appearance::BORDER)))
-                    .child(
-                        h_flex()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .text_color(rgb(appearance::MUTED))
-                                    .child(language.text("ソース")),
-                            )
-                            .child(
-                                icon_button(
-                                    "context-attach",
-                                    IconName::Plus,
-                                    language.text("ソースを追加"),
-                                    cx,
-                                    |s, _, _| s.attach(),
-                                )
-                                .disabled(!enabled),
-                            ),
-                    )
-                    .child(sources)
-                    .child(
-                        button(
-                            "all-files",
-                            language.text("すべてのファイル"),
-                            cx,
-                            |s, _, cx| s.browse(s.snapshot.pane.navigation.cwd.clone(), cx),
-                        )
-                        .icon(IconName::Folder)
-                        .w_full()
-                        .disabled(!enabled),
-                    ),
-            )
-            .into_any_element()
-    }
 
     // Mirrors T3's thread details "Open in <editor>" split row: the primary half
     // opens the preferred editor, and choosing a menu entry opens that editor and
     // makes it preferred.
-    fn open_in_editor_row(&self, cx: &Context<Self>) -> AnyElement {
-        use agent_core::presentation::editors::{editor_label, preferred_editor};
-        use agent_protocol::editors::FileManagerRevealKind;
-        let file_manager = if cfg!(target_os = "macos") {
-            FileManagerRevealKind::Finder
-        } else if cfg!(target_os = "windows") {
-            FileManagerRevealKind::FileExplorer
-        } else {
-            FileManagerRevealKind::Files
-        };
-        let options = self
-            .snapshot
-            .files
-            .file_open_capabilities
-            .as_ref()
-            .map(|capabilities| capabilities.editors.clone())
-            .unwrap_or_default();
-        let selected = preferred_editor(self.snapshot.files.preferred_editor, &options);
-        let no_cwd = self.snapshot.pane.navigation.cwd.is_empty();
-        let language = crate::localization::language(cx);
-        let label = match selected {
-            Some(editor) => agent_core::localization::localized_ui_format(
-                language,
-                "{0}で開く".into(),
-                vec![language.text(editor_label(editor, file_manager)).into()],
-            ),
-            None => language.text("エディターで開く").into(),
-        };
-        let owner = cx.entity().downgrade();
-        h_flex()
-            .w_full()
-            .child(
-                button("open-in-editor", label, cx, move |view, _, cx| {
-                    if let Some(editor) = selected {
-                        view.open_workspace_in_editor(editor, cx);
-                    }
-                })
-                .icon(IconName::ExternalLink)
-                .flex_1()
-                .disabled(selected.is_none() || no_cwd),
-            )
-            .child(
-                Button::new("open-in-editor-picker")
-                    .icon(IconName::ChevronDown)
-                    .small()
-                    .ghost()
-                    .tooltip(language.text("エディターを選択"))
-                    .accessibility_label(language.text("エディターを選択"))
-                    .disabled(no_cwd)
-                    .dropdown_menu(move |mut menu, _, _| {
-                        if options.is_empty() {
-                            menu = menu.item(
-                                PopupMenuItem::new(
-                                    language.text("インストール済みのエディターが見つかりません"),
-                                )
-                                .disabled(true),
-                            );
-                        }
-                        for editor in &options {
-                            let editor = *editor;
-                            let owner = owner.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(
-                                    language.text(editor_label(editor, file_manager)),
-                                )
-                                .on_click(move |_, _, cx| {
-                                    let _ = owner.update(cx, |view, cx| {
-                                        view.open_workspace_in_editor(editor, cx);
-                                    });
-                                }),
-                            );
-                        }
-                        menu
-                    }),
-            )
-            .into_any_element()
-    }
-
-    fn open_workspace_in_editor(
-        &mut self,
-        editor: agent_protocol::editors::EditorId,
-        cx: &mut Context<Self>,
-    ) {
-        self.dispatch(Intent::SetPreferredEditor { editor });
-        let cwd = self.snapshot.pane.navigation.cwd.clone();
-        self.open_in_editor(cwd, None, None, editor, false, cx);
-    }
 }
 
-impl Desktop {
+impl Preferences {
     fn managed_worktrees(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let mut body = v_flex().gap_3().child(
@@ -1047,7 +748,11 @@ impl Desktop {
                             thread.name
                         ),
                         cx,
-                        move |s, window, cx| s.open_chat(id.clone(), window, cx),
+                        move |_, _, cx| {
+                            cx.emit(super::super::preferences::PreferencesEvent::OpenChat(
+                                id.clone(),
+                            ))
+                        },
                     )
                     .icon(IconName::FileText)
                     .disabled(!self.snapshot.connection.connected || self.worktrees.removing),
@@ -1081,7 +786,7 @@ impl Desktop {
         self.worktrees.removing = true;
         self.perform(
             Intent::RemoveWorktree(op::RemoveWorktree { path }),
-            OperationCompletion::RemoveWorktree,
+            super::super::preferences::Completion::RemoveWorktree,
         );
     }
 }
@@ -1167,4 +872,76 @@ impl Render for SettingsNavigation {
             }))
             .children(navigation.into_iter().map(SidebarEntry::from))
     }
+}
+
+impl Desktop {
+    pub(in crate::app) fn open_settings(
+        &mut self,
+        page: SettingsPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tab = Tab::Settings;
+        self.publish_preferences(window, cx);
+        self.preferences
+            .update(cx, |view, cx| view.open_settings(page, window, cx));
+    }
+}
+
+pub(super) fn language_settings<V: 'static>(cx: &Context<V>, failed: fn(&mut V, String)) -> Div {
+    use agent_core::localization::UiLanguage;
+    let language = crate::localization::language(cx);
+    let owner = cx.entity().downgrade();
+    h_flex()
+        .gap_4()
+        .items_center()
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(div().font_semibold().child(language.text("表示言語")))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(language.text("アプリで使用する言語を選択します。")),
+                ),
+        )
+        .child(
+            Button::new("settings-language")
+                .debug_selector(|| "settings-language".into())
+                .accessibility_label(language.text("表示言語"))
+                .label(match language {
+                    UiLanguage::English => "English",
+                    UiLanguage::Japanese => "日本語",
+                })
+                .icon(IconName::Globe)
+                .dropdown_caret(true)
+                .secondary()
+                .outline()
+                .w(px(180.))
+                .h(px(36.))
+                .dropdown_menu(move |mut menu, _, _| {
+                    for (value, label) in [
+                        (UiLanguage::Japanese, "日本語"),
+                        (UiLanguage::English, "English"),
+                    ] {
+                        let owner = owner.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(value == language)
+                                .on_click(move |_, _, cx| {
+                                    let _ = owner.update(cx, |view, cx| {
+                                        if let Err(error) = crate::localization::select(value, cx) {
+                                            failed(view, error);
+                                        }
+                                        cx.notify();
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                }),
+        )
 }

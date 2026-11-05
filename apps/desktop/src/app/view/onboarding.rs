@@ -1,8 +1,4 @@
-use super::*;
-use agent_core::presentation::connections::{AgentAvailability, ConnectionAgent};
-use gpui_kit::component::checkbox::Checkbox;
-
-impl Desktop {
+impl Preferences {
     pub(super) fn connection_agent_controls(
         &self,
         agents: &[ConnectionAgent],
@@ -119,7 +115,12 @@ impl Desktop {
         }
         body
     }
+}
+use super::*;
+use agent_core::presentation::connections::{AgentAvailability, ConnectionAgent};
+use gpui_kit::component::checkbox::Checkbox;
 
+impl Desktop {
     pub(in crate::app) fn complete_onboarding(&mut self) {
         if !self.onboarding {
             self.import_projects = false;
@@ -156,7 +157,9 @@ impl Desktop {
         let setup = self.snapshot.connection_setup();
         let current = self.remote.as_ref().map(|host| host.id.as_str());
         let connected = self.snapshot.connection.connected;
-        let agent_controls = self.connection_agent_controls(&setup.agents, cx);
+        let agent_controls = self.preferences.update(cx, |view, cx| {
+            view.connection_agent_controls(&setup.agents, cx)
+        });
         let choices = self.hosts.as_ref().map(|hosts| {
             hosts.update(cx, |hosts, cx| {
                 hosts.connection_choices(
@@ -177,7 +180,9 @@ impl Desktop {
             .flex_shrink_0()
             .gap_5()
             .p_6()
-            .child(self.language_settings(cx))
+            .child(super::settings::language_settings(cx, |view, error| {
+                view.set_error(error)
+            }))
             .child(
                 v_flex()
                     .gap_2()
@@ -318,7 +323,7 @@ impl Desktop {
                                             return;
                                         }
                                         if view.snapshot.connection.connected {
-                                            view.refresh_accounts_and_models();
+                                            view.preferences.read(cx).refresh_accounts_and_models();
                                         } else {
                                             view.connect(None, None);
                                         }
@@ -335,7 +340,7 @@ impl Desktop {
             )
     }
 
-    pub(super) fn open_project_import(&mut self) {
+    pub(in crate::app) fn open_project_import(&mut self) {
         if !self.snapshot.connection.connected {
             return;
         }
@@ -622,6 +627,8 @@ mod tests {
                 Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({"accounts":[],"selected":{}})).unwrap()));
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
+            let preferences = desktop.read(cx).preferences.clone();
+            cx.observe(&preferences, |_, _, cx| cx.notify()).detach();
             SetupView(desktop)
         });
         window.run_until_parked();
@@ -642,15 +649,19 @@ mod tests {
             let desktop = view.read(cx).0.read(cx);
             assert!(desktop.tab == Tab::Chat);
             assert_eq!(
-                desktop.model_controls.provider,
+                desktop.preferences.read(cx).model_controls.provider,
                 Some(agent_protocol::session::ProviderKind::Claude)
             );
-            assert!(desktop.account.busy);
+            assert!(desktop.preferences.read(cx).account.busy);
         });
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account.busy = false;
-                view.account.polling = true;
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.account.busy = false;
+                });
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.account.polling = true;
+                });
                 Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).catalog.account).login =
                     Some(Arc::new(agent_protocol::operations::AccountLogin {
                         provider: agent_protocol::session::ProviderKind::Claude,
@@ -672,12 +683,15 @@ mod tests {
         assert!(window.debug_bounds("account-open-login").is_some());
         let submit = window.debug_bounds("account-submit-code").unwrap();
         window.simulate_click(submit.center(), Modifiers::default());
-        window.update(|_, cx| assert!(!view.read(cx).0.read(cx).account.busy));
+        window.update(|_, cx| assert!(!view.read(cx).0.read(cx).preferences.read(cx).account.busy));
         window.update(|window, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account
-                    .code
-                    .update(cx, |input, cx| input.set_value("fixture-code", window, cx));
+                view.preferences.update(cx, |preferences, cx| {
+                    preferences
+                        .account
+                        .code
+                        .update(cx, |input, cx| input.set_value("fixture-code", window, cx));
+                });
             })
         });
         window.run_until_parked();
@@ -685,12 +699,23 @@ mod tests {
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
             assert!(desktop.tab == Tab::Chat);
-            assert!(desktop.account.busy);
-            assert!(desktop.account.code.read(cx).value().is_empty());
+            assert!(desktop.preferences.read(cx).account.busy);
+            assert!(
+                desktop
+                    .preferences
+                    .read(cx)
+                    .account
+                    .code
+                    .read(cx)
+                    .value()
+                    .is_empty()
+            );
         });
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account.busy = false;
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.account.busy = false;
+                });
                 cx.notify();
             })
         });
@@ -700,11 +725,13 @@ mod tests {
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
             assert!(desktop.tab == Tab::Chat);
-            assert!(desktop.account.busy);
+            assert!(desktop.preferences.read(cx).account.busy);
         });
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account.busy = false;
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.account.busy = false;
+                });
                 let account = Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).catalog.account);
                 account.login = None;
                 account.accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({

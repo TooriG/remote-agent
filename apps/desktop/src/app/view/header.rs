@@ -8,24 +8,36 @@ pub(in crate::app) struct HeaderModel {
     panel_bottom: bool,
     details: bool,
     details_popover: bool,
+    workspace: Entity<workspace::WorkspaceView>,
 }
 
 pub(in crate::app) struct HeaderView {
     desktop: WeakEntity<Desktop>,
     model: Option<HeaderModel>,
     #[cfg(test)]
+    pub(in crate::app) projections: usize,
+    #[cfg(test)]
     pub(super) renders: usize,
 }
 impl HeaderView {
-    pub(in crate::app) fn new(desktop: &Entity<Desktop>) -> Self {
+    pub(in crate::app) fn new(desktop: &Entity<Desktop>, cx: &mut Context<Self>) -> Self {
+        cx.observe_global::<crate::localization::Language>(|_, cx| cx.notify())
+            .detach();
+
         Self {
             desktop: desktop.downgrade(),
             model: None,
+            #[cfg(test)]
+            projections: 0,
             #[cfg(test)]
             renders: 0,
         }
     }
     pub(in crate::app) fn set_model(&mut self, model: HeaderModel, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        {
+            self.projections += 1;
+        }
         if self.model.as_ref() != Some(&model) {
             self.model = Some(model);
             cx.notify();
@@ -57,22 +69,10 @@ impl Desktop {
         let panel = self.panels.get(self.panel_scope());
         let panel_open = panel.open;
         let title = self
-            .thread()
-            .and_then(|thread| thread.name.as_deref())
-            .or_else(|| {
-                self.snapshot
-                    .lists
-                    .threads
-                    .as_ref()
-                    .and_then(|page| {
-                        page.data
-                            .iter()
-                            .find(|thread| thread.id.as_ref() == self.selected())
-                    })
-                    .and_then(|thread| thread.name.as_deref())
-            })
-            .unwrap_or(language.text("新しいチャット"))
-            .to_owned();
+            .publication
+            .context
+            .title()
+            .unwrap_or_else(|| language.text("新しいチャット").into());
         HeaderModel {
             title,
             sidebar: self.sidebar,
@@ -80,6 +80,7 @@ impl Desktop {
             panel_bottom: panel.layout == PanelLayout::Bottom,
             details: self.details,
             details_popover: self.details_popover,
+            workspace: self.workspace_view.clone(),
         }
     }
     pub(super) fn conversation_header(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -135,7 +136,14 @@ impl Desktop {
                 } else {
                     model.details_popover
                 };
-                Self::details_toggle(inline, open, render_owner, owner, cx)
+                workspace::details_toggle(
+                    inline,
+                    open,
+                    render_owner,
+                    owner,
+                    model.workspace.clone(),
+                    cx,
+                )
             })
             .when(!model.panel_open, |header| {
                 header.child(Self::panel_toggle(false, owner, cx))

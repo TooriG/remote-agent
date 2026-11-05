@@ -1,6 +1,6 @@
 mod asset;
 use super::*;
-use asset::ImageAsset;
+use asset::{ImageAsset, ImageId};
 use asset::{ImageKey, ImagePreview};
 
 #[derive(Default)]
@@ -21,7 +21,7 @@ pub(in crate::app) struct Media {
     store: Option<Arc<agent_core::store::Store>>,
     pane: Option<Arc<agent_core::store::Pane>>,
     handle: tokio::runtime::Handle,
-    images: HashMap<ImageKey, Entity<ImageAsset>>,
+    images: HashMap<ImageId, Entity<ImageAsset>>,
     pub(in crate::app) gallery: Option<ImageGallery>,
     image_dir: Arc<tempfile::TempDir>,
     side_chat_mode: bool,
@@ -59,7 +59,14 @@ impl ImageGallery {
 }
 
 impl Media {
-    pub(in crate::app) fn new(handle: tokio::runtime::Handle, side_chat_mode: bool) -> Self {
+    pub(in crate::app) fn new(
+        handle: tokio::runtime::Handle,
+        side_chat_mode: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        cx.observe_global::<crate::localization::Language>(|_, cx| cx.notify())
+            .detach();
+
         Self {
             source: MediaSource::default(),
             store: None,
@@ -111,7 +118,7 @@ impl Media {
     ) {
         let key = self.key(source, false);
         let image = cx.new(|_| ImageAsset::fixture(key.clone(), path, self.image_dir.clone()));
-        self.images.insert(key, image);
+        self.images.insert(key.id(), image);
     }
     #[cfg(test)]
     pub(in crate::app) fn asset(
@@ -124,7 +131,7 @@ impl Media {
     }
     fn asset_key(&mut self, key: ImageKey, cx: &mut Context<Self>) -> Entity<ImageAsset> {
         self.images
-            .entry(key.clone())
+            .entry(key.id())
             .or_insert_with(|| {
                 cx.new(|cx| {
                     ImageAsset::new(
@@ -149,13 +156,21 @@ impl Media {
         cx: &mut App,
     ) -> AnyElement {
         media.update(cx, |media, cx| {
-            media.image_preview(id, media.key(source, encoded), height, clickable, cx)
+            // Cache identity contains a digest, not the image payload. Repainting
+            // an existing image must not allocate/copy a base64 source string.
+            let key = ImageId::new(&media.source.host, &media.source.cwd, source, encoded);
+            let asset = media
+                .images
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| media.asset_key(media.key(source, encoded), cx));
+            media.preview_asset(id, asset, height, clickable, cx)
         })
     }
-    fn image_preview(
-        &mut self,
+    fn preview_asset(
+        &self,
         id: impl Into<SharedString>,
-        key: ImageKey,
+        asset: Entity<ImageAsset>,
         height: f32,
         clickable: bool,
         cx: &mut Context<Self>,
@@ -163,7 +178,7 @@ impl Media {
         ImagePreview {
             id: id.into(),
             media: cx.entity().downgrade(),
-            asset: self.asset_key(key, cx),
+            asset,
             session: self.source.session.clone(),
             height,
             clickable,
@@ -273,7 +288,8 @@ impl Media {
             encoded,
             ..gallery.origin.clone()
         };
-        let image = self.image_preview(format!("gallery-thumbnail-{index}"), key, 64., false, cx);
+        let asset = self.asset_key(key, cx);
+        let image = self.preview_asset(format!("gallery-thumbnail-{index}"), asset, 64., false, cx);
         Button::new(format!("gallery-thumbnail-{index}"))
             .accessibility_label(agent_core::localization::localized_ui_format(
                 language,
@@ -327,9 +343,9 @@ impl Media {
         {
             gallery.image = Some((asset.clone(), cx.observe(&asset, |_, _, cx| cx.notify())));
         }
-        let image = self.image_preview(
+        let image = self.preview_asset(
             "gallery-main",
-            key,
+            asset,
             (f32::from(window.viewport_size().height) - 200.).max(120.) * zoom,
             false,
             cx,
@@ -467,7 +483,7 @@ impl Media {
         let language = crate::localization::language(cx);
         let Some(ImageSource::Resource(resource)) = self
             .images
-            .get(key)
+            .get(&key.id())
             .and_then(|image| image.read(cx).path.clone())
         else {
             return;
@@ -700,7 +716,7 @@ mod ownership_tests {
             .enable_all()
             .build()
             .unwrap();
-        let media = cx.new(|_| Media::new(runtime.handle().clone(), false));
+        let media = cx.new(|cx| Media::new(runtime.handle().clone(), false, cx));
         media.update(cx, |media, cx| {
             media.sync(
                 MediaSource {

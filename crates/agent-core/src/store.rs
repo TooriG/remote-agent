@@ -419,8 +419,12 @@ impl Store {
         });
         let (commands, mut incoming) = mpsc::channel(MAX_COMMANDS);
         let stop = CancellationToken::new();
-        let presentations =
-            crate::presentation::view::observe(updates.clone(), String::new(), stop.child_token());
+        let presentations = crate::presentation::view::observe(
+            updates.clone(),
+            String::new(),
+            stop.child_token(),
+            crate::presentation::view::Presentation::project,
+        );
         let (finished_tx, finished) = watch::channel(false);
         let publications = writer.clone();
         let shutdown = stop.clone();
@@ -874,7 +878,12 @@ impl Store {
         pane: String,
         stop: CancellationToken,
     ) -> watch::Receiver<Arc<crate::presentation::view::Presentation>> {
-        crate::presentation::view::observe(self.updates.clone(), pane, stop)
+        crate::presentation::view::observe(
+            self.updates.clone(),
+            pane,
+            stop,
+            crate::presentation::view::Presentation::project,
+        )
     }
     /// Ephemeral frames never enter persisted conversation snapshots.
     pub async fn browser(

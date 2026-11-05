@@ -43,6 +43,8 @@ pub(in crate::app) struct ConversationView {
     pub(in crate::app) timeline: Timeline,
     selection: Entity<selection::ConversationSelection>,
     #[cfg(test)]
+    pub(in crate::app) projections: usize,
+    #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
 impl EventEmitter<ConversationAction> for ConversationView {}
@@ -51,7 +53,10 @@ impl ConversationView {
         desktop: &Entity<Desktop>,
         selection: Entity<selection::ConversationSelection>,
         media: Entity<Media>,
+        cx: &mut Context<Self>,
     ) -> Self {
+        cx.observe_global::<crate::localization::Language>(|_, cx| cx.notify())
+            .detach();
         Self {
             desktop: desktop.downgrade(),
             model: ConversationModel::default(),
@@ -59,6 +64,8 @@ impl ConversationView {
             timeline: Timeline::new(),
             selection,
             media,
+            #[cfg(test)]
+            projections: 0,
             #[cfg(test)]
             renders: 0,
         }
@@ -72,6 +79,10 @@ impl ConversationView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(test)]
+        {
+            self.projections += 1;
+        }
         let same_content = match (&rendered, &self.timeline.rendered) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
@@ -205,7 +216,10 @@ impl Desktop {
             }
             ConversationAction::Usage(provider) => {
                 self.open_settings(SettingsPage::Providers, window, cx);
-                self.model_controls.provider = *provider;
+                self.preferences.update(cx, |view, cx| {
+                    view.model_controls.provider = *provider;
+                    cx.notify();
+                });
             }
             ConversationAction::OpenUsage => {
                 self.open_browser(self.panel_scope(), "https://chatgpt.com/settings/usage", cx)

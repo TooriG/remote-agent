@@ -19,6 +19,7 @@ struct ForkControl {
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct ConversationContext {
     navigation: Navigation,
+    title: Option<String>,
     home: Option<String>,
     directory: String,
     history: Option<HistoryControl>,
@@ -32,6 +33,19 @@ impl ConversationContext {
         let session = snapshot.pane.navigation.thread_id.as_ref();
         let next = Self {
             navigation: snapshot.pane.navigation.as_ref().clone(),
+            title: session.and_then(|id| {
+                snapshot
+                    .sessions
+                    .conversations
+                    .get(id)
+                    .and_then(|thread| thread.name.clone())
+                    .or_else(|| {
+                        snapshot
+                            .listed_threads()
+                            .find(|thread| thread.id.as_ref() == Some(id))
+                            .and_then(|thread| thread.name.clone())
+                    })
+            }),
             home: snapshot.connection.host_home_directory.clone(),
             directory: snapshot.selected_directory(),
             history: session.and_then(|id| snapshot.history_control(id.clone())),
@@ -73,6 +87,9 @@ impl ConversationContext {
     }
     pub fn navigation(&self) -> Navigation {
         self.navigation.clone()
+    }
+    pub fn title(&self) -> Option<String> {
+        self.title.clone()
     }
     pub fn home(&self) -> Option<String> {
         self.home.clone()

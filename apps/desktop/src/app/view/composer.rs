@@ -551,16 +551,16 @@ impl ComposerContent {
                                 ),
                             )
                         })
-                        .child(Desktop::permission_menu(
+                        .child(Preferences::permission_menu(
                             model.permission_label,
                             model.permission_mode,
                             model.connected && model.provider_available,
                             render_owner,
-                            desktop,
+                            &self.preferences.downgrade(),
                             cx,
                         ))
                         .child(div().flex_1())
-                        .child(Desktop::fast_control(
+                        .child(Preferences::fast_control(
                             model.quick_controls.clone(),
                             model.controls_enabled,
                             "model-fast",
@@ -569,13 +569,13 @@ impl ComposerContent {
                             pane.clone(),
                             cx,
                         ))
-                        .child(Desktop::model_menu(
+                        .child(Preferences::model_menu(
                             model.model_label.clone(),
                             render_owner,
-                            desktop,
+                            &self.preferences.downgrade(),
                             cx,
                         ))
-                        .child(Desktop::effort_control(
+                        .child(Preferences::effort_control(
                             model.quick_controls.clone(),
                             model.controls_enabled,
                             "model-effort",
@@ -683,12 +683,6 @@ struct ComposerModel {
     question: Option<question::ComposerQuestion>,
 }
 impl Desktop {
-    pub(super) fn model_controls_enabled(&self) -> bool {
-        self.snapshot.connection.connected
-            && !self.account.busy
-            && self.busy == 0
-            && self.snapshot.catalog.account.login.is_none()
-    }
     fn composer_model(&self, cx: &App) -> ComposerModel {
         let language = crate::localization::language(cx);
         let permission = self.snapshot.permission_control(self.draft_key());
@@ -727,7 +721,7 @@ impl Desktop {
             permission_label: permission.label,
             permission_mode: permission.mode,
             quick_controls: self.snapshot.model_quick_controls(self.draft_key().clone()),
-            controls_enabled: self.model_controls_enabled(),
+            controls_enabled: self.preferences.read(cx).model_controls_enabled(),
             suggestions: self.completion_suggestions(cx),
             completion_index: self.composer.completion_index,
             question: self.composer_question(),
@@ -745,11 +739,14 @@ pub(in crate::app) struct ComposerView {
 pub(in crate::app) struct ComposerContent {
     desktop: WeakEntity<Desktop>,
     media: Entity<Media>,
+    preferences: Entity<Preferences>,
     input: Entity<TextareaState>,
     question_input: Entity<TextareaState>,
     question_secret: Entity<InputState>,
     pane: Option<Arc<agent_core::store::Pane>>,
     model: Option<ComposerModel>,
+    #[cfg(test)]
+    pub(in crate::app) projections: usize,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
@@ -775,21 +772,29 @@ impl ComposerView {
     pub(in crate::app) fn new(
         desktop: &Entity<Desktop>,
         media: Entity<Media>,
+        preferences: Entity<Preferences>,
         input: Entity<TextareaState>,
         question_input: Entity<TextareaState>,
         question_secret: Entity<InputState>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let content = cx.new(|_cx| ComposerContent {
-            desktop: desktop.downgrade(),
-            media,
-            input: input.clone(),
-            question_input,
-            question_secret,
-            pane: None,
-            model: None,
-            #[cfg(test)]
-            renders: 0,
+        let content = cx.new(|cx| {
+            cx.observe_global::<crate::localization::Language>(|_, cx| cx.notify())
+                .detach();
+            ComposerContent {
+                desktop: desktop.downgrade(),
+                media,
+                preferences,
+                input: input.clone(),
+                question_input,
+                question_secret,
+                pane: None,
+                model: None,
+                #[cfg(test)]
+                projections: 0,
+                #[cfg(test)]
+                renders: 0,
+            }
         });
         Self {
             _measurement: cx.subscribe(&content, |view, _, height: &ComposerHeight, cx| {
@@ -805,6 +810,10 @@ impl ComposerView {
 }
 impl ComposerContent {
     fn set_model(&mut self, model: ComposerModel, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        {
+            self.projections += 1;
+        }
         if self.model.as_ref() != Some(&model) {
             self.model = Some(model);
             cx.notify();
