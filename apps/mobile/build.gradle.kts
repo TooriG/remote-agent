@@ -141,9 +141,7 @@ android {
             }
         }
     }
-    buildTypes {
-        getByName("release") { signingConfig = signingConfigs.findByName("distribution") }
-    }
+    buildTypes { getByName("release") { signingConfig = signingConfigs.findByName("distribution") } }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
