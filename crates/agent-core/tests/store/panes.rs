@@ -113,6 +113,112 @@ async fn panes_keep_distinct_local_drafts_and_closing_one_keeps_the_store_availa
 }
 
 #[tokio::test]
+async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusing_operation_identity()
+ {
+    let store = Arc::new(Store::offline(Snapshot::default()));
+    let first = store.open_pane("/same".into()).unwrap();
+    let second = store.open_pane("/same".into()).unwrap();
+    let first_id = first.id().to_owned();
+    let keys = [
+        first.snapshot().unwrap().pane.navigation.draft_key.clone(),
+        second.snapshot().unwrap().pane.navigation.draft_key.clone(),
+    ];
+    for (pane, key, text) in [
+        (&first, &keys[0], "first unsent"),
+        (&second, &keys[1], "second unsent"),
+    ] {
+        pane.dispatch(Intent::SetDraftText {
+            thread_id: key.clone(),
+            text: text.into(),
+        })
+        .await
+        .unwrap();
+    }
+    first.close();
+    let reopened = store.open_pane("/same".into()).unwrap();
+    assert_ne!(reopened.id(), first_id);
+    assert_eq!(
+        reopened.snapshot().unwrap().pane.navigation.draft_key,
+        keys[0]
+    );
+    assert_eq!(
+        reopened.snapshot().unwrap().input.drafts[&keys[0]].text,
+        "first unsent"
+    );
+    reopened
+        .dispatch(Intent::NewChat {
+            cwd: "/elsewhere".into(),
+        })
+        .await
+        .unwrap();
+    reopened
+        .dispatch(Intent::NewChat {
+            cwd: "/same".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.snapshot().unwrap().pane.navigation.draft_key,
+        keys[0]
+    );
+    assert_eq!(
+        second.snapshot().unwrap().input.drafts[&keys[1]].text,
+        "second unsent"
+    );
+    let saved = agent_core::persistence::encode(&store.snapshot()).unwrap();
+    store.close().await.unwrap();
+    let restored = Arc::new(Store::offline(
+        agent_core::persistence::decode(&saved).unwrap(),
+    ));
+    let mut panes = Vec::new();
+    for (key, text) in keys.iter().zip(["first unsent", "second unsent"]) {
+        let pane = restored.open_pane("/same".into()).unwrap();
+        assert_eq!(&pane.snapshot().unwrap().pane.navigation.draft_key, key);
+        assert_eq!(pane.snapshot().unwrap().input.drafts[key].text, text);
+        panes.push(pane);
+    }
+    restored.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn changing_host_storage_keeps_secondary_new_chat_drafts_separate() {
+    let store = Arc::new(Store::offline(Snapshot {
+        connection: agent_core::state::Connection {
+            storage_scope: "original-host".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    let panes = [
+        store.open_pane("/same".into()).unwrap(),
+        store.open_pane("/same".into()).unwrap(),
+    ];
+    let before = store.snapshot();
+    let changed = agent_core::state::reduce(
+        &before,
+        agent_core::state::Event::StorageScope("another-host".into()),
+    )
+    .0;
+    for pane in &panes {
+        let view = changed.for_pane(pane.id()).unwrap();
+        let expected = pane.snapshot().unwrap().pane.navigation.draft_key.clone();
+        assert_eq!(view.pane.navigation.draft_key, expected);
+        let navigated = agent_core::state::reduce(
+            &view,
+            agent_core::state::Event::Intent(Intent::NewChat {
+                cwd: "/same".into(),
+            }),
+        )
+        .0;
+        assert_eq!(
+            navigated.pane.navigation.draft_key, expected,
+            "changing Host storage must not merge secondary input with the main pane"
+        );
+    }
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn file_replies_belong_to_their_panes_across_navigation_in_another_pane() {
     let (store, mut reader, writer) = setup(Snapshot::default()).await;
     let first = store.open_pane("/one".into()).unwrap();
@@ -332,6 +438,7 @@ async fn connection_reopens_every_pane_in_one_shared_subscription_map() {
         Arc::make_mut(&mut source.turns.as_mut().unwrap()[0]).status =
             agent_protocol::execution::TurnStatus::Completed;
         let pane = Arc::new(PaneState {
+            draft_slot: u64::from(name != "primary"),
             navigation: Arc::new(Navigation {
                 thread_id: Some(id.clone()),
                 cwd: "/fixture".into(),

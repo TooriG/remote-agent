@@ -70,6 +70,10 @@ pub struct Workspace {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PaneState {
     pub navigation: Arc<Navigation>,
+    // Stable draft slots are reclaimed when a pane reopens. Operation identity
+    // remains the unique runtime pane ID, so old responses cannot reach it.
+    #[serde(skip)]
+    pub draft_slot: u64,
     #[serde(default, rename = "workspace_selection")]
     pub workspace: Arc<WorkspaceLocation>,
     #[serde(skip)]
@@ -129,6 +133,15 @@ impl From<&crate::session::SessionRef> for DraftKey {
     }
 }
 impl DraftKey {
+    fn new_chat(cwd: &str, slot: u64) -> Self {
+        Self::Local {
+            key: if slot == 0 {
+                format!("new:{cwd}")
+            } else {
+                format!("new:{slot}:{cwd}")
+            },
+        }
+    }
     fn is_empty(&self) -> bool {
         matches!(self, Self::Local { key } if key.is_empty())
     }
@@ -974,7 +987,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         }
         Intent::NewChat { cwd } => {
             Arc::make_mut(&mut next.pane).epoch += 1;
-            let key = DraftKey::Local { key: if next.pane_id.is_empty() { format!("new:{cwd}") } else { format!("new:{}:{cwd}", next.pane_id) } };
+            let key = DraftKey::new_chat(&cwd, next.pane.draft_slot);
             let existing = previous.input.drafts.get(&key);
             if existing.is_none_or(|draft| draft.model.is_none()) {
                 let selection = previous.catalog.model_preferences.provider
@@ -1306,14 +1319,13 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     next.files.file_drafts = saved.file_drafts.clone();
                     Arc::make_mut(&mut next.pane).navigation = saved.navigation.clone();
                 }
-                for (id, pane) in Arc::make_mut(&mut next.panes.0) {
+                for pane in Arc::make_mut(&mut next.panes.0).values_mut() {
                     let cwd = pane.navigation.cwd.clone();
                     *pane = Arc::new(PaneState {
+                        draft_slot: pane.draft_slot,
                         epoch: pane.epoch.wrapping_add(1),
                         navigation: Arc::new(Navigation {
-                            draft_key: DraftKey::Local {
-                                key: format!("new:{id}:{cwd}"),
-                            },
+                            draft_key: DraftKey::new_chat(&cwd, pane.draft_slot),
                             cwd,
                             ..Default::default()
                         }),

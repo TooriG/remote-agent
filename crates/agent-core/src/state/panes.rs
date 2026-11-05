@@ -33,12 +33,15 @@ impl Snapshot {
         Some(next)
     }
     pub(crate) fn open_pane(&mut self, id: String, cwd: String) {
-        let draft_key = DraftKey::Local {
-            key: format!("new:{id}:{cwd}"),
-        };
+        let used: BTreeSet<_> = self.panes.0.values().map(|pane| pane.draft_slot).collect();
+        let slot = (1..=used.len() as u64 + 1)
+            .find(|slot| !used.contains(slot))
+            .unwrap();
+        let draft_key = DraftKey::new_chat(&cwd, slot);
         Arc::make_mut(&mut self.panes.0).insert(
             id,
             Arc::new(PaneState {
+                draft_slot: slot,
                 navigation: Arc::new(Navigation {
                     cwd,
                     draft_key,
