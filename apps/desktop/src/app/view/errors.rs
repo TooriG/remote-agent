@@ -23,7 +23,7 @@ pub(in crate::app) fn error_view(
 }
 
 /// An error notice as the error list shows it.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(in crate::app) struct ErrorRow {
     pub(in crate::app) notice: ErrorNotice,
     /// Raised by this window rather than the Store.
@@ -44,30 +44,7 @@ impl Desktop {
     }
 
     pub(in crate::app) fn error_rows(&self, scope: &ErrorScope) -> Vec<ErrorRow> {
-        let mut rows: Vec<_> = self
-            .snapshot
-            .error_notices(scope.clone())
-            .into_iter()
-            .map(|notice| ErrorRow {
-                notice,
-                local: false,
-            })
-            .collect();
-        if let Some(message) = self.local_errors.get(scope) {
-            rows.push(ErrorRow {
-                notice: ErrorNotice {
-                    id: op::ErrorId::Application {
-                        message: message.clone(),
-                    },
-                    context: scope.label().into(),
-                    title: "操作に失敗しました".into(),
-                    text: agent_core::presentation::error::error_text(message),
-                    recovery_label: None,
-                },
-                local: true,
-            });
-        }
-        rows
+        error_rows(&self.snapshot, &self.local_errors, scope)
     }
 
     pub(super) fn error_notices(&self, scope: ErrorScope, cx: &Context<Self>) -> Div {
@@ -257,6 +234,41 @@ pub(in crate::app) fn error_list<V: 'static>(
                 )
         }))
 }
+
+pub(in crate::app) fn error_rows(
+    snapshot: &Snapshot,
+    local_errors: &BTreeMap<ErrorScope, String>,
+    scope: &ErrorScope,
+) -> Vec<ErrorRow> {
+    let mut rows: Vec<_> = snapshot
+        .error_notices(scope.clone())
+        .into_iter()
+        .map(|notice| ErrorRow {
+            notice,
+            local: false,
+        })
+        .collect();
+    if let Some(message) = local_errors.get(scope) {
+        rows.push(local_error_row(scope, message));
+    }
+    rows
+}
+
+pub(in crate::app) fn local_error_row(scope: &ErrorScope, message: &str) -> ErrorRow {
+    ErrorRow {
+        notice: ErrorNotice {
+            id: op::ErrorId::Application {
+                message: message.into(),
+            },
+            context: scope.label().into(),
+            title: "操作に失敗しました".into(),
+            text: agent_core::presentation::error::error_text(message),
+            recovery_label: None,
+        },
+        local: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Arc, Desktop, DraftKey, ErrorScope, Mode, Runtime, appearance, platform};

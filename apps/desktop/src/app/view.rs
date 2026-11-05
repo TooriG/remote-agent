@@ -1,13 +1,13 @@
 mod agents;
 pub(in crate::app) mod composer;
 mod conversation;
-mod errors;
+pub(in crate::app) mod errors;
 mod file_icon;
 mod file_tree;
 mod header;
 mod markdown_diagram;
 pub(super) mod markdown_file;
-mod media;
+pub(in crate::app) mod media;
 mod model_settings;
 mod onboarding;
 mod permissions;
@@ -16,9 +16,9 @@ mod question;
 pub(in crate::app) mod settings;
 mod sidebar;
 pub(in crate::app) mod workbench;
+pub(in crate::app) mod workspace;
 use super::*;
 use agent_core::{presentation::error::error_text, state::operations as op};
-use base64::Engine;
 pub(super) use composer::ComposerView;
 pub(super) use conversation::ConversationView;
 pub(super) use errors::error_view;
@@ -33,8 +33,8 @@ pub(super) use workbench::WorkbenchView;
 
 // Popup contents can change while their trigger remains identical. The
 // observation belongs to the open popup and is dropped with its element state.
-fn observe_popup_desktop(
-    desktop: &WeakEntity<Desktop>,
+fn observe_popup<V: 'static>(
+    desktop: &WeakEntity<V>,
     render_owner: EntityId,
     window: &mut Window,
     cx: &mut Context<popover::PopoverState>,
@@ -203,6 +203,71 @@ fn conversation_file_path(source: &str, cwd: &str) -> Result<PathBuf, String> {
 }
 
 impl Desktop {
+    fn publish_projects(&self, cx: &mut Context<Self>) {
+        let mut projects = Vec::new();
+        let mut folders = Vec::new();
+        let mut more = false;
+        if let Some(list) = &self.publication.list {
+            more = list.has_more_projects;
+            projects.extend(
+                list.projects
+                    .iter()
+                    .chain(&list.hidden_projects)
+                    .map(|project| (project.id.clone(), project.name.clone())),
+            );
+            for project in &list.projects {
+                for root in &project.roots {
+                    let label = if project.roots.len() == 1 {
+                        project.name.clone()
+                    } else {
+                        root.path.clone()
+                    };
+                    folders.push((root.path.clone(), label));
+                }
+            }
+        }
+        self.preferences.update(cx, |view, cx| {
+            if view.projects != projects {
+                view.projects = projects;
+                cx.notify();
+            }
+        });
+        self.composer_view
+            .read(cx)
+            .content
+            .clone()
+            .update(cx, |view, cx| {
+                view.set_folders(folders, more, cx);
+            });
+    }
+    pub(in crate::app) fn publish_preferences(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preferences.update(cx, |view, cx| {
+            view.bind(
+                self.session.as_ref().map(|session| session.pane.clone()),
+                self.remote.clone(),
+                window,
+                cx,
+            );
+            let window_error = self
+                .local_errors
+                .get(&ErrorScope::Settings)
+                .map(|message| errors::local_error_row(&ErrorScope::Settings, message));
+            let changed = view.window_error != window_error
+                || view.busy != self.busy
+                || view.opened != (self.tab == Tab::Settings)
+                || view.hosts != self.hosts
+                || view.app_updates != self.app_updates;
+            view.window_error = window_error;
+            view.busy = self.busy;
+            view.opened = self.tab == Tab::Settings;
+            view.hosts = self.hosts.clone();
+            view.app_updates = self.app_updates.clone();
+            if changed {
+                cx.notify();
+            }
+            view.sync(self.snapshot.clone(), window, cx);
+        });
+    }
     // Fixtures inject immutable state at the same core projection boundary as Store.
     #[cfg(test)]
     pub(in crate::app) fn project_fixture(&mut self) {
@@ -212,29 +277,107 @@ impl Desktop {
         );
     }
 
-    pub(in crate::app) fn publish_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn publish_media(&self, cx: &mut Context<Self>) {
+        let source = media::MediaSource {
+            host: self.remote_key().into(),
+            cwd: self.snapshot.pane.navigation.cwd.clone(),
+            remote: self.remote.is_some(),
+            session: self.selected().cloned(),
+        };
+        self.media.update(cx, |media, cx| {
+            media.sync(
+                source,
+                self.session
+                    .as_ref()
+                    .map(|session| session.host.store.clone()),
+                self.session.as_ref().map(|session| session.pane.clone()),
+                cx,
+            )
+        });
+    }
+    fn publish_sidebar(&self, cx: &mut Context<Self>) {
         if let Some(sidebar) = &self.sidebar_view {
             let model = self.sidebar_model();
             let pane = self.session.as_ref().map(|session| session.pane.clone());
             sidebar.update(cx, |view, cx| view.sync(model, pane, cx));
         }
-        let query = self.settings_search.read(cx).value().to_string();
-        self.settings_navigation
-            .update(cx, |view, cx| view.sync(self.settings_page, query, cx));
-        self.publish_conversation(window, cx);
-        self.sync_composer(cx);
+    }
+    fn publish_header(&self, cx: &mut Context<Self>) {
         let header = self.header_model(crate::localization::language(cx));
         self.header_view
             .update(cx, |view, cx| view.set_model(header, cx));
+    }
+    pub(in crate::app) fn publish_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.publish_projects(cx);
+        self.publish_media(cx);
+        self.publish_sidebar(cx);
+        self.publish_preferences(window, cx);
+        self.publish_workspace(cx);
+        self.publish_conversation(window, cx);
+        self.sync_composer(cx);
+        self.publish_header(cx);
         self.sync_surfaces(window, cx);
+    }
+    pub(in crate::app) fn publish_presentation(
+        &mut self,
+        changes: agent_core::presentation::view::PresentationChanges,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Native layout changes affect the entire window; core publications use
+        // their projected subjects so tokens cannot rebuild unrelated models.
+        let shared = changes.groups.connection || changes.groups.pane;
+        if shared || changes.list {
+            self.publish_projects(cx);
+        }
+        self.publish_preferences(window, cx);
+        if shared {
+            self.publish_media(cx);
+        }
+        if shared || changes.list || changes.groups.operations {
+            self.publish_sidebar(cx);
+        }
+        if shared || changes.context {
+            self.publish_header(cx);
+        }
+        if shared
+            || changes.conversation
+            || changes.context
+            || changes.composer_controls
+            || changes.groups.operations
+            || changes.groups.files
+        {
+            self.publish_conversation(window, cx);
+        }
+        if shared || changes.composer || changes.groups.files || changes.groups.catalog {
+            self.sync_composer(cx);
+        }
+        if shared
+            || changes.sources
+            || changes.attachments
+            || changes.groups.files
+            || changes.groups.operations
+        {
+            self.publish_workspace(cx);
+        }
+        let agents = self.panels.get(self.panel_scope()).kind() == Panel::Agents;
+        if shared
+            || changes.groups.files
+            || changes.groups.operations
+            || agents && changes.groups.sessions
+        {
+            self.sync_surfaces(window, cx);
+        }
     }
 }
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.publish_views(window, cx);
-        if self.media.gallery.is_some() {
-            let gallery = self.image_gallery_view(window, cx);
+        if self.media.read(cx).gallery.is_some() {
+            let gallery = self
+                .media
+                .clone()
+                .cached(StyleRefinement::default().size_full());
             return h_flex()
                 .size_full()
                 .bg(rgb(appearance::BACKGROUND))
@@ -297,7 +440,11 @@ impl Render for Desktop {
                     .child(self.error_notices(ErrorScope::Application, cx)),
             ))
             .when(self.tab == Tab::Settings, |body| {
-                body.child(deferred(self.settings_modal(cx)))
+                body.child(deferred(
+                    self.preferences
+                        .clone()
+                        .cached(StyleRefinement::default().size_full()),
+                ))
             })
     }
 }
@@ -326,72 +473,6 @@ impl Desktop {
             .selected(open)
     }
 
-    /// T3's thread details toggle: it shows or hides the docked card, or opens
-    /// the same card as a popover when the card cannot dock.
-    fn details_toggle(
-        inline: bool,
-        open: bool,
-        render_owner: EntityId,
-        desktop: &WeakEntity<Desktop>,
-        cx: &App,
-    ) -> AnyElement {
-        let label = crate::localization::language(cx).text("スレッド詳細を切り替え");
-        let icon = Icon::default().path("icons/square-menu.svg");
-        if inline {
-            let owner = desktop.clone();
-            return Button::new("thread-details-toggle")
-                .icon(icon)
-                .small()
-                .ghost()
-                .tooltip(label)
-                .accessibility_label(label)
-                .on_click(move |_, _, cx| {
-                    let _ = owner.update(cx, |view, cx| {
-                        view.details = !open;
-                        cx.notify();
-                    });
-                })
-                .debug_selector(|| "thread-details-toggle".into())
-                .selected(open)
-                .into_any_element();
-        }
-        let entity = desktop.clone();
-        let owner = entity.clone();
-        popover::Popover::new("thread-details")
-            .appearance(false)
-            .anchor(Anchor::TopRight)
-            .open(open)
-            .on_open_change(move |open, _, cx| {
-                let _ = owner.update(cx, |view, cx| {
-                    view.details_popover = *open;
-                    cx.notify();
-                });
-            })
-            .trigger(
-                Button::new("thread-details-toggle")
-                    .debug_selector(|| "thread-details-toggle".into())
-                    .icon(icon)
-                    .small()
-                    .ghost()
-                    .selected(open)
-                    .tooltip(label)
-                    .accessibility_label(label),
-            )
-            .content(move |_, window, cx| {
-                observe_popup_desktop(&entity, render_owner, window, cx);
-                entity
-                    .update(cx, |s, cx| {
-                        v_flex()
-                            .debug_selector(|| "thread-details-popover".into())
-                            .w(px(300.))
-                            .child(s.workspace_card(cx))
-                            .into_any_element()
-                    })
-                    .unwrap_or_else(|_| div().into_any_element())
-            })
-            .into_any_element()
-    }
-
     fn conversation_main(&mut self, show_workspace: bool, cx: &mut Context<Self>) -> AnyElement {
         let content = h_flex()
             .flex_1()
@@ -400,10 +481,11 @@ impl Desktop {
             .child(self.chat())
             .when(show_workspace, |content| {
                 content.child(
-                    div()
-                        .w(px(300.))
-                        .flex_shrink_0()
-                        .child(self.workspace_card(cx)),
+                    div().w(px(300.)).flex_shrink_0().child(
+                        self.workspace_view
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
                 )
             });
         v_flex()
@@ -878,6 +960,16 @@ mod cache_tests {
         ]
     }
 
+    fn projections(desktop: &Desktop, cx: &App) -> [usize; 5] {
+        [
+            desktop.sidebar_view.as_ref().unwrap().read(cx).projections,
+            desktop.conversation.read(cx).projections,
+            desktop.composer_view.read(cx).content.read(cx).projections,
+            desktop.workbench_view.read(cx).projections,
+            desktop.header_view.read(cx).projections,
+        ]
+    }
+
     #[gpui::test]
     fn browser_frames_do_not_broadcast_desktop_notifications(cx: &mut TestAppContext) {
         let (runtime, app_runtime) = init(cx);
@@ -1171,6 +1263,7 @@ mod cache_tests {
             })
         });
         let before = desktop.read_with(cx, renders);
+        let before_projections = desktop.read_with(cx, projections);
         for text in ["typing", "typing more", "typing more日本語🙂"] {
             window
                 .update(cx, |_, window, cx| {
@@ -1225,6 +1318,17 @@ mod cache_tests {
                 &before[3..],
                 "typing must reuse the open panel and header"
             );
+            let projected = desktop.read_with(cx, projections);
+            assert_eq!(
+                &projected[..2],
+                &before_projections[..2],
+                "typing must not rebuild list/conversation models"
+            );
+            assert_eq!(
+                &projected[3..],
+                &before_projections[3..],
+                "typing must not rebuild workbench/header models"
+            );
             assert_eq!(
                 notifications.get(),
                 0,
@@ -1242,27 +1346,42 @@ mod cache_tests {
         });
         cx.run_until_parked();
         let before = desktop.read_with(cx, renders);
-        desktop.update(cx, |view, cx| {
-            let snapshot = Arc::make_mut(&mut view.snapshot);
-            let thread = Arc::make_mut(
-                Arc::make_mut(&mut snapshot.sessions.conversations)
-                    .get_mut(&session)
-                    .unwrap(),
-            );
-            let turn = Arc::make_mut(&mut thread.turns.as_mut().unwrap()[0]);
-            turn.items.as_mut().unwrap()[0] = Arc::new(Item::new(
-                "answer".into(),
-                Default::default(),
-                agent_protocol::items::ItemBody::AssistantText {
-                    text: "Updated answer".into(),
-                    phase: agent_protocol::items::AssistantPhase::Final,
-                },
-            ));
-            view.project_fixture();
-            cx.notify();
-        });
+        let before_projections = desktop.read_with(cx, projections);
+        window
+            .update(cx, |_, window, cx| {
+                desktop.update(cx, |view, cx| {
+                    let previous = view.publication.clone();
+                    let snapshot = Arc::make_mut(&mut view.snapshot);
+                    let thread = Arc::make_mut(
+                        Arc::make_mut(&mut snapshot.sessions.conversations)
+                            .get_mut(&session)
+                            .unwrap(),
+                    );
+                    let turn = Arc::make_mut(&mut thread.turns.as_mut().unwrap()[0]);
+                    turn.items.as_mut().unwrap()[0] = Arc::new(Item::new(
+                        "answer".into(),
+                        Default::default(),
+                        agent_protocol::items::ItemBody::AssistantText {
+                            text: "Updated answer".into(),
+                            phase: agent_protocol::items::AssistantPhase::Final,
+                        },
+                    ));
+                    view.project_fixture();
+                    let changes = view.publication.changes(previous);
+                    view.publish_presentation(changes, window, cx);
+                });
+            })
+            .unwrap();
         cx.run_until_parked();
         let after = desktop.read_with(cx, renders);
+        let projected = desktop.read_with(cx, projections);
+        for index in [0, 2, 3, 4] {
+            assert_eq!(
+                projected[index], before_projections[index],
+                "a transcript delta must not rebuild unrelated native model {index}"
+            );
+        }
+        assert!(projected[1] > before_projections[1]);
         assert_eq!(after[0], before[0], "streaming must reuse the sidebar");
         assert!(
             after[1] > before[1],

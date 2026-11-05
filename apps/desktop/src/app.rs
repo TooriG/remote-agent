@@ -5,6 +5,7 @@ mod dictation;
 mod files;
 mod forms;
 mod hosts;
+mod preferences;
 mod selection;
 mod timeline;
 mod view;
@@ -35,6 +36,7 @@ use gpui_kit::{
     *,
 };
 use hosts::{ConnectionLayout, HostEvent, Hosts};
+use preferences::Preferences;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     future::Future,
@@ -42,10 +44,9 @@ use std::{
     rc::Rc,
     sync::{Arc, Weak},
 };
-use timeline::{
-    ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, RequestInputs, Timeline,
-};
+use timeline::{ConversationRow, MarkdownContent, RequestInputs, Timeline};
 use view::icon_button;
+use view::media::Media;
 
 struct ProjectEditor {
     id: String,
@@ -61,12 +62,8 @@ enum OperationCompletion {
     Answer(u64),
     Editor(u64),
     Item { generation: u64, item_id: ItemId },
-    WorktreeSettings,
     Request(RequestId),
     Dictation(uuid::Uuid),
-    RemoveWorktree,
-    Account,
-    Gallery(uuid::Uuid),
     FileReference(Box<files::ReferenceRequest>),
 }
 enum Update {
@@ -75,10 +72,6 @@ enum Update {
     Snapshot,
     Completed(OperationCompletion, Result<Outcome, String>),
     Folder(Result<Option<platform::ProjectSelection>, String>),
-    Image {
-        key: String,
-        result: Result<String, String>,
-    },
     Recording(uuid::Uuid, platform::RecordingEvent),
     PersistenceError(String),
     LocalCompleted {
@@ -174,13 +167,8 @@ pub(crate) struct Desktop {
     file_browser: Option<files::FileBrowser>,
     file_explorer: files::FileExplorer,
     file_open_generation: u64,
-    model_controls: forms::ModelControls,
-    account: forms::AccountForm,
-    worktrees: forms::WorktreeForm,
     tab: Tab,
-    settings_page: SettingsPage,
-    settings_search: Entity<InputState>,
-    settings_focus: FocusHandle,
+    preferences: Entity<Preferences>,
     sidebar: bool,
     /// Whether thread details stay docked beside the chat when they fit.
     details: bool,
@@ -191,15 +179,14 @@ pub(crate) struct Desktop {
     panel_focus: FocusHandle,
     dictation: Option<Dictation>,
     review_expanded: bool,
-    source_paths: Vec<String>,
+    workspace_view: Entity<view::workspace::WorkspaceView>,
     conversation: Entity<view::ConversationView>,
     composer_view: Entity<view::ComposerView>,
     workbench_view: Entity<view::WorkbenchView>,
     header_view: Entity<view::HeaderView>,
-    media: Media,
+    media: Entity<Media>,
     /// Absent in side chats, which have no sidebar.
     sidebar_view: Option<Entity<view::SidebarView>>,
-    settings_navigation: Entity<view::settings::SettingsNavigation>,
     _subscriptions: Vec<Subscription>,
 }
 impl Desktop {
@@ -238,60 +225,30 @@ impl Desktop {
             }
         })
         .detach();
-        cx.spawn_in(window, async move |view, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(1))
-                    .await;
-                if view
-                    .update(cx, |view, _| {
-                        if view.account.polling
-                            && !view.account.busy
-                            && view.snapshot.connection.connected
-                            && let Some(login) = &view.snapshot.catalog.account.login
-                        {
-                            let id = login.login_id.clone();
-                            let provider = login.provider;
-                            view.account.busy = true;
-                            view.perform(
-                                Intent::ReadAccountLogin(op::ReadAccountLogin {
-                                    provider,
-                                    id,
-                                    thread_id: view.account.login_draft.clone(),
-                                }),
-                                OperationCompletion::Account,
-                            );
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
         let composer = forms::ComposerInput::new(window, cx);
         let question = forms::QuestionInput::new(window, cx);
         let editor = forms::FileEditor::new(window, cx);
-        let model_controls = forms::ModelControls::new(window, cx);
-        let account = forms::AccountForm::new(window, cx);
-        let settings_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder(language.text("設定を検索")));
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder(language.text("会話を検索")));
         let file_search =
             cx.new(|cx| InputState::new(window, cx).placeholder(language.text("ファイルを検索")));
-        let worktrees = forms::WorktreeForm::new(window, cx);
         let hosts = (!side_chat_mode).then(|| cx.new(|cx| Hosts::new(window, cx)));
         let app_updates = (!side_chat_mode
             && cfg!(any(target_os = "macos", target_os = "windows")))
         .then(|| cx.new(crate::updates::Updates::new));
         let selection = cx.new(|_| selection::ConversationSelection::new(!side_chat_mode));
+        let preferences =
+            cx.new(|cx| Preferences::new(hosts.clone(), app_updates.clone(), window, cx));
         let owner = cx.entity();
-        let conversation = cx.new(|_| view::ConversationView::new(&owner, selection.clone()));
+        let media =
+            cx.new(|cx| Media::new(cx.global::<Runtime>().handle.clone(), side_chat_mode, cx));
+        let conversation =
+            cx.new(|cx| view::ConversationView::new(&owner, selection.clone(), media.clone(), cx));
         let composer_view = cx.new(|cx| {
             view::ComposerView::new(
                 &owner,
+                media.clone(),
+                preferences.clone(),
                 composer.input.clone(),
                 question.input.clone(),
                 question.secret.clone(),
@@ -302,24 +259,79 @@ impl Desktop {
         let file_explorer = files::FileExplorer::new(cx);
         let workbench_view =
             cx.new(|cx| view::WorkbenchView::new(&owner, &file_explorer.state, cx));
-        let header_view = cx.new(|_| view::HeaderView::new(&owner));
-        let settings_navigation =
-            cx.new(|_| view::settings::SettingsNavigation::new(settings_search.clone()));
+        let workspace_view = cx.new(view::workspace::WorkspaceView::new);
+        let header_view = cx.new(|cx| view::HeaderView::new(&owner, cx));
         let mut subscriptions = vec![
+            cx.subscribe_in(
+                &workspace_view,
+                window,
+                |view, _, action: &view::workspace::WorkspaceAction, window, cx| {
+                    use view::workspace::WorkspaceAction::*;
+                    match action {
+                        Download(path) => view.download(path.clone()),
+                        RefreshReview => view.refresh_review(),
+                        Review => view.open_review(None, cx),
+                        Attach => view.attach(),
+                        PickFolder => view.pick_folder(),
+                        Browse(path) => view.browse(path.clone(), cx),
+                        OpenEditor { path, editor } => {
+                            view.dispatch(Intent::SetPreferredEditor { editor: *editor });
+                            view.open_in_editor(path.clone(), None, None, *editor, false, cx);
+                        }
+                        Notice(action) => view.notice_action(action.clone(), window, cx),
+                    }
+                    cx.notify();
+                },
+            ),
+            cx.observe(&preferences, |view, _, cx| {
+                view.sync_composer(cx);
+                if view.onboarding || view.import_projects {
+                    cx.notify();
+                }
+            }),
+            cx.subscribe_in(
+                &preferences,
+                window,
+                |view, _, event: &preferences::PreferencesEvent, window, cx| {
+                    match event {
+                        preferences::PreferencesEvent::Closed => {
+                            view.tab = Tab::Chat;
+                            view.composer
+                                .input
+                                .read(cx)
+                                .focus_handle(cx)
+                                .focus(window, cx);
+                        }
+                        preferences::PreferencesEvent::ImportProjects => view.open_project_import(),
+                        preferences::PreferencesEvent::OpenBrowser(url) => {
+                            view.open_browser(view.panel_scope(), url, cx)
+                        }
+                        preferences::PreferencesEvent::OpenChat(id) => {
+                            view.open_chat(id.clone(), window, cx)
+                        }
+                        preferences::PreferencesEvent::Notice(action) => {
+                            view.notice_action(action.clone(), window, cx)
+                        }
+                    }
+                    cx.notify();
+                },
+            ),
+            cx.subscribe_in(
+                &media,
+                window,
+                |view, _, event: &view::media::MediaEvent, window, cx| {
+                    match event {
+                        view::media::MediaEvent::Visibility => view.sync_surfaces(window, cx),
+                        view::media::MediaEvent::Error(error) => view.set_error(error.clone()),
+                    }
+                    cx.notify();
+                },
+            ),
             cx.observe_global_in::<crate::localization::Language>(window, |view, window, cx| {
                 let language = crate::localization::language(cx);
                 for (input, source) in [
                     (&view.search, language.text("会話を検索")),
                     (&view.file_search, language.text("ファイルを検索")),
-                    (&view.model_controls.search, language.text("モデルを検索")),
-                    (
-                        &view.account.code,
-                        language.text("認証コード・APIキーを貼り付け"),
-                    ),
-                    (
-                        &view.worktrees.directory,
-                        language.text("ホスト上の絶対パス（空欄で既定）"),
-                    ),
                 ] {
                     input.update(cx, |input, cx| {
                         input.set_placeholder(language.text(source), window, cx)
@@ -337,14 +349,6 @@ impl Desktop {
             cx.observe_in(&owner, window, |view, _, window, cx| {
                 view.publish_views(window, cx)
             }),
-            cx.subscribe_in(
-                &settings_navigation,
-                window,
-                |view, _, page: &SettingsPage, window, cx| {
-                    view.open_settings(*page, window, cx);
-                    cx.notify();
-                },
-            ),
             cx.observe_window_bounds(window, |view, window, cx| view.sync_surfaces(window, cx)),
             cx.subscribe_in(
                 &composer_content,
@@ -353,6 +357,8 @@ impl Desktop {
                     use view::composer::ComposerAction::*;
                     match action {
                         Dispatch(intent) => view.dispatch(intent.clone()),
+                        NewChat(cwd) => view.new_chat(cwd.clone(), window, cx),
+                        PickFolder => view.pick_folder(),
                         Send => view.send(cx),
                         Attach => view.attach(),
                         StartDictation => view.start_dictation(),
@@ -466,21 +472,6 @@ impl Desktop {
                     }
                 }
             }),
-            cx.subscribe(&model_controls.search, |_, _, event, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-            cx.subscribe(&settings_search, |_, _, event, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-            cx.subscribe(&account.code, |_, _, event, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
             cx.subscribe(&search, |view, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     let value = input.read(cx).value();
@@ -489,24 +480,6 @@ impl Desktop {
                         query.search_term = value.to_string();
                         view.dispatch(Intent::ListSessions(op::ListSessions::new(query)));
                     }
-                }
-            }),
-            cx.subscribe(&worktrees.copy_paths, |view, _, event, cx| {
-                if matches!(event, InputEvent::Change) {
-                    view.worktree_input_changed(cx);
-                    cx.notify();
-                }
-                if matches!(event, InputEvent::Blur) {
-                    view.save_worktree_settings(None, cx);
-                }
-            }),
-            cx.subscribe(&worktrees.directory, |view, _, event, cx| {
-                if matches!(event, InputEvent::Change) {
-                    view.worktree_input_changed(cx);
-                    cx.notify();
-                }
-                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                    view.save_worktree_settings(None, cx);
                 }
             }),
         ];
@@ -577,13 +550,8 @@ impl Desktop {
             file_browser: None,
             file_open_generation: 0,
             file_explorer,
-            model_controls,
-            account,
-            worktrees,
             tab: Tab::Chat,
-            settings_page: SettingsPage::General,
-            settings_search,
-            settings_focus: cx.focus_handle(),
+            preferences,
             sidebar: true,
             details: true,
             details_popover: false,
@@ -592,19 +560,27 @@ impl Desktop {
             panel_focus: cx.focus_handle(),
             dictation: None,
             review_expanded: false,
-            source_paths: Vec::new(),
+            workspace_view,
             conversation,
             composer_view,
             workbench_view,
             header_view,
-            media: Media::new(),
+            media,
             sidebar_view: None,
-            settings_navigation,
             _subscriptions: subscriptions,
         };
         if !side_chat_mode {
             let desktop = cx.entity();
-            let sidebar = cx.new(|_| view::SidebarView::new(&desktop, &view));
+            let sidebar = cx.new(|cx| {
+                view::SidebarView::new(
+                    &desktop,
+                    view.sidebar_model(),
+                    view.search.clone(),
+                    view.app_updates.clone(),
+                    view.session.as_ref().map(|s| s.pane.clone()),
+                    cx,
+                )
+            });
             view._subscriptions.push(cx.subscribe_in(
                 &sidebar,
                 window,
@@ -656,7 +632,6 @@ impl Desktop {
         } else if !side_chat_mode {
             view.connect(None, None);
         }
-        view.sync_composer(cx);
         cx.notify();
         view
     }
@@ -666,13 +641,6 @@ impl Desktop {
         self.connecting = true;
         self.local_shell = false;
         self.busy = 0;
-        self.worktrees.removal = None;
-        self.worktrees.removing = false;
-        self.account.busy = false;
-        self.account.polling = false;
-        self.model_controls.provider = None;
-        self.account.sign_out = None;
-        self.account.login_draft = None;
         self.local_errors.clear();
         if let Some(error) = self.runtime.logging_error.clone() {
             self.local_errors.insert(ErrorScope::Application, error);
@@ -844,8 +812,6 @@ impl Desktop {
                         }
                         if view.accept_snapshot(window, cx) {
                             cx.notify();
-                        } else {
-                            view.sync_composer(cx);
                         }
                     });
                 });
@@ -902,32 +868,6 @@ impl Desktop {
                     Err(error) => self.set_error(error),
                 }
             }
-            Update::Image { key, result } => {
-                if let Some(image) = self.media.images.get_mut(&key) {
-                    match result {
-                        Ok(path) => {
-                            image.path = Some(if Path::new(&path).is_absolute() {
-                                PathBuf::from(path).into()
-                            } else {
-                                ImageSource::from(path)
-                            })
-                        }
-                        Err(error) => {
-                            tracing::error!(target: "agent", operation = "image.load", message = %error);
-                            image.error = Some(error);
-                        }
-                    }
-                }
-                self.composer_view
-                    .read(cx)
-                    .content
-                    .clone()
-                    .update(cx, |_, cx| cx.notify());
-                self.conversation.update(cx, |view, cx| {
-                    view.timeline.list.remeasure();
-                    cx.notify();
-                });
-            }
         }
         cx.notify();
     }
@@ -983,18 +923,7 @@ impl Desktop {
                 });
                 return true;
             }
-            OperationCompletion::WorktreeSettings => {
-                self.worktrees.saving = false;
-                self.accept_snapshot(window, cx);
-                self.worktrees.dirty = !self
-                    .worktrees
-                    .matches(self.snapshot.files.workspace.settings.as_deref(), cx);
-                self.worktrees.saved = !self.worktrees.dirty;
-                if std::mem::take(&mut self.worktrees.save_pending) {
-                    self.save_worktree_settings(None, cx);
-                }
-                return true;
-            }
+
             OperationCompletion::Request(key) => {
                 if result.is_err() {
                     self.conversation.update(cx, |view, cx| {
@@ -1011,69 +940,11 @@ impl Desktop {
                 });
                 return true;
             }
-            OperationCompletion::Account => {
-                self.account.busy = false;
-                if result.is_err() {
-                    self.account.polling = false;
-                    self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
-                } else {
-                    self.accept_snapshot(window, cx);
-                    self.account.polling = self.snapshot.catalog.account.login.is_some();
-                }
-                if self.snapshot.catalog.account.login.is_none() {
-                    self.account.login_draft = None;
-                }
-                return true;
-            }
-            OperationCompletion::RemoveWorktree => {
-                self.worktrees.removing = false;
-                match result {
-                    Ok(_) => self.worktrees.removal = None,
-                    Err(_) => {
-                        self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
-                    }
-                }
-                self.accept_snapshot(window, cx);
-                return true;
-            }
+
             OperationCompletion::Dictation(id) => {
                 if self.dictation.as_ref().is_some_and(|state| state.id == id) {
                     self.dictation = None;
                 }
-            }
-            OperationCompletion::Gallery(id) => {
-                let Some(gallery) = self
-                    .media
-                    .gallery
-                    .as_mut()
-                    .filter(|gallery| gallery.id == id)
-                else {
-                    return true;
-                };
-                gallery.loading = false;
-                match result {
-                    Ok(Outcome::SessionImages { images }) => {
-                        let initial = gallery.current_image().clone();
-                        let entries: Vec<_> = images
-                            .into_iter()
-                            .map(|image| (Arc::new(image.source), image.encoded))
-                            .collect();
-                        gallery.selected = entries.iter().position(|entry| entry == &initial);
-                        gallery
-                            .list
-                            .splice(0..gallery.list.item_count(), entries.len());
-                        gallery.entries = entries;
-                        if let Some(index) = gallery.selected {
-                            gallery.list.scroll_to_reveal_item(index);
-                        }
-                    }
-                    Err(error) => {
-                        tracing::error!(target: "agent", operation = "gallery.load", message = %error);
-                        gallery.error = error;
-                    }
-                    _ => unreachable!("session image outcome"),
-                }
-                return true;
             }
         }
         self.accept_snapshot(window, cx) || !input_save
@@ -1087,42 +958,13 @@ impl Desktop {
         };
         let changes = publication.changes(self.publication.clone());
         let snapshot = publication.snapshot();
-        let window_uses_snapshot = self.onboarding
-            || self.import_projects
-            || self.project_editor.is_some()
-            || self.tab == Tab::Settings;
+        let window_uses_snapshot =
+            self.onboarding || self.import_projects || self.project_editor.is_some();
         let navigation_changed = self.snapshot.pane.navigation != snapshot.pane.navigation;
         let connection_changed = changes.groups.connection;
         let application_error_changed = self.snapshot.pane.error != snapshot.pane.error;
-        let review_changed = self
-            .snapshot
-            .pane
-            .workspace
-            .review
-            .as_ref()
-            .map(Arc::as_ptr)
-            != snapshot.pane.workspace.review.as_ref().map(Arc::as_ptr);
         self.publication = publication;
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
-        let old_sources = self.source_paths.clone();
-        if previous
-            .catalog
-            .account
-            .login
-            .as_ref()
-            .map(|login| &login.login_id)
-            != self
-                .snapshot
-                .catalog
-                .account
-                .login
-                .as_ref()
-                .map(|login| &login.login_id)
-        {
-            self.account
-                .code
-                .update(cx, |input, cx| input.set_value("", window, cx));
-        }
         if let Some(request) = self
             .snapshot
             .permission_control(self.draft_key())
@@ -1135,17 +977,6 @@ impl Desktop {
         {
             tracing::error!(target: "agent", operation = "store", message = %error);
         }
-        let previous_draft = previous
-            .input
-            .drafts
-            .get(&previous.pane.navigation.draft_key);
-        let sources_changed = previous_draft.map(|draft| &draft.attachments)
-            != self
-                .snapshot
-                .input
-                .drafts
-                .get(self.draft_key())
-                .map(|draft| &draft.attachments);
         let navigated =
             previous.pane.navigation.draft_key != self.snapshot.pane.navigation.draft_key;
         // Store snapshots may coalesce creation and send acceptance. Use the
@@ -1191,30 +1022,6 @@ impl Desktop {
             self.composer.text.pending = None;
         }
         self.sync_inputs(window, cx);
-        if !self.worktrees.dirty
-            && !self.worktrees.saving
-            && previous.files.workspace.settings != self.snapshot.files.workspace.settings
-            && let Some(settings) = &self.snapshot.files.workspace.settings
-        {
-            self.worktrees.show(settings, window, cx);
-        }
-        if sources_changed || changes.conversation || navigated {
-            let mut paths: std::collections::BTreeSet<_> = self
-                .draft()
-                .attachments
-                .iter()
-                .map(|attachment| attachment.path.clone())
-                .collect();
-            paths.extend(
-                self.publication
-                    .conversation
-                    .as_ref()
-                    .into_iter()
-                    .flat_map(|conversation| conversation.source_paths.iter())
-                    .cloned(),
-            );
-            self.source_paths = paths.into_iter().collect();
-        }
         if navigated {
             let panel = self.panels.get(self.panel_scope());
             if panel.open
@@ -1224,13 +1031,11 @@ impl Desktop {
                 self.activate_surface(id, window, cx);
             }
         }
-        self.publish_views(window, cx);
+        self.publish_presentation(changes, window, cx);
         window_uses_snapshot && changes.changed
             || navigation_changed
             || connection_changed
             || application_error_changed
-            || (self.details || self.details_popover)
-                && (review_changed || old_sources != self.source_paths)
     }
     fn sync_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self
@@ -1307,21 +1112,10 @@ impl Desktop {
             .map_or(&EMPTY, Arc::as_ref)
     }
     fn selected_model(&self) -> Option<&Model> {
-        self.snapshot
-            .catalog
-            .models
-            .iter()
-            .find(|model| Some(&model.model) == self.draft().model.as_ref())
+        selected_model(&self.snapshot.catalog.models, self.draft().model.as_ref())
     }
     fn remote_key(&self) -> &str {
         self.remote.as_ref().map_or("local", |remote| &remote.id)
-    }
-    fn image_key(&self, source: &str, encoded: bool) -> String {
-        format!(
-            "{}:{}:{encoded}:{source}",
-            self.remote_key(),
-            self.snapshot.pane.navigation.cwd
-        )
     }
     fn new_chat(&mut self, cwd: String, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = Tab::Chat;
@@ -1418,11 +1212,7 @@ impl Desktop {
         self.pending_explanation = None;
         self.editor.text.pending = None;
         self.editor.path = None;
-        self.worktrees.dirty = false;
-        self.worktrees.saving = false;
-        self.worktrees.save_pending = false;
-        self.media.images.clear();
-        self.media.gallery = None;
+        self.media.update(cx, |media, cx| media.reset(cx));
         self.conversation.update(cx, |view, cx| {
             view.timeline.clear();
             cx.notify();
@@ -1920,44 +1710,7 @@ impl Desktop {
             OperationCompletion::Busy,
         );
     }
-    fn worktree_input_changed(&mut self, cx: &App) {
-        self.worktrees.dirty = !self
-            .worktrees
-            .matches(self.snapshot.files.workspace.settings.as_deref(), cx);
-        self.worktrees.saved = false;
-    }
-    fn save_worktree_settings(&mut self, toggle: Option<WorktreeToggle>, cx: &Context<Self>) {
-        let Some(settings) = &self.snapshot.files.workspace.settings else {
-            return;
-        };
-        let mut settings = self.worktrees.edited(settings, cx);
-        if let Some(toggle) = toggle {
-            match toggle {
-                WorktreeToggle::Create(checked) => settings.create_on_new_session = checked,
-                WorktreeToggle::Copy(checked) => settings.copy_on_create = checked,
-                WorktreeToggle::DeleteUnchanged(checked) => settings.delete_unchanged = checked,
-                WorktreeToggle::ProjectDeleteUnchanged(project, Some(checked)) => {
-                    settings.project_delete_unchanged.insert(project, checked);
-                }
-                WorktreeToggle::ProjectDeleteUnchanged(project, None) => {
-                    settings.project_delete_unchanged.remove(&project);
-                }
-            }
-        }
-        if self.snapshot.files.workspace.settings.as_deref() == Some(&settings) {
-            return;
-        }
-        if self.worktrees.saving {
-            self.worktrees.save_pending = true;
-            return;
-        }
-        self.worktrees.saving = true;
-        self.worktrees.saved = false;
-        self.perform(
-            Intent::UpdateWorktreeSettings(op::UpdateWorktreeSettings { settings }),
-            OperationCompletion::WorktreeSettings,
-        );
-    }
+
     fn respond(&mut self, id: RequestId, answer: Answer) {
         self.perform(
             Intent::Respond(op::Respond {
@@ -2004,6 +1757,13 @@ fn composer_should_submit(
     cx: &mut Context<TextareaState>,
 ) -> bool {
     !action.shift && !action.secondary && input.marked_text_range(window, cx).is_none()
+}
+
+fn selected_model<'a>(
+    models: &'a [Model],
+    selected: Option<&agent_protocol::models::ModelRef>,
+) -> Option<&'a Model> {
+    models.iter().find(|model| Some(&model.model) == selected)
 }
 
 #[cfg(test)]

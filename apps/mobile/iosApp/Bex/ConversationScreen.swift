@@ -47,7 +47,7 @@ struct ThreadScreen: View {
                 ConversationDirectorySheet(model: model, destination: destination) { openedDirectory = nil }
             }
             .navigationTitle(isSideChat ? Text("サイドチャット") : conversationTitleText(
-                conversation?.title, fallback: model.isNewThread ? "新しいタスク" : "タスク"
+                model.conversationContext.title(), fallback: model.isNewThread ? "新しいタスク" : "タスク"
             ))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -233,7 +233,7 @@ extension ThreadScreen {
         let directory = model.selectedDirectory
         return VStack(spacing: 2) {
             HStack(spacing: 6) {
-                conversationTitleText(conversation?.title, fallback: model.isNewThread ? "チャット" : "タスク")
+                conversationTitleText(model.conversationContext.title(), fallback: model.isNewThread ? "チャット" : "タスク")
                     .font(.headline).lineLimit(1)
                 if environment.connecting {
                     ProgressView().controlSize(.small)

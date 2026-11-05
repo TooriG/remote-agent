@@ -16,18 +16,14 @@ impl Desktop {
 }
 
 impl ComposerContent {
-    fn composer_context(
-        model: &ComposerModel,
-        desktop: &WeakEntity<Desktop>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+    fn composer_context(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let mut row = h_flex()
             .w_full()
             .min_w_0()
             .gap_2()
             .px_2()
-            .child(Self::composer_folder(model, desktop, cx));
+            .child(Self::composer_folder(model, cx));
         if let Some(hosts) = &model.hosts {
             row = row.child(Hosts::menu(
                 hosts,
@@ -120,14 +116,10 @@ impl ComposerContent {
         row.into_any_element()
     }
 
-    fn composer_folder(
-        model: &ComposerModel,
-        desktop: &WeakEntity<Desktop>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+    fn composer_folder(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let selected_directory = model.selected_directory.clone();
-        let entity = desktop.clone();
+        let entity = cx.entity().downgrade();
         Button::new("composer-folder")
             .debug_selector(|| "composer-folder".into())
             .label(if selected_directory.is_empty() {
@@ -161,63 +153,60 @@ impl ComposerContent {
                     return menu;
                 };
                 let state = owner.read(cx);
-                let selected_directory = state.snapshot.selected_directory();
-                let list = state.publication.list.clone();
+                let selected_directory = state
+                    .model
+                    .as_ref()
+                    .map(|model| model.selected_directory.as_str())
+                    .unwrap_or_default();
                 let unassigned = entity.clone();
                 menu = menu.item(
                     PopupMenuItem::new(language.text("チャット"))
                         .checked(selected_directory.is_empty())
-                        .on_click(move |_, window, cx| {
-                            let _ = unassigned.update(cx, |s, cx| {
-                                s.new_chat(String::new(), window, cx);
-                                cx.notify();
+                        .on_click(move |_, _, cx| {
+                            let _ = unassigned.update(cx, |_, cx| {
+                                cx.emit(ComposerAction::NewChat(String::new()))
                             });
                         }),
                 );
-                for project in list
-                    .as_ref()
-                    .map(|page| page.projects.as_slice())
-                    .unwrap_or_default()
-                {
-                    for root in &project.roots {
-                        let path = root.path.clone();
-                        let label = if project.roots.len() == 1 {
-                            project.name.clone()
-                        } else {
-                            path.clone()
-                        };
-                        let target = entity.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(path == selected_directory)
-                                .on_click(move |_, window, cx| {
-                                    let _ = target.update(cx, |s, cx| {
-                                        s.new_chat(path.clone(), window, cx);
-                                        cx.notify();
-                                    });
-                                }),
-                        );
-                    }
+                for (path, label) in &state.folders {
+                    let path = path.clone();
+                    let label = label.clone();
+                    let target = entity.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(label)
+                            .checked(path == selected_directory)
+                            .on_click(move |_, _, cx| {
+                                let _ = target.update(cx, |_, cx| {
+                                    cx.emit(ComposerAction::NewChat(path.clone()))
+                                });
+                            }),
+                    );
                 }
-                if list.as_ref().is_some_and(|page| page.has_more_projects) {
+                if state.more_projects {
                     let target = entity.clone();
                     menu = menu.item(
                         PopupMenuItem::new(language.text("さらにプロジェクトを読み込む")).on_click(
                             move |_, _, cx| {
-                                let _ = target.update(cx, |s, cx| {
-                                    s.dispatch(Intent::ExpandProjects);
-                                    cx.notify();
+                                let _ = target.update(cx, |s, _| {
+                                    if let Some(pane) = &s.pane {
+                                        drop(pane.dispatch(Intent::ExpandProjects));
+                                    }
                                 });
                             },
                         ),
                     );
                 }
-                if state.remote.is_none() {
+                if state
+                    .model
+                    .as_ref()
+                    .is_some_and(|model| model.remote.is_none())
+                {
                     let target = entity.clone();
                     menu = menu.item(
                         PopupMenuItem::new(language.text("別のフォルダを選択…")).on_click(
                             move |_, _, cx| {
-                                let _ = target.update(cx, |s, _| s.pick_folder());
+                                let _ =
+                                    target.update(cx, |_, cx| cx.emit(ComposerAction::PickFolder));
                             },
                         ),
                     );
@@ -247,7 +236,6 @@ impl Desktop {
 
 impl ComposerContent {
     fn render_composer(&self, model: &ComposerModel, cx: &mut Context<Self>) -> AnyElement {
-        let desktop = &self.desktop;
         let pane = &self.pane;
         let input = &self.input;
         let question_input = &self.question_input;
@@ -279,49 +267,52 @@ impl ComposerContent {
             .debug_selector(move || format!("attachment-remove-{i}"))
             .xsmall()
             .rounded_full();
-            files = files.child(if file.is_image {
-                div()
-                    .id(format!("draft-attachment-{i}"))
-                    .relative()
-                    .size(px(120.))
-                    .flex_shrink_0()
-                    .child(
-                        div().size_full().rounded_lg().overflow_hidden().child(
-                            desktop
-                                .update(cx, |desktop, cx| {
-                                    desktop.image(&file.path, false, 120., true, cx)
-                                })
-                                .unwrap_or_else(|_| div().into_any_element()),
-                        ),
-                    )
-                    .child(deferred(
-                        div()
-                            .id(format!("attachment-remove-hitbox-{i}"))
-                            .occlude()
-                            .absolute()
-                            .top(px(-4.))
-                            .right(px(-4.))
-                            .size(px(18.))
-                            .child(
-                                remove
-                                    .size(px(18.))
-                                    .custom(
-                                        ButtonCustomVariant::new(cx)
-                                            .foreground(rgb(0x222222).into())
-                                            .hover(rgb(0xe6e6e6).into())
-                                            .active(rgb(0xd4d4d4).into()),
-                                    )
-                                    .bg(rgb(0xffffff)),
+            files =
+                files.child(if file.is_image {
+                    div()
+                        .id(format!("draft-attachment-{i}"))
+                        .relative()
+                        .size(px(120.))
+                        .flex_shrink_0()
+                        .child(div().size_full().rounded_lg().overflow_hidden().child(
+                            Media::preview(
+                                &self.media,
+                                format!("draft-image-{i}"),
+                                &file.path,
+                                false,
+                                120.,
+                                true,
+                                cx,
                             ),
-                    ))
-                    .into_any_element()
-            } else {
-                h_flex()
-                    .gap_2()
-                    .child(file.name.clone())
-                    .child(remove.size(px(28.)).bg(rgb(appearance::RAISED)))
-                    .into_any_element()
-            });
+                        ))
+                        .child(deferred(
+                            div()
+                                .id(format!("attachment-remove-hitbox-{i}"))
+                                .occlude()
+                                .absolute()
+                                .top(px(-4.))
+                                .right(px(-4.))
+                                .size(px(18.))
+                                .child(
+                                    remove
+                                        .size(px(18.))
+                                        .custom(
+                                            ButtonCustomVariant::new(cx)
+                                                .foreground(rgb(0x222222).into())
+                                                .hover(rgb(0xe6e6e6).into())
+                                                .active(rgb(0xd4d4d4).into()),
+                                        )
+                                        .bg(rgb(0xffffff)),
+                                ),
+                        ))
+                        .into_any_element()
+                } else {
+                    h_flex()
+                        .gap_2()
+                        .child(file.name.clone())
+                        .child(remove.size(px(28.)).bg(rgb(appearance::RAISED)))
+                        .into_any_element()
+                });
         }
         let running = model.running.clone();
         let empty = model.empty;
@@ -548,16 +539,16 @@ impl ComposerContent {
                                 ),
                             )
                         })
-                        .child(Desktop::permission_menu(
+                        .child(Preferences::permission_menu(
                             model.permission_label,
                             model.permission_mode,
                             model.connected && model.provider_available,
                             render_owner,
-                            desktop,
+                            &self.preferences.downgrade(),
                             cx,
                         ))
                         .child(div().flex_1())
-                        .child(Desktop::fast_control(
+                        .child(Preferences::fast_control(
                             model.quick_controls.clone(),
                             model.controls_enabled,
                             "model-fast",
@@ -566,13 +557,13 @@ impl ComposerContent {
                             pane.clone(),
                             cx,
                         ))
-                        .child(Desktop::model_menu(
+                        .child(Preferences::model_menu(
                             model.model_label.clone(),
                             render_owner,
-                            desktop,
+                            &self.preferences.downgrade(),
                             cx,
                         ))
-                        .child(Desktop::effort_control(
+                        .child(Preferences::effort_control(
                             model.quick_controls.clone(),
                             model.controls_enabled,
                             "model-effort",
@@ -613,7 +604,7 @@ impl ComposerContent {
             .when_some(model.question.as_ref(), |column, question| {
                 column.child(Self::question_panel(question, cx))
             })
-            .child(Self::composer_context(model, desktop, cx))
+            .child(Self::composer_context(model, cx))
             .child(composer);
         h_flex()
             .justify_center()
@@ -680,12 +671,6 @@ struct ComposerModel {
     question: Option<question::ComposerQuestion>,
 }
 impl Desktop {
-    pub(super) fn model_controls_enabled(&self) -> bool {
-        self.snapshot.connection.connected
-            && !self.account.busy
-            && self.busy == 0
-            && self.snapshot.catalog.account.login.is_none()
-    }
     fn composer_model(&self, cx: &App) -> ComposerModel {
         let language = crate::localization::language(cx);
         let permission = self.snapshot.permission_control(self.draft_key());
@@ -724,7 +709,7 @@ impl Desktop {
             permission_label: permission.label,
             permission_mode: permission.mode,
             quick_controls: self.snapshot.model_quick_controls(self.draft_key().clone()),
-            controls_enabled: self.model_controls_enabled(),
+            controls_enabled: self.preferences.read(cx).model_controls_enabled(),
             suggestions: self.completion_suggestions(cx),
             completion_index: self.composer.completion_index,
             question: self.composer_question(),
@@ -741,16 +726,24 @@ pub(in crate::app) struct ComposerView {
 }
 pub(in crate::app) struct ComposerContent {
     desktop: WeakEntity<Desktop>,
+    media: Entity<Media>,
+    preferences: Entity<Preferences>,
     input: Entity<TextareaState>,
     question_input: Entity<TextareaState>,
     question_secret: Entity<InputState>,
     pane: Option<Arc<agent_core::store::Pane>>,
     model: Option<ComposerModel>,
+    folders: Vec<(String, String)>,
+    more_projects: bool,
+    #[cfg(test)]
+    pub(in crate::app) projections: usize,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
 pub(in crate::app) enum ComposerAction {
     Dispatch(Intent),
+    NewChat(String),
+    PickFolder,
     Send,
     Attach,
     StartDictation,
@@ -770,20 +763,32 @@ impl EventEmitter<ComposerHeight> for ComposerContent {}
 impl ComposerView {
     pub(in crate::app) fn new(
         desktop: &Entity<Desktop>,
+        media: Entity<Media>,
+        preferences: Entity<Preferences>,
         input: Entity<TextareaState>,
         question_input: Entity<TextareaState>,
         question_secret: Entity<InputState>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let content = cx.new(|_cx| ComposerContent {
-            desktop: desktop.downgrade(),
-            input: input.clone(),
-            question_input,
-            question_secret,
-            pane: None,
-            model: None,
-            #[cfg(test)]
-            renders: 0,
+        let content = cx.new(|cx| {
+            cx.observe_global::<crate::localization::Language>(|_, cx| cx.notify())
+                .detach();
+            ComposerContent {
+                desktop: desktop.downgrade(),
+                media,
+                preferences,
+                input: input.clone(),
+                question_input,
+                question_secret,
+                pane: None,
+                model: None,
+                folders: Vec::new(),
+                more_projects: false,
+                #[cfg(test)]
+                projections: 0,
+                #[cfg(test)]
+                renders: 0,
+            }
         });
         Self {
             _measurement: cx.subscribe(&content, |view, _, height: &ComposerHeight, cx| {
@@ -798,7 +803,23 @@ impl ComposerView {
     }
 }
 impl ComposerContent {
+    pub(in crate::app) fn set_folders(
+        &mut self,
+        folders: Vec<(String, String)>,
+        more: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.folders != folders || self.more_projects != more {
+            self.folders = folders;
+            self.more_projects = more;
+            cx.notify();
+        }
+    }
     fn set_model(&mut self, model: ComposerModel, cx: &mut Context<Self>) {
+        #[cfg(test)]
+        {
+            self.projections += 1;
+        }
         if self.model.as_ref() != Some(&model) {
             self.model = Some(model);
             cx.notify();
@@ -865,6 +886,69 @@ mod composer_tests {
     impl Render for ComposerView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.0.update(cx, |view, _| view.chat())
+        }
+    }
+
+    #[gpui::test]
+    fn project_publications_refresh_settings_and_folder_choices_without_navigation(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(crate::Runtime {
+                handle: runtime.handle().clone(),
+                sessions: Default::default(),
+                connections: Default::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let (desktop, window) = cx.add_window_view(|window, cx| {
+            let mut desktop = Desktop::new(
+                Mode::Fixture {
+                    remote: None,
+                    cwd: "/fixture".into(),
+                },
+                window,
+                cx,
+            );
+            desktop.project_fixture();
+            desktop
+        });
+        window.run_until_parked();
+        for name in [Some("Project"), Some("Renamed"), None] {
+            window.update(|window, cx| {
+                desktop.update(cx, |view, cx| {
+                    Arc::make_mut(&mut view.snapshot).lists.threads = name.map(|name| {
+                        let value = serde_json::json!({
+                            "data":[], "projects":[{"id":"project", "name":name,
+                            "roots":[{"path":"/project"}]}],
+                            "hasMore":false, "hasMoreProjects":true, "projectPages":{}, "limit":5
+                        });
+                        Arc::new(serde_json::from_value(value).unwrap())
+                    });
+                    let previous = view.publication.clone();
+                    view.project_fixture();
+                    let changes = view.publication.changes(previous);
+                    assert!(changes.list && !changes.groups.pane);
+                    view.publish_presentation(changes, window, cx);
+                    let expected = name
+                        .map(|name| vec![("project".into(), name.into())])
+                        .unwrap_or_default();
+                    assert_eq!(view.preferences.read(cx).projects, expected);
+                    let composer = view.composer_view.read(cx).content.read(cx);
+                    let expected = name
+                        .map(|name| vec![("/project".into(), name.into())])
+                        .unwrap_or_default();
+                    assert_eq!(composer.folders, expected);
+                    assert_eq!(composer.more_projects, name.is_some());
+                })
+            });
+            window.run_until_parked();
         }
     }
 
@@ -1376,7 +1460,7 @@ mod composer_tests {
                     cx,
                 )
             });
-            desktop.update(cx, |view, _| {
+            desktop.update(cx, |view, cx| {
                 let key = view.draft_key().clone();
                 draft_key = Some(key.clone());
                 Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).input.drafts).insert(
@@ -1391,14 +1475,10 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.media.images.insert(
-                    view.image_key(&source, false),
-                    ImageState {
-                        source: Arc::new(source.clone()),
-                        path: Some(source.clone().into()),
-                        error: None,
-                    },
-                );
+                view.publish_views(window, cx);
+                view.media.update(cx, |media, cx| {
+                    media.fixture_image(&source, source.clone().into(), cx);
+                });
                 let store = runtime.block_on(async {
                     Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
                 });
@@ -1426,18 +1506,22 @@ mod composer_tests {
         window.simulate_click(bounds.center(), Modifiers::default());
         let desktop = desktop_handle.unwrap();
         window.update(|_, cx| {
-            desktop.update(cx, |view, _| {
+            desktop.update(cx, |view, cx| {
                 assert!(
-                    view.media.gallery.is_some(),
+                    view.media.read(cx).gallery.is_some(),
                     "the thumbnail still opens the gallery"
                 );
-                view.media.gallery = None;
+                view.media.update(cx, |media, cx| media.close_gallery(cx));
             })
         });
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
-                let key = view.image_key(&source, false);
-                view.media.images.get_mut(&key).unwrap().path = None;
+                view.media.update(cx, |media, cx| {
+                    media.asset(&source, false, cx).update(cx, |asset, cx| {
+                        asset.path = None;
+                        cx.notify();
+                    });
+                });
                 view.composer_view
                     .read(cx)
                     .content
@@ -1474,7 +1558,11 @@ mod composer_tests {
             );
         });
         window.simulate_click(remove, Modifiers::default());
-        window.update(|_, cx| desktop.update(cx, |view, _| assert!(view.media.gallery.is_none())));
+        window.update(|_, cx| {
+            desktop.update(cx, |view, cx| {
+                assert!(view.media.read(cx).gallery.is_none())
+            })
+        });
         let snapshot = store_handle.unwrap().snapshot();
         let draft = &snapshot.input.drafts[&draft_key.unwrap()];
         assert!(draft.attachments.is_empty());

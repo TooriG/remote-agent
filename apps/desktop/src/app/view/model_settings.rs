@@ -2,7 +2,7 @@ use super::*;
 use agent_protocol::session::ProviderKind;
 use gpui_kit::Rgba;
 
-pub(super) fn provider_icon(provider: ProviderKind) -> Icon {
+pub(in crate::app) fn provider_icon(provider: ProviderKind) -> Icon {
     Icon::default().path(match provider {
         ProviderKind::Codex => "icons/openai.svg",
         ProviderKind::Claude => "icons/anthropic.svg",
@@ -28,8 +28,8 @@ fn account_identity(provider: Option<ProviderKind>, identity: &str) -> Div {
         .child(div().min_w_0().text_ellipsis().child(identity.to_owned()))
 }
 
-impl Desktop {
-    pub(super) fn refresh_accounts_and_models(&self) {
+impl Preferences {
+    pub(in crate::app) fn refresh_accounts_and_models(&self) {
         self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
         self.dispatch(Intent::RefreshModels);
         if self.account_provider() == Some(ProviderKind::DeepSeek) {
@@ -37,10 +37,10 @@ impl Desktop {
         }
     }
 
-    pub(super) fn model_menu(
+    pub(in crate::app) fn model_menu(
         label: String,
         render_owner: EntityId,
-        desktop: &WeakEntity<Desktop>,
+        desktop: &WeakEntity<Preferences>,
         cx: &App,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
@@ -83,7 +83,7 @@ impl Desktop {
                 }
             })
             .content(move |_, window, cx| {
-                observe_popup_desktop(&entity, render_owner, window, cx);
+                observe_popup(&entity, render_owner, window, cx);
                 entity
                     .update(cx, |s, cx| {
                         v_flex()
@@ -203,8 +203,10 @@ impl Desktop {
                 format!("account-usage-manage-{index}"),
                 language.text("追加クレジット・上限を管理"),
                 cx,
-                |s, _, cx| {
-                    s.open_browser(s.panel_scope(), "https://chatgpt.com/settings/usage", cx);
+                |_, _, cx| {
+                    cx.emit(super::super::preferences::PreferencesEvent::OpenBrowser(
+                        "https://chatgpt.com/settings/usage".into(),
+                    ));
                 },
             );
             let hint = div().text_xs().text_color(rgb(appearance::MUTED))
@@ -247,9 +249,9 @@ impl Desktop {
         }
         row.into_any_element()
     }
-    pub(super) fn account_controls(&self, cx: &Context<Self>) -> AnyElement {
+    pub(in crate::app) fn account_controls(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let in_settings = self.tab == Tab::Settings;
+        let in_settings = self.opened;
         let accounts = self.snapshot.catalog.account.accounts.as_ref();
         let provider = self.account_provider();
         let disabled = self.account.busy
@@ -443,7 +445,13 @@ impl Desktop {
             );
         }
         if !in_settings {
-            body = body.child(self.error_notices(ErrorScope::Settings, cx));
+            body = body.child(super::errors::error_list(
+                &self.settings_errors(),
+                ErrorScope::Settings,
+                None,
+                cx,
+                Self::notice_action,
+            ));
         }
         if provider == ProviderKind::Codex {
             body = body.child(self.codex_cli_controls(disabled, cx));
@@ -477,8 +485,8 @@ impl Desktop {
     }
 }
 
-impl Desktop {
-    pub(super) fn account_provider(&self) -> Option<ProviderKind> {
+impl Preferences {
+    pub(in crate::app) fn account_provider(&self) -> Option<ProviderKind> {
         self.model_controls
             .provider
             .or_else(|| {
@@ -514,7 +522,7 @@ impl Desktop {
         }
     }
     pub(in crate::app) fn account_operation(&mut self, intent: Intent) {
-        if self.account.busy || self.session.is_none() || !self.snapshot.connection.connected {
+        if self.account.busy || self.pane.is_none() || !self.snapshot.connection.connected {
             return;
         }
         if let Intent::StartAccountLogin(start) = &intent {
@@ -522,7 +530,7 @@ impl Desktop {
             self.account.login_draft = Some(self.draft_key().clone());
         }
         self.account.busy = true;
-        self.perform(intent, OperationCompletion::Account);
+        self.perform(intent, super::super::preferences::Completion::Account);
     }
 
     fn credential_controls(&self, cx: &Context<Self>) -> AnyElement {
@@ -666,7 +674,7 @@ impl Desktop {
         form.into_any_element()
     }
 
-    pub(super) fn account_login_controls(
+    pub(in crate::app) fn account_login_controls(
         &self,
         title: Option<&str>,
         cx: &Context<Self>,
@@ -878,7 +886,7 @@ fn account_usage_view(
         .into_any_element()
 }
 
-impl Desktop {
+impl Preferences {
     fn show_openrouter_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model_controls.provider = Some(ProviderKind::DeepSeek);
         self.model_controls.panel = ModelPanel::Models;
@@ -938,7 +946,7 @@ impl Desktop {
                             thread_id: s.draft_key().clone(),
                             model: value.clone(),
                         });
-                        s.accept_snapshot(window, cx);
+                        s.sync_from_pane(window, cx);
                         s.model_controls
                             .search
                             .update(cx, |input, cx| input.set_value("openrouter", window, cx));
@@ -1232,7 +1240,7 @@ impl Desktop {
                                 "model-picker-effort",
                                 true,
                                 self.draft_key().clone(),
-                                self.session.as_ref().map(|session| session.pane.clone()),
+                                self.pane.clone(),
                                 cx,
                             ))
                             .child(Self::fast_control(
@@ -1241,7 +1249,7 @@ impl Desktop {
                                 "model-picker-speed",
                                 true,
                                 self.draft_key().clone(),
-                                self.session.as_ref().map(|session| session.pane.clone()),
+                                self.pane.clone(),
                                 cx,
                             )),
                     )
@@ -1256,7 +1264,7 @@ impl Desktop {
             .into_any_element()
     }
 
-    pub(super) fn fast_control(
+    pub(in crate::app) fn fast_control(
         controls: agent_core::presentation::model_settings::ModelQuickControls,
         enabled: bool,
         id: &'static str,
@@ -1339,7 +1347,7 @@ impl Desktop {
         }
     }
 
-    pub(super) fn effort_control(
+    pub(in crate::app) fn effort_control(
         controls: agent_core::presentation::model_settings::ModelQuickControls,
         enabled: bool,
         id: &'static str,
@@ -1496,7 +1504,7 @@ fn usage_bar(remaining_percent: u32, tint: Rgba) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{Desktop, Draft, Mode, ModelPanel, RemoteHost};
+    use super::{Desktop, Draft, Mode, ModelPanel, Preferences, RemoteHost};
     use gpui_kit as gpui;
     use gpui_kit::component::{h_flex, v_flex};
     use gpui_kit::{AppContext, Modifiers, Render, TestAppContext};
@@ -1505,42 +1513,52 @@ mod tests {
 
     struct PickerView(Entity<Desktop>);
     impl Render for PickerView {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.0.update(cx, |view, cx| {
-                v_flex()
-                    .w(px(420.))
-                    .gap_3()
-                    .child(
-                        h_flex()
-                            .child(Desktop::fast_control(
-                                view.snapshot.model_quick_controls(view.draft_key().clone()),
-                                view.model_controls_enabled(),
-                                "model-fast",
-                                false,
-                                view.draft_key().clone(),
-                                view.session.as_ref().map(|session| session.pane.clone()),
-                                cx,
-                            ))
-                            .child(Desktop::model_menu(
-                                view.selected_model()
-                                    .map_or("モデルを選択".to_owned(), |model| {
-                                        model.display_name.clone()
-                                    }),
-                                cx.entity().entity_id(),
-                                &cx.weak_entity(),
-                                cx,
-                            ))
-                            .child(Desktop::effort_control(
-                                view.snapshot.model_quick_controls(view.draft_key().clone()),
-                                view.model_controls_enabled(),
-                                "model-effort",
-                                false,
-                                view.draft_key().clone(),
-                                view.session.as_ref().map(|session| session.pane.clone()),
-                                cx,
-                            )),
-                    )
-                    .child(view.model_panel_content(cx))
+                // Drive the same Store adoption boundary as the window's observation.
+                view.accept_snapshot(window, cx);
+                // This fixture uses an offline Store for local model edits while
+                // presenting the connected controls under test.
+                if view.session.is_some() {
+                    Arc::make_mut(&mut view.snapshot).connection.connected = true;
+                }
+                view.publish_preferences(window, cx);
+                view.preferences.update(cx, |view, cx| {
+                    v_flex()
+                        .w(px(420.))
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .child(Preferences::fast_control(
+                                    view.snapshot.model_quick_controls(view.draft_key().clone()),
+                                    view.model_controls_enabled(),
+                                    "model-fast",
+                                    false,
+                                    view.draft_key().clone(),
+                                    view.pane.clone(),
+                                    cx,
+                                ))
+                                .child(Preferences::model_menu(
+                                    view.selected_model()
+                                        .map_or("モデルを選択".to_owned(), |model| {
+                                            model.display_name.clone()
+                                        }),
+                                    cx.entity().entity_id(),
+                                    &cx.weak_entity(),
+                                    cx,
+                                ))
+                                .child(Preferences::effort_control(
+                                    view.snapshot.model_quick_controls(view.draft_key().clone()),
+                                    view.model_controls_enabled(),
+                                    "model-effort",
+                                    false,
+                                    view.draft_key().clone(),
+                                    view.pane.clone(),
+                                    cx,
+                                )),
+                        )
+                        .child(view.model_panel_content(cx))
+                })
             })
         }
     }
@@ -1582,6 +1600,8 @@ mod tests {
                 Arc::make_mut(&mut snapshot.input.drafts).insert(key, Arc::new(Draft { model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "gpt".into() }), ..Default::default() }));
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
+            let preferences = desktop.read(cx).preferences.clone();
+            cx.observe(&preferences, |_, _, cx| cx.notify()).detach();
             PickerView(desktop)
         });
         window.run_until_parked();
@@ -1633,14 +1653,32 @@ mod tests {
         window.run_until_parked();
         window.update(|_, cx| {
             assert_eq!(
-                view.read(cx).0.read(cx).account.sign_out.as_deref(),
+                view.read(cx)
+                    .0
+                    .read(cx)
+                    .preferences
+                    .read(cx)
+                    .account
+                    .sign_out
+                    .as_deref(),
                 Some("first")
             )
         });
         let cancel = window.debug_bounds("account-logout-cancel-0").unwrap();
         window.simulate_click(cancel.center(), Modifiers::default());
         window.run_until_parked();
-        window.update(|_, cx| assert!(view.read(cx).0.read(cx).account.sign_out.is_none()));
+        window.update(|_, cx| {
+            assert!(
+                view.read(cx)
+                    .0
+                    .read(cx)
+                    .preferences
+                    .read(cx)
+                    .account
+                    .sign_out
+                    .is_none()
+            )
+        });
         window.simulate_click(logout.center(), Modifiers::default());
         window.run_until_parked();
         let back = window.debug_bounds("model-panel-back").unwrap();
@@ -1648,7 +1686,18 @@ mod tests {
         window.run_until_parked();
         assert!(window.debug_bounds("model-choice-gpt").is_some());
         assert!(window.debug_bounds("account-logout-0").is_none());
-        window.update(|_, cx| assert!(view.read(cx).0.read(cx).account.sign_out.is_none()));
+        window.update(|_, cx| {
+            assert!(
+                view.read(cx)
+                    .0
+                    .read(cx)
+                    .preferences
+                    .read(cx)
+                    .account
+                    .sign_out
+                    .is_none()
+            )
+        });
         let summary = window.debug_bounds("model-account-summary").unwrap();
         window.simulate_click(summary.center(), Modifiers::default());
         window.run_until_parked();
@@ -1663,9 +1712,12 @@ mod tests {
         assert!(window.debug_bounds("model-choice-gpt").is_some());
         window.update(|window, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.model_controls
-                    .search
-                    .update(cx, |input, cx| input.set_value("no match", window, cx));
+                view.preferences.update(cx, |preferences, cx| {
+                    preferences
+                        .model_controls
+                        .search
+                        .update(cx, |input, cx| input.set_value("no match", window, cx));
+                });
                 cx.notify();
             })
         });
@@ -1684,10 +1736,15 @@ mod tests {
                 Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
                     session.clone().into();
                 Arc::make_mut(&mut snapshot.input.drafts).insert(session.into(), Arc::new(draft));
-                view.model_controls.provider = None;
-                view.model_controls
-                    .search
-                    .update(cx, |input, cx| input.set_value("", window, cx));
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.model_controls.provider = None;
+                });
+                view.preferences.update(cx, |preferences, cx| {
+                    preferences
+                        .model_controls
+                        .search
+                        .update(cx, |input, cx| input.set_value("", window, cx));
+                });
                 cx.notify();
             })
         });
@@ -1698,7 +1755,7 @@ mod tests {
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
             assert_eq!(
-                desktop.model_controls.provider,
+                desktop.preferences.read(cx).model_controls.provider,
                 Some(agent_protocol::session::ProviderKind::Claude)
             );
             assert_eq!(desktop.selected().unwrap().id, "existing");
@@ -1706,8 +1763,12 @@ mod tests {
         assert!(window.debug_bounds("model-choice-claude:sonnet").is_some());
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.model_controls.panel = ModelPanel::Accounts;
-                view.account.busy = true;
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.model_controls.panel = ModelPanel::Accounts;
+                });
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.account.busy = true;
+                });
                 cx.notify();
             })
         });
@@ -1716,7 +1777,13 @@ mod tests {
         window.simulate_click(claude.center(), Modifiers::default());
         window.update(|_, cx| {
             assert_eq!(
-                view.read(cx).0.read(cx).model_controls.provider,
+                view.read(cx)
+                    .0
+                    .read(cx)
+                    .preferences
+                    .read(cx)
+                    .model_controls
+                    .provider,
                 Some(agent_protocol::session::ProviderKind::Claude)
             )
         });
@@ -1755,9 +1822,13 @@ mod tests {
                 )
             });
             desktop.update(cx, |view, cx| {
-                view.model_controls.provider =
-                    Some(agent_protocol::session::ProviderKind::DeepSeek);
-                view.model_controls.panel = ModelPanel::Accounts;
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.model_controls.provider =
+                        Some(agent_protocol::session::ProviderKind::DeepSeek);
+                });
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.model_controls.panel = ModelPanel::Accounts;
+                });
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials =
@@ -1768,11 +1839,15 @@ mod tests {
                             needs_attention: false,
                         }],
                     }));
-                view.account.code.update(cx, |input, cx| {
-                    input.set_value("previous-secret", window, cx)
+                view.preferences.update(cx, |preferences, cx| {
+                    preferences.account.code.update(cx, |input, cx| {
+                        input.set_value("previous-secret", window, cx)
+                    });
                 });
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
+            let preferences = desktop.read(cx).preferences.clone();
+            cx.observe(&preferences, |_, _, cx| cx.notify()).detach();
             PickerView(desktop)
         });
         window.run_until_parked();
@@ -1783,17 +1858,29 @@ mod tests {
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
             assert!(
-                desktop.account.dsh_key_provider == agent_protocol::dsh::KeyProvider::OpenRouter
+                desktop.preferences.read(cx).account.dsh_key_provider
+                    == agent_protocol::dsh::KeyProvider::OpenRouter
             );
-            assert!(desktop.account.code.read(cx).value().is_empty());
+            assert!(
+                desktop
+                    .preferences
+                    .read(cx)
+                    .account
+                    .code
+                    .read(cx)
+                    .value()
+                    .is_empty()
+            );
         });
         assert!(window.debug_bounds("dsh-key-remove").is_some());
         assert!(window.debug_bounds("account-submit-code").is_some());
         assert!(window.debug_bounds("dsh-openrouter-models").is_some());
         window.update(|window, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
-                view.account.code.update(cx, |input, cx| {
-                    input.set_value("unsaved-route-key", window, cx)
+                view.preferences.update(cx, |preferences, cx| {
+                    preferences.account.code.update(cx, |input, cx| {
+                        input.set_value("unsaved-route-key", window, cx)
+                    });
                 });
             });
         });
@@ -1804,6 +1891,8 @@ mod tests {
             assert!(
                 view.read(cx)
                     .0
+                    .read(cx)
+                    .preferences
                     .read(cx)
                     .account
                     .code
@@ -1830,8 +1919,17 @@ mod tests {
         assert!(window.debug_bounds("model-choice-official").is_none());
         window.update(|_, cx| {
             let desktop = view.read(cx).0.read(cx);
-            assert!(desktop.model_controls.panel == ModelPanel::Models);
-            assert_eq!(desktop.model_controls.search.read(cx).value(), "openrouter");
+            assert!(desktop.preferences.read(cx).model_controls.panel == ModelPanel::Models);
+            assert_eq!(
+                desktop
+                    .preferences
+                    .read(cx)
+                    .model_controls
+                    .search
+                    .read(cx)
+                    .value(),
+                "openrouter"
+            );
         });
     }
 
@@ -1902,14 +2000,18 @@ mod tests {
                     cx,
                 )
             });
-            desktop.update(cx, |view, _| {
+            desktop.update(cx, |view, cx| {
                 view.snapshot = store.snapshot();
                 Arc::make_mut(&mut view.snapshot).connection.connected = true;
                 view.session = Some(session);
-                view.model_controls.provider =
-                    Some(agent_protocol::session::ProviderKind::DeepSeek);
+                view.preferences.update(cx, |preferences, _| {
+                    preferences.model_controls.provider =
+                        Some(agent_protocol::session::ProviderKind::DeepSeek);
+                });
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
+            let preferences = desktop.read(cx).preferences.clone();
+            cx.observe(&preferences, |_, _, cx| cx.notify()).detach();
             PickerView(desktop)
         });
         window.run_until_parked();

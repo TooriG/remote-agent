@@ -645,7 +645,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
     androidx.compose.runtime.key(model.selectionKey) {
         var scrollToTopRequest by remember { mutableStateOf(0) }
         ConversationHeader(
-            model.conversation?.source?.source()?.title(),
+            model.conversationContext.title(),
             model::showThreads,
         ) {
             scrollToTopRequest += 1

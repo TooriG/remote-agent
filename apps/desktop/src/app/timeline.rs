@@ -7,30 +7,6 @@ pub(super) struct RequestInputs {
     pub(super) response: Entity<TextareaState>,
     pub(super) sent: bool,
 }
-pub(super) struct ImageGallery {
-    pub(super) zoom: f32,
-    pub(super) id: uuid::Uuid,
-    pub(super) entries: Vec<(Arc<String>, bool)>,
-    pub(super) initial: (Arc<String>, bool),
-    pub(super) selected: Option<usize>,
-    pub(super) list: ListState,
-    pub(super) loading: bool,
-    pub(super) saving: bool,
-    pub(super) saved: bool,
-    pub(super) error: String,
-}
-impl ImageGallery {
-    pub(super) fn current_image(&self) -> &(Arc<String>, bool) {
-        self.selected
-            .and_then(|index| self.entries.get(index))
-            .unwrap_or(&self.initial)
-    }
-}
-pub(super) struct ImageState {
-    pub(super) source: Arc<String>,
-    pub(super) path: Option<ImageSource>,
-    pub(super) error: Option<String>,
-}
 pub(super) struct MarkdownContent {
     pub(super) source: SharedString,
     pub(super) rendered: SharedString,
@@ -41,23 +17,6 @@ pub(super) struct MarkdownContent {
     pub(super) diagrams: HashMap<String, Arc<RenderImage>>,
     pub(super) wrap_code: bool,
     pub(super) compact_tables: bool,
-}
-pub(super) struct Media {
-    pub(super) images: HashMap<String, ImageState>,
-    pub(super) gallery: Option<ImageGallery>,
-    pub(super) image_dir: tempfile::TempDir,
-}
-impl Media {
-    pub(super) fn new() -> Self {
-        Self {
-            images: HashMap::new(),
-            gallery: None,
-            image_dir: tempfile::Builder::new()
-                .prefix("agent-images-")
-                .tempdir()
-                .expect("image temporary directory"),
-        }
-    }
 }
 #[derive(Clone)]
 pub(super) enum ConversationRow {

@@ -1,5 +1,11 @@
 name: Android candidate
 on:
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: Existing draft candidate whose Android package needs rebuilding
+        type: string
+        required: true
   workflow_call:
     inputs:
       release-tag:
@@ -11,12 +17,14 @@ on:
       BEX_ANDROID_KEYSTORE_PASSWORD:
         required: true
 permissions:
+  actions: read
   contents: write
 concurrency:
   group: android-candidate-${{ inputs.release-tag }}
   cancel-in-progress: false
 jobs:
   build:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -30,6 +38,20 @@ jobs:
           ref: ${{ inputs.release-tag }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Require a verified draft candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          [[ $CANDIDATE_TAG =~ ^(nightly|prd)-[1-9][0-9]*$ ]]
+          test "$(gh release view "$CANDIDATE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+          revision=$(git rev-parse HEAD)
+          for workflow in portable.yml native.yml; do
+            verified=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch main \
+              --event push --commit "$revision" --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+            test "$verified" = "$revision"
+          done
       - name: Free build space
         run: |
           for sdk in /usr/local/lib/android /usr/share/dotnet; do
