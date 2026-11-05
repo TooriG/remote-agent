@@ -40,7 +40,9 @@ fn availability(
         return AgentAvailability::Checking;
     }
     let key = provider.key();
-    if errors.contains_key(key) {
+    if errors.contains_key(key)
+        || accounts.is_some_and(|accounts| accounts.errors.contains_key(&provider))
+    {
         return AgentAvailability::Unavailable;
     }
     let Some(accounts) = accounts else {
@@ -99,6 +101,14 @@ impl Snapshot {
                             .and_then(|error| error.get("message"))
                             .and_then(Value::as_str)
                             .map(super::error::error_text)
+                            .or_else(|| {
+                                self.account
+                                    .accounts
+                                    .as_ref()?
+                                    .errors
+                                    .get(&provider)
+                                    .map(|error| super::error::error_text(error))
+                            })
                             .or_else(|| self.operation_error(OperationKey::Models))
                             .or_else(|| self.operation_error(OperationKey::Accounts))
                     })
@@ -171,6 +181,45 @@ mod tests {
                 .iter()
                 .all(|agent| agent.error.is_none())
         );
+    }
+
+    #[test]
+    fn account_probe_failures_are_scoped_and_recover_without_logging_out() {
+        use std::sync::Arc;
+        let mut snapshot = Snapshot {
+            connected: true,
+            models: Arc::new(serde_json::from_value(serde_json::json!([
+                {"id":"gpt", "model":{"provider":"codex","id":"gpt"}, "displayName":"GPT", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                {"id":"sonnet", "model":{"provider":"claude","id":"sonnet"}, "displayName":"Sonnet", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
+            ])).unwrap()),
+            ..Default::default()
+        };
+        let accounts: Accounts = serde_json::from_value(serde_json::json!({
+            "accounts":[{"id":"native", "provider":"codex"}, {"id":"claude:desktop", "provider":"claude"}],
+            "selected":{"codex":"native", "claude":"claude:desktop"},
+            "errors":{"claude":"executable is missing: claude"}
+        })).unwrap();
+        Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(accounts));
+        let setup = snapshot.connection_setup();
+        assert!(setup.can_start);
+        assert_eq!(setup.agents[0].availability, AgentAvailability::Ready);
+        assert!(setup.agents[0].error.is_none());
+        assert_eq!(setup.agents[1].availability, AgentAvailability::Unavailable);
+        assert_eq!(
+            setup.agents[1].error.as_ref().unwrap().details.as_deref(),
+            Some("executable is missing: claude")
+        );
+        Arc::make_mut(
+            Arc::make_mut(&mut snapshot.account)
+                .accounts
+                .as_mut()
+                .unwrap(),
+        )
+        .errors
+        .clear();
+        let setup = snapshot.connection_setup();
+        assert_eq!(setup.agents[1].availability, AgentAvailability::Ready);
+        assert!(setup.agents[1].error.is_none());
     }
 
     #[test]
@@ -255,6 +304,7 @@ mod tests {
             authenticated in proptest::bool::ANY,
             catalog in proptest::bool::ANY,
             failed in proptest::bool::ANY,
+            account_failed in proptest::bool::ANY,
             provider in proptest::sample::select(vec![ProviderKind::Codex, ProviderKind::Claude, ProviderKind::DeepSeek]),
         ) {
             let key = provider.key();
@@ -267,11 +317,11 @@ mod tests {
             let accounts: Accounts = serde_json::from_value(serde_json::json!({
                 "accounts": if authenticated { vec![serde_json::json!({"id":"selected","provider":key})] } else { Vec::new() },
                 "selected":{(key):"selected"},
-                "error":null
+                "errors": if account_failed { serde_json::json!({(key):"account probe failed"}) } else { serde_json::json!({}) }
             })).unwrap();
             let errors = if failed { Map::from_iter([(key.into(), Value::Null)]) } else { Map::new() };
             let actual = availability(connected, provider, &models, Some(&accounts), &errors);
-            proptest::prop_assert_eq!(actual == AgentAvailability::Ready, connected && authenticated && catalog && !failed);
+            proptest::prop_assert_eq!(actual == AgentAvailability::Ready, connected && authenticated && catalog && !failed && !account_failed);
         }
 
         #[test]
@@ -330,7 +380,7 @@ mod tests {
         let accounts = Accounts {
             accounts: Vec::new(),
             selected: Default::default(),
-            error: None,
+            errors: Default::default(),
         };
         assert_eq!(
             availability(

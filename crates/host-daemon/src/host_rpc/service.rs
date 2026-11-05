@@ -782,11 +782,11 @@ mod tests {
         assert!(list.provider_errors.is_none());
         a.accounts_gate.add_permits(1);
         b.accounts_gate.add_permits(1);
-        assert!(accounts.await.unwrap().error.is_none());
+        assert!(accounts.await.unwrap().errors.is_empty());
     }
 
     #[tokio::test]
-    async fn account_read_failures_are_ordered_with_other_providers_startup_errors() {
+    async fn account_read_failures_keep_their_provider_alongside_startup_errors() {
         use super::conversations::tests::{NativeAgent, call};
         use super::*;
         use std::sync::atomic::Ordering;
@@ -811,8 +811,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            accounts.error.as_deref(),
-            Some("codex accounts failed\nclaude startup failed\ndeepseek startup failed")
+            accounts.errors,
+            [
+                (ProviderKind::Codex, "codex accounts failed".into()),
+                (ProviderKind::Claude, "claude startup failed".into()),
+                (ProviderKind::DeepSeek, "deepseek startup failed".into()),
+            ]
+            .into()
         );
     }
 

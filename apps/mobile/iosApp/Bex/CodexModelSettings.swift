@@ -6,10 +6,6 @@ extension AppViewModel {
         snapshot.accounts()?.accounts ?? []
     }
 
-    var accountError: String? {
-        snapshot.accounts()?.error
-    }
-
     var selectedModel: ModelRef? {
         snapshot.draft(key: coreDraftKey).model
     }

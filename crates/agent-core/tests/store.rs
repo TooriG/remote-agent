@@ -2701,7 +2701,7 @@ async fn account_selection_publishes_the_selected_account_and_persistence_warnin
     let (store, mut reader, writer) = setup(Snapshot::default()).await;
     let listing = store.dispatch(Intent::ListAccounts(op::ListAccounts {}));
     let request = read(&mut reader).await;
-    writer.reply(&request, json!({"result":{"accounts":[{"provider":"codex","id":"a"},{"provider":"claude","id":"claude:c"}],"selected":{"codex":"a","claude":"claude:c"},"error":null}})).await.unwrap();
+    writer.reply(&request, json!({"result":{"accounts":[{"provider":"codex","id":"a"},{"provider":"claude","id":"claude:c"}],"selected":{"codex":"a","claude":"claude:c"},"errors":{}}})).await.unwrap();
     listing.await.unwrap();
     assert_eq!(
         store
@@ -2769,7 +2769,7 @@ async fn account_selection_publishes_the_selected_account_and_persistence_warnin
         let request = read(&mut reader).await;
         let result = match request["method"].as_str().unwrap() {
             "host/account/list" => {
-                json!({"accounts":[{"provider":"codex","id":"a"},{"provider":"codex","id":"b"},{"provider":"claude","id":"claude:c"}],"selected":{"codex":"b","claude":"claude:c"},"error":null})
+                json!({"accounts":[{"provider":"codex","id":"a"},{"provider":"codex","id":"b"},{"provider":"claude","id":"claude:c"}],"selected":{"codex":"b","claude":"claude:c"},"errors":{}})
             }
             "host/model/list" => json!({"data":[]}),
             method => panic!("unexpected account refresh: {method}"),
@@ -2805,7 +2805,7 @@ async fn concurrent_account_listing_preserves_login_and_cancellation_ignores_lat
     writer
         .reply(
             &list,
-            json!({"result":{"accounts":[],"selected":{},"error":null}}),
+            json!({"result":{"accounts":[],"selected":{},"errors":{}}}),
         )
         .await
         .unwrap();
@@ -4031,7 +4031,7 @@ async fn completed_login_selects_its_account_before_refreshing_without_client_lo
                 let request = read(&mut reader).await;
                 let result = match request["method"].as_str().unwrap() {
                     "host/account/list" => {
-                        json!({"accounts":[{"provider":provider,"id":id}],"selected":{(provider):id},"error":null})
+                        json!({"accounts":[{"provider":provider,"id":id}],"selected":{(provider):id},"errors":{}})
                     }
                     "host/model/list" => {
                         json!({"data":[{"id":model_id,"model":{"provider":provider,"id":model_id},"displayName":model_id, "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}]})

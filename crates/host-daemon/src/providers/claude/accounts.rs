@@ -708,6 +708,44 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
 
     #[tokio::test]
+    async fn failed_native_discovery_returns_saved_accounts_with_a_scoped_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let native = directory.path().join("native");
+        let claude = super::super::Claude::load(
+            directory.path().join("missing-claude"),
+            directory.path().join("adapter"),
+            Some(native),
+        )
+        .await
+        .unwrap();
+        let saved = Account {
+            id: "claude:desktop".into(),
+            provider: ProviderKind::Claude,
+            email: Some("native@example.invalid".into()),
+            plan_type: Some("max".into()),
+            usage: None,
+        };
+        claude
+            .accounts
+            .lock()
+            .await
+            .registry
+            .accounts
+            .push(saved.clone());
+        let listed = crate::providers::Identity::list(&claude).await.unwrap();
+        assert_eq!(listed.accounts, vec![saved]);
+        assert_eq!(
+            listed
+                .selected
+                .get(&ProviderKind::Claude)
+                .map(String::as_str),
+            Some("claude:desktop")
+        );
+        assert!(listed.errors[&ProviderKind::Claude].contains("executable is missing"));
+        assert!(claude.accounts.lock().await.native_checked_at.is_none());
+    }
+
+    #[tokio::test]
     async fn repeated_listing_reuses_native_identity_but_expiration_rechecks_it() {
         let directory = tempfile::tempdir().unwrap();
         let mut accounts = Accounts::load(

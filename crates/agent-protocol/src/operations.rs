@@ -269,7 +269,8 @@ impl UsageWindow {
 pub struct Accounts {
     pub accounts: Vec<Account>,
     pub selected: std::collections::HashMap<crate::session::ProviderKind, String>,
-    pub error: Option<String>,
+    #[serde(default)]
+    pub errors: std::collections::HashMap<crate::session::ProviderKind, String>,
 }
 
 impl Accounts {

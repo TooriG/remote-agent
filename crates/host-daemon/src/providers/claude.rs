@@ -1705,11 +1705,14 @@ impl crate::providers::Identity for Claude {
         // the selected home while that discovery is running.
         let _discovery = self.account_discovery.lock().await;
         let refresh = self.accounts.lock().await.native_refresh();
+        let mut errors = HashMap::new();
         if let Some((revision, refresh)) = refresh {
-            let info = refresh
-                .await
-                .map_err(|e| crate::providers::Failure::new("account_operation_failed", e))?;
-            self.accounts.lock().await.accept_native(revision, info);
+            match refresh.await {
+                Ok(info) => self.accounts.lock().await.accept_native(revision, info),
+                Err(error) => {
+                    errors.insert(ProviderKind::Claude, error);
+                }
+            }
         }
         let (accounts, selected) = self.accounts.lock().await.list();
         Ok(op::Accounts {
@@ -1718,7 +1721,7 @@ impl crate::providers::Identity for Claude {
                 .map(|id| (ProviderKind::Claude, id))
                 .into_iter()
                 .collect(),
-            error: None,
+            errors,
         })
     }
     async fn account(

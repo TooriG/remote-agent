@@ -243,7 +243,13 @@ impl Accounts {
                 .map(|id| (agent_protocol::session::ProviderKind::Codex, id.to_owned()))
                 .into_iter()
                 .collect(),
-            error: self.restoration_error.borrow().clone(),
+            errors: self
+                .restoration_error
+                .borrow()
+                .clone()
+                .map(|error| (agent_protocol::session::ProviderKind::Codex, error))
+                .into_iter()
+                .collect(),
         })
     }
 

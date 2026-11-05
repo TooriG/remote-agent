@@ -775,7 +775,7 @@ impl Identity for DeepSeek {
             } else {
                 HashMap::new()
             },
-            error: None,
+            errors: Default::default(),
         })
     }
     async fn dsh_credentials(&self) -> Result<agent_protocol::dsh::Credentials, Failure> {

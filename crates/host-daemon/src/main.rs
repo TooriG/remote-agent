@@ -1,4 +1,6 @@
 mod command_line;
+#[cfg(any(target_os = "macos", test))]
+mod environment;
 mod management;
 mod runtime;
 
@@ -8,6 +10,8 @@ use clap::Parser;
 use command_line::StartupConfig;
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    environment::initialize();
     host_runtime().block_on(run());
 }
 

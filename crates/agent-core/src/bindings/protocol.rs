@@ -525,7 +525,7 @@ struct UsageWindow {
 struct Accounts {
     pub accounts: Vec<Account>,
     pub selected: std::collections::HashMap<ProviderKind, String>,
-    pub error: Option<String>,
+    pub errors: std::collections::HashMap<ProviderKind, String>,
 }
 #[uniffi::remote(Record)]
 struct StartAccountLogin {

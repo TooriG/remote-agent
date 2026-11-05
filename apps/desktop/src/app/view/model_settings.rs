@@ -411,7 +411,7 @@ impl Desktop {
                 body.child(div().text_sm().child(language.text("アカウントを更新中…")))
             })
             .when_some(
-                accounts.and_then(|accounts| accounts.error.as_ref()),
+                accounts.and_then(|accounts| accounts.errors.get(&provider)),
                 |body, error| {
                     body.child(
                         div()

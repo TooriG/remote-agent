@@ -27,6 +27,10 @@ struct AgentSettingsScreen: View {
         model.accounts.filter { $0.provider == provider }
     }
 
+    private var agent: ConnectionAgent? {
+        model.snapshot.connectionSetup().agents.first { $0.provider == provider }
+    }
+
     private var login: AccountLogin? {
         model.snapshot.accountLogin()
     }
@@ -70,12 +74,15 @@ struct AgentSettingsScreen: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("account.provider")
                     .disabled(busy)
-                    if let agent = model.snapshot.connectionSetup().agents.first(where: { $0.provider == provider }) {
+                    if let agent {
                         Label(
                             agent.label,
                             systemImage: agent.availability == .ready ? "checkmark.circle.fill" : "circle"
                         )
                         .font(.caption).foregroundStyle(agent.availability == .ready ? .green : .secondary)
+                        if let error = agent.error {
+                            ErrorTextView(text: error).font(.caption).foregroundStyle(.red)
+                        }
                     }
                 }
                 if provider == .deepSeek {
@@ -214,7 +221,7 @@ extension AgentSettingsScreen {
                     }
                 }
             }
-            if accounts.isEmpty, !loadingAccounts {
+            if accounts.isEmpty, !loadingAccounts, agent?.error == nil {
                 Text("\(providerName) にサインインして利用を開始できます。")
                     .foregroundStyle(.secondary)
             }
@@ -224,7 +231,7 @@ extension AgentSettingsScreen {
             if let loginProgressMessage {
                 ProgressView(loginProgressMessage)
             }
-            if let error = loginError ?? model.accountError {
+            if let error = loginError {
                 ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
             }
         } header: {

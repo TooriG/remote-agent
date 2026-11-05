@@ -143,7 +143,7 @@ impl Identity for NativeAgent {
         Ok(op::Accounts {
             accounts: vec![],
             selected: Default::default(),
-            error: None,
+            errors: Default::default(),
         })
     }
     async fn account(&self, _: AccountCommand) -> Result<AccountReply, Failure> {

@@ -88,9 +88,11 @@ impl Registry {
         let mut combined = op::Accounts {
             accounts: Vec::new(),
             selected: HashMap::new(),
-            error: None,
+            errors: self
+                .startup_errors()
+                .map(|(provider, error)| (provider, error.to_string()))
+                .collect(),
         };
-        let mut errors = BTreeMap::new();
         let listings = futures_util::future::join_all(self.all().into_iter().map(
             |(provider, agent)| async move { (provider, Identity::list(agent.as_ref()).await) },
         ))
@@ -100,16 +102,13 @@ impl Registry {
                 Ok(accounts) => {
                     combined.accounts.extend(accounts.accounts);
                     combined.selected.extend(accounts.selected);
-                    if let Some(error) = accounts.error {
-                        errors.insert(provider, error);
-                    }
+                    combined.errors.extend(accounts.errors);
                 }
                 Err(error) => {
-                    errors.insert(provider, error.to_string());
+                    combined.errors.insert(provider, error.to_string());
                 }
             }
         }
-        combined.error = self.error_summary(errors);
         combined
     }
 
@@ -300,7 +299,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn startup_errors_and_account_errors_follow_provider_order() {
+    async fn startup_errors_stay_ordered_and_account_errors_keep_their_provider() {
         for providers in [
             [
                 ProviderKind::DeepSeek,
@@ -330,7 +329,12 @@ mod tests {
                     .join("\n"),
                 expected
             );
-            assert_eq!(registry.accounts().await.error.as_deref(), Some(expected));
+            assert_eq!(
+                registry.accounts().await.errors,
+                providers
+                    .map(|provider| (provider, format!("{} startup failed", provider.key())))
+                    .into()
+            );
         }
     }
 

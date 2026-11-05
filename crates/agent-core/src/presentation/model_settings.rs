@@ -358,7 +358,7 @@ mod tests {
                 model_errors: Arc::new(errors),
                 account: Arc::new(crate::state::AccountState {
                     accounts: Some(Arc::new(agent_protocol::operations::Accounts {
-                        accounts: Vec::new(), selected, error: None,
+                        accounts: Vec::new(), selected, errors: Default::default(),
                     })),
                     ..Default::default()
                 }),
