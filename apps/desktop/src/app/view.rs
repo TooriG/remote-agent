@@ -7,7 +7,7 @@ mod file_tree;
 mod header;
 mod markdown_diagram;
 pub(super) mod markdown_file;
-mod media;
+pub(in crate::app) mod media;
 mod model_settings;
 mod onboarding;
 mod permissions;
@@ -18,7 +18,6 @@ mod sidebar;
 pub(in crate::app) mod workbench;
 use super::*;
 use agent_core::{presentation::error::error_text, state::operations as op};
-use base64::Engine;
 pub(super) use composer::ComposerView;
 pub(super) use conversation::ConversationView;
 pub(super) use errors::error_view;
@@ -213,6 +212,22 @@ impl Desktop {
     }
 
     pub(in crate::app) fn publish_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let source = media::MediaSource {
+            host: self.remote_key().into(),
+            cwd: self.snapshot.pane.navigation.cwd.clone(),
+            remote: self.remote.is_some(),
+            session: self.selected().cloned(),
+        };
+        self.media.update(cx, |media, cx| {
+            media.sync(
+                source,
+                self.session
+                    .as_ref()
+                    .map(|session| session.host.store.clone()),
+                self.session.as_ref().map(|session| session.pane.clone()),
+                cx,
+            )
+        });
         if let Some(sidebar) = &self.sidebar_view {
             let model = self.sidebar_model();
             let pane = self.session.as_ref().map(|session| session.pane.clone());
@@ -233,8 +248,11 @@ impl Desktop {
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.publish_views(window, cx);
-        if self.media.gallery.is_some() {
-            let gallery = self.image_gallery_view(window, cx);
+        if self.media.read(cx).gallery.is_some() {
+            let gallery = self
+                .media
+                .clone()
+                .cached(StyleRefinement::default().size_full());
             return h_flex()
                 .size_full()
                 .bg(rgb(appearance::BACKGROUND))

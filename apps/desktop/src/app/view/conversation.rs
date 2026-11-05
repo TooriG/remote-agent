@@ -39,6 +39,7 @@ pub(in crate::app) struct ConversationView {
     desktop: WeakEntity<Desktop>,
     model: ConversationModel,
     metadata: agent_core::presentation::files::FileMetadataCache,
+    media: Entity<Media>,
     pub(in crate::app) timeline: Timeline,
     selection: Entity<selection::ConversationSelection>,
     #[cfg(test)]
@@ -49,6 +50,7 @@ impl ConversationView {
     pub(in crate::app) fn new(
         desktop: &Entity<Desktop>,
         selection: Entity<selection::ConversationSelection>,
+        media: Entity<Media>,
     ) -> Self {
         Self {
             desktop: desktop.downgrade(),
@@ -56,6 +58,7 @@ impl ConversationView {
             metadata: Default::default(),
             timeline: Timeline::new(),
             selection,
+            media,
             #[cfg(test)]
             renders: 0,
         }
@@ -500,7 +503,13 @@ impl ConversationView {
             has_body = !text.unwrap_or_default().is_empty();
             body = body.child(self.markdown(id.to_owned(), text.unwrap_or_default(), cx));
         }
-        self.user_message_content(body, has_body, image_sources.iter().map(String::as_str), cx)
+        self.user_message_content(
+            id,
+            body,
+            has_body,
+            image_sources.iter().map(String::as_str),
+            cx,
+        )
     }
     pub(super) fn item(
         &mut self,
@@ -580,14 +589,16 @@ impl ConversationView {
                 if projected.data.image_placeholder {
                     body = body.child(image_skeleton(320., cx.theme().secondary));
                 }
-                for source in &projected.data.image_sources {
-                    body = body.child(
-                        self.desktop
-                            .update(cx, |desktop, cx| {
-                                desktop.image(source, false, 320., true, cx)
-                            })
-                            .unwrap_or_else(|_| div().into_any_element()),
-                    );
+                for (index, source) in projected.data.image_sources.iter().enumerate() {
+                    body = body.child(Media::preview(
+                        &self.media,
+                        format!("{id}-image-{index}"),
+                        source,
+                        false,
+                        320.,
+                        true,
+                        cx,
+                    ));
                 }
                 body.when_some(body_text, |body, text| {
                     body.child(div().text_sm().child(text.to_owned()))
@@ -1268,6 +1279,7 @@ impl ConversationView {
             }
         }
         let body = self.user_message_content(
+            id,
             body,
             !draft.text.is_empty() || draft.attachments.iter().any(|file| !file.is_image),
             draft
@@ -1301,13 +1313,15 @@ impl ConversationView {
 
     fn user_message_content<'a>(
         &mut self,
+        id: &str,
         body: Div,
         has_body: bool,
         sources: impl Iterator<Item = &'a str>,
         cx: &mut Context<Self>,
     ) -> Div {
         let images: Vec<_> = sources
-            .map(|source| {
+            .enumerate()
+            .map(|(index, source)| {
                 div()
                     .w(px(80.))
                     .h(px(80.))
@@ -1317,13 +1331,15 @@ impl ConversationView {
                     .border_1()
                     .border_color(rgb(appearance::BORDER))
                     .debug_selector(|| "user-image-thumbnail".into())
-                    .child(
-                        self.desktop
-                            .update(cx, |desktop, cx| {
-                                desktop.image(source, false, 80., true, cx)
-                            })
-                            .unwrap_or_else(|_| div().into_any_element()),
-                    )
+                    .child(Media::preview(
+                        &self.media,
+                        format!("{id}-image-{index}"),
+                        source,
+                        false,
+                        80.,
+                        true,
+                        cx,
+                    ))
             })
             .collect();
         v_flex()
@@ -1992,7 +2008,7 @@ impl ConversationView {
             .table(table_style)
             .table_cell(table_cell);
         let mut body = v_flex().gap_3().w_full().child(
-            TextView::markdown(SharedString::from(id), cached.rendered.clone())
+            TextView::markdown(SharedString::from(id.clone()), cached.rendered.clone())
                 .selectable(true)
                 .markdown_extensions(
                     gpui_kit::base::text::MarkdownExtensions::default()
@@ -2150,14 +2166,16 @@ impl ConversationView {
                     });
                 }),
         );
-        for source in images.iter() {
-            body = body.child(
-                self.desktop
-                    .update(cx, |desktop, cx| {
-                        desktop.image(source, false, 320., true, cx)
-                    })
-                    .unwrap_or_else(|_| div().into_any_element()),
-            );
+        for (index, source) in images.iter().enumerate() {
+            body = body.child(Media::preview(
+                &self.media,
+                format!("{id}-markdown-image-{index}"),
+                source,
+                false,
+                320.,
+                true,
+                cx,
+            ));
         }
         body.into_any_element()
     }
@@ -2209,7 +2227,6 @@ mod tests {
 #[cfg(test)]
 mod rendering_tests {
     use super::{Desktop, Mode, Snapshot};
-    use crate::app::ImageState;
     use agent_core::state::operations as op;
     use gpui_kit as gpui;
     use gpui_kit::{
@@ -3181,17 +3198,11 @@ mod rendering_tests {
                     user_message_fixture("caption", Some("/fixture/image.png"), pending);
                 let (view, window) = cx.add_window_view(|window, cx| {
                     let view = ConversationView::new(snapshot, source, window, cx);
-                    view.desktop.update(cx, |desktop, _| {
-                        let source = "/fixture/image.png".to_owned();
-                        let key = desktop.image_key(&source, false);
-                        desktop.media.images.insert(
-                            key,
-                            ImageState {
-                                source: Arc::new(source),
-                                path: Some(image.into()),
-                                error: None,
-                            },
-                        );
+                    view.desktop.update(cx, |desktop, cx| {
+                        desktop.publish_views(window, cx);
+                        desktop.media.update(cx, |media, cx| {
+                            media.fixture_image("/fixture/image.png", image.into(), cx);
+                        });
                     });
                     view
                 });

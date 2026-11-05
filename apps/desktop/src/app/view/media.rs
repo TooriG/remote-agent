@@ -1,249 +1,279 @@
+mod asset;
 use super::*;
-use gpui_kit::component::menu::ContextMenuExt;
+use asset::ImageAsset;
+use asset::{ImageKey, ImagePreview};
 
-impl Desktop {
-    pub(super) fn image(
+#[derive(Default)]
+pub(in crate::app) struct MediaSource {
+    pub(in crate::app) host: String,
+    pub(in crate::app) cwd: String,
+    pub(in crate::app) remote: bool,
+    pub(in crate::app) session: Option<SessionRef>,
+}
+
+pub(in crate::app) enum MediaEvent {
+    Visibility,
+    Error(String),
+}
+
+pub(in crate::app) struct Media {
+    source: MediaSource,
+    store: Option<Arc<agent_core::store::Store>>,
+    pane: Option<Arc<agent_core::store::Pane>>,
+    handle: tokio::runtime::Handle,
+    images: HashMap<ImageKey, Entity<ImageAsset>>,
+    pub(in crate::app) gallery: Option<ImageGallery>,
+    image_dir: Arc<tempfile::TempDir>,
+    side_chat_mode: bool,
+}
+impl EventEmitter<MediaEvent> for Media {}
+
+pub(in crate::app) struct ImageGallery {
+    zoom: f32,
+    id: uuid::Uuid,
+    entries: Vec<(Arc<String>, bool)>,
+    initial: (Arc<String>, bool),
+    origin: ImageKey,
+    selected: Option<usize>,
+    list: ListState,
+    loading: bool,
+    saving: bool,
+    saved: bool,
+    error: String,
+    image: Option<(Entity<ImageAsset>, Subscription)>,
+}
+impl ImageGallery {
+    pub(in crate::app) fn current_image(&self) -> &(Arc<String>, bool) {
+        self.selected
+            .and_then(|index| self.entries.get(index))
+            .unwrap_or(&self.initial)
+    }
+    fn current_key(&self) -> ImageKey {
+        let (source, encoded) = self.current_image();
+        ImageKey {
+            source: source.clone(),
+            encoded: *encoded,
+            ..self.origin.clone()
+        }
+    }
+}
+
+impl Media {
+    pub(in crate::app) fn new(handle: tokio::runtime::Handle, side_chat_mode: bool) -> Self {
+        Self {
+            source: MediaSource::default(),
+            store: None,
+            pane: None,
+            handle,
+            images: HashMap::new(),
+            gallery: None,
+            side_chat_mode,
+            image_dir: Arc::new(
+                tempfile::Builder::new()
+                    .prefix("agent-images-")
+                    .tempdir()
+                    .expect("image temporary directory"),
+            ),
+        }
+    }
+    pub(in crate::app) fn sync(
         &mut self,
+        source: MediaSource,
+        store: Option<Arc<agent_core::store::Store>>,
+        pane: Option<Arc<agent_core::store::Pane>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.source.host != source.host {
+            self.reset(cx);
+        }
+        self.source = source;
+        self.store = store;
+        self.pane = pane;
+    }
+    pub(in crate::app) fn reset(&mut self, cx: &mut Context<Self>) {
+        self.images.clear();
+        self.close_gallery(cx);
+    }
+    fn key(&self, source: &str, encoded: bool) -> ImageKey {
+        ImageKey {
+            host: self.source.host.clone(),
+            cwd: self.source.cwd.clone(),
+            source: Arc::new(source.to_owned()),
+            encoded,
+        }
+    }
+    #[cfg(test)]
+    pub(in crate::app) fn fixture_image(
+        &mut self,
+        source: &str,
+        path: ImageSource,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self.key(source, false);
+        let image = cx.new(|_| ImageAsset::fixture(key.clone(), path, self.image_dir.clone()));
+        self.images.insert(key, image);
+    }
+    #[cfg(test)]
+    pub(in crate::app) fn asset(
+        &mut self,
+        source: &str,
+        encoded: bool,
+        cx: &mut Context<Self>,
+    ) -> Entity<ImageAsset> {
+        self.asset_key(self.key(source, encoded), cx)
+    }
+    fn asset_key(&mut self, key: ImageKey, cx: &mut Context<Self>) -> Entity<ImageAsset> {
+        self.images
+            .entry(key.clone())
+            .or_insert_with(|| {
+                cx.new(|cx| {
+                    ImageAsset::new(
+                        key,
+                        self.source.remote,
+                        self.store.clone(),
+                        self.image_dir.clone(),
+                        &self.handle,
+                        cx,
+                    )
+                })
+            })
+            .clone()
+    }
+    pub(in crate::app) fn preview(
+        media: &Entity<Self>,
+        id: impl Into<SharedString>,
         source: &str,
         encoded: bool,
         height: f32,
         clickable: bool,
+        cx: &mut App,
+    ) -> AnyElement {
+        media.update(cx, |media, cx| {
+            media.image_preview(id, media.key(source, encoded), height, clickable, cx)
+        })
+    }
+    fn image_preview(
+        &mut self,
+        id: impl Into<SharedString>,
+        key: ImageKey,
+        height: f32,
+        clickable: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let language = crate::localization::language(cx);
-        let key = self.image_key(source, encoded);
-        if !self.media.images.contains_key(&key) {
-            let source = Arc::new(source.to_owned());
-            self.media.images.insert(
-                key.clone(),
-                ImageState {
-                    source: source.clone(),
-                    path: None,
-                    error: None,
-                },
-            );
-            let cwd = self.snapshot.pane.navigation.cwd.clone();
-            let remote = self.remote.is_some();
-            let store = self
-                .session
-                .as_ref()
-                .map(|session| session.host.store.clone());
-            let destination = self
-                .media
-                .image_dir
-                .path()
-                .join(format!("image-{}", self.media.images.len()));
-            let returned = key.clone();
-            self.effect(
-                async move {
-                    if encoded || source.starts_with("data:image/") {
-                        let data = if encoded {
-                            source.as_str()
-                        } else {
-                            let (header, data) = source
-                                .split_once(',')
-                                .ok_or(language.text("画像データが不正です"))?;
-                            if !header.ends_with(";base64") {
-                                return Err(language.text("未対応の画像データです").into());
-                            }
-                            data
-                        };
-                        let bytes = base64::engine::general_purpose::STANDARD
-                            .decode(data)
-                            .map_err(|error| error.to_string())?;
-                        tokio::fs::write(&destination, bytes)
-                            .await
-                            .map_err(|error| error.to_string())?;
-                        return Ok(destination.to_string_lossy().into_owned());
-                    }
-                    if source.starts_with("https://") || source.starts_with("http://") {
-                        return Ok(source.as_ref().clone());
-                    }
-                    let path = conversation_file_path(&source, &cwd)?;
-                    if !remote && path.is_absolute() {
-                        return Ok(path.to_string_lossy().into_owned());
-                    }
-                    let store = store.ok_or(language.text("ホストに接続していません"))?;
-                    if !remote {
-                        let result = store
-                            .dispatch(Intent::ResolveFile(op::ResolveFile {
-                                path: path.to_string_lossy().into_owned(),
-                            }))
-                            .await
-                            .map_err(|error| error.to_string())?;
-                        let Outcome::ResolvedFile { entry } = result else {
-                            unreachable!("resolved file outcome")
-                        };
-                        return Ok(entry.path);
-                    }
-                    files::download_to(
-                        &store,
-                        path.into_os_string()
-                            .into_string()
-                            .map_err(|_| "download source is not UTF-8")?,
-                        destination.clone(),
-                    )
-                    .await?;
-                    Ok(destination.to_string_lossy().into_owned())
-                },
-                move |result| Update::Image {
-                    key: returned,
-                    result,
-                },
-            );
+        ImagePreview {
+            id: id.into(),
+            media: cx.entity().downgrade(),
+            asset: self.asset_key(key, cx),
+            session: self.source.session.clone(),
+            height,
+            clickable,
         }
-        let state = &self.media.images[&key];
-        if let Some(path) = &state.path {
-            let background = cx.theme().secondary;
-            let id = SharedString::from(key.clone());
-            let image = img(path.clone())
-                .id(id.clone())
-                .w_full()
-                .min_w_0()
-                .h(px(height))
-                .min_h(px(height))
-                .max_h(px(height))
-                .object_fit(ObjectFit::Contain)
-                .debug_selector(|| "chat-image".into())
-                .with_loading(move || image_skeleton(height, background).into_any_element())
-                .with_fallback(move || {
-                    div()
-                        .text_sm()
-                        .text_color(rgb(appearance::MUTED))
-                        .child(language.text("画像を表示できません"))
-                        .into_any_element()
-                });
-            let source = state.source.clone();
-            let menu_source = source.clone();
-            let owner = cx.entity().downgrade();
-            let saving = self
-                .media
-                .gallery
-                .as_ref()
-                .is_some_and(|gallery| gallery.saving);
-            let image_menu = div()
-                .id(id)
-                .w_full()
-                .h(px(height))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(clickable, |element| {
-                    element
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.open_image_gallery(source.clone(), encoded, cx)
-                        }))
-                })
-                .child(image)
-                .context_menu(move |menu, _, _| {
-                    let owner = owner.clone();
-                    let source = menu_source.clone();
-                    menu.item(
-                        PopupMenuItem::new(language.text("画像を名前を付けて保存…"))
-                            .icon(Icon::default().path("icons/download.svg"))
-                            .disabled(saving)
-                            .on_click(move |_, _, cx| {
-                                let _ = owner.update(cx, |view, cx| {
-                                    view.save_image(&source, encoded, cx);
-                                });
-                            }),
-                    )
-                });
-            div()
-                .id(SharedString::from(format!("image-menu-boundary-{key}")))
-                .w_full()
-                .h(px(height))
-                .flex_shrink_0()
-                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                .child(image_menu)
-                .into_any_element()
-        } else if let Some(error) = &state.error {
-            div()
-                .text_sm()
-                .text_color(rgb(appearance::MUTED))
-                .child(error.clone())
-                .into_any_element()
-        } else {
-            image_skeleton(height, cx.theme().secondary).into_any_element()
-        }
+        .into_any_element()
     }
-
-    pub(super) fn click_conversation_link(
+    #[cfg(test)]
+    pub(in crate::app) fn open(&mut self, source: &str, encoded: bool, cx: &mut Context<Self>) {
+        self.open_gallery(self.key(source, encoded), self.source.session.clone(), cx);
+    }
+    fn open_gallery(
         &mut self,
-        source: &str,
-        control: bool,
-        window: &mut Window,
+        origin: ImageKey,
+        session: Option<SessionRef>,
         cx: &mut Context<Self>,
     ) {
-        if source.starts_with("https://") || source.starts_with("http://") {
-            if control {
-                self.open_browser(self.panel_scope(), source, cx);
-            } else {
-                cx.open_url(source);
-            }
+        if origin.host != self.source.host {
             return;
         }
-        if let Some((file, lookup_path)) =
-            agent_core::presentation::markdown::desktop_file_reference(
-                source,
-                &self.snapshot.pane.navigation.cwd,
-                self.snapshot.connection.host_home_directory.as_deref(),
-            )
-        {
-            self.activate_reference(
-                &file,
-                lookup_path.as_deref(),
-                false,
-                window.mouse_position(),
-                window,
-                cx,
-            );
-        }
-    }
-
-    pub(super) fn open_image_gallery(
-        &mut self,
-        source: Arc<String>,
-        encoded: bool,
-        cx: &mut Context<Self>,
-    ) {
+        let was_open = self.gallery.is_some();
         let id = uuid::Uuid::new_v4();
-        self.media.gallery = Some(ImageGallery {
+        self.gallery = Some(ImageGallery {
             zoom: 1.,
             id,
             entries: Vec::new(),
-            initial: (source, encoded),
+            initial: (origin.source.clone(), origin.encoded),
+            origin,
             selected: None,
             list: ListState::new(0, ListAlignment::Top, px(160.)),
-            loading: !self.selected().is_none(),
+            loading: session.is_some(),
             saving: false,
             saved: false,
             error: String::new(),
+            image: None,
         });
-        if !self.selected().is_none() {
-            self.perform(
-                Intent::LoadSessionImages(op::LoadSessionImages {
-                    thread_id: self.selected().expect("selected conversation").clone(),
-                }),
-                OperationCompletion::Gallery(id),
-            );
+        if let Some(thread_id) = session
+            && let Some(pane) = &self.pane
+        {
+            let receipt = pane.dispatch(Intent::LoadSessionImages(op::LoadSessionImages {
+                thread_id,
+            }));
+            let load = self
+                .handle
+                .spawn(async move { receipt.await.map_err(|error| error.to_string()) });
+            cx.spawn(async move |media, cx| {
+                let result = load.await.unwrap_or_else(|error| Err(error.to_string()));
+                let _ = media.update(cx, |media, cx| media.gallery_loaded(id, result, cx));
+            })
+            .detach();
+        }
+        if !was_open {
+            cx.emit(MediaEvent::Visibility);
         }
         cx.notify();
     }
-
-    pub(super) fn gallery_thumbnail(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn close_gallery(&mut self, cx: &mut Context<Self>) {
+        if self.gallery.take().is_some() {
+            cx.emit(MediaEvent::Visibility);
+            cx.notify();
+        }
+    }
+    fn gallery_loaded(
+        &mut self,
+        id: uuid::Uuid,
+        result: Result<Outcome, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(gallery) = self.gallery.as_mut().filter(|gallery| gallery.id == id) else {
+            return;
+        };
+        gallery.loading = false;
+        match result {
+            Ok(Outcome::SessionImages { images }) => {
+                let initial = gallery.current_image().clone();
+                let entries: Vec<_> = images
+                    .into_iter()
+                    .map(|image| (Arc::new(image.source), image.encoded))
+                    .collect();
+                gallery.selected = entries.iter().position(|entry| entry == &initial);
+                gallery
+                    .list
+                    .splice(0..gallery.list.item_count(), entries.len());
+                gallery.entries = entries;
+                if let Some(index) = gallery.selected {
+                    gallery.list.scroll_to_reveal_item(index);
+                }
+            }
+            Err(error) => {
+                tracing::error!(target: "agent", operation = "gallery.load", message = %error);
+                gallery.error = error;
+            }
+            _ => unreachable!("session image outcome"),
+        }
+        cx.notify();
+    }
+    fn gallery_thumbnail(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let Some(gallery) = &self.media.gallery else {
+        let Some(gallery) = &self.gallery else {
             return div().into_any_element();
         };
         let Some((source, encoded)) = gallery.entries.get(index).cloned() else {
             return div().into_any_element();
         };
         let selected = gallery.selected == Some(index);
-        let image = self.image(&source, encoded, 64., false, cx);
+        let key = ImageKey {
+            source,
+            encoded,
+            ..gallery.origin.clone()
+        };
+        let image = self.image_preview(format!("gallery-thumbnail-{index}"), key, 64., false, cx);
         Button::new(format!("gallery-thumbnail-{index}"))
             .accessibility_label(agent_core::localization::localized_ui_format(
                 language,
@@ -257,7 +287,7 @@ impl Desktop {
             .p_2()
             .selected(selected)
             .on_click(cx.listener(move |s, _, _, cx| {
-                if let Some(gallery) = s.media.gallery.as_mut().filter(|gallery| !gallery.saving) {
+                if let Some(gallery) = s.gallery.as_mut().filter(|gallery| !gallery.saving) {
                     gallery.selected = Some(index);
                     gallery.zoom = 1.;
                     gallery.saved = false;
@@ -268,13 +298,9 @@ impl Desktop {
             .into_any_element()
     }
 
-    pub(super) fn image_gallery_view(
-        &mut self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn image_gallery_view(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let gallery = self.media.gallery.as_ref().unwrap();
+        let gallery = self.gallery.as_ref().unwrap();
         let (source, encoded) = gallery.current_image().clone();
         let list_state = gallery.list.clone();
         let zoom = gallery.zoom;
@@ -286,19 +312,28 @@ impl Desktop {
             .map(|index| format!("{} / {}", index + 1, gallery.entries.len()))
             .unwrap_or_else(|| language.text("画像").into());
         let error = gallery.error.clone();
-        let image = self.image(
-            &source,
+        let key = ImageKey {
+            source,
             encoded,
+            ..gallery.origin.clone()
+        };
+        let asset = self.asset_key(key.clone(), cx);
+        let ready = asset.read(cx).path.is_some();
+        let gallery = self.gallery.as_mut().unwrap();
+        if gallery
+            .image
+            .as_ref()
+            .is_none_or(|(previous, _)| previous != &asset)
+        {
+            gallery.image = Some((asset.clone(), cx.observe(&asset, |_, _, cx| cx.notify())));
+        }
+        let image = self.image_preview(
+            "gallery-main",
+            key,
             (f32::from(window.viewport_size().height) - 200.).max(120.) * zoom,
             false,
             cx,
         );
-        let key = self.image_key(&source, encoded);
-        let ready = self
-            .media
-            .images
-            .get(&key)
-            .is_some_and(|image| image.path.is_some());
         let entity = cx.entity().downgrade();
         let thumbnails = list(list_state, move |index, _, cx| {
             entity
@@ -347,7 +382,7 @@ impl Desktop {
                             IconName::Close,
                             language.text("閉じる"),
                             cx,
-                            |s, _, _| s.media.gallery = None,
+                            |s, _, cx| s.close_gallery(cx),
                         )
                         .disabled(saving),
                     ),
@@ -383,7 +418,7 @@ impl Desktop {
                     .gap_3()
                     .child(
                         button("gallery-zoom-out", "−", cx, |s, _, _| {
-                            if let Some(gallery) = &mut s.media.gallery {
+                            if let Some(gallery) = &mut s.gallery {
                                 gallery.zoom = (gallery.zoom - 0.25).max(0.25);
                             }
                         })
@@ -396,7 +431,7 @@ impl Desktop {
                             format!("{:.0}%", zoom * 100.),
                             cx,
                             |s, _, _| {
-                                if let Some(gallery) = &mut s.media.gallery {
+                                if let Some(gallery) = &mut s.gallery {
                                     gallery.zoom = 1.;
                                 }
                             },
@@ -405,7 +440,7 @@ impl Desktop {
                     )
                     .child(
                         button("gallery-zoom-in", "+", cx, |s, _, _| {
-                            if let Some(gallery) = &mut s.media.gallery {
+                            if let Some(gallery) = &mut s.gallery {
                                 gallery.zoom = (gallery.zoom + 0.25).min(4.);
                             }
                         })
@@ -416,34 +451,32 @@ impl Desktop {
             .into_any_element()
     }
 
-    pub(super) fn save_gallery_image(&mut self, cx: &mut Context<Self>) {
-        let Some((source, encoded)) = self
-            .media
+    fn save_gallery_image(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self
             .gallery
             .as_ref()
             .filter(|gallery| !gallery.saving)
-            .map(|gallery| gallery.current_image().clone())
+            .map(|gallery| gallery.current_key())
         else {
             return;
         };
-        self.save_image(&source, encoded, cx);
+        self.save_image(&key, cx);
     }
 
-    fn save_image(&mut self, source: &str, encoded: bool, cx: &mut Context<Self>) {
+    fn save_image(&mut self, key: &ImageKey, cx: &mut Context<Self>) {
         let language = crate::localization::language(cx);
-        let key = self.image_key(source, encoded);
         let Some(ImageSource::Resource(resource)) = self
-            .media
             .images
-            .get(&key)
-            .and_then(|image| image.path.clone())
+            .get(key)
+            .and_then(|image| image.read(cx).path.clone())
         else {
             return;
         };
-        let id = if let Some(gallery) = self.media.gallery.as_mut().filter(|gallery| {
-            let current = gallery.current_image();
-            current.0.as_str() == source && current.1 == encoded
-        }) {
+        let id = if let Some(gallery) = self
+            .gallery
+            .as_mut()
+            .filter(|gallery| gallery.current_key() == *key)
+        {
             if gallery.saving {
                 return;
             }
@@ -521,7 +554,7 @@ impl Desktop {
             }
             .await;
             let _ = view.update(cx, |s, cx| {
-                if let Some(gallery) = s.media.gallery.as_mut().filter(|gallery| Some(gallery.id) == id) {
+                if let Some(gallery) = s.gallery.as_mut().filter(|gallery| Some(gallery.id) == id) {
                     gallery.saving = false;
                     match result {
                         Ok(saved) => gallery.saved = saved,
@@ -532,13 +565,181 @@ impl Desktop {
                     }
                 } else if let Err(error) = result {
                     tracing::error!(target: "agent", operation = "image.save", message = %error);
-                    s.set_error(error);
+                    cx.emit(MediaEvent::Error(error));
                 }
                 cx.notify();
             });
         })
         .detach();
         cx.notify();
+    }
+}
+
+impl Render for Media {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.gallery.is_some() {
+            self.image_gallery_view(window, cx)
+        } else {
+            div().into_any_element()
+        }
+    }
+}
+
+impl Desktop {
+    pub(super) fn click_conversation_link(
+        &mut self,
+        source: &str,
+        control: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if source.starts_with("https://") || source.starts_with("http://") {
+            if control {
+                self.open_browser(self.panel_scope(), source, cx);
+            } else {
+                cx.open_url(source);
+            }
+            return;
+        }
+        if let Some((file, lookup_path)) =
+            agent_core::presentation::markdown::desktop_file_reference(
+                source,
+                &self.snapshot.pane.navigation.cwd,
+                self.snapshot.connection.host_home_directory.as_deref(),
+            )
+        {
+            self.activate_reference(
+                &file,
+                lookup_path.as_deref(),
+                false,
+                window.mouse_position(),
+                window,
+                cx,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use core::prelude::v1::test;
+    use gpui_kit as gpui;
+    use std::cell::Cell;
+
+    #[gpui::test]
+    fn completions_and_zoom_notify_only_media_owners(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                sessions: Default::default(),
+                connections: Default::default(),
+                closing: Default::default(),
+                logging_error: None,
+            });
+        });
+        let mut desktop = None;
+        let _window = cx.open_window(size(px(700.), px(700.)), |window, cx| {
+            let view = cx.new(|cx| {
+                Desktop::new(
+                    Mode::Fixture {
+                        remote: None,
+                        cwd: "/fixture".into(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+            desktop = Some(view.clone());
+            crate::activity::ActivityWindow::new(view, window, cx)
+        });
+        cx.run_until_parked();
+        let desktop = desktop.unwrap();
+        let notifications = Rc::new(Cell::new(0));
+        let count = notifications.clone();
+        cx.update(|cx| {
+            cx.observe(&desktop, move |_, _| {
+                count.set(count.get() + 1);
+            })
+            .detach();
+        });
+        let (media, asset) = desktop.update(cx, |view, cx| {
+            let media = view.media.clone();
+            let asset = media.update(cx, |media, cx| media.asset("picture.png", false, cx));
+            (media, asset)
+        });
+        asset.update(cx, |asset, cx| {
+            asset.complete(Ok("/fixture/picture.png".into()), cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            notifications.get(),
+            0,
+            "loading one image must not notify Desktop"
+        );
+        media.update(cx, |media, cx| media.open("picture.png", false, cx));
+        cx.run_until_parked();
+        let before = notifications.get();
+        assert!(before > 0, "opening the gallery changes the window layout");
+        media.update(cx, |media, cx| {
+            media.gallery.as_mut().unwrap().zoom = 2.;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), before, "zoom belongs to the gallery");
+    }
+
+    #[gpui::test]
+    fn gallery_and_image_completions_cannot_replace_a_new_mount_or_host(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let media = cx.new(|_| Media::new(runtime.handle().clone(), false));
+        media.update(cx, |media, cx| {
+            media.sync(
+                MediaSource {
+                    host: "one".into(),
+                    cwd: "/work".into(),
+                    ..Default::default()
+                },
+                None,
+                None,
+                cx,
+            );
+            let old_asset = media.asset("image.png", false, cx);
+            media.open("image.png", false, cx);
+            let old_gallery = media.gallery.as_ref().unwrap().id;
+            media.open("next.png", false, cx);
+            media.gallery_loaded(old_gallery, Err("stale".into()), cx);
+            assert!(media.gallery.as_ref().unwrap().error.is_empty());
+            assert_eq!(
+                media.gallery.as_ref().unwrap().current_image().0.as_str(),
+                "next.png"
+            );
+            media.sync(
+                MediaSource {
+                    host: "two".into(),
+                    cwd: "/work".into(),
+                    ..Default::default()
+                },
+                None,
+                None,
+                cx,
+            );
+            assert!(media.gallery.is_none());
+            let current = media.asset("image.png", false, cx);
+            assert_ne!(current, old_asset);
+            old_asset.update(cx, |asset, cx| asset.complete(Ok("/old.png".into()), cx));
+            assert!(current.read(cx).path.is_none());
+            media.gallery_loaded(old_gallery, Err("stale".into()), cx);
+            assert!(media.gallery.is_none());
+        });
     }
 }
 
@@ -671,7 +872,7 @@ mod file_panel_tests {
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 assert!(
-                    view.media.gallery.is_none(),
+                    view.media.read(cx).gallery.is_none(),
                     "text references must not open a media preview"
                 );
                 assert_eq!(view.panels.get(view.panel_scope()).kind(), Panel::File);
@@ -737,7 +938,7 @@ mod file_panel_tests {
                         panel.selected().unwrap().path.as_deref(),
                         Some(target.as_str())
                     );
-                    assert!(view.media.gallery.is_none());
+                    assert!(view.media.read(cx).gallery.is_none());
                     assert_eq!(
                         view.busy, 0,
                         "{name} must not start an implicit download or OS launch"
@@ -820,9 +1021,11 @@ mod file_panel_tests {
                     .join("explicit.png")
                     .to_string_lossy()
                     .into_owned();
-                view.open_image_gallery(Arc::new(image.clone()), false, cx);
+                view.media
+                    .update(cx, |media, cx| media.open(&image, false, cx));
                 assert_eq!(
                     view.media
+                        .read(cx)
                         .gallery
                         .as_ref()
                         .unwrap()
@@ -831,7 +1034,7 @@ mod file_panel_tests {
                         .as_str(),
                     image
                 );
-                view.media.gallery = None;
+                view.media.update(cx, |media, cx| media.close_gallery(cx));
                 let request = start_reference(view, "~/Documents", window, cx);
                 view.operation_completed(
                     OperationCompletion::FileReference(Box::new(request)),
@@ -852,7 +1055,7 @@ mod file_panel_tests {
                     cx,
                 );
                 assert!(
-                    view.media.gallery.is_none(),
+                    view.media.read(cx).gallery.is_none(),
                     "a stale Host response must not open a file"
                 );
                 assert_eq!(view.panels.get(view.panel_scope()), before);

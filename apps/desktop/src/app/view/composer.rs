@@ -279,49 +279,52 @@ impl ComposerContent {
             .debug_selector(move || format!("attachment-remove-{i}"))
             .xsmall()
             .rounded_full();
-            files = files.child(if file.is_image {
-                div()
-                    .id(format!("draft-attachment-{i}"))
-                    .relative()
-                    .size(px(120.))
-                    .flex_shrink_0()
-                    .child(
-                        div().size_full().rounded_lg().overflow_hidden().child(
-                            desktop
-                                .update(cx, |desktop, cx| {
-                                    desktop.image(&file.path, false, 120., true, cx)
-                                })
-                                .unwrap_or_else(|_| div().into_any_element()),
-                        ),
-                    )
-                    .child(deferred(
-                        div()
-                            .id(format!("attachment-remove-hitbox-{i}"))
-                            .occlude()
-                            .absolute()
-                            .top(px(-4.))
-                            .right(px(-4.))
-                            .size(px(18.))
-                            .child(
-                                remove
-                                    .size(px(18.))
-                                    .custom(
-                                        ButtonCustomVariant::new(cx)
-                                            .foreground(rgb(0x222222).into())
-                                            .hover(rgb(0xe6e6e6).into())
-                                            .active(rgb(0xd4d4d4).into()),
-                                    )
-                                    .bg(rgb(0xffffff)),
+            files =
+                files.child(if file.is_image {
+                    div()
+                        .id(format!("draft-attachment-{i}"))
+                        .relative()
+                        .size(px(120.))
+                        .flex_shrink_0()
+                        .child(div().size_full().rounded_lg().overflow_hidden().child(
+                            Media::preview(
+                                &self.media,
+                                format!("draft-image-{i}"),
+                                &file.path,
+                                false,
+                                120.,
+                                true,
+                                cx,
                             ),
-                    ))
-                    .into_any_element()
-            } else {
-                h_flex()
-                    .gap_2()
-                    .child(file.name.clone())
-                    .child(remove.size(px(28.)).bg(rgb(appearance::RAISED)))
-                    .into_any_element()
-            });
+                        ))
+                        .child(deferred(
+                            div()
+                                .id(format!("attachment-remove-hitbox-{i}"))
+                                .occlude()
+                                .absolute()
+                                .top(px(-4.))
+                                .right(px(-4.))
+                                .size(px(18.))
+                                .child(
+                                    remove
+                                        .size(px(18.))
+                                        .custom(
+                                            ButtonCustomVariant::new(cx)
+                                                .foreground(rgb(0x222222).into())
+                                                .hover(rgb(0xe6e6e6).into())
+                                                .active(rgb(0xd4d4d4).into()),
+                                        )
+                                        .bg(rgb(0xffffff)),
+                                ),
+                        ))
+                        .into_any_element()
+                } else {
+                    h_flex()
+                        .gap_2()
+                        .child(file.name.clone())
+                        .child(remove.size(px(28.)).bg(rgb(appearance::RAISED)))
+                        .into_any_element()
+                });
         }
         let running = model.running.clone();
         let empty = model.empty;
@@ -741,6 +744,7 @@ pub(in crate::app) struct ComposerView {
 }
 pub(in crate::app) struct ComposerContent {
     desktop: WeakEntity<Desktop>,
+    media: Entity<Media>,
     input: Entity<TextareaState>,
     question_input: Entity<TextareaState>,
     question_secret: Entity<InputState>,
@@ -770,6 +774,7 @@ impl EventEmitter<ComposerHeight> for ComposerContent {}
 impl ComposerView {
     pub(in crate::app) fn new(
         desktop: &Entity<Desktop>,
+        media: Entity<Media>,
         input: Entity<TextareaState>,
         question_input: Entity<TextareaState>,
         question_secret: Entity<InputState>,
@@ -777,6 +782,7 @@ impl ComposerView {
     ) -> Self {
         let content = cx.new(|_cx| ComposerContent {
             desktop: desktop.downgrade(),
+            media,
             input: input.clone(),
             question_input,
             question_secret,
@@ -1376,7 +1382,7 @@ mod composer_tests {
                     cx,
                 )
             });
-            desktop.update(cx, |view, _| {
+            desktop.update(cx, |view, cx| {
                 let key = view.draft_key().clone();
                 draft_key = Some(key.clone());
                 Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).input.drafts).insert(
@@ -1391,14 +1397,10 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.media.images.insert(
-                    view.image_key(&source, false),
-                    ImageState {
-                        source: Arc::new(source.clone()),
-                        path: Some(source.clone().into()),
-                        error: None,
-                    },
-                );
+                view.publish_views(window, cx);
+                view.media.update(cx, |media, cx| {
+                    media.fixture_image(&source, source.clone().into(), cx);
+                });
                 let store = runtime.block_on(async {
                     Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
                 });
@@ -1426,18 +1428,22 @@ mod composer_tests {
         window.simulate_click(bounds.center(), Modifiers::default());
         let desktop = desktop_handle.unwrap();
         window.update(|_, cx| {
-            desktop.update(cx, |view, _| {
+            desktop.update(cx, |view, cx| {
                 assert!(
-                    view.media.gallery.is_some(),
+                    view.media.read(cx).gallery.is_some(),
                     "the thumbnail still opens the gallery"
                 );
-                view.media.gallery = None;
+                view.media.update(cx, |media, cx| media.close_gallery(cx));
             })
         });
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
-                let key = view.image_key(&source, false);
-                view.media.images.get_mut(&key).unwrap().path = None;
+                view.media.update(cx, |media, cx| {
+                    media.asset(&source, false, cx).update(cx, |asset, cx| {
+                        asset.path = None;
+                        cx.notify();
+                    });
+                });
                 view.composer_view
                     .read(cx)
                     .content
@@ -1474,7 +1480,11 @@ mod composer_tests {
             );
         });
         window.simulate_click(remove, Modifiers::default());
-        window.update(|_, cx| desktop.update(cx, |view, _| assert!(view.media.gallery.is_none())));
+        window.update(|_, cx| {
+            desktop.update(cx, |view, cx| {
+                assert!(view.media.read(cx).gallery.is_none())
+            })
+        });
         let snapshot = store_handle.unwrap().snapshot();
         let draft = &snapshot.input.drafts[&draft_key.unwrap()];
         assert!(draft.attachments.is_empty());

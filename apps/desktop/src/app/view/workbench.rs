@@ -233,12 +233,12 @@ impl Desktop {
         cx.notify();
     }
 
-    fn workbench_visible(&self, open: bool) -> bool {
+    fn workbench_visible(&self, open: bool, cx: &App) -> bool {
         self.visible
             && open
             && self.tab == Tab::Chat
             && self.project_editor.is_none()
-            && self.media.gallery.is_none()
+            && self.media.read(cx).gallery.is_none()
             && !self.onboarding
             && !self.import_projects
     }
@@ -252,7 +252,7 @@ impl Desktop {
         let panel_kind = panel.kind();
         let panel_layout = panel.layout;
         let active_surface = panel.active;
-        let active = self.workbench_visible(panel_open);
+        let active = self.workbench_visible(panel_open, cx);
         let thread_id = (active && panel_kind == Panel::Agents)
             .then(|| self.snapshot.pane.navigation.thread_id.clone())
             .flatten();
@@ -261,7 +261,7 @@ impl Desktop {
         }
         let composer_visible = self.visible
             && self.project_editor.is_none()
-            && self.media.gallery.is_none()
+            && self.media.read(cx).gallery.is_none()
             && self.tab == Tab::Chat
             && (!panel_open
                 || (!self.side_chat_mode
@@ -341,7 +341,7 @@ impl Desktop {
     fn workbench_model(&self, width: Pixels, cx: &App) -> Option<WorkbenchModel> {
         let language = crate::localization::language(cx);
         let panel = self.panels.get(self.panel_scope());
-        if !self.workbench_visible(panel.open) {
+        if !self.workbench_visible(panel.open, cx) {
             return None;
         }
         let kind = panel.kind();

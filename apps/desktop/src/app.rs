@@ -42,10 +42,9 @@ use std::{
     rc::Rc,
     sync::{Arc, Weak},
 };
-use timeline::{
-    ConversationRow, ImageGallery, ImageState, MarkdownContent, Media, RequestInputs, Timeline,
-};
+use timeline::{ConversationRow, MarkdownContent, RequestInputs, Timeline};
 use view::icon_button;
+use view::media::Media;
 
 struct ProjectEditor {
     id: String,
@@ -66,7 +65,6 @@ enum OperationCompletion {
     Dictation(uuid::Uuid),
     RemoveWorktree,
     Account,
-    Gallery(uuid::Uuid),
     FileReference(Box<files::ReferenceRequest>),
 }
 enum Update {
@@ -75,10 +73,6 @@ enum Update {
     Snapshot,
     Completed(OperationCompletion, Result<Outcome, String>),
     Folder(Result<Option<platform::ProjectSelection>, String>),
-    Image {
-        key: String,
-        result: Result<String, String>,
-    },
     Recording(uuid::Uuid, platform::RecordingEvent),
     PersistenceError(String),
     LocalCompleted {
@@ -196,7 +190,7 @@ pub(crate) struct Desktop {
     composer_view: Entity<view::ComposerView>,
     workbench_view: Entity<view::WorkbenchView>,
     header_view: Entity<view::HeaderView>,
-    media: Media,
+    media: Entity<Media>,
     /// Absent in side chats, which have no sidebar.
     sidebar_view: Option<Entity<view::SidebarView>>,
     settings_navigation: Entity<view::settings::SettingsNavigation>,
@@ -288,10 +282,13 @@ impl Desktop {
         .then(|| cx.new(crate::updates::Updates::new));
         let selection = cx.new(|_| selection::ConversationSelection::new(!side_chat_mode));
         let owner = cx.entity();
-        let conversation = cx.new(|_| view::ConversationView::new(&owner, selection.clone()));
+        let media = cx.new(|cx| Media::new(cx.global::<Runtime>().handle.clone(), side_chat_mode));
+        let conversation =
+            cx.new(|_| view::ConversationView::new(&owner, selection.clone(), media.clone()));
         let composer_view = cx.new(|cx| {
             view::ComposerView::new(
                 &owner,
+                media.clone(),
                 composer.input.clone(),
                 question.input.clone(),
                 question.secret.clone(),
@@ -306,6 +303,17 @@ impl Desktop {
         let settings_navigation =
             cx.new(|_| view::settings::SettingsNavigation::new(settings_search.clone()));
         let mut subscriptions = vec![
+            cx.subscribe_in(
+                &media,
+                window,
+                |view, _, event: &view::media::MediaEvent, window, cx| {
+                    match event {
+                        view::media::MediaEvent::Visibility => view.sync_surfaces(window, cx),
+                        view::media::MediaEvent::Error(error) => view.set_error(error.clone()),
+                    }
+                    cx.notify();
+                },
+            ),
             cx.observe_global_in::<crate::localization::Language>(window, |view, window, cx| {
                 let language = crate::localization::language(cx);
                 for (input, source) in [
@@ -593,7 +601,7 @@ impl Desktop {
             composer_view,
             workbench_view,
             header_view,
-            media: Media::new(),
+            media,
             sidebar_view: None,
             settings_navigation,
             _subscriptions: subscriptions,
@@ -898,32 +906,6 @@ impl Desktop {
                     Err(error) => self.set_error(error),
                 }
             }
-            Update::Image { key, result } => {
-                if let Some(image) = self.media.images.get_mut(&key) {
-                    match result {
-                        Ok(path) => {
-                            image.path = Some(if Path::new(&path).is_absolute() {
-                                PathBuf::from(path).into()
-                            } else {
-                                ImageSource::from(path)
-                            })
-                        }
-                        Err(error) => {
-                            tracing::error!(target: "agent", operation = "image.load", message = %error);
-                            image.error = Some(error);
-                        }
-                    }
-                }
-                self.composer_view
-                    .read(cx)
-                    .content
-                    .clone()
-                    .update(cx, |_, cx| cx.notify());
-                self.conversation.update(cx, |view, cx| {
-                    view.timeline.list.remeasure();
-                    cx.notify();
-                });
-            }
         }
         cx.notify();
     }
@@ -1036,40 +1018,6 @@ impl Desktop {
                 if self.dictation.as_ref().is_some_and(|state| state.id == id) {
                     self.dictation = None;
                 }
-            }
-            OperationCompletion::Gallery(id) => {
-                let Some(gallery) = self
-                    .media
-                    .gallery
-                    .as_mut()
-                    .filter(|gallery| gallery.id == id)
-                else {
-                    return true;
-                };
-                gallery.loading = false;
-                match result {
-                    Ok(Outcome::SessionImages { images }) => {
-                        let initial = gallery.current_image().clone();
-                        let entries: Vec<_> = images
-                            .into_iter()
-                            .map(|image| (Arc::new(image.source), image.encoded))
-                            .collect();
-                        gallery.selected = entries.iter().position(|entry| entry == &initial);
-                        gallery
-                            .list
-                            .splice(0..gallery.list.item_count(), entries.len());
-                        gallery.entries = entries;
-                        if let Some(index) = gallery.selected {
-                            gallery.list.scroll_to_reveal_item(index);
-                        }
-                    }
-                    Err(error) => {
-                        tracing::error!(target: "agent", operation = "gallery.load", message = %error);
-                        gallery.error = error;
-                    }
-                    _ => unreachable!("session image outcome"),
-                }
-                return true;
             }
         }
         self.accept_snapshot(window, cx) || !input_save
@@ -1312,13 +1260,6 @@ impl Desktop {
     fn remote_key(&self) -> &str {
         self.remote.as_ref().map_or("local", |remote| &remote.id)
     }
-    fn image_key(&self, source: &str, encoded: bool) -> String {
-        format!(
-            "{}:{}:{encoded}:{source}",
-            self.remote_key(),
-            self.snapshot.pane.navigation.cwd
-        )
-    }
     fn new_chat(&mut self, cwd: String, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = Tab::Chat;
         self.cancel_recording();
@@ -1416,8 +1357,7 @@ impl Desktop {
         self.worktrees.dirty = false;
         self.worktrees.saving = false;
         self.worktrees.save_pending = false;
-        self.media.images.clear();
-        self.media.gallery = None;
+        self.media.update(cx, |media, cx| media.reset(cx));
         self.conversation.update(cx, |view, cx| {
             view.timeline.clear();
             cx.notify();
