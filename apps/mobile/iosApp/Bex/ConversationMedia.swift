@@ -38,6 +38,7 @@ struct ConversationMediaAccess {
     let cwd: String
     let home: String?
     let draft: DraftKey
+    let presentation: ConversationMediaPresentation
     let download: @MainActor (String) async throws -> URL
     let visualization: @MainActor (String) async throws -> String
     let resolve: @MainActor (String) async throws -> ResolvedFile
@@ -71,8 +72,6 @@ struct ConversationImage: View {
     var contentMode: ContentMode = .fit
     @State private var image: UIImage?
     @State private var original: Data?
-    @State private var previewURL: URL?
-    @State private var preparingPreview = false
     @State private var error: String?
     private struct LoadID: Equatable {
         let host: String?
@@ -88,13 +87,8 @@ struct ConversationImage: View {
                     .accessibilityLabel(label.isEmpty ? Text("画像") : Text(verbatim: label))
                     .accessibilityIdentifier(identifier)
                     .onTapGesture {
-                        guard !preparingPreview, let original else { return }
-                        preparingPreview = true
-                        Task {
-                            do {
-                                previewURL = try await writeConversationImage(original)
-                            } catch { self.error = error.localizedDescription }
-                            preparingPreview = false
+                        if let original {
+                            media.presentation.openImage(original)
                         }
                     }
                     .accessibilityHint("タップして拡大")
@@ -103,25 +97,6 @@ struct ConversationImage: View {
                     .font(.caption).foregroundColor(.secondary)
             } else {
                 ConversationImageSkeleton()
-            }
-        }
-        .alert(
-            "画像を開けません",
-            isPresented: Binding(get: { image != nil && error != nil }, set: {
-                if !$0 {
-                    error = nil
-                }
-            })
-        ) {
-            Button("OK") { error = nil }
-        } message: { AppText(error ?? "") }
-        .fullScreenCover(isPresented: Binding(get: { previewURL != nil }, set: {
-            if !$0 {
-                dismissPreview()
-            }
-        })) {
-            if let previewURL {
-                ConversationPreview(url: previewURL, isImage: true) { dismissPreview() }
             }
         }
         .task(id: LoadID(host: media.host, source: source)) {
@@ -137,13 +112,6 @@ struct ConversationImage: View {
                 }
             }
         }
-    }
-
-    private func dismissPreview() {
-        if let previewURL {
-            try? FileManager.default.removeItem(at: previewURL.deletingLastPathComponent())
-        }
-        previewURL = nil
     }
 }
 
@@ -187,7 +155,7 @@ struct ConversationImage: View {
     }.value
 }
 
-private func writeConversationImage(_ data: Data) async throws -> URL {
+func writeConversationImage(_ data: Data) async throws -> URL {
     try Task.checkCancellation()
     let local = try await Task.detached(priority: .userInitiated) {
         try inTemporaryDirectory { directory in

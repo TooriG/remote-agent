@@ -15,7 +15,8 @@ function fixture(t) {
   mkdirSync(join(root, 'scripts'));
   copyFileSync('scripts/test-ios-scroll.sh', join(root, 'scripts/test-ios-scroll.sh'));
   for (const path of [
-    'apps/mobile/iosApp/Bex/ConversationScrollObserver.swift',
+    'apps/mobile/iosApp/Bex/ConversationList.swift',
+    'apps/mobile/iosApp/Bex/ConversationListLayout.swift',
     'apps/mobile/iosApp/Bex/ConversationTextLayout.swift',
     'apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift',
     'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift',
@@ -75,7 +76,7 @@ test('unchanged Swift tests reuse compilation and always execute both fixtures',
   successfulRun(build, 2);
   const firstBuild = readdirSync(directory)[0];
   successfulRun(build, 0);
-  writeFileSync(join(build.root, 'apps/mobile/iosApp/Bex/ConversationScrollObserver.swift'), '// changed source\n');
+  writeFileSync(join(build.root, 'apps/mobile/iosApp/Bex/ConversationList.swift'), '// changed source\n');
   successfulRun(build, 1);
   const currentBuild = readdirSync(directory).find(name => name !== firstBuild);
   writeFileSync(join(build.root, 'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift'), '// changed test\n');

@@ -1,6 +1,5 @@
 import AgentCore
 import SwiftUI
-import SwiftUIIntrospect
 import UIKit
 
 struct ConversationEnvironment {
@@ -19,30 +18,21 @@ struct ThreadScreen: View {
     var isSideChat = false
     var openTools: ((PanelKind?) -> Void)?
     @State var openedDirectory: WorkspaceDestination?
-    @State var isFollowingLatest = true
-    @State var scrollController = ConversationScrollObserver()
-    @State var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
-    @State var visibleLatest: LatestBoundary?
+    @State var mediaPresentation = ConversationMediaPresentation()
+    @State var scroll = ConversationScrollState()
     @State var expandedItemIds = Set<String>()
     @State var activityExpansionOverrides = [String: String]()
 
     var body: some View {
         chatContent
-            .onDisappear {
-                scrollController.onScrollToTop = {}
-                scrollController.cancelHistoryRestoration()
-                scrollController.detach()
-                visibleLatest = nil
-            }
-            .onChange(of: conversation?.id) {
+            .modifier(ConversationMediaPresenter(presentation: mediaPresentation))
+            .onChange(of: model.draftKey) {
                 expandedItemIds.removeAll()
                 activityExpansionOverrides.removeAll()
-                visibleLatest = nil
-                scrollController.cancelHistoryRestoration()
-                isFollowingLatest = true
-                scrollPosition.scrollTo(edge: .bottom)
+                scroll.goTo(.bottom)
+                openedDirectory = nil
+                mediaPresentation.reset()
             }
-            .onChange(of: model.draftKey) { openedDirectory = nil }
             .sheet(item: $openedDirectory) { destination in
                 ConversationDirectorySheet(model: model, destination: destination) { openedDirectory = nil }
             }
@@ -55,9 +45,7 @@ struct ThreadScreen: View {
                     if !model.isNewThread {
                         ToolbarItem(placement: .principal) {
                             Button {
-                                scrollController.cancelHistoryRestoration()
-                                isFollowingLatest = false
-                                withAnimation { scrollPosition.scrollTo(edge: .top) }
+                                scroll.goTo(.top)
                             } label: {
                                 conversationTitle
                             }
@@ -90,7 +78,6 @@ struct ThreadScreen: View {
 
     private var chatContent: some View {
         let history = model.history
-        let followLatest = $isFollowingLatest
         return VStack(spacing: 0) {
             ErrorNotices(notices: model.conversationContext.notices(), perform: { model.perform($0) })
                 .padding(.horizontal)
@@ -99,81 +86,27 @@ struct ThreadScreen: View {
             }
             if let thread = conversation {
                 let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
-                let lastRowId = rows.last?.id
-                let latestBoundary = lastRowId.map { LatestBoundary(threadId: thread.id, rowId: $0) }
-                let turnCount = thread.source.turnCount()
-                let hasMoreHistory = history?.hasMore ?? false
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if let session = thread.id, let history {
+                let hasHistory = thread.id != nil && history != nil
+                let ids: [ConversationList.RowID] = (hasHistory ? [.history] : []) + rows.map { .message($0.id) }
+                ConversationList(ids: ids, scroll: scroll, following: scroll.following, request: scroll.request,
+                                 accessibilityValue: threadAccessibilityValue(thread)) { index in
+                    let row = index - (hasHistory ? 1 : 0)
+                    return AnyView(Group {
+                        if row < 0, let session = thread.id, let history {
                             historyControl(history, session: session)
-                        }
-                        ForEach(rows) { row in
-                            conversationRow(row)
+                        } else if rows.indices.contains(row) {
+                            conversationRow(rows[row])
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .id(row.id)
-                                .overlay(alignment: .bottom) {
-                                    if row.id == lastRowId, let latestBoundary {
-                                        latestBoundaryMarker(latestBoundary)
-                                    }
-                                }
                         }
                     }
-                    .scrollTargetLayout()
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                    .buttonStyle(.plain)
+                    .environment(\.locale, locale))
                 }
-                // Keep the scroll view's identity off introspection's marker views.
-                .accessibilityIdentifier("task.detail")
-                .accessibilityValue(threadAccessibilityValue(thread))
-                .introspect(.scrollView, on: .iOS(.v26...)) { scroll in
-                    scrollController.onScrollToTop = { followLatest.wrappedValue = false }
-                    scrollController.attach(to: scroll)
-                }
-                // Measure loaded rows; native text views draw only within the viewport.
-                .scrollPosition($scrollPosition, anchor: .bottom)
-                .onScrollGeometryChange(for: ConversationHistoryLayout.self) { geometry in
-                    ConversationHistoryLayout(contentHeight: geometry.contentSize.height,
-                                              insets: geometry.contentInsets,
-                                              offset: geometry.contentOffset,
-                                              turnCount: turnCount, hasMoreHistory: hasMoreHistory)
-                } action: { _, layout in
-                    if let point = scrollController.historyDidLayout(
-                        turnCount: layout.turnCount, hasMoreHistory: layout.hasMoreHistory,
-                        contentHeight: layout.contentHeight, contentOffset: layout.offset,
-                        scrollOrigin: CGPoint(x: layout.insets.leading, y: layout.insets.top)
-                    ) {
-                        scrollPosition.scrollTo(point: point)
-                    }
-                }
-                // Native anchoring follows growth and keyboard resizing without repeated scroll requests.
-                .defaultScrollAnchor(isFollowingLatest ? .bottom : nil, for: .sizeChanges)
-                .defaultScrollAnchor(.bottom, for: .alignment)
-                // Tail updates preserve a detached reader.
-                .transaction { transaction in
-                    if !isFollowingLatest {
-                        transaction.scrollContentOffsetAdjustmentBehavior = .disabled
-                    }
-                }
-                .buttonStyle(.plain)
-                .simultaneousGesture(DragGesture(minimumDistance: 1).onChanged { gesture in
-                    guard isFollowingLatest,
-                          abs(gesture.translation.height) > abs(gesture.translation.width) else { return }
-                    isFollowingLatest = false
-                }.onEnded { gesture in
-                    if gesture.translation.height < -abs(gesture.translation.width),
-                       visibleLatest == latestBoundary {
-                        scrollController.cancelHistoryRestoration()
-                        isFollowingLatest = true
-                        scrollPosition.scrollTo(edge: .bottom)
-                    }
-                })
+                .id(model.draftKey)
                 .overlay(alignment: .bottom) {
-                    if visibleLatest != latestBoundary, !rows.isEmpty {
+                    if !scroll.latestVisible, !rows.isEmpty {
                         Button {
-                            scrollController.cancelHistoryRestoration()
-                            isFollowingLatest = true
-                            withAnimation { scrollPosition.scrollTo(edge: .bottom) }
+                            scroll.goTo(.bottom)
                         } label: {
                             Image(systemName: "arrow.down").font(.title3.weight(.medium))
                                 .frame(width: 44, height: 44)
@@ -208,18 +141,11 @@ struct ThreadScreen: View {
         }
         .background(Color(UIColor.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ConversationComposer(model: model, hasConversation: conversation != nil,
+            ConversationComposer(model: model, mediaPresentation: mediaPresentation,
+                                 hasConversation: conversation != nil,
                                  isSideChat: isSideChat, openTools: openTools)
         }
     }
-}
-
-private struct ConversationHistoryLayout: Equatable {
-    let contentHeight: CGFloat
-    let insets: EdgeInsets
-    let offset: CGPoint
-    let turnCount: UInt64
-    let hasMoreHistory: Bool
 }
 
 /// Conversation navigation

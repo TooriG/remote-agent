@@ -3,7 +3,8 @@ import SwiftUI
 import UIKit
 
 extension ConversationModel {
-    func mediaAccess(open: @escaping (WorkspaceDestination) -> Void) -> ConversationMediaAccess {
+    func mediaAccess(presentation: ConversationMediaPresentation,
+                     open: @escaping (WorkspaceDestination) -> Void) -> ConversationMediaAccess {
         let draft = coreDraftKey
         let cwd = cwd
         return ConversationMediaAccess(
@@ -11,6 +12,7 @@ extension ConversationModel {
             cwd: cwd,
             home: hostHomeDirectory,
             draft: draft,
+            presentation: presentation,
             download: { [self] path in
                 return try await download(path)
             },
@@ -55,23 +57,15 @@ extension ConversationModel {
 /// History and row presentation
 extension ThreadScreen {
     var mediaAccess: ConversationMediaAccess {
-        model.mediaAccess { openedDirectory = $0 }
+        model.mediaAccess(presentation: mediaPresentation) { openedDirectory = $0 }
     }
 
     func historyControl(_ control: HistoryControl, session: SessionRef) -> some View {
         VStack(spacing: 6) {
             if control.hasMore {
                 Button {
-                    let controller = scrollController
-                    let request = controller.captureReadingPosition()
-                    isFollowingLatest = false
-                    model.loadOlderHistory(session) { succeeded, turns, hasMore in
-                        if let point = controller.historyLoaded(
-                            request, succeeded: succeeded, turnCount: turns, hasMoreHistory: hasMore
-                        ) {
-                            scrollPosition.scrollTo(point: point)
-                        }
-                    }
+                    scroll.following = false
+                    model.loadOlderHistory(session)
                 } label: {
                     HStack(spacing: 12) {
                         Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
@@ -158,7 +152,7 @@ extension ThreadScreen {
             selection: selectionActions,
             isExpanded: expandedItemIds.contains(item.data.id),
             toggleExpanded: {
-                isFollowingLatest = false
+                scroll.following = false
                 if expandedItemIds.contains(item.data.id) {
                     expandedItemIds.remove(item.data.id)
                 } else {
@@ -185,7 +179,7 @@ extension ThreadScreen {
                                           isInProgress: turn.isInProgress, expanded: expanded)
         if turn.activityCanCollapse {
             Button {
-                isFollowingLatest = false
+                scroll.following = false
                 activityExpansionOverrides[turn.id] = expanded ? nil : turn.status
                 if !expanded, let params = turn.loadItems {
                     model.perform(.loadTurnItems(params))
@@ -198,25 +192,6 @@ extension ThreadScreen {
         } else {
             header.accessibilityIdentifier("turn.activity." + turn.id)
         }
-    }
-
-    func latestBoundaryMarker(_ boundary: LatestBoundary) -> some View {
-        Color.clear.frame(height: 80)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-            .id(boundary)
-            .onScrollVisibilityChange(threshold: 0.01) { visible in
-                if visible {
-                    visibleLatest = boundary
-                } else if visibleLatest == boundary {
-                    visibleLatest = nil
-                }
-            }
-            .onDisappear {
-                if visibleLatest == boundary {
-                    visibleLatest = nil
-                }
-            }
     }
 
     func threadAccessibilityValue(_ thread: ConversationPresentation) -> String {
@@ -250,11 +225,6 @@ private struct ThreadPreparationRow: View {
     }
 }
 
-struct LatestBoundary: Hashable {
-    let threadId: SessionRef?
-    let rowId: String
-}
-
 func conversationRows(_ rows: [ThreadConversationRow],
                       expansion: [String: String]) -> [ThreadConversationRow] {
     var expanded = false
@@ -265,7 +235,6 @@ func conversationRows(_ rows: [ThreadConversationRow],
             expanded = AgentCore.activityIsExpanded(status: activity.status, expandedStatus: expansion[activity.id])
             return true
         case .activity: return expanded
-        // Only rendered rows can own the latest-boundary marker.
         // Requests live in the composer's dock, rather than in the history.
         case .inProgress, .pendingRequest: return false
         default: return true

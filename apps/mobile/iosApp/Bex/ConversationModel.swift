@@ -210,17 +210,10 @@ extension ConversationModel {
         set { perform(.setDraftText(threadId: coreDraftKey, text: newValue)) }
     }
 
-    func loadOlderHistory(
-        _ id: SessionRef,
-        completion: @escaping (_ succeeded: Bool, _ turnCount: UInt64, _ hasMore: Bool) -> Void
-    ) {
+    func loadOlderHistory(_ id: SessionRef) {
         guard selectedThreadId == id else { return }
         notice = nil
-        perform(.readOlder(threadId: id)) { [weak self] result in
-            guard let self else { return }
-            completion((try? result.get()) != nil, snapshot.conversation(id: id)?.turnCount() ?? 0,
-                       snapshot.historyControl(session: id)?.hasMore ?? false)
-        }
+        perform(.readOlder(threadId: id))
     }
 
     func send() {

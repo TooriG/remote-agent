@@ -6,13 +6,14 @@ struct ConversationVisualization: View {
     let media: ConversationMediaAccess
     @State private var html: String?
     @State private var error: String?
-    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading) {
             if let html {
-                Button("インタラクティブ表示を拡大") { expanded = true }
-                    .accessibilityIdentifier("visualize.expand")
+                Button("インタラクティブ表示を拡大") {
+                    media.presentation.visualization = .init(html: html)
+                }
+                .accessibilityIdentifier("visualize.expand")
                 VisualizationWebView(html: html).frame(height: 420)
             } else if let error {
                 Text("表示できません: \(error)").font(.caption)
@@ -29,18 +30,6 @@ struct ConversationVisualization: View {
             } catch {
                 if !Task.isCancelled {
                     self.error = error.localizedDescription
-                }
-            }
-        }
-        .sheet(isPresented: $expanded) {
-            NavigationStack {
-                if let html {
-                    VisualizationWebView(html: html)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("閉じる") { expanded = false }
-                            }
-                        }
                 }
             }
         }

@@ -5,6 +5,7 @@ import UIKit
 /// Owns native input, dictation and attachment presentation independently of history.
 struct ConversationComposer: View {
     let model: ConversationModel
+    let mediaPresentation: ConversationMediaPresentation
     let hasConversation: Bool
     let isSideChat: Bool
     let openTools: ((PanelKind?) -> Void)?
@@ -47,7 +48,7 @@ struct ConversationComposer: View {
     }
 
     var mediaAccess: ConversationMediaAccess {
-        model.mediaAccess { openedDirectory = $0 }
+        model.mediaAccess(presentation: mediaPresentation) { openedDirectory = $0 }
     }
 
     var composer: some View {

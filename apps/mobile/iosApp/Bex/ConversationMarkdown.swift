@@ -11,8 +11,6 @@ struct ConversationMarkdown: View {
     var textIdentifier: String = "message.assistant-text"
     @State private var linkTarget: String?
     @State private var linkError: String?
-    @State private var sharedFile: SharedFile?
-    @State private var shareTarget: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(blocks) { part in
@@ -52,27 +50,6 @@ struct ConversationMarkdown: View {
             linkTarget = url.absoluteString
             return .handled
         })
-        .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
-        .task(id: shareTarget) {
-            guard let path = shareTarget else { return }
-            defer {
-                if !Task.isCancelled {
-                    shareTarget = nil
-                }
-            }
-            do {
-                let url = try await media.download(path)
-                if Task.isCancelled {
-                    try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-                    return
-                }
-                sharedFile = SharedFile(url: url)
-            } catch {
-                if !Task.isCancelled {
-                    linkError = error.localizedDescription
-                }
-            }
-        }
         .task(id: linkTarget) {
             guard let target = linkTarget else { return }
             defer {
@@ -98,7 +75,7 @@ struct ConversationMarkdown: View {
     }
 
     private func shareFile(_ path: String) {
-        shareTarget = path
+        media.presentation.share(path, download: media.download)
     }
 
     private func image(_ block: ConversationMarkdownContent.Block, url: URL) -> some View {
