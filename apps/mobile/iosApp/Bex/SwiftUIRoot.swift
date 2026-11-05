@@ -163,6 +163,7 @@ struct ConnectionsScreen: View {
     @ViewBuilder private func pairingConfirmation(_ invitation: Invitation) -> some View {
         Section("接続先") {
             LabeledContent("PC") { Text(invitation.hostName).accessibilityIdentifier("pairing.host") }
+                .accessibilityElement(children: .contain)
             Button("変更") {
                 contents = ""
                 showsManualPairing = false
