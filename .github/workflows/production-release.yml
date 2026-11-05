@@ -1,0 +1,52 @@
+name: Production release
+on:
+  push:
+    tags: ['prd-*']
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Retry an existing prd-N tag; leave empty to check pending reviews
+        type: string
+        default: ''
+permissions:
+  contents: write
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - name: Initialize pinned tooling before loading credentials
+        run: scripts/dev-env.sh true
+      - name: Load the App Store Connect API credential
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.BEX_ASC_PRIVATE_KEY }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/bex-asc.p8"
+          printf '%s' "$ASC_PRIVATE_KEY" > "$key"
+          echo "AGENT_ASC_PRIVATE_KEY_FILE=$key" >> "$GITHUB_ENV"
+      - name: Promote a tested candidate or finish approved releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
+          AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
+          RELEASE_TAG: ${{ inputs.tag || (github.event_name == 'push' && github.ref_name) || '' }}
+        run: |
+          if [[ -n "$RELEASE_TAG" ]]; then
+            scripts/dev-env.sh node scripts/release-candidate.mjs promote "$RELEASE_TAG"
+          fi
+          scripts/dev-env.sh node scripts/release-candidate.mjs sync
+      - name: Remove the API credential
+        if: always()
+        run: rm -f "$RUNNER_TEMP/bex-asc.p8"

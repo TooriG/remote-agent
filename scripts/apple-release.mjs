@@ -7,11 +7,34 @@ import { join } from 'node:path';
 export function nextBuildNumber(sourceVersions, appleVersions, releaseTags) {
   const source = new Set(sourceVersions);
   if (source.size !== 1 || !sourceVersions.length) throw new Error('Apple source build numbers must agree.');
-  const versions = [...source, ...appleVersions, ...releaseTags.flatMap(tag => /^prd-(\d+)$/.exec(tag)?.slice(1) ?? [])];
+  const versions = [...source, ...appleVersions, ...releaseTags.flatMap(tag => /^(?:dev|prd)-(\d+)$/.exec(tag)?.slice(1) ?? [])];
   if (versions.some(version => !/^[1-9]\d*$/.test(version))) throw new Error('Apple build numbers must be positive integers.');
   const next = Math.max(...versions.map(Number)) + 1;
   if (!Number.isSafeInteger(next) || next > 9999) throw new Error('The Apple build number needs a new numbering range.');
   return String(next);
+}
+
+// Apple versions already approved for distribution keep their existing build.
+// All subsequent candidates use the next patch until that version is released.
+export function nextMarketingVersion(source, approvedVersions) {
+  const parts = value => {
+    if (!/^\d+\.\d+(?:\.\d+)?$/.test(value)) throw new Error('Invalid marketing version.');
+    return value.split('.').map(Number).concat([0]).slice(0, 3);
+  };
+  const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  let next = parts(source);
+  for (const version of approvedVersions) {
+    const released = parts(version);
+    if (compare(next, released) <= 0) next = [released[0], released[1], released[2] + 1];
+  }
+  return next.join('.');
+}
+
+const required = name => { const value = process.env[name]; if (!value) throw new Error(`${name} is required.`); return value; };
+
+export function requestFromEnvironment() {
+  return ascClient({ keyId: required('AGENT_ASC_KEY_ID'), issuer: required('AGENT_ASC_ISSUER_ID'),
+    privateKey: readFileSync(required('AGENT_ASC_PRIVATE_KEY_FILE')) });
 }
 
 export function parseBuildStatus(output) {
@@ -39,7 +62,7 @@ export function ascClient({ keyId, issuer, privateKey }, fetcher = fetch) {
       method, headers: { Authorization: `Bearer ${payload}.${signature}`, 'Content-Type': 'application/json' },
       ...(data === undefined ? {} : { body: JSON.stringify(data) }), signal: AbortSignal.timeout(60_000),
     });
-    if (!response.ok) throw new Error(`App Store Connect ${method} ${path.split('?')[0]} failed (HTTP ${response.status}).`);
+    if (!response.ok) throw Object.assign(new Error(`App Store Connect ${method} ${path.split('?')[0]} failed (HTTP ${response.status}).`), { status: response.status });
     return response.status === 204 ? null : response.json();
   };
 }
@@ -73,25 +96,36 @@ export async function distributeBuild(request, appId, buildId, groupName, notes,
   const detail = await request(`/v1/builds/${buildId}/buildBetaDetail`);
   const state = detail.data.attributes[group.attributes.isInternalGroup ? 'internalBuildState' : 'externalBuildState'];
   if (!state || ['BETA_REJECTED', 'EXPIRED', 'PROCESSING_EXCEPTION', 'MISSING_EXPORT_COMPLIANCE'].includes(state)) throw new Error(`TestFlight distribution is blocked (${state ?? 'unknown state'}).`);
+  if (!group.attributes.isInternalGroup && !detail.data.attributes.autoNotifyEnabled) {
+    await request(`/v1/buildBetaDetails/${detail.data.id}`, { method: 'PATCH', data: {
+      data: { type: 'buildBetaDetails', id: detail.data.id, attributes: { autoNotifyEnabled: true } },
+    } });
+  }
   const localized = (await request(`/v1/builds/${buildId}/betaBuildLocalizations`)).data;
   const existing = localized.find(info => info.attributes.locale === locale);
   if (existing) {
-    await request(`/v1/betaBuildLocalizations/${existing.id}`, { method: 'PATCH', data: { data: { type: 'betaBuildLocalizations', id: existing.id, attributes: { whatsNew: notes } } } });
+    if (existing.attributes.whatsNew !== notes) await request(`/v1/betaBuildLocalizations/${existing.id}`, { method: 'PATCH', data: { data: { type: 'betaBuildLocalizations', id: existing.id, attributes: { whatsNew: notes } } } });
   } else {
     await request('/v1/betaBuildLocalizations', { method: 'POST', data: { data: { type: 'betaBuildLocalizations', attributes: { locale, whatsNew: notes }, relationships: { build: { data: { type: 'builds', id: buildId } } } } } });
   }
-  const submit = !group.attributes.isInternalGroup && state === 'READY_FOR_BETA_SUBMISSION';
-  if (submit) {
-    await request('/v1/betaAppReviewSubmissions', { method: 'POST', data: { data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: buildId } } } } } });
-  }
   if (!group.attributes.hasAccessToAllBuilds) {
     await request(`/v1/betaGroups/${group.id}/relationships/builds`, { method: 'POST', data: { data: [{ type: 'builds', id: buildId }] } });
+  }
+  const submit = !group.attributes.isInternalGroup && state === 'READY_FOR_BETA_SUBMISSION';
+  if (submit) {
+    try {
+      await request('/v1/betaAppReviewSubmissions', { method: 'POST', data: { data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: buildId } } } } } });
+    } catch (error) {
+      // Apple limits concurrent beta reviews and submissions per day. The
+      // hosted release reconciler retries the latest candidate after capacity returns.
+      if (error.status === 409 || error.status === 429) return 'Waiting for TestFlight review capacity';
+      throw error;
+    }
   }
   return submit ? 'Submitted for TestFlight beta review' : state;
 }
 
 async function main(command) {
-  const required = name => { const value = process.env[name]; if (!value) throw new Error(`${name} is required.`); return value; };
   const planPath = 'target/apple-release/plan.json';
   if (command === 'record-delivery') {
     const directory = process.argv[3];
@@ -112,7 +146,7 @@ async function main(command) {
   const keyId = required('AGENT_ASC_KEY_ID');
   const issuer = required('AGENT_ASC_ISSUER_ID');
   const keyPath = required('AGENT_ASC_PRIVATE_KEY_FILE');
-  const request = ascClient({ keyId, issuer, privateKey: readFileSync(keyPath) });
+  const request = requestFromEnvironment();
   if (command === 'plan') {
     const app = await appForBundleId(request, 'dev.remoteagent.mobile.ios');
     const builds = await listAll(request, `/v1/builds?filter[app]=${app.id}&limit=200`);
@@ -122,9 +156,15 @@ async function main(command) {
     const macVersion = /<key>CFBundleVersion<\/key>\s*<string>(\d+)<\/string>/.exec(mac)?.[1];
     const releases = JSON.parse(readFileSync('target/apple-release/releases.json', 'utf8'));
     const version = nextBuildNumber([...versions, macVersion], builds.map(build => build.attributes.version), releases.map(release => release.tagName));
-    const plan = { appId: app.id, version, tag: `prd-${version}`, sha: required('AGENT_RELEASE_SHA'), locale: app.attributes.primaryLocale, notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
+    const storeVersions = await listAll(request, `/v1/apps/${app.id}/appStoreVersions?limit=200`);
+    const sourceVersion = /MARKETING_VERSION = ([\d.]+);/.exec(source)?.[1];
+    const approvedVersions = storeVersions.filter(version => version.attributes.platform === 'IOS'
+      && ['PENDING_DEVELOPER_RELEASE', 'READY_FOR_DISTRIBUTION', 'READY_FOR_SALE'].includes(version.attributes.appStoreState))
+      .map(version => version.attributes.versionString);
+    const versionName = nextMarketingVersion(sourceVersion, approvedVersions);
+    const plan = { appId: app.id, version, versionName, tag: `dev-${version}`, sha: required('AGENT_RELEASE_SHA'), locale: app.attributes.primaryLocale, notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
     writeFileSync(planPath, JSON.stringify(plan) + '\n');
-    appendFileSync(required('GITHUB_ENV'), `AGENT_BUILD_NUMBER=${version}\nAGENT_RELEASE_TAG=${plan.tag}\n`);
+    appendFileSync(required('GITHUB_ENV'), `AGENT_BUILD_NUMBER=${version}\nAGENT_RELEASE_TAG=${plan.tag}\nAGENT_MARKETING_VERSION=${versionName}\n`);
     console.log(`Apple release build ${version} planned for ${plan.sha}.`);
   } else if (command === 'verify') {
     const plan = JSON.parse(readFileSync(planPath, 'utf8'));
@@ -139,6 +179,8 @@ async function main(command) {
     const builds = (await request(`/v1/builds?filter[app]=${plan.appId}&filter[version]=${plan.version}`)).data;
     const build = builds.find(build => build.attributes.version === plan.version && build.attributes.processingState === 'VALID');
     if (!build) throw new Error('The processed BEX build could not be verified.');
+    plan.buildId = build.id;
+    writeFileSync('target/apple-release/apple-build.json', JSON.stringify(plan) + '\n');
     const distribution = await distributeBuild(request, plan.appId, build.id, process.env.AGENT_TESTFLIGHT_GROUP || 'BEX External', plan.notes, plan.locale);
     console.log(`TestFlight ${plan.version}: ${distribution}.`);
     appendFileSync(required('GITHUB_STEP_SUMMARY'), `TestFlight build **${plan.version}**: ${distribution}.\n\nSource: \`${plan.sha}\`.\n`);

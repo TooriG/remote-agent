@@ -248,6 +248,13 @@ impl Desktop {
         v_flex()
             .gap_4()
             .child(settings_group().p_5().child(self.language_settings(cx)))
+            .when_some(self.app_updates.as_ref(), |body, updates| {
+                body.child(
+                    settings_group()
+                        .p_5()
+                        .child(crate::updates::Updates::settings(updates, cx)),
+                )
+            })
             .child(
                 h_flex()
                     .gap_2()

@@ -117,9 +117,9 @@ open apps/mobile/iosApp/Bex.xcodeproj
 scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 
-The separate iOS development app has its own [distribution procedure](docs/qa/IOS_DEV_RELEASE.md).
+See [release operations](docs/RELEASES.md) for development distribution and production promotion.
 
-Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `AGENT_STATE_DIR`; Host discovery may select a different credential directory. Bex Dev on Mac uses `app.bex.BEX-Dev` and its isolated Host even when opened from Finder. Other isolated desktops require both `AGENT_ISOLATED_HOST=1` and `AGENT_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
+Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `AGENT_STATE_DIR`; Host discovery may select a different credential directory. Isolated desktops require both `AGENT_ISOLATED_HOST=1` and `AGENT_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
 
 Use `scripts/dev-env.sh just check -p agent-core` for quick Rust feedback without
 generating executables; select the crate you changed with `-p`.

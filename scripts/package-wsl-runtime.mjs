@@ -14,6 +14,7 @@ mkdirSync(libraries, { recursive: true });
 const patchelf = execFileSync("sh", ["-c", "command -v patchelf"], { encoding: "utf8" }).trim();
 const executables = [
   [join(binaryDirectory, "host-daemon"), "host-daemon"],
+  [join(binaryDirectory, "agent-cli"), "agent-cli"],
   [join(binaryDirectory, "agent-provider-supervisor"), "agent-provider-supervisor"],
   [patchelf, "patchelf"],
 ];

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build standard icons from the logo and reuse the iPhone Dev artwork. Requires macOS.
+# Build standard app icons from the logo. Requires macOS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source=apps/desktop/assets/logo.png
@@ -40,5 +40,3 @@ create_icns() {
     iconutil -c icns "$iconset" -o "$destination"
 }
 create_icns "$icon" apps/desktop/assets/icon.icns
-create_icns apps/mobile/iosApp/Bex/Assets.xcassets/AppIconDev.appiconset/AppIcon.png \
-    apps/desktop/assets/icon-dev.icns

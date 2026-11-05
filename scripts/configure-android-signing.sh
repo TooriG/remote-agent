@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Both public APK workflows use the same signing key and source version.
+# Both release channels use one distribution key and the same source version.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-: "${AGENT_ANDROID_PREVIEW_KEYSTORE_BASE64:?Configure the existing preview signing key before publishing APKs}"
+: "${AGENT_ANDROID_KEYSTORE_BASE64:?Configure the BEX distribution signing key before publishing APKs}"
 : "${RUNNER_TEMP:?}"
 : "${GITHUB_ENV:?}"
 [[ $(git rev-parse --is-shallow-repository) == false ]] || {
@@ -16,8 +16,8 @@ version=$(git rev-list --count HEAD)
     exit 1
 }
 umask 077
-keystore="$RUNNER_TEMP/agent-preview.p12"
+keystore="$RUNNER_TEMP/bex-android.p12"
 trap 'rm -f "$keystore"' ERR
-printf '%s' "$AGENT_ANDROID_PREVIEW_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+printf '%s' "$AGENT_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
 test -s "$keystore"
-printf 'AGENT_ANDROID_PREVIEW_KEYSTORE=%s\nAGENT_ANDROID_VERSION_CODE=%s\n' "$keystore" "$version" >> "$GITHUB_ENV"
+printf 'AGENT_ANDROID_KEYSTORE=%s\nAGENT_ANDROID_VERSION_CODE=%s\nAGENT_ANDROID_KEY_ALIAS=%s\n' "$keystore" "$version" "${AGENT_ANDROID_KEY_ALIAS:-bex}" >> "$GITHUB_ENV"

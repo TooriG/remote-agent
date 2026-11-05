@@ -6,15 +6,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  release:
-    types: [published]
   schedule:
     # Nightly iPhone acceptance in repeated fresh rounds, to measure flaky tests.
     - cron: '0 18 * * *'
+  workflow_call:
+    inputs:
+      candidate-tag:
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
-      desktop-release-tag:
-        description: Published production tag to package for Windows; leave empty for CI
+      candidate-tag:
+        description: Development candidate tag to package; leave empty for CI
         type: string
         default: ''
       ios-tests:
@@ -29,7 +32,7 @@ permissions:
   contents: read
 concurrency:
   # The nightly measurement never displaces a pending main revision.
-  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || inputs.desktop-release-tag || github.ref }}${{ inputs.ios-tests && '-focused' || '' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || inputs.candidate-tag || github.ref }}${{ inputs.ios-tests && '-focused' || '' }}
   # Finish a running main revision and keep only the newest pending revision.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
@@ -39,7 +42,7 @@ env:
   NEXTEST_TEST_THREADS: 16
 jobs:
   changes:
-    if: ${{ !inputs.desktop-release-tag }}
+    if: ${{ !inputs.candidate-tag }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -117,7 +120,7 @@ jobs:
           printf 'windows=%s\nandroid=%s\niphone=%s\nmac=%s\n' "$windows" "$android" "$iphone" "$mac" | tee -a "$GITHUB_OUTPUT"
   toolchain:
     needs: changes
-    if: ${{ !cancelled() && !inputs.ios-tests && (inputs.desktop-release-tag || needs.changes.outputs.windows == 'true') }}
+    if: ${{ !cancelled() && !inputs.ios-tests && (inputs.candidate-tag || needs.changes.outputs.windows == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -128,7 +131,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Delayed stages must use the event commit even when main advances.
-          ref: ${{ inputs.desktop-release-tag || github.sha }}
+          ref: ${{ inputs.candidate-tag || github.sha }}
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - id: rust
@@ -140,7 +143,7 @@ jobs:
     needs: changes
     permissions:
       actions: write # Retire the preceding Gradle snapshot after saving its replacement.
-      contents: write # Attach the tested Android preview APK on release publication.
+      contents: read
     if: needs.changes.outputs.android == 'true' && !inputs.ios-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -149,11 +152,6 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Configure Android release signing and version
-        if: github.event_name == 'release'
-        env:
-          AGENT_ANDROID_PREVIEW_KEYSTORE_BASE64: ${{ secrets.BEX_ANDROID_PREVIEW_KEYSTORE_BASE64 }}
-        run: bash scripts/configure-android-preview.sh
       - name: Free space for pinned Nix tools and Cargo builds
         run: |
           # Project tools come from Nix; Actions' own Node runtimes live outside this tool cache.
@@ -256,12 +254,6 @@ jobs:
           path: target/android-packages/*
           if-no-files-found: error
           retention-days: 14
-      - name: Attach Android preview APK to the published release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" target/android-packages/bex-android-preview.apk target/android-packages/bex-android-preview.apk.sha256 --repo "$GITHUB_REPOSITORY" --clobber
   mac:
     name: Mac
     needs: changes
@@ -533,12 +525,14 @@ jobs:
             target/qa/Bex-*
           retention-days: 7
   wsl-runtime:
+    permissions:
+      contents: write
     needs: toolchain
     if: ${{ !cancelled() && needs.toolchain.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      WSL_PROFILE: ${{ (github.event_name == 'release' || inputs.desktop-release-tag != '') && 'release' || 'dev' }}
+      WSL_PROFILE: ${{ (inputs.candidate-tag != '') && 'release' || 'dev' }}
     steps:
       - *windows-checkout
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
@@ -551,11 +545,25 @@ jobs:
         run: |
           AGENT_BUILD_REVISION=$(git rev-parse HEAD)
           export AGENT_BUILD_REVISION
-          nix develop .#host-build --command cargo build --locked --profile "$WSL_PROFILE" -p host-daemon -p agent-process --bin host-daemon --bin agent-provider-supervisor
+          nix develop .#host-build --command cargo build --locked --profile "$WSL_PROFILE" -p host-daemon -p agent-process -p agent-cli --bin host-daemon --bin agent-provider-supervisor --bin agent-cli
           directory=debug
           if [[ "$WSL_PROFILE" == release ]]; then directory=release; fi
           nix develop .#host-build --command node scripts/package-wsl-runtime.mjs "target/$directory" target/wsl-runtime
           nix develop .#host-build --command node scripts/verify-wsl-runtime.mjs target/wsl-runtime
+      - name: Package the matching Linux Host and CLI candidate
+        if: inputs.candidate-tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate-tag }}
+        run: |
+          cp scripts/install-linux-runtime.sh target/wsl-runtime/install.sh
+          bash target/wsl-runtime/install.sh "$RUNNER_TEMP/bex-linux-smoke" "$RUNNER_TEMP/bex-linux-bin"
+          "$RUNNER_TEMP/bex-linux-bin/agent-cli" --help
+          "$RUNNER_TEMP/bex-linux-bin/host-daemon" --help
+          tar -czf target/bex-linux-x86_64.tar.gz -C target/wsl-runtime .
+          cd target
+          sha256sum bex-linux-x86_64.tar.gz > bex-linux-x86_64.tar.gz.sha256
+          gh release upload "$CANDIDATE_TAG" bex-linux-x86_64.tar.gz bex-linux-x86_64.tar.gz.sha256 --repo "$GITHUB_REPOSITORY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bex-wsl-runtime
@@ -572,17 +580,17 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     env:
-      AGENT_RELEASE_TAG: ${{ inputs.desktop-release-tag || github.event.release.tag_name }}
+      AGENT_RELEASE_TAG: ${{ inputs.candidate-tag }}
       # rust-cache prunes non-Cargo files inside target, leaving empty tool caches.
       AGENT_FXC_CACHE_ROOT: ${{ github.workspace }}/output/tool-cache/windows-fxc
     steps:
       - *windows-checkout
-      - name: Require a verified production revision for release packaging
-        if: inputs.desktop-release-tag != ''
+      - name: Require a verified development revision for release packaging
+        if: inputs.candidate-tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:AGENT_RELEASE_TAG -notmatch '^prd-[1-9][0-9]*$') { throw "A production release tag is required." }
+          if ($env:AGENT_RELEASE_TAG -notmatch '^dev-[1-9][0-9]*$') { throw "A development candidate tag is required." }
           $revision = git rev-parse HEAD
           foreach ($workflow in 'portable.yml', 'native.yml') {
             $verified = gh run list --repo "$env:GITHUB_REPOSITORY" --workflow $workflow --branch main --event push --commit "$revision" --status success --limit 1 --json headSha --jq '.[0].headSha // ""'
@@ -618,7 +626,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Pinned FXC preparation failed." }
           "GPUI_FXC_PATH=$compiler" >> $env:GITHUB_ENV
       - name: Build desktop, Host and CLI
-        if: ${{ !inputs.desktop-release-tag }}
+        if: ${{ !inputs.candidate-tag }}
         run: |
           cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
           if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
@@ -630,39 +638,39 @@ jobs:
             throw "The desktop updater could not read the development build number."
           }
       - name: Install the SDK runtime beside the Host
-        if: ${{ !inputs.desktop-release-tag }}
+        if: ${{ !inputs.candidate-tag }}
         run: node scripts/install-claude-sdk.mjs target/debug
       - name: Core contracts and isolated iroh Host
-        if: ${{ !inputs.desktop-release-tag }}
+        if: ${{ !inputs.candidate-tag }}
         run: cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
       - name: Documentation examples
-        if: ${{ !inputs.desktop-release-tag }}
+        if: ${{ !inputs.candidate-tag }}
         run: cargo test --locked --doc --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
       - name: Real-time passive approval soak
-        if: github.event_name == 'workflow_dispatch' && !inputs.desktop-release-tag
+        if: github.event_name == 'workflow_dispatch' && !inputs.candidate-tag
         run: cargo test --locked -p host-fixture --test iroh_host passive_client_can_approve_after_five_minutes_without_reconnecting -- --ignored
       - name: Package verified Windows development binaries
-        if: github.event_name != 'release' && !inputs.desktop-release-tag
+        if: ${{ !inputs.candidate-tag }}
         run: ./scripts/package-windows.ps1 -Profile dev -SkipBuild
       - name: Build and package Windows release
-        if: github.event_name == 'release' || inputs.desktop-release-tag != ''
+        if: inputs.candidate-tag != ''
         run: |
-          if ($env:AGENT_RELEASE_TAG -match '^prd-([1-9][0-9]*)$') { $env:AGENT_BUILD_NUMBER = $Matches[1] }
+          if ($env:AGENT_RELEASE_TAG -match '^dev-([1-9][0-9]*)$') { $env:AGENT_BUILD_NUMBER = $Matches[1] }
           ./scripts/package-windows.ps1 -Profile release
       - name: Retain the Windows package and checksum
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: bex-windows-x86_64-${{ (github.event_name == 'release' || inputs.desktop-release-tag != '') && 'release' || 'dev' }}
+          name: bex-windows-x86_64-${{ (inputs.candidate-tag != '') && 'release' || 'dev' }}
           path: target/windows-packages/bex-windows-x86_64-*
           if-no-files-found: error
           retention-days: 14
       - name: Attach Windows package to the published release
-        if: github.event_name == 'release' || inputs.desktop-release-tag != ''
+        if: inputs.candidate-tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ env.AGENT_RELEASE_TAG }}
         run: |
-          gh release upload "$env:RELEASE_TAG" target/windows-packages/bex-windows-x86_64-setup.exe target/windows-packages/bex-windows-x86_64-setup.exe.sha256 target/windows-packages/bex-windows-x86_64-release.zip target/windows-packages/bex-windows-x86_64-release.zip.sha256 --repo "$env:GITHUB_REPOSITORY" --clobber
+          gh release upload "$env:RELEASE_TAG" target/windows-packages/bex-windows-x86_64-setup.exe target/windows-packages/bex-windows-x86_64-setup.exe.sha256 target/windows-packages/bex-windows-x86_64-release.zip target/windows-packages/bex-windows-x86_64-release.zip.sha256 --repo "$env:GITHUB_REPOSITORY"
           if ($LASTEXITCODE -ne 0) { throw "Windows release upload failed." }
   caches:
     name: Retire replaced dependency caches

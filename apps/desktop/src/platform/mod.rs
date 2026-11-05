@@ -67,12 +67,8 @@ pub(crate) fn state_dir() -> Result<PathBuf, String> {
     std::env::var_os("AGENT_STATE_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            directories::ProjectDirs::from(
-                "app",
-                "bex",
-                if development_app() { "BEX-Dev" } else { "BEX" },
-            )
-            .map(|project| project.data_local_dir().to_path_buf())
+            directories::ProjectDirs::from("app", "bex", "BEX")
+                .map(|project| project.data_local_dir().to_path_buf())
         })
         .ok_or_else(|| "application data directory unavailable".into())
 }
@@ -80,17 +76,6 @@ pub(crate) fn state_dir() -> Result<PathBuf, String> {
 /// One Host's conversation copies, shared by its main and side windows.
 pub(crate) fn conversation_copies(host: &str) -> Result<PathBuf, String> {
     Ok(state_dir()?.join(format!("desktop-conversations-{host}")))
-}
-
-pub(crate) fn development_app() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        objc2_foundation::NSBundle::mainBundle()
-            .bundleIdentifier()
-            .is_some_and(|id| id.to_string() == "app.bex.dev.desktop")
-    }
-    #[cfg(not(target_os = "macos"))]
-    false
 }
 
 pub(crate) async fn ssh_invitation(
@@ -315,19 +300,14 @@ pub(crate) fn isolated_host() -> anyhow::Result<bool> {
     isolation_setting(
         value.as_deref(),
         std::env::var_os("AGENT_STATE_DIR").is_some(),
-        development_app(),
     )
 }
 
-fn isolation_setting(
-    value: Option<&str>,
-    has_directory: bool,
-    development: bool,
-) -> anyhow::Result<bool> {
+fn isolation_setting(value: Option<&str>, has_directory: bool) -> anyhow::Result<bool> {
     match value {
-        None => Ok(development),
+        None => Ok(false),
         Some("0") => Ok(false),
-        Some("1") if has_directory || development => Ok(true),
+        Some("1") if has_directory => Ok(true),
         Some("1") => Err(anyhow::anyhow!(
             "AGENT_ISOLATED_HOST=1 requires AGENT_STATE_DIR"
         )),
@@ -387,14 +367,7 @@ fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std
     if isolated {
         command.arg("--isolated");
     }
-    let accounts = std::env::var_os("AGENT_ACCOUNT_STATE_DIR").map(PathBuf::from);
-    let accounts = if accounts.is_none() && development_app() {
-        let registry = LocalHostRegistry::for_user()?;
-        Some(registry.resolve(registry.directory())?.directory)
-    } else {
-        accounts
-    };
-    if let Some(directory) = accounts {
+    if let Some(directory) = std::env::var_os("AGENT_ACCOUNT_STATE_DIR") {
         command.arg("--account-state-dir").arg(directory);
     }
     os::prepare_host(&mut command);
@@ -422,28 +395,15 @@ mod tests {
     use super::isolation_setting;
 
     #[test]
-    fn dev_launch_is_isolated_without_environment_and_explicit_settings_are_validated() {
-        for (value, directory, development, expected) in [
-            (None, false, false, false),
-            (None, true, false, false),
-            (None, false, true, true),
-            (None, true, true, true),
-            (Some("0"), false, false, false),
-            (Some("0"), true, false, false),
-            (Some("0"), false, true, false),
-            (Some("0"), true, true, false),
-            (Some("1"), true, false, true),
-            (Some("1"), false, true, true),
-            (Some("1"), true, true, true),
-        ] {
-            assert_eq!(
-                isolation_setting(value, directory, development).unwrap(),
-                expected
-            );
+    fn host_isolation_is_explicit_and_requires_its_own_state_directory() {
+        for directory in [false, true] {
+            assert!(!isolation_setting(None, directory).unwrap());
+            assert!(!isolation_setting(Some("0"), directory).unwrap());
         }
-        assert!(isolation_setting(Some("1"), false, false).is_err());
+        assert!(isolation_setting(Some("1"), true).unwrap());
+        assert!(isolation_setting(Some("1"), false).is_err());
         for invalid in ["", "true", "2"] {
-            assert!(isolation_setting(Some(invalid), true, true).is_err());
+            assert!(isolation_setting(Some(invalid), true).is_err());
         }
     }
 }

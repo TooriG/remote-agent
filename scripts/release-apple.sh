@@ -26,37 +26,28 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-# Both channels reuse the same release binaries and bundled Host. Only the
-# bundle identity and icon differ; each archive is signed and notarized.
-mac_archives=(bex-macOS-arm64 bex-macOS-arm64-dev)
-for name in "${mac_archives[@]}"; do
-    channel=production
-    identifier=app.bex.desktop
-    if [[ $name == *-dev ]]; then
-        channel=development
-        identifier=app.bex.dev.desktop
-    fi
-    AGENT_DESKTOP_CHANNEL=$channel just build-desktop-macos
-    mkdir -p "$mac_output/$name"
-    bundle="$mac_output/$name/bex.app"
-    mv "$PWD/target/release/bex.app" "$bundle"
-    [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Info.plist") == "$identifier" ]]
-    [[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$bundle/Contents/Info.plist") == "$AGENT_BUILD_NUMBER" ]]
-    zip="$output/$name.zip"
-    ditto -c -k --sequesterRsrc --keepParent "$bundle" "$zip"
-    xcrun notarytool submit "$zip" --key "$AGENT_ASC_PRIVATE_KEY_FILE" \
-        --key-id "$AGENT_ASC_KEY_ID" --issuer "$AGENT_ASC_ISSUER_ID" \
-        --wait --output-format json > "$mac_output/$name/notarization.json" &
-    notaries+=("$!")
-done
-# Apple processes both Mac submissions while the iPhone archive builds locally.
+# Both release channels distribute this exact signed application bundle.
+name=bex-macOS-arm64
+just build-desktop-macos
+mkdir -p "$mac_output/$name"
+bundle="$mac_output/$name/bex.app"
+mv "$PWD/target/release/bex.app" "$bundle"
+[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Info.plist") == app.bex.desktop ]]
+[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$bundle/Contents/Info.plist") == "$AGENT_BUILD_NUMBER" ]]
+zip="$output/$name.zip"
+ditto -c -k --sequesterRsrc --keepParent "$bundle" "$zip"
+xcrun notarytool submit "$zip" --key "$AGENT_ASC_PRIVATE_KEY_FILE" \
+    --key-id "$AGENT_ASC_KEY_ID" --issuer "$AGENT_ASC_ISSUER_ID" \
+    --wait --output-format json > "$mac_output/$name/notarization.json" &
+notaries+=("$!")
+# Apple processes the Mac submission while the iPhone archive builds locally.
 archive="$output/Bex.xcarchive"
 auth=(-authenticationKeyPath "$AGENT_ASC_PRIVATE_KEY_FILE" -authenticationKeyID "$AGENT_ASC_KEY_ID" -authenticationKeyIssuerID "$AGENT_ASC_ISSUER_ID")
 node scripts/apple-provisioning.mjs
 profile_specifier="AGENT_IOS_PROFILE_SPECIFIER=$(jq -er .prefix "$output/provisioning.json") \$(PRODUCT_BUNDLE_IDENTIFIER)"
 # Only the app and extension consume these settings; Swift package build plugins keep their defaults.
 just ios-archive "$archive" "$output/DerivedData" "${auth[@]}" \
-    "CURRENT_PROJECT_VERSION=$AGENT_BUILD_NUMBER" AGENT_IOS_CODE_SIGN_STYLE=Manual \
+    "CURRENT_PROJECT_VERSION=$AGENT_BUILD_NUMBER" "MARKETING_VERSION=${AGENT_MARKETING_VERSION:?}" AGENT_IOS_CODE_SIGN_STYLE=Manual \
     'AGENT_IOS_CODE_SIGN_IDENTITY=Apple Distribution' "$profile_specifier" \
     "OTHER_CODE_SIGN_FLAGS=--keychain $AGENT_CODE_SIGN_KEYCHAIN"
 app="$archive/Products/Applications/Bex.app"
@@ -66,16 +57,14 @@ codesign --verify --deep --strict "$app"
 # Both products must validate before an iPhone upload or a Mac release can proceed.
 for notary in "${notaries[@]}"; do wait "$notary"; done
 notaries=()
-for name in "${mac_archives[@]}"; do
-    bundle="$mac_output/$name/bex.app"
-    jq -e -s 'any(.[]; .status == "Accepted")' "$mac_output/$name/notarization.json" >/dev/null
-    xcrun stapler staple "$bundle"
-    codesign --verify --deep --strict "$bundle"
-    spctl --assess --type execute "$bundle"
-    ditto -c -k --sequesterRsrc --keepParent "$bundle" "$mac_output/$name/notarized.zip"
-    mv "$mac_output/$name/notarized.zip" "$output/$name.zip"
-    (cd "$output" && shasum -a 256 "$name.zip" > "$name.zip.sha256")
-done
+bundle="$mac_output/$name/bex.app"
+jq -e -s 'any(.[]; .status == "Accepted")' "$mac_output/$name/notarization.json" >/dev/null
+xcrun stapler staple "$bundle"
+codesign --verify --deep --strict "$bundle"
+spctl --assess --type execute "$bundle"
+ditto -c -k --sequesterRsrc --keepParent "$bundle" "$mac_output/$name/notarized.zip"
+mv "$mac_output/$name/notarized.zip" "$output/$name.zip"
+(cd "$output" && shasum -a 256 "$name.zip" > "$name.zip.sha256")
 # Prove distribution signing locally before sending the archive to Apple.
 for destination in export upload; do
     if [[ $destination == upload ]]; then touch "$output/upload-start"; fi

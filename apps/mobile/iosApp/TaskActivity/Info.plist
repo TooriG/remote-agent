@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>TaskURLScheme</key>
-    <string>$(AGENT_TASK_URL_SCHEME)</string>
+    <string>bex</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>

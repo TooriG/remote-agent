@@ -90,20 +90,23 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('[data-dl-menu]').forEach(m => m.hidden = true); });
   new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
   render();
-  // Select each platform independently: an Apple release need not contain Windows assets.
+  // The stable endpoint remains available even after hundreds of dev candidates.
   // Keep pinned downloads available when the API or an upload is unavailable.
   async function loadReleaseDownloads() {
     try {
-      const response = await fetch('https://api.github.com/repos/ttizze/remote-agent/releases?per_page=20', {
+      const response = await fetch('https://api.github.com/repos/ttizze/remote-agent/releases/latest', {
         headers: { Accept: 'application/vnd.github+json' },
         signal: AbortSignal.timeout(5000)
       });
       if (!response.ok) return;
-      const releases = await response.json();
-      const assets = releases.filter(x => !x.draft && !x.prerelease).flatMap(x => x.assets || []);
+      const release = await response.json();
+      if (release.draft || release.prerelease || !/^prd-[1-9][0-9]*$/.test(release.tag_name)) return;
+      const assets = release.assets || [];
       for (const [platform, filename, description] of [
-        ['mac', /^bex-(?:\d+-)?macOS-arm64\.zip$/, 'Apple Silicon · macOS 26 · ZIP'],
-        ['win', /^bex-windows-x86_64-setup\.exe$/, 'Windows 11 · x86-64 · EXE']
+        ['mac', /^bex-macOS-arm64\.zip$/, 'Apple Silicon · macOS 26 · ZIP'],
+        ['win', /^bex-windows-x86_64-setup\.exe$/, 'Windows 11 · x86-64 · EXE'],
+        ['android', /^bex-android\.apk$/, 'Android 8.0+ · 64-bit · APK'],
+        ['linux', /^bex-linux-x86_64\.tar\.gz$/, 'Linux · x86-64 · Host / CLI']
       ]) {
         const asset = assets.find(x => {
           if (!filename.test(x.name) || x.state !== 'uploaded') return false;
@@ -118,6 +121,13 @@
         target.ready = true;
         target.source = false;
         target.file = { ja: description, en: description };
+      }
+      // New production releases publish only after the selected App Store build
+      // is available. Preserve the current public links until that first release.
+      if (assets.some(asset => asset.name === 'release.json' && asset.state === 'uploaded')) {
+        DL.ios = { name: 'iPhone', file: { ja: 'iOS 26 · App Store', en: 'iOS 26 · App Store' },
+          url: 'https://apps.apple.com/app/id6816015343', ready: true,
+          cta: { ja: 'App Storeで入手', en: 'Get on the App Store' } };
       }
       render();
     } catch { /* Keep the pinned, published download. */ }

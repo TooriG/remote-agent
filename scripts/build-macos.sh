@@ -13,15 +13,6 @@ case "$profile" in
     release) directory=release ;;
     *) echo "usage: $0 [host|desktop] [dev|release]" >&2; exit 2 ;;
 esac
-channel=${AGENT_DESKTOP_CHANNEL:-}
-if [[ -z $channel ]]; then
-    channel=production
-    if [[ $profile == dev ]]; then channel=development; fi
-fi
-case "$channel" in
-    production|development) ;;
-    *) echo 'Invalid desktop update channel.' >&2; exit 1 ;;
-esac
 packages=(--package host-daemon --package codex-app-server --package agent-process)
 if [[ $product == desktop ]]; then
     [[ $(uname -m) == arm64 ]] || { echo 'The GPUI Mac bundle requires Apple Silicon.' >&2; exit 2; }
@@ -93,18 +84,14 @@ cp "${AGENT_NODE_RUNTIME:?Use the pinned Nix development environment}/bin/node" 
 cp apps/desktop/macos/Node.Info.plist "$node_bundle/Contents/Info.plist"
 cp "$AGENT_NODE_RUNTIME/share/doc/node/LICENSE" "$resources/Node-LICENSE.txt"
 cp apps/desktop/macos/Info.plist "$bundle/Contents/Info.plist"
-icon=icon
-if [[ $channel == development ]]; then
-    icon=icon-dev
-    /usr/bin/plutil -replace CFBundleIdentifier -string app.bex.dev.desktop "$bundle/Contents/Info.plist"
-    /usr/bin/plutil -replace CFBundleName -string 'Bex Dev' "$bundle/Contents/Info.plist"
-    /usr/bin/plutil -replace CFBundleDisplayName -string 'Bex Dev' "$bundle/Contents/Info.plist"
-fi
-cp "apps/desktop/assets/$icon.icns" "$resources/bex.icns"
+cp apps/desktop/assets/icon.icns "$resources/bex.icns"
 /usr/bin/plutil -insert BEXBuildRevision -string "$AGENT_BUILD_REVISION" "$bundle/Contents/Info.plist"
 if [[ -n ${AGENT_BUILD_NUMBER:-} ]]; then
     [[ $AGENT_BUILD_NUMBER =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid Mac build number.' >&2; exit 1; }
     /usr/bin/plutil -replace CFBundleVersion -string "$AGENT_BUILD_NUMBER" "$bundle/Contents/Info.plist"
+fi
+if [[ -n ${AGENT_MARKETING_VERSION:-} ]]; then
+    /usr/bin/plutil -replace CFBundleShortVersionString -string "$AGENT_MARKETING_VERSION" "$bundle/Contents/Info.plist"
 fi
 # Use macOS's libiconv so the app also runs on Macs without Nix.
 for executable in "$executables/bex" "$executables/host-daemon" "$executables/agent-provider-supervisor"; do

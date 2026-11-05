@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { appForBundleId, ascClient, deliveryId, distributeBuild, listAll, nextBuildNumber, parseBuildStatus } from './apple-release.mjs';
+import { appForBundleId, ascClient, deliveryId, distributeBuild, listAll, nextBuildNumber, nextMarketingVersion, parseBuildStatus } from './apple-release.mjs';
 
 test('release waits for pending checks and requires both workflows to pass for the exact revision', (t) => {
   const workflow = readFileSync(new URL('../.github/workflows/apple-release.yml', import.meta.url), 'utf8');
@@ -74,6 +74,7 @@ test('production planning selects the exact bundle even when ASC returns Dev fir
 test('build numbers advance past source, uploaded Apple builds and published releases', () => {
   assert.equal(nextBuildNumber(['76', '76'], ['75', '77'], ['android-preview-1000', 'prd-81']), '82');
   assert.equal(nextBuildNumber(['76'], [], []), '77');
+  assert.equal(nextBuildNumber(['76'], [], ['dev-144', 'prd-143']), '145');
   assert.throws(() => nextBuildNumber(['75', '76'], [], []));
   assert.throws(() => nextBuildNumber([], [], []));
   assert.throws(() => nextBuildNumber(['76'], ['77.1'], []));
@@ -118,13 +119,14 @@ test('TestFlight assigns the existing group and submits only builds needing beta
   for (const state of ['READY_FOR_BETA_SUBMISSION', 'IN_BETA_TESTING']) {
     const mutations = [];
     const request = async (path, options = {}) => {
-      if (options.method === 'POST') { mutations.push({ path, data: options.data }); return null; }
+      if (options.method) { mutations.push({ path, data: options.data }); return null; }
       if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'external', attributes: { name: 'BEX External', isInternalGroup: false } }] };
       if (path.endsWith('/betaBuildLocalizations')) return { data: [] };
-      return { data: { attributes: { externalBuildState: state } } };
+      return { data: { id: 'beta-detail', attributes: { externalBuildState: state, autoNotifyEnabled: false } } };
     };
     await distributeBuild(request, 'app', 'build', 'BEX External', 'Release changes', 'ja');
-    assert.deepEqual(mutations.at(-1), { path: '/v1/betaGroups/external/relationships/builds', data: { data: [{ type: 'builds', id: 'build' }] } });
+    assert.ok(mutations.some(call => call.path === '/v1/betaGroups/external/relationships/builds' && call.data.data[0].id === 'build'));
+    assert.ok(mutations.some(call => call.path === '/v1/buildBetaDetails/beta-detail' && call.data.data.attributes.autoNotifyEnabled));
     assert.equal(mutations.some(call => call.path === '/v1/betaAppReviewSubmissions'), state === 'READY_FOR_BETA_SUBMISSION');
   }
 });
@@ -134,7 +136,7 @@ test('missing groups and rejected builds cannot be reported as distributed', asy
   const request = async (path, options = {}) => {
     if (options.method === 'POST') return null;
     if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'group', attributes: { name: 'external', isInternalGroup: false } }] };
-    return { data: { attributes: { externalBuildState: 'BETA_REJECTED' } } };
+    return { data: { id: 'detail', attributes: { externalBuildState: 'BETA_REJECTED' } } };
   };
   await assert.rejects(distributeBuild(request, 'app', 'build', 'external', 'changes', 'ja'), /blocked/);
 });
@@ -207,4 +209,27 @@ test('receipt recording reads recent Xcode bundles and preserves the plan on amb
     rmSync(join(native, 'Bex-other.xcdistributionlogs'), { recursive: true });
     assert.equal(run().status, 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('future candidates advance past approved versions without replacing their builds', () => {
+  assert.equal(nextMarketingVersion('1.0', []), '1.0.0');
+  assert.equal(nextMarketingVersion('1.0', ['1.0']), '1.0.1');
+  assert.equal(nextMarketingVersion('1.0', ['1.0']), '1.0.1');
+  assert.equal(nextMarketingVersion('2.0', ['1.9.9']), '2.0.0');
+  assert.throws(() => nextMarketingVersion('invalid', []));
+});
+
+test('Apple beta-review capacity waits remain retryable and never claim distribution', async () => {
+  for (const status of [409, 429]) {
+    let attempts = 0;
+    const request = async (path, options = {}) => {
+      if (path === '/v1/betaAppReviewSubmissions') { attempts++; if (attempts === 1) throw Object.assign(new Error('Capacity'), { status }); return {}; }
+      if (options.method) return {};
+      if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'group', attributes: { name: 'external', isInternalGroup: false, hasAccessToAllBuilds: true } }] };
+      if (path.endsWith('/betaBuildLocalizations')) return { data: [] };
+      return { data: { id: 'detail', attributes: { externalBuildState: 'READY_FOR_BETA_SUBMISSION', autoNotifyEnabled: true } } };
+    };
+    assert.equal(await distributeBuild(request, 'app', 'build', 'external', 'Changes', 'ja'), 'Waiting for TestFlight review capacity');
+    assert.equal(await distributeBuild(request, 'app', 'build', 'external', 'Changes', 'ja'), 'Submitted for TestFlight beta review');
+  }
 });

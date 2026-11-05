@@ -6,7 +6,7 @@ const source = fs.readFileSync(__dirname + '/public/download.js', 'utf8');
 const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-setup.exe';
 const pinnedWindows = 'https://github.com/ttizze/remote-agent/releases/download/prd-133/bex-windows-x86_64-setup.exe';
 
-async function renderDownloads({ language = 'en', platform = 'Win32', userAgent, assets = [], releases = [{ assets }], ok = true, fail = false } = {}) {
+async function renderDownloads({ language = 'en', platform = 'Win32', userAgent, assets = [], release = { tag_name: 'prd-75', assets }, ok = true, fail = false } = {}) {
   const element = () => ({ classList: { toggle() {} }, innerHTML: '', href: '' });
   const primary = [element(), element()];
   const grid = [element()];
@@ -24,9 +24,10 @@ async function renderDownloads({ language = 'en', platform = 'Win32', userAgent,
       addEventListener() {}
     },
     MutationObserver: class { observe() {} },
-    fetch: async () => {
+    fetch: async url => {
+      assert.equal(url, 'https://api.github.com/repos/ttizze/remote-agent/releases/latest');
       if (fail) throw new Error('offline');
-      return { ok, json: async () => releases };
+      return { ok, json: async () => release };
     }
   };
   vm.runInNewContext(source, context);
@@ -94,28 +95,23 @@ for (const language of ['ja', 'en']) {
   });
 }
 
-test('Mac and Windows select the newest uploaded asset for each platform across stable releases', async () => {
-  const mac = 'https://github.com/ttizze/remote-agent/releases/download/prd-77/bex-macOS-arm64.zip';
-  const asset = (name, url, state = 'uploaded') => ({ name, state, browser_download_url: url });
-  const releases = [
-    { draft: true, assets: [asset('bex-macOS-arm64.zip', mac + '-draft')] },
-    { prerelease: true, assets: [asset('bex-macOS-arm64.zip', mac + '-prerelease')] },
-    { assets: [asset('bex-macOS-arm64.zip', mac + '-pending', 'new')] },
-    { assets: [asset('bex-macOS-arm64.zip', 'https://example.test/bex.zip')] },
-    { assets: [asset('bex-macOS-arm64.zip', mac)] },
-    { assets: [asset('bex-75-macOS-arm64.zip', mac + '-old'), asset('bex-windows-x86_64-setup.exe', download)] }
-  ];
-  const result = await renderDownloads({ platform: 'MacIntel', releases });
-  assert.equal(result.primary[0].href, mac);
-  assert.ok(result.menu.includes(`href="${download}"`));
-  assert.ok(result.grid.includes(`href="${mac}"`));
-  assert.doesNotMatch(result.grid, /34MB/);
+test('the latest production release supplies the same packages for every platform', async () => {
+  const prefix = 'https://github.com/ttizze/remote-agent/releases/download/prd-145/';
+  const assets = ['bex-macOS-arm64.zip', 'bex-windows-x86_64-setup.exe', 'bex-android.apk', 'bex-linux-x86_64.tar.gz', 'release.json']
+    .map(name => ({ name, state: 'uploaded', browser_download_url: prefix + name }));
+  const result = await renderDownloads({ assets });
+  for (const asset of assets.filter(asset => asset.name !== 'release.json')) assert.ok(result.grid.includes(`href="${asset.browser_download_url}"`));
+  assert.ok(result.grid.includes('https://apps.apple.com/app/id6816015343'));
+  assert.doesNotMatch(result.grid, /testflight.apple.com/);
 });
 
-test('Mac retains its published download offline and accepts the historical versioned ZIP name', async () => {
-  const pinned = 'https://github.com/ttizze/remote-agent/releases/download/prd-133/bex-macOS-arm64.zip';
-  assert.equal((await renderDownloads({ platform: 'MacIntel', fail: true })).primary[0].href, pinned);
-  const mac = 'https://github.com/ttizze/remote-agent/releases/download/prd-76/bex-76-macOS-arm64.zip';
-  const result = await renderDownloads({ platform: 'MacIntel', assets: [{ name: 'bex-76-macOS-arm64.zip', state: 'uploaded', browser_download_url: mac }] });
-  assert.equal(result.primary[0].href, mac);
-});
+for (const release of [
+  { tag_name: 'dev-999', prerelease: true },
+  { tag_name: 'prd-999', draft: true },
+  { tag_name: 'android-preview-999' },
+]) {
+  test(`${release.tag_name} cannot change the public production download`, async () => {
+    release.assets = [{ name: 'bex-windows-x86_64-setup.exe', state: 'uploaded', browser_download_url: download }];
+    assert.equal((await renderDownloads({ release })).primary[0].href, pinnedWindows);
+  });
+}
