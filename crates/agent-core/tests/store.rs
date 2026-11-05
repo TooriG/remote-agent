@@ -308,7 +308,9 @@ async fn failed_list_refresh_releases_the_next_request_and_close_releases_its_wa
     let second = refresh();
     let joined = refresh();
     // This independent RPC is also a barrier: the queued refreshes were admitted.
-    let models = store.dispatch(Intent::LoadModels(op::LoadModels {}));
+    let models = store.dispatch(Intent::LoadModels(op::LoadModels {
+        provider: ProviderKind::Codex,
+    }));
     let model_request = read_after_status(&mut reader, &writer).await;
     assert_eq!(model_request["method"], "host/model/list");
     writer
@@ -488,9 +490,14 @@ async fn setup(snapshot: Snapshot) -> (Arc<Store>, host_fixture::Reader, host_fi
         current.threads.is_some()
             && current.task_activity.is_some()
             && current.account.accounts.is_some()
-            && [op::OperationKey::Models, op::OperationKey::Accounts]
-                .iter()
-                .all(|key| !current.operations.contains_key(key))
+            && [
+                op::OperationKey::Models {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                },
+                op::OperationKey::Accounts,
+            ]
+            .iter()
+            .all(|key| !current.operations.contains_key(key))
             && (cwd.is_empty() || current.workspace.review.is_some())
     })
     .await;
@@ -3996,6 +4003,7 @@ async fn completed_login_selects_its_account_before_refreshing_without_client_lo
                 "gpt"
             };
             let (store, mut reader, writer) = setup(Snapshot::default()).await;
+            reader.script_model_catalog();
             let polling = store.dispatch(Intent::ReadAccountLogin(op::ReadAccountLogin {
                 provider: serde_json::from_value(json!(provider)).unwrap(),
                 id: "login".into(),
@@ -4459,43 +4467,63 @@ fn item_text(item: &agent_protocol::items::Item) -> Option<&str> {
 }
 
 #[tokio::test]
-async fn model_catalog_pages_keep_provider_identity_and_distinct_alias_entries() {
-    let (store, mut reader, writer) = connected(Snapshot::default()).await;
+async fn model_catalogs_publish_and_recover_independently_while_another_provider_is_pending() {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    reader.script_model_catalog();
+    let refreshed = store.dispatch(Intent::RefreshModels);
     let mut pending = BTreeMap::new();
-    for _ in 0..4 {
+    for _ in 0..3 {
         let request = read(&mut reader).await;
-        pending.insert(request["method"].as_str().unwrap().to_owned(), request);
+        assert_eq!(request["method"], "host/model/list");
+        let provider: ProviderKind =
+            serde_json::from_value(request["params"]["provider"].clone()).unwrap();
+        assert!(pending.insert(provider, request).is_none());
     }
-    writer.reply(&pending["host/taskActivity/read"], json!({"result":{"revision":0,"statuses":[],"waiting":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()}})).await.unwrap();
-    writer
-        .reply(
-            &pending["host/session/list"],
-            json!({"result":{"data":[],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}}),
-        )
-        .await
-        .unwrap();
-    writer
-        .reply(
-            &pending["host/account/list"],
-            json!({"result":{"accounts":[],"selected":{}}}),
-        )
-        .await
-        .unwrap();
-    let model = |provider: &str, id: &str, title: &str| json!({"id":id,"model":{"provider":provider,"id":"same-native-model"},"displayName":title,"isDefault":false, "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}});
-    writer.reply(&pending["host/model/list"],json!({"result":{"data":[model("codex","shared-entry","Original Codex"),model("claude","shared-entry","Claude")],"nextCursor":"next"}})).await.unwrap();
+    let model = |provider: ProviderKind, id: &str, title: &str| json!({"id":id,"model":{"provider":provider,"id":"same-native-model"},"displayName":title,"isDefault":false, "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}});
+    writer.reply(&pending[&ProviderKind::Codex], json!({"result":{
+        "data":[model(ProviderKind::Codex,"shared-entry","Original Codex")],"nextCursor":"next"
+    }})).await.unwrap();
     let next = read(&mut reader).await;
-    assert_eq!(next["method"], "host/model/list");
+    assert_eq!(next["params"]["provider"], "codex");
     assert_eq!(next["params"]["cursor"], "next");
-    writer.reply(&next,json!({"result":{"data":[model("codex","shared-entry","Updated Codex"),model("codex","alias-entry","Codex alias")],"nextCursor":null}})).await.unwrap();
-    wait_for(&store, |state| {
-        state
-            .models
-            .iter()
-            .any(|model| model.display_name == "Updated Codex")
-    })
-    .await;
+    writer
+        .reply(
+            &next,
+            json!({"result":{"data":[
+        model(ProviderKind::Codex,"shared-entry","Updated Codex"),
+        model(ProviderKind::Codex,"alias-entry","Codex alias")],"nextCursor":null}}),
+        )
+        .await
+        .unwrap();
+    wait_for(&store, |state| state.models.len() == 2).await;
+    assert!(!store.snapshot().models_loading(Some(ProviderKind::Codex)));
+    assert!(store.snapshot().models_loading(Some(ProviderKind::Claude)));
+    assert!(
+        store
+            .snapshot()
+            .models_loading(Some(ProviderKind::DeepSeek))
+    );
+    writer
+        .reply(
+            &pending[&ProviderKind::Claude],
+            json!({"result":{"data":[],"providerErrors":{
+                "claude":{"code":"provider_timeout","message":"Claude unavailable"}
+            }}}),
+        )
+        .await
+        .unwrap();
+    wait_for(&store, |state| state.model_errors.contains_key("claude")).await;
+    assert_eq!(store.snapshot().models.len(), 2);
+    let retry = store.dispatch(Intent::LoadModels(op::LoadModels {
+        provider: ProviderKind::Claude,
+    }));
+    let request = read(&mut reader).await;
+    assert_eq!(request["params"]["provider"], "claude");
+    writer.reply(&request,json!({"result":{"data":[model(ProviderKind::Claude,"shared-entry","Claude")],"nextCursor":null}})).await.unwrap();
+    retry.await.unwrap();
     let state = store.snapshot();
-    assert_eq!(state.models.len(), 3);
+    assert!(state.model_errors.is_empty());
+    assert!(state.models_loading(Some(ProviderKind::DeepSeek)));
     assert_eq!(
         state
             .models
@@ -4508,10 +4536,19 @@ async fn model_catalog_pages_keep_provider_identity_and_distinct_alias_entries()
             .collect::<Vec<_>>(),
         vec![
             (ProviderKind::Codex, "shared-entry", "Updated Codex"),
-            (ProviderKind::Claude, "shared-entry", "Claude"),
             (ProviderKind::Codex, "alias-entry", "Codex alias"),
+            (ProviderKind::Claude, "shared-entry", "Claude"),
         ]
     );
+    writer
+        .reply(
+            &pending[&ProviderKind::DeepSeek],
+            json!({"result":{"data":[]}}),
+        )
+        .await
+        .unwrap();
+    wait_for(&store, |state| !state.models_loading(None)).await;
+    refreshed.await.unwrap();
     store.close().await.unwrap();
 }
 

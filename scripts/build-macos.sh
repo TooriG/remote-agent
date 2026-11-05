@@ -33,9 +33,9 @@ export AGENT_BUILD_REVISION
 AGENT_BUILD_REVISION=$(git rev-parse HEAD)
 if ! git diff --quiet HEAD --; then AGENT_BUILD_REVISION+=-dirty; fi
 sign() {
-    local options=(--force --sign "$identity")
+    local options=(--force --sign "$identity" --options runtime)
     if [[ ${AGENT_DISTRIBUTION_SIGNING:-0} == 1 ]]; then
-        options+=(--options runtime --timestamp)
+        options+=(--timestamp)
     else
         options+=(--timestamp=none)
     fi
@@ -103,13 +103,16 @@ for executable in "$executables/bex" "$executables/host-daemon" "$executables/ag
         /usr/bin/install_name_tool -change "$library" /usr/lib/libiconv.2.dylib "$executable"
     done < <(/usr/bin/otool -L "$executable" | awk 'NR > 1 {print $1}')
 done
-sign "$executables/bex"
 sign --identifier app.bex.provider-supervisor "$executables/agent-provider-supervisor"
 sign --identifier app.bex.host "$executables/host-daemon"
-sign --options runtime --entitlements apps/desktop/macos/Node.entitlements "$node_bundle"
+sign --entitlements apps/desktop/macos/Node.entitlements "$node_bundle"
 verify "$node_bundle"
-sign "$bundle"
+sign --entitlements apps/desktop/macos/Desktop.entitlements "$bundle"
 verify "$bundle"
+/usr/bin/codesign -d --verbose=2 "$bundle" 2>&1 | grep 'flags=.*runtime' >/dev/null
+/usr/bin/codesign -d --entitlements - --xml "$bundle" |
+    /usr/bin/plutil -convert json -o - - |
+    jq -e '."com.apple.security.device.audio-input" == true' >/dev/null
 # Exercise the signed runtime without an installed Node or Nix on PATH.
 env -i PATH=/usr/bin:/bin "$node" "$resources/agent-claude-sdk.mjs" </dev/null
 if [[ -e $destination ]]; then mv "$destination" "$staging/previous.app"; fi

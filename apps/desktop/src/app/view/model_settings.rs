@@ -31,7 +31,7 @@ fn account_identity(provider: Option<ProviderKind>, identity: &str) -> Div {
 impl Desktop {
     pub(super) fn refresh_accounts_and_models(&self) {
         self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
-        self.dispatch(Intent::LoadModels(op::LoadModels {}));
+        self.dispatch(Intent::RefreshModels);
         if self.account_provider() == Some(ProviderKind::DeepSeek) {
             self.dispatch(Intent::ReadDshCredentials(op::ReadDshCredentials {}));
         }
@@ -1132,7 +1132,11 @@ impl Desktop {
             .max_h(px(264.))
             .overflow_y_scroll();
         if models.is_empty() && custom_model.is_none() {
-            list = list.child(language.text("利用可能なモデルがありません"));
+            list = list.child(language.text(if self.snapshot.models_loading(provider) {
+                "モデルを読み込み中…"
+            } else {
+                "利用可能なモデルがありません"
+            }));
         }
         for model in models {
             let value = model.model.clone();

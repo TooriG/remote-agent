@@ -835,26 +835,28 @@ mod tests {
             ProjectStore::new(root.path().join("worktrees.json")),
         );
         let session = service.open_session();
-        let response = service
-            .dispatch(
-                session.id(),
-                &Call::ListModels(op::ListModels {
-                    cursor: None,
-                    limit: 100,
-                }),
-            )
-            .await
-            .unwrap();
-        let Response::Success { result: page } =
-            agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
-        else {
-            panic!("catalog failures must retain each provider's error");
-        };
-        assert!(page.data.is_empty());
-        assert!(page.next_cursor.is_none());
-        let errors = page.provider_errors.unwrap();
-        assert_eq!(errors.len(), providers.len());
         for provider in providers {
+            let response = service
+                .dispatch(
+                    session.id(),
+                    &Call::ListModels(op::ListModels {
+                        provider,
+                        cursor: None,
+                        limit: 100,
+                    }),
+                )
+                .await
+                .unwrap();
+            let Response::Success { result: page } =
+                agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial)
+                    .unwrap()
+            else {
+                panic!("catalog failures must retain each provider's error");
+            };
+            assert!(page.data.is_empty());
+            assert!(page.next_cursor.is_none());
+            let errors = page.provider_errors.unwrap();
+            assert_eq!(errors.len(), 1);
             assert_eq!(errors[provider.key()]["code"], "provider_unavailable");
         }
     }

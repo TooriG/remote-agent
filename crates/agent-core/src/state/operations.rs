@@ -189,6 +189,7 @@ pub enum Intent {
     ReadOlder {
         thread_id: crate::session::SessionRef,
     },
+    RefreshModels,
     LoadModels(LoadModels),
     ReadModelSettings(ReadModelSettings),
     SetDraft {
@@ -287,7 +288,9 @@ pub enum OperationKey {
     },
     WorkspaceReview,
     CodexCli,
-    Models,
+    Models {
+        provider: crate::session::ProviderKind,
+    },
     ModelSettings {
         model: crate::models::ModelRef,
     },

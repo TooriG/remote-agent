@@ -266,7 +266,7 @@ extension AgentSettingsScreen {
         }
         loadingAccounts = true
         model.perform(.listAccounts(ListAccounts())) { _ in loadingAccounts = false }
-        model.perform(.loadModels(LoadModels()))
+        model.perform(.refreshModels)
     }
 
     private func signOut(_ id: String) {

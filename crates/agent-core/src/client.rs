@@ -82,7 +82,7 @@ pub trait ClientExt {
         &self,
         operation: &O,
     ) -> Result<Option<(O::Output, Updates, uuid::Uuid)>, PeerError>;
-    async fn models(&self) -> Result<ModelPage, PeerError>;
+    async fn models(&self, provider: crate::session::ProviderKind) -> Result<ModelPage, PeerError>;
     async fn respond(&self, request: &Request, answer: &Answer) -> Result<(), PeerError>;
     async fn session_images(
         &self,
@@ -110,28 +110,57 @@ impl ClientExt for Client {
         Ok(Some((output, updates, id)))
     }
 
-    async fn models(&self) -> Result<ModelPage, PeerError> {
+    async fn models(&self, provider: crate::session::ProviderKind) -> Result<ModelPage, PeerError> {
         let mut provider_errors = Map::<String, Value>::new();
         let mut models: Vec<crate::models::Model> = Vec::new();
+        let mut positions = None;
         let mut cursor = None;
         let mut seen = std::collections::HashSet::new();
         loop {
             let page = self
                 .call(&ListModels {
+                    provider,
                     limit: 100,
                     cursor: cursor.clone(),
                 })
                 .await?;
+            if page
+                .data
+                .iter()
+                .any(|model| model.model.provider != provider)
+                || page
+                    .provider_errors
+                    .as_ref()
+                    .is_some_and(|errors| errors.keys().any(|key| key != provider.key()))
+            {
+                return Err(PeerError::InvalidMessage(
+                    "model catalog belongs to another provider".into(),
+                ));
+            }
             if let Some(errors) = page.provider_errors {
                 provider_errors.extend(errors);
             }
             for model in page.data {
-                if let Some(index) = models.iter().position(|previous| {
-                    previous.id == model.id && previous.model.provider == model.model.provider
-                }) {
-                    models[index] = model;
-                } else {
+                if positions.is_none() && models.len() >= 128 {
+                    positions = Some(
+                        models
+                            .iter()
+                            .enumerate()
+                            .map(|(index, model)| (model.id.clone(), index))
+                            .collect::<std::collections::HashMap<_, _>>(),
+                    );
+                }
+                let index = match &mut positions {
+                    Some(positions) => *positions.entry(model.id.clone()).or_insert(models.len()),
+                    None => models
+                        .iter()
+                        .position(|previous| previous.id == model.id)
+                        .unwrap_or(models.len()),
+                };
+                if index == models.len() {
                     models.push(model);
+                } else {
+                    models[index] = model;
                 }
             }
             cursor = page.next_cursor;
@@ -277,3 +306,131 @@ pub mod native;
 pub mod persistence;
 #[cfg(feature = "bindings")]
 pub mod session;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        models::{Model, ModelRef},
+        session::ProviderKind,
+        state::Snapshot,
+    };
+    use serde_json::json;
+    use std::time::Duration;
+
+    #[allow(dead_code)]
+    mod host_fixture {
+        include!("../tests/support/host.rs");
+    }
+
+    #[tokio::test]
+    async fn model_pages_reject_payloads_owned_by_another_provider() {
+        for result in [
+            json!({"data":[{"id":"wrong","model":{"provider":"claude","id":"wrong"},"displayName":"Wrong"}]}),
+            json!({"data":[],"providerErrors":{"claude":{"message":"wrong provider"}}}),
+        ] {
+            let ((client, _events), mut reader, writer) =
+                host_fixture::connect(&Snapshot::default()).await;
+            let serving = async {
+                let request = reader.read_request().await.unwrap().unwrap();
+                assert_eq!(request["params"]["provider"], "codex");
+                writer
+                    .reply(&request, json!({"result":result}))
+                    .await
+                    .unwrap();
+            };
+            let (result, ()) = tokio::join!(client.models(ProviderKind::Codex), serving);
+            assert!(matches!(result, Err(PeerError::InvalidMessage(_))));
+            client.close().await;
+        }
+    }
+
+    #[rstest::rstest]
+    #[case(1)]
+    #[case(16)]
+    #[case(127)]
+    #[case(128)]
+    #[case(129)]
+    #[case(160)]
+    #[tokio::test]
+    async fn model_pages_keep_alias_identity_first_position_and_latest_payload(
+        #[case] count: usize,
+    ) {
+        let original: Vec<_> = (0..count)
+            .map(|index| Model {
+                id: format!("alias-{index}"),
+                model: ModelRef {
+                    provider: ProviderKind::Codex,
+                    id: "same-native-model".into(),
+                },
+                display_name: format!("Original {index}"),
+                credential_route: None,
+                settings: None,
+                settings_discovery: false,
+                is_default: Some(false),
+            })
+            .collect();
+        let mut tail = original[count - 1].clone();
+        tail.display_name = "Updated tail".into();
+        let mut alias = original[0].clone();
+        alias.id = "another-alias".into();
+        let mut latest = original[0].clone();
+        latest.display_name = "Latest first entry".into();
+        latest.model.id = "replaced-native-model".into();
+        latest.settings_discovery = true;
+        latest.is_default = Some(true);
+        let mut pages: Vec<_> = original.chunks(100).map(<[Model]>::to_vec).collect();
+        pages.push(vec![tail.clone(), alias.clone(), latest.clone()]);
+        let mut expected = original;
+        expected[count - 1] = tail;
+        expected[0] = latest;
+        expected.push(alias);
+        let ((client, _events), mut reader, writer) =
+            host_fixture::connect(&Snapshot::default()).await;
+        let page_count = pages.len();
+        let serving = async {
+            for (index, data) in pages.into_iter().enumerate() {
+                let request = reader.read_request().await.unwrap().unwrap();
+                assert_eq!(request["method"], "host/model/list");
+                assert_eq!(request["params"]["limit"], 100);
+                assert_eq!(
+                    request["params"]["cursor"],
+                    if index == 0 {
+                        Value::Null
+                    } else {
+                        json!(format!("page-{index}"))
+                    }
+                );
+                let next = (index + 1 < page_count).then(|| format!("page-{}", index + 1));
+                let errors = if next.is_none() {
+                    json!({"codex":"latest"})
+                } else {
+                    json!({"codex":format!("page-{index}")})
+                };
+                writer
+                    .reply(
+                        &request,
+                        json!({"result":{"data":data,"nextCursor":next,"providerErrors":errors}}),
+                    )
+                    .await
+                    .unwrap();
+            }
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                client.models(agent_protocol::session::ProviderKind::Codex),
+                serving
+            )
+        })
+        .await
+        .unwrap();
+        let result = result.unwrap();
+        assert_eq!(result.data, expected);
+        assert_eq!(result.next_cursor, None);
+        assert_eq!(
+            result.provider_errors,
+            json!({"codex":"latest"}).as_object().cloned()
+        );
+        client.close().await;
+    }
+}

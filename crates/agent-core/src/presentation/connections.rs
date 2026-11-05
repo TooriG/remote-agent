@@ -65,14 +65,6 @@ fn availability(
 impl Snapshot {
     pub fn connection_setup(&self) -> ConnectionSetup {
         use crate::state::operations::{OperationKey, OperationPhase};
-        let checks_failed = self.connected
-            && [OperationKey::Models, OperationKey::Accounts]
-                .iter()
-                .any(|key| {
-                    self.operations
-                        .get(key)
-                        .is_some_and(|state| matches!(state.phase, OperationPhase::Failed { .. }))
-                });
         let agents: Vec<_> = [
             (ProviderKind::Codex, "Codex"),
             (ProviderKind::Claude, "Claude Code"),
@@ -80,6 +72,15 @@ impl Snapshot {
         ]
         .into_iter()
         .map(|(provider, name)| {
+            let checks_failed = self.connected
+                && [OperationKey::Models { provider }, OperationKey::Accounts]
+                    .iter()
+                    .any(|key| {
+                        self.operations.get(key).is_some_and(|state| {
+                            matches!(state.phase, OperationPhase::Failed { .. })
+                        })
+                    });
+
             let availability = availability(
                 self.connected,
                 provider,
@@ -109,7 +110,7 @@ impl Snapshot {
                                     .get(&provider)
                                     .map(|error| super::error::error_text(error))
                             })
-                            .or_else(|| self.operation_error(OperationKey::Models))
+                            .or_else(|| self.operation_error(OperationKey::Models { provider }))
                             .or_else(|| self.operation_error(OperationKey::Accounts))
                     })
                     .flatten(),
@@ -226,7 +227,12 @@ mod tests {
     fn failed_checks_stop_spinning_and_retries_keep_cached_ready_agents() {
         use crate::state::operations::{OperationKey, OperationPhase, OperationState};
         use std::sync::Arc;
-        for key in [OperationKey::Models, OperationKey::Accounts] {
+        for key in [
+            OperationKey::Models {
+                provider: agent_protocol::session::ProviderKind::Codex,
+            },
+            OperationKey::Accounts,
+        ] {
             let mut snapshot = Snapshot {
                 connected: true,
                 ..Default::default()
@@ -242,12 +248,13 @@ mod tests {
             );
             let setup = snapshot.connection_setup();
             assert!(!setup.can_start);
-            assert!(
-                setup
-                    .agents
-                    .iter()
-                    .all(|agent| agent.availability == AgentAvailability::Unavailable)
-            );
+            assert!(setup.agents.iter().all(|agent| agent.availability
+                == if matches!(key, OperationKey::Models { provider } if provider != agent.provider)
+                {
+                    AgentAvailability::Checking
+                } else {
+                    AgentAvailability::Unavailable
+                }));
             Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(
                 serde_json::from_value(serde_json::json!({
                     "accounts":[{"id":"native","provider":"codex"}],

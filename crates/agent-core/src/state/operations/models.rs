@@ -4,31 +4,49 @@ use crate::client::ClientExt;
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoadModels {}
+pub struct LoadModels {
+    pub provider: crate::session::ProviderKind,
+}
+
+pub(crate) fn refresh_models() -> Vec<Effect> {
+    use crate::session::ProviderKind;
+    [
+        ProviderKind::Codex,
+        ProviderKind::Claude,
+        ProviderKind::DeepSeek,
+    ]
+    .into_iter()
+    .map(|provider| Effect::execute(LoadModels { provider }))
+    .collect()
+}
+
 impl Operation for LoadModels {
     fn key(&self) -> Option<OperationKey> {
-        Some(OperationKey::Models)
+        Some(OperationKey::Models {
+            provider: self.provider,
+        })
     }
     fn scheduling(&self) -> Scheduling {
-        Scheduling::LatestHostState(OperationKey::Models)
+        Scheduling::LatestHostState(OperationKey::Models {
+            provider: self.provider,
+        })
     }
     no_input!();
     type Output = rpc::ModelPage;
     async fn run(&self, _: (), context: &mut Execution<'_>) -> Result<Self::Output, PeerError> {
-        context.client.models().await
+        context.client.models(self.provider).await
     }
     fn apply(self, snapshot: &mut Snapshot, catalog: Self::Output) -> Vec<Effect> {
-        let models = catalog.data;
-        let errors = catalog
-            .provider_errors
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
-        snapshot.models = Arc::new(models);
-        snapshot.model_errors = Arc::new(errors);
+        let models = Arc::make_mut(&mut snapshot.models);
+        models.retain(|model| model.model.provider != self.provider);
+        models.extend(catalog.data);
+        models.sort_by_key(|model| model.model.provider);
+        let errors = Arc::make_mut(&mut snapshot.model_errors);
+        errors.remove(self.provider.key());
+        errors.extend(catalog.provider_errors.unwrap_or_default());
         snapshot.normalize_model_drafts();
         Arc::make_mut(&mut snapshot.operations).retain(|key, state| {
-            !matches!(key, OperationKey::ModelSettings { .. })
+            !matches!(key, OperationKey::ModelSettings { model } if model.provider == self.provider)
                 || state.phase == OperationPhase::Running
         });
         Vec::new()
@@ -84,6 +102,86 @@ mod tests {
     use crate::session::ProviderKind;
 
     #[test]
+    fn refreshing_one_provider_preserves_other_catalogs_errors_and_settings() {
+        let catalog = |provider, id| {
+            serde_json::from_value(serde_json::json!({
+                "data":[{"id":id,"model":{"provider":provider,"id":id},"displayName":id}]
+            }))
+            .unwrap()
+        };
+        let mut snapshot = Snapshot::default();
+        for (provider, id) in [
+            (ProviderKind::Codex, "old"),
+            (ProviderKind::Claude, "retained"),
+        ] {
+            LoadModels { provider }.apply(&mut snapshot, catalog(provider, id));
+        }
+        let retained = snapshot.models[1].clone();
+        Arc::make_mut(&mut snapshot.model_errors).insert(
+            "claude".into(),
+            serde_json::json!({"message":"retained error"}),
+        );
+        let key = OperationKey::ModelSettings {
+            model: retained.model.clone(),
+        };
+        Arc::make_mut(&mut snapshot.operations).insert(
+            key.clone(),
+            OperationState {
+                generation: 1,
+                phase: OperationPhase::Failed {
+                    message: "retained settings failure".into(),
+                },
+            },
+        );
+        let failed = OperationKey::ModelSettings {
+            model: snapshot.models[0].model.clone(),
+        };
+        let running = OperationKey::ModelSettings {
+            model: crate::models::ModelRef {
+                provider: ProviderKind::Codex,
+                id: "pending".into(),
+            },
+        };
+        for (key, phase) in [
+            (
+                failed.clone(),
+                OperationPhase::Failed {
+                    message: "retry after refresh".into(),
+                },
+            ),
+            (running.clone(), OperationPhase::Running),
+        ] {
+            Arc::make_mut(&mut snapshot.operations).insert(
+                key,
+                OperationState {
+                    generation: 1,
+                    phase,
+                },
+            );
+        }
+        LoadModels {
+            provider: ProviderKind::Codex,
+        }
+        .apply(&mut snapshot, catalog(ProviderKind::Codex, "fresh"));
+        assert_eq!(snapshot.models[0].id, "fresh");
+        assert_eq!(snapshot.models[1], retained);
+        assert_eq!(snapshot.model_errors["claude"]["message"], "retained error");
+        assert!(snapshot.operations.contains_key(&key));
+        assert!(!snapshot.operations.contains_key(&failed));
+        assert_eq!(snapshot.operations[&running].phase, OperationPhase::Running);
+        assert_ne!(
+            LoadModels {
+                provider: ProviderKind::Codex
+            }
+            .key(),
+            LoadModels {
+                provider: ProviderKind::Claude
+            }
+            .key()
+        );
+    }
+
+    #[test]
     fn model_settings_resolution_preserves_unresolved_drafts_and_applies_by_model_identity() {
         let model = crate::models::ModelRef {
             provider: ProviderKind::DeepSeek,
@@ -118,7 +216,10 @@ mod tests {
         ],"nextCursor":null}))
         .unwrap();
         snapshot.connected = true;
-        LoadModels {}.apply(&mut snapshot, page);
+        LoadModels {
+            provider: ProviderKind::DeepSeek,
+        }
+        .apply(&mut snapshot, page);
         assert!(
             prefetch_model_settings(
                 snapshot.connected,

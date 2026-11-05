@@ -38,6 +38,61 @@ async fn lifetime_pipe_relays_input_and_preserves_native_exit_status() {
     );
 }
 
+// GUI/update launch threads can block signals before exec. Both native exit
+// and EOF cleanup must still finish, including on macOS's SIGCHLD reaper.
+#[tokio::test]
+async fn blocked_launcher_signals_do_not_stall_native_exit_or_eof_cleanup() {
+    for (script, expected) in [
+        ("read value; echo ready; exit 7", 7),
+        ("read value; echo ready; kill -TERM $$; exit 9", 1),
+        ("read value; echo ready; cat >/dev/null; sleep 30", 0),
+    ] {
+        let mut command = agent_process::command(Path::new("/bin/sh")).unwrap();
+        // SAFETY: the child callback only builds a local signal set and uses
+        // async-signal-safe POSIX functions before exec.
+        unsafe {
+            command.pre_exec(|| {
+                let mut signals = std::mem::zeroed();
+                libc::sigemptyset(&mut signals);
+                libc::sigaddset(&mut signals, libc::SIGCHLD);
+                libc::sigaddset(&mut signals, libc::SIGTERM);
+                let error = libc::pthread_sigmask(libc::SIG_BLOCK, &signals, std::ptr::null_mut());
+                if error == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::from_raw_os_error(error))
+                }
+            });
+        }
+        let mut child = command
+            .args(["-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(b"start\n").await.unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .await
+            .unwrap();
+        assert_eq!(line, "ready\n");
+        let lifetime = if expected == 0 {
+            drop(input);
+            None
+        } else {
+            Some(input)
+        };
+        let status = tokio::time::timeout(Duration::from_secs(3), child.wait())
+            .await
+            .expect("inherited signal masks must not strand the supervisor")
+            .unwrap();
+        assert_eq!(status.code(), Some(expected));
+        drop(lifetime);
+    }
+}
+
 // The subprocess is an isolated Host stand-in. Kill it without running any
 // destructors, then verify its known provider and tool child both disappear.
 #[test]

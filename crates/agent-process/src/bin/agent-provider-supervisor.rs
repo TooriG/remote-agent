@@ -5,8 +5,9 @@ use process_wrap::tokio::{CommandWrap, KillOnDrop};
 use std::process::Stdio;
 use tokio::process::Command;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+fn main() {
+    #[cfg(unix)]
+    agent_process::reset_signal_mask().expect("reset supervisor signal mask");
     // BROWSER accepts an executable, without arguments, on Windows as well as
     // Unix. Reuse this companion as a successful no-op browser so no host-local
     // callback tab can escape a provider's explicitly client-owned login flow.
@@ -16,12 +17,19 @@ async fn main() {
     ) {
         return;
     }
-    let code = if std::env::args().nth(1).as_deref() == Some("--agent-pty") {
-        pty::run().await
-    } else {
-        run().await
-    }
-    .unwrap_or(1);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("create supervisor runtime");
+    let code = runtime
+        .block_on(async {
+            if std::env::args().nth(1).as_deref() == Some("--agent-pty") {
+                pty::run().await
+            } else {
+                run().await
+            }
+        })
+        .unwrap_or(1);
     // Tokio's stdin reader may still be blocked after a native process exits.
     // All owned children have already been killed/reaped before reaching here.
     std::process::exit(code);

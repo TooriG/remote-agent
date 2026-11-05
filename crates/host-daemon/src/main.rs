@@ -10,6 +10,10 @@ use clap::Parser;
 use command_line::StartupConfig;
 
 fn main() {
+    // The updater can descend from a GPUI dispatch worker, where child-exit
+    // and shutdown signals are blocked. Reset before Tokio inherits that mask.
+    #[cfg(unix)]
+    agent_process::reset_signal_mask().expect("reset Host signal mask");
     #[cfg(target_os = "macos")]
     environment::initialize();
     host_runtime().block_on(run());

@@ -2,7 +2,7 @@ use agent_core::{
     persistence,
     state::{
         Draft, DraftKey, Event, Intent, Snapshot,
-        operations::{ListAccounts, LoadModels, Operation, ReadThread},
+        operations::{ListAccounts, Operation, ReadThread},
         reduce,
     },
 };
@@ -105,7 +105,7 @@ fn explicit_codex_model_survives_selection_and_catalog_refresh() {
     );
     assert_eq!(selected.drafts[&key].model, Some(model.clone()));
     let mut selected = selected;
-    LoadModels {}.apply(
+    crate::test_models::apply_catalog(
         &mut selected,
         ModelPage {
             data: catalog(),
@@ -147,7 +147,7 @@ fn chatgpt_catalog_repairs_unavailable_saved_model_but_api_keeps_explicit_ids() 
                 model: unsupported.clone(),
             },
         );
-        LoadModels {}.apply(
+        crate::test_models::apply_catalog(
             &mut snapshot,
             ModelPage {
                 data: catalog(),
@@ -179,7 +179,7 @@ fn chatgpt_catalog_repairs_unavailable_saved_model_but_api_keeps_explicit_ids() 
                 model: unsupported.clone(),
             },
         );
-        LoadModels {}.apply(
+        crate::test_models::apply_catalog(
             &mut snapshot,
             ModelPage {
                 data: available,
@@ -213,7 +213,7 @@ fn catalog_failures_only_preserve_the_affected_providers_saved_model(
             ..Default::default()
         }),
     );
-    LoadModels {}.apply(
+    crate::test_models::apply_catalog(
         &mut snapshot,
         ModelPage {
             data: catalog(),
@@ -483,7 +483,7 @@ fn reading_a_conversation_and_refreshing_catalogs_do_not_remember_its_model() {
             .provider,
         ProviderKind::Claude
     );
-    LoadModels {}.apply(
+    crate::test_models::apply_catalog(
         &mut snapshot,
         ModelPage {
             data: catalog(),
@@ -576,7 +576,7 @@ fn remembered_deepseek_route_waits_for_capabilities_without_losing_choices() {
     let key = snapshot.navigation.draft_key.clone();
     assert_eq!(snapshot.drafts[&key].model.as_ref(), Some(&model));
     assert_eq!(snapshot.drafts[&key].effort.as_deref(), Some("max"));
-    LoadModels {}.apply(
+    crate::test_models::apply_catalog(
         &mut snapshot,
         ModelPage {
             data: vec![serde_json::from_value(json!({
@@ -603,7 +603,7 @@ fn first_new_chat_waits_for_authentication_without_creating_a_preference() {
         let mut snapshot = Snapshot::default();
         for load_catalog in [catalog_first, !catalog_first] {
             if load_catalog {
-                LoadModels {}.apply(
+                crate::test_models::apply_catalog(
                     &mut snapshot,
                     ModelPage {
                         data: catalog(),

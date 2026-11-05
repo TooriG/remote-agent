@@ -4749,6 +4749,7 @@ dependencies = [
  "futures-util",
  "image",
  "libc",
+ "memchr",
  "pbkdf2 0.13.0",
  "proptest",
  "regex",

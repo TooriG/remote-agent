@@ -88,7 +88,7 @@ impl Desktop {
             })
     }
 
-    pub(super) fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn settings(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let (title, subtitle) = match self.settings_page {
             SettingsPage::General => (
@@ -145,7 +145,11 @@ impl Desktop {
                     .text_xs()
                     .child(header)
                     .border_b_1()
-                    .border_color(rgb(appearance::BORDER)),
+                    .border_color(rgb(appearance::BORDER))
+                    .when(
+                        cfg!(target_os = "windows") && !self.side_chat_mode,
+                        |header| crate::window_chrome::header(header, window),
+                    ),
             )
             .child(
                 div()

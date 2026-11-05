@@ -70,9 +70,12 @@ impl ListTreeEntries {
 impl SearchTreeEntries {
     pub fn validate(&self) -> Result<(), &'static str> {
         validate_root(&self.root)?;
-        if self.query.contains('\0')
-            || self.query.encode_utf16().count() > 256
-            || !(1..=200).contains(&self.limit)
+        const MAX_UTF16_UNITS: usize = 256;
+        // UTF-16 never needs more units than the UTF-8 byte length.
+        if !(1..=200).contains(&self.limit)
+            || (self.query.len() > MAX_UTF16_UNITS
+                && self.query.encode_utf16().nth(MAX_UTF16_UNITS).is_some())
+            || self.query.contains('\0')
         {
             return Err("invalid workspace path search");
         }

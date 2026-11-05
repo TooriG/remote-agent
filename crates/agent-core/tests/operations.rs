@@ -109,7 +109,12 @@ async fn execute(client: &Client, command: &Value) -> Result<Value, PeerError> {
             });
             Value::Null
         }
-        "models" => json!(client.models().await?.data),
+        "models" => json!(
+            client
+                .models(agent_protocol::session::ProviderKind::Codex)
+                .await?
+                .data
+        ),
         "sessionImages" => json!(
             client
                 .session_images(

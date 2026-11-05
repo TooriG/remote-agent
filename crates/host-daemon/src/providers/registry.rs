@@ -153,69 +153,34 @@ impl Registry {
         catalog
     }
 
-    /// The cursor records each provider's own cursor; exhausted providers drop out.
     pub(crate) async fn models(&self, params: &op::ListModels) -> Result<op::ModelPage, Failure> {
-        let cursors: BTreeMap<ProviderKind, Option<String>> = params
-            .cursor
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()?
-            .unwrap_or_else(|| {
-                self.all()
-                    .into_iter()
-                    .map(|(provider, _)| provider)
-                    .chain(self.startup_errors.keys().copied())
-                    .map(|provider| (provider, None))
-                    .collect()
-            });
-        let mut page = op::ModelPage {
-            data: Vec::new(),
-            next_cursor: None,
-            provider_errors: None,
-        };
-        let mut next = BTreeMap::new();
-        let listings = futures_util::future::join_all(cursors.into_iter().map(
-            |(provider, cursor)| async move {
-                let result = match self.get(provider) {
-                    Ok(agent) => tokio::time::timeout(
-                        MODEL_LIST_TIMEOUT,
-                        agent.models(&op::ListModels {
-                            cursor,
-                            limit: params.limit,
-                        }),
-                    )
-                    .await
-                    .unwrap_or_else(|_| {
-                        Err(Failure::new(
-                            "provider_timeout",
-                            "モデル一覧の取得がタイムアウトしました。もう一度お試しください。",
-                        ))
-                    }),
-                    Err(error) => Err(error),
-                };
-                (provider, result)
-            },
-        ))
-        .await;
-        for (provider, result) in listings {
-            match result {
-                Ok(result) => {
-                    page.data.extend(result.data);
-                    if let Some(cursor) = result.next_cursor {
-                        next.insert(provider, Some(cursor));
-                    }
-                }
-                Err(error) => {
-                    page.provider_errors
-                        .get_or_insert_default()
-                        .insert(provider.key().to_owned(), serde_json::to_value(error)?);
-                }
-            }
+        // A Host may configure only some of the client's known providers.
+        if !self.agents.contains_key(&params.provider)
+            && !self.startup_errors.contains_key(&params.provider)
+        {
+            return Ok(op::ModelPage::default());
         }
-        if !next.is_empty() {
-            page.next_cursor = Some(serde_json::to_string(&next)?);
+        let result = tokio::time::timeout(MODEL_LIST_TIMEOUT, async {
+            self.get(params.provider)?.models(params).await
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(Failure::new(
+                "provider_timeout",
+                "モデル一覧の取得がタイムアウトしました。もう一度お試しください。",
+            ))
+        });
+        match result {
+            Ok(page) => Ok(page),
+            Err(error) => Ok(op::ModelPage {
+                provider_errors: Some(
+                    [(params.provider.key().into(), serde_json::to_value(error)?)]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
         }
-        Ok(page)
     }
 
     /// Identifies the native storage the providers read, independent of path aliases.

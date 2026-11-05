@@ -60,6 +60,14 @@ pub struct ModelSpeedChoice {
 }
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
+    pub fn models_loading(&self, provider: Option<ProviderKind>) -> bool {
+        use crate::state::operations::{OperationKey, OperationPhase};
+        self.operations.iter().any(|(key, state)| {
+            matches!(key, OperationKey::Models { provider: owner } if provider.is_none_or(|provider| provider == *owner))
+                && state.phase == OperationPhase::Running
+        })
+    }
+
     pub fn model_provider_for_draft(
         &self,
         thread_id: crate::state::DraftKey,

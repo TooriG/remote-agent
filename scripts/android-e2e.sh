@@ -17,6 +17,11 @@ export ANDROID_AVD_HOME="$fixture/avd" ANDROID_USER_HOME="$fixture/user"
 host='' emulator_pid=''
 cleanup() {
     result=$?
+    if [[ $result != 0 && -n ${serial-} && -n ${log-} ]]; then
+        timeout 10 adb -P "$server_port" -s "$serial" logcat -b main -b system -b crash -d -v threadtime \
+            -s TestRunner:V AndroidRuntime:E ActivityManager:I ActivityTaskManager:I libc:F '*:S' \
+            >"$log.failure.log" 2>&1 || true
+    fi
     if [[ -n $host ]]; then kill -INT "$host" 2>/dev/null || true; wait "$host" || true; fi
     if [[ -n $emulator_pid ]]; then
         kill "$emulator_pid" 2>/dev/null || true
@@ -30,6 +35,8 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
+# Keep Rust compilation off the emulator's resource-heavy first boot.
+cargo build --locked -p xtask
 adb -P "$server_port" start-server
 case $(uname -m) in arm64|aarch64) abi=arm64-v8a ;; *) abi=x86_64 ;; esac
 avd="agent-os-$$"
@@ -60,7 +67,8 @@ done
 for scale in window_animation_scale transition_animation_scale animator_duration_scale; do
     adb -P "$server_port" -s "$serial" shell settings put global "$scale" 0
 done
-adb -P "$server_port" -s "$serial" shell input keyevent 82
+# MENU reaches the launcher and can leave its input-dispatch ANR over the app.
+adb -P "$server_port" -s "$serial" shell wm dismiss-keyguard
 adb -P "$server_port" -s "$serial" install apps/mobile/build/outputs/apk/debug/mobile-debug.apk
 adb -P "$server_port" -s "$serial" install apps/mobile/build/outputs/apk/androidTest/debug/mobile-debug-androidTest.apk
 adb -P "$server_port" -s "$serial" shell am start -W -a android.intent.action.MAIN -c android.intent.category.HOME | tee "$log.home.log"
@@ -103,7 +111,7 @@ prepare_pairing() {
 }
 if [[ $mode == all ]]; then
 prepare_pairing
-adb -P "$server_port" -s "$serial" shell am instrument -w -e cwd "$fixture/host/project" \
+adb -P "$server_port" -s "$serial" shell am instrument -w -r -e cwd "$fixture/host/project" \
     -e class dev.remoteagent.mobile.StorePersistenceTest,dev.remoteagent.mobile.ConversationRecoveryTest,dev.remoteagent.mobile.MarkdownTableTest,dev.remoteagent.mobile.ConversationNavigationTest,dev.remoteagent.mobile.ThreadListTest,dev.remoteagent.mobile.ComposerControlsTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.store.log"
 adb -P "$server_port" -s "$serial" exec-out screencap -p >"$log.final.png"
@@ -111,7 +119,7 @@ grep -qx 'OK (14 tests)' "$log.store.log"
 # Each paired test gets a fresh single-use invitation and isolated credentials.
 
 prepare_pairing
-adb -P "$server_port" -s "$serial" shell am instrument -w -e cwd "$fixture/host/project" \
+adb -P "$server_port" -s "$serial" shell am instrument -w -r -e cwd "$fixture/host/project" \
     -e class dev.remoteagent.mobile.VisualizationTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.visualize.log"
 adb -P "$server_port" -s "$serial" exec-out screencap -p >"$log.visualize-final.png"
@@ -126,7 +134,7 @@ adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mob
 fi
 
 prepare_pairing
-adb -P "$server_port" -s "$serial" shell am instrument -w -e cwd "$fixture/host/project" \
+adb -P "$server_port" -s "$serial" shell am instrument -w -r -e cwd "$fixture/host/project" \
     -e class dev.remoteagent.mobile.NativeTerminalTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.terminal.log"
 if ! grep -qx 'OK (1 test)' "$log.terminal.log"; then
@@ -138,7 +146,7 @@ adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mob
 adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mobile/files/terminal-retained.png "$log.terminal-retained.png"
 if [[ $mode == all ]]; then
 adb -P "$server_port" -s "$serial" shell settings put secure show_ime_with_hard_keyboard 1
-adb -P "$server_port" -s "$serial" shell am instrument -w \
+adb -P "$server_port" -s "$serial" shell am instrument -w -r \
     -e class dev.remoteagent.mobile.VoiceInputTest,dev.remoteagent.mobile.MarkdownLinkTest,dev.remoteagent.mobile.FileViewerTest,dev.remoteagent.mobile.MessageActionsTest,dev.remoteagent.mobile.UnknownSubmissionTest,dev.remoteagent.mobile.ModelSelectionTest,dev.remoteagent.mobile.ComposerStopTest,dev.remoteagent.mobile.ComposerKeyboardTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.ui.log"
 grep -qx 'OK (26 tests)' "$log.ui.log"
