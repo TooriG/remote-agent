@@ -96,20 +96,20 @@ fn header_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
         return Some("image/webp");
     }
-    let text = String::from_utf8_lossy(bytes);
     for (signature, mime) in [
-        ("GIF87a", "image/gif"),
-        ("GIF89a", "image/gif"),
-        ("%PDF-", "application/pdf"),
-        ("SQLite format 3\0", "application/vnd.sqlite3"),
+        (&b"GIF87a"[..], "image/gif"),
+        (&b"GIF89a"[..], "image/gif"),
+        (&b"%PDF-"[..], "application/pdf"),
+        (&b"SQLite format 3\0"[..], "application/vnd.sqlite3"),
     ] {
-        if text.starts_with(signature) {
+        if bytes.starts_with(signature) {
             return Some(mime);
         }
     }
-    if !text.starts_with("#!") {
+    if !bytes.starts_with(b"#!") {
         return None;
     }
+    let text = String::from_utf8_lossy(bytes);
     static INTERPRETERS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         [
             (r"(?-u:\bpython[0-9.]*\b)", "text/x-python"),
@@ -265,11 +265,20 @@ mod tests {
             (&b"%PDF-"[..], "application/pdf"),
             (&b"SQLite format 3\0"[..], "application/vnd.sqlite3"),
             (&b"#!/usr/bin/python3.13"[..], "text/x-python"),
+            (&b"#!\xffpython3"[..], "text/x-python"),
             (&b"#!/usr/bin/env node"[..], "text/javascript"),
             (&b"#!/usr/bin/ruby"[..], "text/x-ruby"),
             (&b"#!/bin/zsh"[..], "text/x-shellscript"),
         ] {
             assert_eq!(header_mime(bytes), Some(mime));
+            if !bytes.starts_with(b"#!") {
+                let mut binary = bytes.to_vec();
+                binary.extend([0xff, 0xfe, 0x80]);
+                assert_eq!(header_mime(&binary), Some(mime));
+                for end in 0..bytes.len() {
+                    assert_eq!(header_mime(&bytes[..end]), None);
+                }
+            }
         }
         for bytes in [
             &b""[..],
@@ -277,6 +286,7 @@ mod tests {
             &b"python"[..],
             &b"#!notpython"[..],
             &b"#!env\npython"[..],
+            &b"\xff\xfe#!python"[..],
         ] {
             assert_eq!(header_mime(bytes), None);
         }
