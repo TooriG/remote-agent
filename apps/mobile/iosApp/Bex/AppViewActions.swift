@@ -90,23 +90,29 @@ extension AppViewModel {
     }
 
     func refreshTaskList() {
-        if !isConnected {
-            connect(); return
-        }
-        guard !loadingThreads else { return }
         notice = nil
-        perform(.listSessions(ListSessions(query: snapshot.listQuery())))
+        connectProfiles()
+        for id in listedHostIds {
+            guard let owner = sessions.session(host: id),
+                  owner.snapshot().connected(),
+                  !owner.snapshot().operationRunning(key: .sessionList) else { continue }
+            perform(.listSessions(ListSessions(query: owner.snapshot().listQuery())), on: id)
+        }
     }
 
-    func expandTaskList(projectId: String? = nil) {
-        perform(.expandThreadList(projectId: projectId))
+    func expandTaskList(projectId: String? = nil, host: String? = nil) {
+        for id in host.map({ [$0] }) ?? listedHostIds {
+            perform(.expandThreadList(projectId: projectId), on: id)
+        }
     }
 
     func searchTaskList(_ term: String) {
-        var query = snapshot.listQuery()
-        guard query.searchTerm != term else { return }
-        query.searchTerm = term
-        perform(.listSessions(ListSessions(query: query)))
+        for id in listedHostIds {
+            guard var query = sessions.session(host: id)?.snapshot().listQuery(),
+                  query.searchTerm != term else { continue }
+            query.searchTerm = term
+            perform(.listSessions(ListSessions(query: query)), on: id)
+        }
     }
 
     func openNewThread(cwd: String) {
@@ -114,7 +120,33 @@ extension AppViewModel {
     }
 
     func openNewThread(on profileId: String) {
-        selectProfile(profileId); openNewThread(cwd: "")
+        activateProfile(profileId); openNewThread(cwd: "")
+    }
+
+    func openNewThread(cwd: String, on host: String) {
+        activateProfile(host)
+        openNewThread(cwd: cwd)
+    }
+
+    func openThread(_ id: SessionRef, on host: String) {
+        activateProfile(host)
+        openThread(id)
+    }
+
+    var listedHostIds: [String] {
+        profiles.filter { allProfiles || $0.id == selectedProfileId }.map(\.id)
+    }
+
+    func perform(_ intent: Intent, on host: String) {
+        guard let owner = sessions.session(host: host) else { return }
+        do {
+            let receipt = try owner.dispatch(intent: intent)
+            updateTaskList()
+            Task { [weak self] in
+                do { _ = try await receipt.wait() } catch { self?.notice = error.localizedDescription }
+                self?.updateTaskList()
+            }
+        } catch { notice = error.localizedDescription }
     }
 
     func openThread(_ id: SessionRef) {

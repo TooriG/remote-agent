@@ -38,6 +38,12 @@ internal class AndroidMobileRepository(private val context: Context) {
             preferences.edit().putString("selected", value).apply()
         }
 
+    var allHosts: Boolean
+        get() = preferences.getBoolean("all-hosts", false)
+        set(value) {
+            preferences.edit().putBoolean("all-hosts", value).apply()
+        }
+
     fun profiles(): List<HostProfile> =
         preferences.getString("profiles", null)?.let { Json.decodeFromString(it) } ?: emptyList()
 

@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppViewModel
+    let openConnections: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -21,7 +22,7 @@ struct SettingsSheet: View {
                         .disabled(!model.isConnected)
                     Button {
                         dismiss()
-                        model.showProfiles()
+                        openConnections()
                     } label: {
                         HStack {
                             Label("端末と接続", systemImage: "network")

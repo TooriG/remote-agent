@@ -8,45 +8,48 @@ struct SwiftUIRoot: View {
         NavigationStack(path: Binding<[AppScreen]>(
             get: {
                 switch model.screen {
-                case .thread: [.threads, .thread]
-                case .threads: [.threads]
+                case .thread: [.thread]
                 default: []
                 }
             },
             set: { path in
-                if path.last == .threads, model.screen == .thread {
+                if path.isEmpty, model.screen == .thread {
                     model.showThreadList()
-                } else if path.isEmpty, model.screen == .threads || model.screen == .thread {
-                    model.showProfiles()
                 }
             }
         )) {
-            Group {
-                if model.profiles.isEmpty {
-                    pairingScreen
-                } else {
-                    ProfilesScreen(profiles: model.profiles, notice: model.notice,
-                                   select: model.selectProfile, remove: model.removeProfile, add: model.openPairing)
-                        .sheet(isPresented: Binding(
-                            get: { model.screen == .pairing },
-                            set: {
-                                if !$0, model.screen == .pairing {
-                                    model.dismissPairing()
-                                }
-                            }
-                        )) {
-                            NavigationStack { pairingScreen }
+            ThreadsScreen(model: model)
+                .sheet(isPresented: Binding(
+                    get: { model.screen == .profiles || model.screen == .pairing },
+                    set: {
+                        if !$0 {
+                            model.dismissPairing(returnTo: .threads)
                         }
+                    }
+                )) {
+                    NavigationStack {
+                        if model.screen == .pairing {
+                            pairingScreen
+                        } else {
+                            ProfilesScreen(profiles: model.profiles, notice: model.notice,
+                                           select: model.selectProfile, remove: model.removeProfile,
+                                           add: model.openPairing)
+                                .toolbar {
+                                    ToolbarItem(placement: .confirmationAction) {
+                                        Button("完了", action: model.showThreadList)
+                                            .accessibilityIdentifier("connections.close")
+                                    }
+                                }
+                        }
+                    }
                 }
-            }
-            .navigationDestination(for: AppScreen.self) { screen in
-                switch screen {
-                case .threads: ThreadsScreen(model: model)
-                case .thread: ConversationDestination(model: model)
-                default: EmptyView()
+                .navigationDestination(for: AppScreen.self) { screen in
+                    switch screen {
+                    case .thread: ConversationDestination(model: model)
+                    default: EmptyView()
+                    }
                 }
-            }
-            .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.inline)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             ErrorNotices(model: model, scope: .application).padding(.horizontal)
@@ -66,19 +69,17 @@ struct SwiftUIRoot: View {
     }
 
     private var pairingScreen: some View {
-        PairingScreen(canCancel: !model.profiles.isEmpty,
-                      connecting: model.isConnecting, error: model.pairingError,
+        PairingScreen(connecting: model.isConnecting, error: model.pairingError,
                       hostName: model.pairingInvitation?.hostName,
                       aiRecipients: model.pairingInvitation?.aiRecipients ?? [],
                       transcriptionRecipient: model.pairingInvitation?.transcriptionRecipient,
                       prepare: model.preparePairing, confirm: model.confirmPairing,
-                      change: model.openPairing, cancel: model.dismissPairing)
+                      change: model.openPairing, cancel: { model.dismissPairing() })
     }
 }
 
 private struct PairingScreen: View {
     @Environment(\.locale) private var locale
-    let canCancel: Bool
     let connecting: Bool
     let error: String?
     let hostName: String?
@@ -178,7 +179,7 @@ private struct PairingScreen: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle(LocalizedStringKey(canCancel ? "PCを追加" : "Bex"))
+        .navigationTitle("PCを追加")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $isScanning) {
             QrScannerSheet {
@@ -191,10 +192,8 @@ private struct PairingScreen: View {
         }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                if canCancel {
-                    Button("キャンセル", action: cancel)
-                        .accessibilityIdentifier("pairing.cancel")
-                }
+                Button("キャンセル", action: cancel)
+                    .accessibilityIdentifier("pairing.cancel")
             }
         }
     }

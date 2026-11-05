@@ -3,9 +3,16 @@ import XCTest
 
 /// XCTest selectors remain on LaunchUITests for the fixture runner.
 extension LaunchUITests {
+    private func openConnectionSettings(_ app: XCUIApplication) {
+        app.buttons["tasks.menu"].tap()
+        app.buttons["tasks.settings"].tap()
+        app.buttons["settings.connections"].tap()
+        XCTAssertTrue(app.buttons["profiles.add"].waitForExistence(timeout: 10))
+    }
+
     func testSimulatorRemovesHostAndRequiresPairingAfterRelaunch() throws {
         let app = try connectedSimulatorApp()
-        app.navigationBars.buttons["BackButton"].tap()
+        openConnectionSettings(app)
         let profile = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND identifier != %@", "profiles.", "profiles.add"
         )).firstMatch
@@ -22,18 +29,23 @@ extension LaunchUITests {
         XCTAssertTrue(remove.waitForExistence(timeout: 5))
         remove.tap()
         app.alerts.buttons["接続を解除"].tap()
+        app.buttons["connections.close"].tap()
+        XCTAssertTrue(app.buttons["tasks.connect"].waitForExistence(timeout: 10))
+        app.buttons["tasks.connect"].tap()
         XCTAssertTrue(app.staticTexts["pairing.welcome"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["pairing.scan"].exists)
         XCTAssertEqual(app.buttons["pairing.scan"].label, "QRコードを読み取る")
         assertUnavailableScannerCanBeCancelled(app)
-        XCTAssertFalse(app.descendants(matching: .any)["tasks.list"].exists)
+        XCTAssertFalse(app.buttons["tasks.project.simulator-project"].exists)
         app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["tasks.connect"].waitForExistence(timeout: 10))
+        app.buttons["tasks.connect"].tap()
         XCTAssertTrue(app.staticTexts["pairing.welcome"].waitForExistence(timeout: 10))
         app.buttons["privacy.policy"].tap()
         XCTAssertTrue(app.navigationBars["プライバシーポリシー"].waitForExistence(timeout: 5))
         app.buttons["閉じる"].tap()
         XCTAssertTrue(app.buttons["pairing.scan"].waitForExistence(timeout: 10))
-        XCTAssertFalse(app.descendants(matching: .any)["tasks.list"].exists)
+        XCTAssertFalse(app.buttons["tasks.project.simulator-project"].exists)
         captureScreen(app, named: "Removed Host stays unpaired after relaunch")
         app.terminate()
         let reconnected = try connectedSimulatorApp()
@@ -91,7 +103,7 @@ extension LaunchUITests {
 
     func testSimulatorOpensQrScannerWhileAddingHost() throws {
         let app = try connectedSimulatorApp()
-        app.navigationBars.buttons["BackButton"].tap()
+        openConnectionSettings(app)
         let addHost = app.buttons["profiles.add"]
         XCTAssertTrue(addHost.waitForExistence(timeout: 10)); addHost.tap()
         assertUnavailableScannerCanBeCancelled(app)
@@ -105,10 +117,10 @@ extension LaunchUITests {
 
     func testSimulatorUsesNativeHostNavigationAndPairingDismissal() throws {
         let app = try connectedSimulatorApp()
-        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(
-            format: "label BEGINSWITH %@", "検証 Host、"
-        )).firstMatch.waitForExistence(timeout: 10))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let selector = app.buttons["tasks.connections"]
+        XCTAssertTrue(selector.waitForExistence(timeout: 10))
+        assertConnectionScopeSwitches(app)
+        openConnectionSettings(app)
         let addHost = app.buttons["profiles.add"]
         tapWhenStable(addHost)
         let cancel = app.buttons["pairing.cancel"]
@@ -119,8 +131,9 @@ extension LaunchUITests {
         waitForStableFrame(pairingBar)
         pairingBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
-        // The profile list remains in the hierarchy while the sheet is closing.
         XCTAssertTrue(cancel.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(selector.waitForExistence(timeout: 10))
+        openConnectionSettings(app)
         XCTAssertTrue(addHost.isHittable)
         addHost.tap()
         XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
@@ -130,7 +143,7 @@ extension LaunchUITests {
         XCTAssertTrue(host.waitForExistence(timeout: 10)); host.tap()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 15))
 
-        app.navigationBars.buttons["BackButton"].tap()
+        openConnectionSettings(app)
         addHost.tap()
         app.buttons["pairing.manual"].tap()
         let contents = app.secureTextFields["pairing.contents"]
@@ -148,14 +161,20 @@ extension LaunchUITests {
         XCUIDevice.shared.press(.home); app.activate()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 30))
         XCTAssertFalse(app.buttons["pairing.cancel"].exists)
-        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(
-            format: "label BEGINSWITH %@", "検証 Host、"
-        )).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["tasks.connections"].label.contains("検証 Host"))
         app.terminate(); app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 30))
-        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(
-            format: "label BEGINSWITH %@", "検証 Host、"
-        )).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["tasks.connections"].label.contains("検証 Host"))
+    }
+
+    private func assertConnectionScopeSwitches(_ app: XCUIApplication) {
+        let selector = app.buttons["tasks.connections"]
+        selector.tap()
+        app.buttons["tasks.connections.all"].tap()
+        XCTAssertTrue(selector.label.contains("すべての接続先"))
+        selector.tap()
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                         "tasks.connections.", "検証 Host")).firstMatch.tap()
     }
 
     private func dismissSimulatorSetupNotification() {

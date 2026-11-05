@@ -62,17 +62,38 @@ internal class ProjectReorder(val list: LazyListState) {
         get() = pointerY - grabOffsetY
 
     var projects: List<ProjectSummary> = emptyList()
-    var perform: (Intent) -> Unit = {}
+    var perform: (Intent, String) -> Unit = { _, _ -> }
     var pinned: PinnableContainer.PinnedHandle? = null
 
+    fun moveActions(
+        id: String,
+        host: String,
+        language: dev.remoteagent.core.UiLanguage,
+    ): List<CustomAccessibilityAction> {
+        val index = projects.indexOfFirst { it.id == id && it.hostId == host }
+        if (index < 0) return emptyList()
+        return listOf(index - 1 to false, index + 1 to true).mapNotNull { (targetIndex, after) ->
+            projects
+                .getOrNull(targetIndex)
+                ?.takeIf { it.hostId == host }
+                ?.let { target ->
+                    CustomAccessibilityAction(language.text(if (after) "下へ移動" else "上へ移動")) {
+                        perform(Intent.ReorderProject(id, target.id, after), host)
+                        true
+                    }
+                }
+        }
+    }
+
     fun updateTarget() {
+        val host = projects.firstOrNull { it.listKey == source }?.hostId
         target =
             projectDropAt(
                 pointerY,
                 list.layoutInfo.visibleItemsInfo.mapNotNull { item ->
                     val key = item.key as? String ?: return@mapNotNull null
                     val id = key.removePrefix("project:")
-                    if (projects.none { it.id == id }) return@mapNotNull null
+                    if (projects.none { it.listKey == id && it.hostId == host }) return@mapNotNull null
                     id to (item.offset until item.offset + item.size)
                 },
             )
@@ -82,8 +103,13 @@ internal class ProjectReorder(val list: LazyListState) {
         val id = source
         val drop = target
         if (commit && id != null && drop != null) {
-            val present = projects.any { it.id == id } && projects.any { it.id == drop.id }
-            if (id != drop.id && present) perform(Intent.ReorderProject(id, drop.id, drop.after))
+            val from = projects.firstOrNull { it.listKey == id }
+            val to = projects.firstOrNull { it.listKey == drop.id }
+            if (from != null && to != null) {
+                if (from.listKey != to.listKey && from.hostId == to.hostId) {
+                    perform(Intent.ReorderProject(from.id, to.id, drop.after), from.hostId)
+                }
+            }
         }
         source = null
         target = null
@@ -96,7 +122,7 @@ internal class ProjectReorder(val list: LazyListState) {
 internal fun rememberProjectReorder(
     list: LazyListState,
     projects: List<ProjectSummary>,
-    perform: (Intent) -> Unit,
+    perform: (Intent, String) -> Unit,
 ): ProjectReorder {
     val state = remember(list) { ProjectReorder(list) }
     state.projects = projects
@@ -142,34 +168,19 @@ internal fun ProjectDragHandle(project: ProjectSummary, state: ProjectReorder) {
         Modifier.size(40.dp, 48.dp)
             .semantics {
                 contentDescription = localizedUiFormat(language, "{0}の順番を変更。上下にドラッグ", listOf(project.name))
-                val index = state.projects.indexOfFirst { it.id == project.id }
-                customActions =
-                    listOfNotNull(
-                        state.projects.getOrNull(index - 1)?.let { previous ->
-                            CustomAccessibilityAction(language.text("上へ移動")) {
-                                state.perform(Intent.ReorderProject(project.id, previous.id, false))
-                                true
-                            }
-                        },
-                        state.projects.getOrNull(index + 1)?.let { next ->
-                            CustomAccessibilityAction(language.text("下へ移動")) {
-                                state.perform(Intent.ReorderProject(project.id, next.id, true))
-                                true
-                            }
-                        },
-                    )
+                customActions = state.moveActions(project.id, project.hostId, language)
             }
-            .pointerInput(project.id, state) {
+            .pointerInput(project.listKey, state) {
                 detectDragGestures(
                     onDragStart = { position ->
                         val row =
                             state.list.layoutInfo.visibleItemsInfo.firstOrNull {
-                                it.key == "project:${currentProject.id}"
+                                it.key == "project:${currentProject.listKey}"
                             }
                         if (row != null) {
                             // Keep receiving this gesture when auto-scroll moves its source offscreen.
                             state.pinned = pinnable?.pin()
-                            state.source = currentProject.id
+                            state.source = currentProject.listKey
                             state.pointerY = row.offset + row.size / 2f + position.y - size.height / 2f
                             state.grabOffsetY = state.pointerY - row.offset
                             state.updateTarget()
@@ -189,8 +200,11 @@ internal fun ProjectDragHandle(project: ProjectSummary, state: ProjectReorder) {
         Text(
             "≡",
             color =
-                if (state.source == project.id) MaterialTheme.colorScheme.primary
+                if (state.source == project.listKey) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
+
+internal val ProjectSummary.listKey: String
+    get() = "$hostId:$id"

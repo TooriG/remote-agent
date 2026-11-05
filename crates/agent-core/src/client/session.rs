@@ -982,6 +982,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connection_lists_filter_hosts_keep_offline_rows_and_forget_removed_hosts() {
+        let clients = clients();
+        for host in ["mac", "server"] {
+            let storage = Arc::new(Storage::default());
+            let session = clients.open(host.into(), storage.clone(), storage);
+            let snapshot = Snapshot {
+                threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
+                    "data":[{"id":{"provider":"codex","id":"same-session"},"name":host,"projectId":null}],
+                    "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":10
+                })).unwrap())),
+                ..Default::default()
+            };
+            session
+                .install(
+                    AgentStore::restored(snapshot, None, "fixture".into()).unwrap(),
+                    false,
+                )
+                .unwrap();
+        }
+        let all = clients.thread_list(None).unwrap();
+        assert_eq!(
+            all.threads
+                .iter()
+                .map(|row| row.host_id.as_str())
+                .collect::<Vec<_>>(),
+            ["mac", "server"]
+        );
+        let selected = clients.thread_list(Some("server".into())).unwrap();
+        assert_eq!(selected.threads.len(), 1);
+        assert_eq!(selected.threads[0].title, "server");
+        assert_eq!(selected.threads[0].host_id, "server");
+        assert!(clients.thread_list(Some("missing".into())).is_none());
+        clients
+            .remove("server".into())
+            .unwrap()
+            .shutdown()
+            .await
+            .unwrap();
+        assert_eq!(clients.thread_list(None).unwrap().threads.len(), 1);
+        clients.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn switching_hosts_reuses_sessions_and_never_waits_for_another_hosts_io() {
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             let clients = clients();

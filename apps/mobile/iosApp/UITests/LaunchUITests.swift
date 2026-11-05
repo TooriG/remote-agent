@@ -104,30 +104,23 @@ final class LaunchUITests: XCTestCase {
         let taskDetail = app.descendants(matching: .any)["task.detail"]
         let manualPairing = app.buttons["pairing.manual"]
         let ready = expectation(for: NSPredicate { _, _ in
-            taskList.exists || taskDetail.exists || manualPairing.exists
+            taskDetail.exists || manualPairing.exists ||
+                (taskList.exists && (app.buttons["tasks.connect"].exists || app.buttons["tasks.connections"].exists))
         }, evaluatedWith: app)
         wait(for: [ready], timeout: 30)
         if taskDetail.exists {
             app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        if app.buttons["tasks.connect"].exists {
+            app.buttons["tasks.connect"].tap()
+            XCTAssertTrue(manualPairing.waitForExistence(timeout: 10))
         }
         if manualPairing.exists {
             let payload = try simulatorPairingPayload()
             for _ in 0 ..< 5 where !manualPairing.isHittable {
                 app.swipeUp()
             }
-            manualPairing.tap()
-            let contents = app.secureTextFields["pairing.contents"]
-            XCTAssertTrue(contents.waitForExistence(timeout: 10))
-            contents.tap()
-            contents.typeText(payload)
-            let submit = app.buttons["pairing.submit"]
-            XCTAssertTrue(submit.waitForExistence(timeout: 10))
-            let submitEnabled = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: submit)
-            wait(for: [submitEnabled], timeout: 10)
-            submit.tap()
-            XCTAssertTrue(app.staticTexts["pairing.host"].waitForExistence(timeout: 10))
-            XCTAssertEqual(app.staticTexts["pairing.host"].label, "検証 Host")
-            confirmPairing(app)
+            submitManualPairing(app, payload: payload)
         }
 
         let notice = app.staticTexts["notice"]
@@ -142,10 +135,10 @@ final class LaunchUITests: XCTestCase {
         let confirm = app.buttons["pairing.confirm"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["pairing.host"].exists)
-        XCTAssertFalse(app.staticTexts["pairing.host"].label.isEmpty)
+        XCTAssertEqual(app.staticTexts["pairing.host"].label, "検証 Host")
         XCTAssertTrue(app.staticTexts["pairing.recipients"].exists)
         XCTAssertFalse(app.buttons["pairing.scan"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["tasks.list"].exists)
+        XCTAssertFalse(app.buttons["tasks.new.chat"].isHittable)
         captureScreen(app, named: "Connection disclosure before consent")
         for _ in 0 ..< 4 where !confirm.isHittable {
             app.swipeUp()

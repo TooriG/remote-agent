@@ -112,7 +112,12 @@ fn sidebar_header(expanded: bool, cx: &Context<Desktop>) -> Div {
         .flex_shrink_0()
         .pl(px(88.))
         .gap_2()
-        .child(div().flex_shrink_0().text_sm().font_semibold().child("bex"))
+        .child(
+            img("icons/icon.png")
+                .size(px(22.))
+                .rounded(px(5.))
+                .flex_shrink_0(),
+        )
         .when(expanded, |header| {
             header.w_full().pr_3().child(div().flex_1())
         })

@@ -13,12 +13,19 @@ internal val LocalUiLanguage = staticCompositionLocalOf { UiLanguage.JAPANESE }
 internal fun UiLanguage.text(source: String): String = localizedUiText(this, source)
 
 @Composable
-internal fun LanguageSettingsDialog(language: UiLanguage, select: (UiLanguage) -> Unit, dismiss: () -> Unit) {
+internal fun LanguageSettingsDialog(
+    language: UiLanguage,
+    select: (UiLanguage) -> Unit,
+    openConnections: () -> Unit,
+    dismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = dismiss,
-        title = { Text(language.text("表示言語")) },
+        title = { Text(language.text("設定")) },
         text = {
             androidx.compose.foundation.layout.Column {
+                TextButton(onClick = openConnections) { Text(language.text("端末と接続")) }
+                Text(language.text("表示言語"))
                 listOf(UiLanguage.ENGLISH to "English", UiLanguage.JAPANESE to "日本語").forEach { (value, label) ->
                     TextButton(onClick = { select(value) }) { Text("${if (value == language) "✓ " else ""}$label") }
                 }
