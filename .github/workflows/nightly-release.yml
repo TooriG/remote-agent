@@ -1,4 +1,4 @@
-name: Development release
+name: Nightly release
 on:
   workflow_run:
     workflows: [Native clients]
@@ -144,7 +144,7 @@ jobs:
           gh release create "$AGENT_RELEASE_TAG" target/apple-release/bex-macOS-arm64.zip \
             target/apple-release/bex-macOS-arm64.zip.sha256 target/apple-release/apple-build.json \
             --repo "$GITHUB_REPOSITORY" --target "$AGENT_RELEASE_SHA" --draft --prerelease \
-            --title "BEX development $AGENT_BUILD_NUMBER" \
+            --title "BEX Nightly $AGENT_BUILD_NUMBER" \
             --notes "Source: $AGENT_RELEASE_SHA. iPhone: https://testflight.apple.com/join/UJbK9Ww7"
           echo "tag=$AGENT_RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - name: Remove signing credentials
@@ -178,7 +178,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
-      - name: Verify all packages and publish the development channel
+      - name: Verify all packages and publish the Nightly channel
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_TAG: ${{ needs.release.outputs.tag }}

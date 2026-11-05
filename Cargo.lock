@@ -215,7 +215,6 @@ dependencies = [
  "block2 0.6.2",
  "chrono",
  "cpal",
- "directories",
  "futures-util",
  "gpui-kit",
  "gpui-pre-apple",

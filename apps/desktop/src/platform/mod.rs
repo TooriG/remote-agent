@@ -64,13 +64,10 @@ pub(crate) use wsl::ProjectSelection;
 pub(crate) use wsl::distributions as wsl_distributions;
 
 pub(crate) fn state_dir() -> Result<PathBuf, String> {
-    std::env::var_os("AGENT_STATE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            directories::ProjectDirs::from("app", "bex", "BEX")
-                .map(|project| project.data_local_dir().to_path_buf())
-        })
-        .ok_or_else(|| "application data directory unavailable".into())
+    if let Some(path) = std::env::var_os("AGENT_STATE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    agent_local_host::state_directory(cfg!(debug_assertions)).map_err(|error| error.to_string())
 }
 
 /// One Host's conversation copies, shared by its main and side windows.
@@ -300,14 +297,19 @@ pub(crate) fn isolated_host() -> anyhow::Result<bool> {
     isolation_setting(
         value.as_deref(),
         std::env::var_os("AGENT_STATE_DIR").is_some(),
+        cfg!(debug_assertions),
     )
 }
 
-fn isolation_setting(value: Option<&str>, has_directory: bool) -> anyhow::Result<bool> {
+fn isolation_setting(
+    value: Option<&str>,
+    has_directory: bool,
+    development: bool,
+) -> anyhow::Result<bool> {
     match value {
-        None => Ok(false),
+        None => Ok(development),
         Some("0") => Ok(false),
-        Some("1") if has_directory => Ok(true),
+        Some("1") if has_directory || development => Ok(true),
         Some("1") => Err(anyhow::anyhow!(
             "AGENT_ISOLATED_HOST=1 requires AGENT_STATE_DIR"
         )),
@@ -395,15 +397,23 @@ mod tests {
     use super::isolation_setting;
 
     #[test]
-    fn host_isolation_is_explicit_and_requires_its_own_state_directory() {
+    fn release_channels_share_the_normal_host_and_source_development_is_isolated() {
         for directory in [false, true] {
-            assert!(!isolation_setting(None, directory).unwrap());
-            assert!(!isolation_setting(Some("0"), directory).unwrap());
+            for development in [false, true] {
+                assert_eq!(
+                    isolation_setting(None, directory, development).unwrap(),
+                    development
+                );
+                assert!(!isolation_setting(Some("0"), directory, development).unwrap());
+            }
         }
-        assert!(isolation_setting(Some("1"), true).unwrap());
-        assert!(isolation_setting(Some("1"), false).is_err());
+        assert!(isolation_setting(Some("1"), true, false).unwrap());
+        assert!(isolation_setting(Some("1"), false, true).unwrap());
+        let error = isolation_setting(Some("1"), false, false).unwrap_err();
+        assert!(error.to_string().contains("AGENT_STATE_DIR"));
         for invalid in ["", "true", "2"] {
-            assert!(isolation_setting(Some(invalid), true).is_err());
+            let error = isolation_setting(Some(invalid), true, true).unwrap_err();
+            assert!(error.to_string().contains("0 or 1"));
         }
     }
 }

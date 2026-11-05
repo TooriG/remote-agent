@@ -30,7 +30,7 @@ Android 8〜16ではAndroid 17専用のローカルネットワーク許可を�
 
 ## Hostの起動
 
-配布版のMac・WindowsアプリとMacのBex Devは、それぞれの新版を自動確認します。Bex Devは開発版のまま更新し、専用のデータとHostを保持します。更新があると、会話サイドバー右下の既存の更新ボタンがダウンロードアイコンに変わります。押すと取得が始まり、円形の進捗を表示します。完了後はチェック付きの再起動アイコンに変わり、もう一度押すと再起動して適用します。取得中も作業を続けられます。再起動時はこのPCのHostも更新し、中断した作業を同じ会話と設定で再開します。
+配布版のMac・Windowsアプリは、設定で選んだ更新チャンネルの新版を自動確認します。既定は安定版で、Nightly に切り替えられます。両チャンネルは同じアプリ・データ・Host を使います。更新があると、会話サイドバー右下の既存の更新ボタンがダウンロードアイコンに変わります。押すと取得が始まり、円形の進捗を表示します。完了後はチェック付きの再起動アイコンに変わり、もう一度押すと再起動して適用します。取得中も作業を続けられます。再起動時はこのPCのHostも更新し、中断した作業を同じ会話と設定で再開します。
 
 デスクトップの初回設定では、環境とAIを確認した後、Codex・Claude Codeの既存プロジェクトを選んで取り込めます。直近30日以内に使い、会話が3件以上あるGitリポジトリを初期選択します。取り込みは選んだフォルダーの登録で、ネイティブの履歴と会話IDは保持します。AIの設定と取り込みは後回しにでき、後から「設定 → 端末と接続」でも取り込めます。一部のAIの探索に失敗しても、他のAIの候補は残ります。画面の流れとClaude確認プロセスの設定は[T3 Codeの初回設定](https://github.com/pingdotgg/t3code/blob/4fef307dd0a0e9eb1a7bd610ed390b6764295a65/docs/user/welcome-wizard.md)を参考にしています。
 
@@ -114,13 +114,13 @@ open apps/mobile/iosApp/Bex.xcodeproj
 scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 
-別アプリとして配布するiOS開発版は、[配布手順](docs/qa/IOS_DEV_RELEASE.md)を参照してください。
+Nightly の配布と本番への昇格は、[リリース手順](docs/RELEASES.md)を参照してください。iPhone は同じ BEX アプリを外部 TestFlight と App Store で配布します。
 
-Rustのソースを変更したら、iOS用ライブラリも再ビルドしてください。デスクトップの下書きとログは`AGENT_STATE_DIR`を使いますが、Host探索で別の認証情報ディレクトリを選ぶことがあります。デスクトップを隔離するには`AGENT_ISOLATED_HOST=1`と`AGENT_STATE_DIR`の両方が必要です。個人のプロバイダー状態をテストが読み込まないよう、別のCodexホームかフィクスチャ実行ファイルも使ってください。
+Rustのソースを変更したら、iOS用ライブラリも再ビルドしてください。デスクトップの下書きとログは`AGENT_STATE_DIR`を使いますが、Host探索で別の認証情報ディレクトリを選ぶことがあります。本番と Nightly は既存のデータ保存先とローカル Host を共有し、デスクトップの debug ビルドはその `dev` サブディレクトリと専用 Host を使います。配布ビルドを隔離するには`AGENT_ISOLATED_HOST=1`と`AGENT_STATE_DIR`の両方を設定します。個人のプロバイダー状態をテストが読み込まないよう、別のCodexホームかフィクスチャ実行ファイルも使ってください。
 
 編集中は`scripts/dev-env.sh just check -p agent-core`で、実行ファイルを生成せずにRustを確認できます。`-p`には変更したクレートを指定してください。
 
-`scripts/dev-env.sh just dev`は、Hostとデスクトップを同じdebugビルドで`target/debug/bex.app`にまとめ、プロバイダーのアカウントと会話履歴を共有する別のローカルHostを起動します。MacのBex DevはFinderから開いても`app.bex.BEX-Dev`のデータと専用Hostを使います。配布用は`target/release/bex.app`に保存します。Macの両ビルドコマンドは`dev`または`release`を指定でき、既定は`release`です。再ビルド前に実行中タスクを確認し、古い開発Hostを停止してください。ウィンドウを閉じるだけではHostは停止しません。同じ会話を2つのHostで同時に実行しないでください。
+`scripts/dev-env.sh just dev`は、Hostとデスクトップを同じdebugビルドで`target/debug/bex.app`にまとめ、プロバイダーのアカウントを共有する開発用 Host を起動します。配布用は`target/release/bex.app`に保存します。Macの両ビルドコマンドは`dev`または`release`を指定でき、既定は`release`です。再ビルド前に実行中タスクを確認し、古い開発Hostを停止してください。ウィンドウを閉じるだけではHostは停止しません。同じ会話を2つのHostで同時に実行しないでください。
 
 ## 会話の操作
 

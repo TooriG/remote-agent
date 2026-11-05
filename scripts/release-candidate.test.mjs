@@ -10,14 +10,14 @@ import { packages, releaseNumber, validateCandidate, verifyPackages } from './re
 
 test('production tags identify one numbered candidate without accepting branches or shell syntax', () => {
   assert.equal(releaseNumber('prd-145', 'prd'), '145');
-  for (const value of ['dev-145', 'prd-0', 'prd-01', 'prd-145/other', 'prd-$(echo)', 'prd-999999999999999999']) assert.throws(() => releaseNumber(value, 'prd'));
+  for (const value of ['nightly-145', 'prd-0', 'prd-01', 'prd-145/other', 'prd-$(echo)', 'prd-999999999999999999']) assert.throws(() => releaseNumber(value, 'prd'));
 });
 
 test('the real promotion command copies tested bytes once, waits for approval and preserves a newer stable release', t => {
   const root = mkdtempSync(join(tmpdir(), 'release-promotion-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, 'bin');
-  const source = join(root, 'dev-145');
+  const source = join(root, 'nightly-145');
   mkdirSync(bin);
   mkdirSync(source);
   const assets = {};
@@ -29,13 +29,13 @@ test('the real promotion command copies tested bytes once, waits for approval an
       assets[file] = { size: content.length, sha256: createHash('sha256').update(content).digest('hex') };
     }
   }
-  const manifest = { tag: 'dev-145', version: '145', versionName: '1.0.1', sha: 'a'.repeat(40), appId: '6816015343', buildId: 'candidate', notes: 'Changes', locale: 'ja', assets };
+  const manifest = { tag: 'nightly-145', version: '145', versionName: '1.0.1', sha: 'a'.repeat(40), appId: '6816015343', buildId: 'candidate', notes: 'Changes', locale: 'ja', assets };
   writeFileSync(join(source, 'release.json'), JSON.stringify(manifest));
   const appleBuild = { ...manifest };
   delete appleBuild.assets;
   writeFileSync(join(source, 'apple-build.json'), JSON.stringify(appleBuild));
   const state = join(root, 'state.json');
-  writeFileSync(state, JSON.stringify({ apple: 'WAITING_FOR_REVIEW', releases: [{ tagName: 'dev-145', isDraft: true, isPrerelease: true }] }));
+  writeFileSync(state, JSON.stringify({ apple: 'WAITING_FOR_REVIEW', releases: [{ tagName: 'nightly-145', isDraft: true, isPrerelease: true }] }));
   writeFileSync(join(bin, 'gh'), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
 const root = process.env.RELEASE_FIXTURE, args = process.argv.slice(2);
@@ -88,8 +88,8 @@ globalThis.fetch = async (url, options) => {
     });
     assert.equal(result.status, 0, result.stderr);
   };
-  run('seal', 'dev-145');
-  run('seal', 'dev-145');
+  run('seal', 'nightly-145');
+  run('seal', 'nightly-145');
   run('promote', 'prd-145');
   run('promote', 'prd-145');
   let current = JSON.parse(readFileSync(state));
@@ -120,11 +120,11 @@ test('promotion verifies every platform byte, checksum and source/build identity
       assets[file] = { size: content.length, sha256: createHash('sha256').update(content).digest('hex') };
     }
   }
-  const manifest = { tag: 'dev-145', version: '145', versionName: '1.0.1', sha: 'a'.repeat(40), appId: '6816015343', buildId: 'apple-build', assets };
-  validateCandidate(manifest, 'dev-145', 'a'.repeat(40));
+  const manifest = { tag: 'nightly-145', version: '145', versionName: '1.0.1', sha: 'a'.repeat(40), appId: '6816015343', buildId: 'apple-build', assets };
+  validateCandidate(manifest, 'nightly-145', 'a'.repeat(40));
   verifyPackages(directory, manifest.assets);
   for (const patch of [{ sha: 'b'.repeat(40) }, { version: '146' }, { appId: '6820657007' }, { assets: {} }]) {
-    assert.throws(() => validateCandidate({ ...manifest, ...patch }, 'dev-145', 'a'.repeat(40)));
+    assert.throws(() => validateCandidate({ ...manifest, ...patch }, 'nightly-145', 'a'.repeat(40)));
   }
   writeFileSync(join(directory, packages[0]), 'different signed application');
   assert.throws(() => verifyPackages(directory, manifest.assets), /checksum mismatch/);

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { appForBundleId, ascClient, deliveryId, distributeBuild, listAll, nextBuildNumber, nextMarketingVersion, parseBuildStatus } from './apple-release.mjs';
 
 test('release waits for pending checks and requires both workflows to pass for the exact revision', (t) => {
-  const workflow = readFileSync(new URL('../.github/workflows/apple-release.yml', import.meta.url), 'utf8');
+  const workflow = readFileSync(new URL('../.github/workflows/nightly-release.yml', import.meta.url), 'utf8');
   const block = workflow.match(/      - name: Require both workflows[\s\S]*?        run: \|\n([\s\S]*?)(?=^  release:)/m);
   assert.ok(block);
   const script = block[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
@@ -61,20 +61,20 @@ esac
   }
 });
 
-test('production planning selects the exact bundle even when ASC returns Dev first', async () => {
+test('production planning selects the exact bundle when ASC returns a prefixed bundle first', async () => {
   const bundleId = 'dev.remoteagent.mobile.ios';
-  const dev = { id: 'dev-app', attributes: { bundleId: `${bundleId}.dev` } };
+  const prefixed = { id: 'prefixed-app', attributes: { bundleId: `${bundleId}.dev` } };
   const production = { id: 'production-app', attributes: { bundleId } };
-  for (const data of [[dev, production], [production, dev]]) {
+  for (const data of [[prefixed, production], [production, prefixed]]) {
     assert.equal(await appForBundleId(async () => ({ data }), bundleId), production);
   }
-  await assert.rejects(appForBundleId(async () => ({ data: [dev] }), bundleId), /missing/);
+  await assert.rejects(appForBundleId(async () => ({ data: [prefixed] }), bundleId), /missing/);
 });
 
 test('build numbers advance past source, uploaded Apple builds and published releases', () => {
   assert.equal(nextBuildNumber(['76', '76'], ['75', '77'], ['android-preview-1000', 'prd-81']), '82');
   assert.equal(nextBuildNumber(['76'], [], []), '77');
-  assert.equal(nextBuildNumber(['76'], [], ['dev-144', 'prd-143']), '145');
+  assert.equal(nextBuildNumber(['76'], [], ['nightly-144', 'prd-143']), '145');
   assert.throws(() => nextBuildNumber(['75', '76'], [], []));
   assert.throws(() => nextBuildNumber([], [], []));
   assert.throws(() => nextBuildNumber(['76'], ['77.1'], []));

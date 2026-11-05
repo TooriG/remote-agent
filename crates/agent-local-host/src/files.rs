@@ -3,8 +3,22 @@ use anyhow::{Context, Result};
 use std::{
     fs::{self, File},
     io,
-    path::Path,
+    path::{Path, PathBuf},
 };
+
+/// Stable and Nightly use the existing shared directory. Source development
+/// uses its dev child, independently of the installed release channel.
+pub fn state_directory(development: bool) -> Result<PathBuf> {
+    let directory = directories::ProjectDirs::from("app", "bex", "BEX")
+        .context("application data directory unavailable")?
+        .data_local_dir()
+        .to_owned();
+    Ok(if development {
+        directory.join("dev")
+    } else {
+        directory
+    })
+}
 
 pub(crate) fn open_lock(path: &Path) -> Result<File> {
     File::options()
@@ -107,6 +121,13 @@ fn save_private_inner(path: &Path, write: impl Fn(&mut File) -> io::Result<()>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_development_has_its_own_state_beneath_the_shared_release_directory() {
+        let shared = state_directory(false).unwrap();
+        let development = state_directory(true).unwrap();
+        assert_eq!(development, shared.join("dev"));
+    }
 
     #[test]
     fn opaque_state_preserves_every_byte() {

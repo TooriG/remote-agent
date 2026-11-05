@@ -30,7 +30,7 @@ When a new major becomes generally available, verify the vendor release, update 
 
 ## Run the Host
 
-Released Mac and Windows apps and Bex Dev on Mac check their own channels for new versions automatically. Bex Dev stays on the development channel and preserves its separate data and Host. The existing refresh button at the bottom right of the conversation sidebar changes to a download icon when an update is available. Click it to download; a circular indicator shows progress. When it changes to a restart icon with a check mark, click it again to restart and update. You can keep working during the download. Applying an update also restarts this computer's bundled Host and continues interrupted work in the same conversations with the same settings.
+Released Mac and Windows apps automatically check the update channel selected in Settings: Stable by default, or Nightly. Both channels share the same app, data and Host. The existing refresh button at the bottom right of the conversation sidebar changes to a download icon when an update is available. Click it to download; a circular indicator shows progress. When it changes to a restart icon with a check mark, click it again to restart and update. You can keep working during the download. Applying an update also restarts this computer's bundled Host and continues interrupted work in the same conversations with the same settings.
 
 On desktop, first-run setup checks the selected computer and agents, then lets you import existing Codex and Claude Code projects. Recent Git repositories with at least three conversations are selected by default. Import registers selected folders and keeps native conversations and session IDs intact. You can defer agent setup, skip import, or reopen import from Settings → Computers and connections. Discovery retains healthy providers' results when another provider fails. The flow and Claude capability-probe isolation reference [T3 Code's welcome wizard](https://github.com/pingdotgg/t3code/blob/4fef307dd0a0e9eb1a7bd610ed390b6764295a65/docs/user/welcome-wizard.md).
 
@@ -117,14 +117,14 @@ open apps/mobile/iosApp/Bex.xcodeproj
 scripts/dev-env.sh ./gradlew :apps:mobile:assembleDebug
 ```
 
-See [release operations](docs/RELEASES.md) for development distribution and production promotion.
+See [release operations](docs/RELEASES.md) for Nightly distribution and production promotion.
 
-Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `AGENT_STATE_DIR`; Host discovery may select a different credential directory. Isolated desktops require both `AGENT_ISOLATED_HOST=1` and `AGENT_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
+Rerun the iOS library build after changing Rust sources. Desktop drafts and logs use `AGENT_STATE_DIR`; Host discovery may select a different credential directory. Stable and Nightly share the existing application-data directory and local Host. Desktop debug builds default to its `dev` subdirectory and an isolated Host. To isolate a release build, set both `AGENT_ISOLATED_HOST=1` and `AGENT_STATE_DIR`; use a separate Codex home or fixture executable as well so tests cannot read personal provider state.
 
 Use `scripts/dev-env.sh just check -p agent-core` for quick Rust feedback without
 generating executables; select the crate you changed with `-p`.
 Run `scripts/dev-env.sh just dev` to build `target/debug/bex.app` and launch a
-separate local Host with shared provider accounts and conversation history.
+separate local Host with shared provider accounts.
 The Host and desktop use the same debug build; release bundles stay in
 `target/release/bex.app`. Both Mac build recipes accept `dev` or `release` and
 default to `release`. Check active tasks and stop the old

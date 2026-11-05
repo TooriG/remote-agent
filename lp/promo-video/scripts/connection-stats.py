@@ -1,7 +1,7 @@
 """iPhone connection timings that clients report to a Host (client.connection).
 
     python3 scripts/connection-stats.py data/ios-connections.jsonl
-    python3 scripts/connection-stats.py --refresh ~/Library/Application\\ Support/app.bex.BEX-Dev/logs data/ios-connections.jsonl
+    python3 scripts/connection-stats.py --refresh ~/Library/Application\\ Support/app.bex.BEX/dev/logs data/ios-connections.jsonl
 Host logs rotate every 5 MiB, so the video's figures come from a saved snapshot.
 total_ms ends when the encrypted connection is authenticated (see agent-transport diagnostics).
 """

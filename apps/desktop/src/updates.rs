@@ -143,7 +143,7 @@ impl Updates {
                 Button::new("update-channel")
                     .label(language.text(match channel {
                         Channel::Production => "安定版",
-                        Channel::Development => "開発版",
+                        Channel::Nightly => "Nightly",
                     }))
                     .dropdown_caret(true)
                     .secondary()
@@ -152,7 +152,7 @@ impl Updates {
                     .dropdown_menu(move |mut menu, _, _| {
                         for (value, label) in [
                             (Channel::Production, "安定版"),
-                            (Channel::Development, "開発版"),
+                            (Channel::Nightly, "Nightly"),
                         ] {
                             let owner = owner.clone();
                             menu = menu.item(

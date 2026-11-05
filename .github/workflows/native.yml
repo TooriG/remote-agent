@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate-tag:
-        description: Development candidate tag to package; leave empty for CI
+        description: Nightly candidate tag to package; leave empty for CI
         type: string
         default: ''
       ios-tests:
@@ -585,12 +585,12 @@ jobs:
       AGENT_FXC_CACHE_ROOT: ${{ github.workspace }}/output/tool-cache/windows-fxc
     steps:
       - *windows-checkout
-      - name: Require a verified development revision for release packaging
+      - name: Require a verified Nightly revision for release packaging
         if: inputs.candidate-tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:AGENT_RELEASE_TAG -notmatch '^dev-[1-9][0-9]*$') { throw "A development candidate tag is required." }
+          if ($env:AGENT_RELEASE_TAG -notmatch '^nightly-[1-9][0-9]*$') { throw "A Nightly candidate tag is required." }
           $revision = git rev-parse HEAD
           foreach ($workflow in 'portable.yml', 'native.yml') {
             $verified = gh run list --repo "$env:GITHUB_REPOSITORY" --workflow $workflow --branch main --event push --commit "$revision" --status success --limit 1 --json headSha --jq '.[0].headSha // ""'
@@ -655,7 +655,7 @@ jobs:
       - name: Build and package Windows release
         if: inputs.candidate-tag != ''
         run: |
-          if ($env:AGENT_RELEASE_TAG -match '^dev-([1-9][0-9]*)$') { $env:AGENT_BUILD_NUMBER = $Matches[1] }
+          if ($env:AGENT_RELEASE_TAG -match '^nightly-([1-9][0-9]*)$') { $env:AGENT_BUILD_NUMBER = $Matches[1] }
           ./scripts/package-windows.ps1 -Profile release
       - name: Retain the Windows package and checksum
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

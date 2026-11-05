@@ -15953,22 +15953,6 @@
         }
       }
     },
-    "開発版": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "開発版"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Development"
-          }
-        }
-      }
-    },
     "表示言語": {
       "localizations": {
         "ja": {

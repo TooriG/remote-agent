@@ -1,27 +1,35 @@
 # Release operations
 
 Develop on `main`. A revision that passes both Portable checks and Native clients
-produces a numbered GitHub prerelease, `dev-N`. Download its packages from GitHub;
+produces a numbered GitHub prerelease, `nightly-N`. Download its packages from GitHub;
 on iPhone, use the existing [BEX TestFlight public link](https://testflight.apple.com/join/UJbK9Ww7).
 External TestFlight availability follows Apple's beta review and automatic tester
 notification. The GitHub job summary distinguishes submission from availability.
 
-On macOS and Windows, select **Development** in Settings → Update channel to
+On macOS and Windows, select **Nightly** in Settings → Update channel to
 receive these candidates. **Stable** is the default. Returning to Stable waits
 for a newer stable build; it never automatically downgrades the installed app.
+
+Stable and Nightly share BEX's existing application-data directory, conversations,
+settings and local Host. The update channel never selects a different data directory.
+Desktop debug builds use its `dev` subdirectory and an isolated Host by default.
+Run `scripts/dev-env.sh just dev` on macOS to build and launch that development
+instance alongside the installed release. `AGENT_STATE_DIR` selects an explicit
+state directory; `AGENT_ISOLATED_HOST` explicitly selects Host isolation when
+needed. Provider caches and project worktrees keep their existing shared locations.
 
 After testing a candidate, create the production tag at that exact revision:
 
 ```sh
 git fetch origin --tags
-git tag prd-N dev-N
+git tag prd-N nightly-N
 git push origin prd-N
 ```
 
 Replace `N` with the chosen candidate number. Production promotion checks the
 revision and every package checksum, selects the existing iPhone build for App
 Review, and requests release after approval. All desktop, Android and Linux
-packages retain the bytes tested in dev. Production downloads remain on the
+packages retain the bytes tested in Nightly. Production downloads remain on the
 previous release until App Store distribution is ready; the scheduled Production
 release workflow then publishes the draft and advances the stable channel.
 

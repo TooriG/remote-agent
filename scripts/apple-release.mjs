@@ -7,7 +7,7 @@ import { join } from 'node:path';
 export function nextBuildNumber(sourceVersions, appleVersions, releaseTags) {
   const source = new Set(sourceVersions);
   if (source.size !== 1 || !sourceVersions.length) throw new Error('Apple source build numbers must agree.');
-  const versions = [...source, ...appleVersions, ...releaseTags.flatMap(tag => /^(?:dev|prd)-(\d+)$/.exec(tag)?.slice(1) ?? [])];
+  const versions = [...source, ...appleVersions, ...releaseTags.flatMap(tag => /^(?:nightly|prd)-(\d+)$/.exec(tag)?.slice(1) ?? [])];
   if (versions.some(version => !/^[1-9]\d*$/.test(version))) throw new Error('Apple build numbers must be positive integers.');
   const next = Math.max(...versions.map(Number)) + 1;
   if (!Number.isSafeInteger(next) || next > 9999) throw new Error('The Apple build number needs a new numbering range.');
@@ -162,7 +162,7 @@ async function main(command) {
       && ['PENDING_DEVELOPER_RELEASE', 'READY_FOR_DISTRIBUTION', 'READY_FOR_SALE'].includes(version.attributes.appStoreState))
       .map(version => version.attributes.versionString);
     const versionName = nextMarketingVersion(sourceVersion, approvedVersions);
-    const plan = { appId: app.id, version, versionName, tag: `dev-${version}`, sha: required('AGENT_RELEASE_SHA'), locale: app.attributes.primaryLocale, notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
+    const plan = { appId: app.id, version, versionName, tag: `nightly-${version}`, sha: required('AGENT_RELEASE_SHA'), locale: app.attributes.primaryLocale, notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
     writeFileSync(planPath, JSON.stringify(plan) + '\n');
     appendFileSync(required('GITHUB_ENV'), `AGENT_BUILD_NUMBER=${version}\nAGENT_RELEASE_TAG=${plan.tag}\nAGENT_MARKETING_VERSION=${versionName}\n`);
     console.log(`Apple release build ${version} planned for ${plan.sha}.`);

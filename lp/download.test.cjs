@@ -106,7 +106,7 @@ test('the latest production release supplies the same packages for every platfor
 });
 
 for (const release of [
-  { tag_name: 'dev-999', prerelease: true },
+  { tag_name: 'nightly-999', prerelease: true },
   { tag_name: 'prd-999', draft: true },
   { tag_name: 'android-preview-999' },
 ]) {

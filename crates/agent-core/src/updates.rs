@@ -5,14 +5,14 @@ use serde::{Deserialize, Serialize};
 pub enum Channel {
     #[default]
     Production,
-    Development,
+    Nightly,
 }
 
 impl Channel {
     pub fn releases_url(self) -> &'static str {
         match self {
             Self::Production => "https://api.github.com/repos/ttizze/remote-agent/releases/latest",
-            Self::Development => {
+            Self::Nightly => {
                 "https://api.github.com/repos/ttizze/remote-agent/releases?per_page=100"
             }
         }
@@ -21,7 +21,7 @@ impl Channel {
     fn tag_prefix(self) -> &'static str {
         match self {
             Self::Production => "prd-",
-            Self::Development => "dev-",
+            Self::Nightly => "nightly-",
         }
     }
 }
@@ -80,7 +80,7 @@ pub fn select_download(
     };
     let selected = releases
         .into_iter()
-        .filter(|release| !release.draft && release.prerelease == (channel == Channel::Development))
+        .filter(|release| !release.draft && release.prerelease == (channel == Channel::Nightly))
         .filter_map(|release| {
             let build = release
                 .tag_name
@@ -95,7 +95,7 @@ pub fn select_download(
         })
         .max_by_key(|(build, _)| *build);
     let Some((build, asset)) = selected else {
-        if channel == Channel::Development {
+        if channel == Channel::Nightly {
             return Ok(None);
         }
         return Err("この環境向けの更新ファイルはまだ公開されていません。".into());
@@ -160,18 +160,19 @@ mod tests {
             ("windows", "x86_64", "bex-windows-x86_64-setup.exe"),
         ] {
             let stable = release(95, file);
-            let mut dev = release(96, file);
-            dev["tag_name"] = "dev-96".into();
-            dev["prerelease"] = true.into();
-            dev["assets"][0]["browser_download_url"] =
-                format!("https://github.com/ttizze/remote-agent/releases/download/dev-96/{file}")
-                    .into();
-            let mut draft = dev.clone();
+            let mut nightly = release(96, file);
+            nightly["tag_name"] = "nightly-96".into();
+            nightly["prerelease"] = true.into();
+            nightly["assets"][0]["browser_download_url"] = format!(
+                "https://github.com/ttizze/remote-agent/releases/download/nightly-96/{file}"
+            )
+            .into();
+            let mut draft = nightly.clone();
             draft["draft"] = true.into();
-            let bytes = serde_json::to_vec(&vec![draft, stable.clone(), dev]).unwrap();
+            let bytes = serde_json::to_vec(&vec![draft, stable.clone(), nightly]).unwrap();
             for (channel, build, prefix) in [
                 (Channel::Production, 95, "prd"),
-                (Channel::Development, 96, "dev"),
+                (Channel::Nightly, 96, "nightly"),
             ] {
                 let download = select_download(&bytes, 94, os, arch, channel)
                     .unwrap()
@@ -180,13 +181,13 @@ mod tests {
                 assert_eq!(download.file_name, file);
                 assert_eq!(download.build, build);
                 assert!(download.url.ends_with(&format!("/{prefix}-{build}/{file}")));
-                // Switching back to stable must never downgrade a development build.
+                // Switching back to stable must never downgrade a Nightly build.
                 assert_eq!(
                     select_download(&bytes, 97, os, arch, channel).unwrap(),
                     None
                 );
             }
-            // The stable endpoint is independent of how many dev releases exist.
+            // The stable endpoint is independent of how many Nightly releases exist.
             assert_eq!(
                 select_download(
                     &serde_json::to_vec(&stable).unwrap(),
@@ -202,17 +203,17 @@ mod tests {
             );
         }
         assert_eq!(Channel::default(), Channel::Production);
-        // Stable discovery must not depend on a finite page of dev releases.
+        // Stable discovery must not depend on a finite page of Nightly releases.
         assert_eq!(
             Channel::Production.releases_url(),
             "https://api.github.com/repos/ttizze/remote-agent/releases/latest"
         );
         assert_eq!(
-            Channel::Development.releases_url(),
+            Channel::Nightly.releases_url(),
             "https://api.github.com/repos/ttizze/remote-agent/releases?per_page=100"
         );
         assert_eq!(
-            select_download(b"[]", 94, "macos", "aarch64", Channel::Development).unwrap(),
+            select_download(b"[]", 94, "macos", "aarch64", Channel::Nightly).unwrap(),
             None
         );
     }
