@@ -53,6 +53,12 @@ internal class AndroidMobileRepository(private val context: Context) {
 
     fun sessionStorage(id: String) = SessionStorage(id)
 
+    fun removeHost(id: String) {
+        AndroidCredentialStore(context, id).remove()
+        val copies = File(directory, "conversations/${encodedId(id)}")
+        if (copies.exists() && !copies.deleteRecursively()) throw IOException("会話のキャッシュを削除できませんでした。")
+    }
+
     inner class SessionStorage(private val id: String) : ClientStorage, ClientPlatform {
         private fun <T> access(body: () -> T): T =
             try {

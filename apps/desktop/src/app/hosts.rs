@@ -38,7 +38,7 @@ enum Action {
 }
 enum Update {
     WslDistributions(Result<Vec<String>, String>),
-    WslHost(Result<RemoteHost, String>),
+    WslHost(Result<RemoteHost, String>, Option<bool>),
     Connected(Result<StoreSession, String>),
     Snapshot,
     Completed(Action, Result<Outcome, String>),
@@ -60,6 +60,7 @@ pub(super) struct Hosts {
     busy: bool,
     connecting: bool,
     wsl_distros: Vec<String>,
+    wsl_hosts: std::collections::BTreeMap<String, RemoteHost>,
     error: Option<String>,
     _language: Subscription,
 }
@@ -97,6 +98,7 @@ impl Hosts {
             busy: false,
             connecting: false,
             wsl_distros: Vec::new(),
+            wsl_hosts: Default::default(),
             error: None,
             _language: cx.observe_global_in::<crate::localization::Language>(
                 window,
@@ -129,17 +131,28 @@ impl Hosts {
     fn choices(&self) -> Vec<RemoteHost> {
         self.wsl_distros
             .iter()
-            .map(|distro| RemoteHost {
-                id: format!("wsl:{distro}"),
-                name: format!("WSL ({distro})"),
-                ticket: String::new(),
+            .map(|distro| {
+                self.wsl_hosts
+                    .get(distro)
+                    .cloned()
+                    .unwrap_or_else(|| RemoteHost {
+                        id: format!("wsl:{distro}"),
+                        name: format!("WSL ({distro})"),
+                        ticket: String::new(),
+                    })
             })
             .chain(self.snapshot.connection.management.remotes.iter().cloned())
             .collect()
     }
-    fn select(&mut self, remote: Option<RemoteHost>, cx: &mut Context<Self>) {
+    fn select(
+        &mut self,
+        remote: Option<RemoteHost>,
+        enabled: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(distro) = remote
             .as_ref()
+            .filter(|host| host.ticket.is_empty())
             .and_then(|host| host.id.strip_prefix("wsl:"))
         {
             if self.busy {
@@ -155,10 +168,13 @@ impl Hosts {
                     .wsl_host(&distro)
                     .await
                     .map_err(|error| format!("{error:#}"));
-                let _ = updates.send(Update::WslHost(result)).await;
+                let _ = updates.send(Update::WslHost(result, enabled)).await;
             });
         } else {
-            cx.emit(HostEvent::Selected(remote));
+            cx.emit(match enabled {
+                Some(enabled) => HostEvent::Enabled(remote, enabled),
+                None => HostEvent::Selected(remote),
+            });
         }
         cx.notify();
     }
@@ -223,10 +239,18 @@ impl Hosts {
                     tracing::warn!(target: "agent", operation = "wsl.discovery", message = %error)
                 }
             },
-            Update::WslHost(result) => {
+            Update::WslHost(result, enabled) => {
                 self.busy = false;
                 match result {
-                    Ok(host) => cx.emit(HostEvent::Selected(Some(host))),
+                    Ok(host) => {
+                        if let Some(distro) = host.id.strip_prefix("wsl:") {
+                            self.wsl_hosts.insert(distro.into(), host.clone());
+                        }
+                        cx.emit(match enabled {
+                            Some(enabled) => HostEvent::Enabled(Some(host), enabled),
+                            None => HostEvent::Selected(Some(host)),
+                        });
+                    }
                     Err(error) => {
                         self.error = Some(error.clone());
                         cx.emit(HostEvent::Failed(error));
@@ -370,14 +394,23 @@ impl Hosts {
             let destination = remote.cloned();
             let toggle_destination = destination.clone();
             let name = remote.map_or(language.text("このPC"), |host| host.name.as_str());
-            let label = if selected {
-                if !enabled {
-                    language.text("オフ")
-                } else if connected {
-                    language.text("接続済み")
-                } else {
-                    language.text("接続中…")
-                }
+            let state = self
+                .runtime
+                .sessions
+                .store(remote.map(|host| host.ticket.as_str()))
+                .map(|store| store.snapshot());
+            let enabled = state
+                .as_ref()
+                .map_or(selected && enabled, |state| state.connection_enabled());
+            let connected = state
+                .as_ref()
+                .map_or(selected && connected, |state| state.connection.connected);
+            let label = if connected {
+                language.text("接続済み")
+            } else if selected && enabled {
+                language.text("接続中…")
+            } else if state.is_some() && !enabled {
+                language.text("オフ")
             } else if (remote.is_none() || remote.is_some_and(|host| host.id.starts_with("wsl:")))
                 && self.snapshot.connection.connected
             {
@@ -425,13 +458,13 @@ impl Hosts {
                                 .flex_1()
                                 .disabled(self.busy)
                                 .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.select(destination.clone(), cx);
+                                    view.select(destination.clone(), None, cx);
                                 })),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(if selected && connected {
+                                .text_color(if connected {
                                     rgb(0x88c9a0)
                                 } else {
                                     rgb(appearance::MUTED)
@@ -442,13 +475,10 @@ impl Hosts {
                             row.child(
                                 switch::Switch::new(format!("connection-enabled-{index}"))
                                     .accessibility_label(name.to_owned())
-                                    .checked(selected && enabled)
+                                    .checked(enabled)
                                     .disabled(self.busy)
-                                    .on_click(cx.listener(move |_, enabled, _, cx| {
-                                        cx.emit(HostEvent::Enabled(
-                                            toggle_destination.clone(),
-                                            *enabled,
-                                        ));
+                                    .on_click(cx.listener(move |view, enabled, _, cx| {
+                                        view.select(toggle_destination.clone(), Some(*enabled), cx);
                                     })),
                             )
                         })
@@ -456,7 +486,6 @@ impl Hosts {
                             remote.filter(|host| !cards && !host.id.starts_with("wsl:")),
                             |row, remote| {
                                 let id = remote.id.clone();
-                                let ticket = remote.ticket.clone();
                                 row.child(
                                     Button::new(format!("remove-{id}"))
                                         .icon(IconName::Close)
@@ -472,17 +501,6 @@ impl Hosts {
                                                 }),
                                                 Action::Remove(id.clone()),
                                             );
-                                            if let Ok(ticket) =
-                                                ticket.parse::<agent_transport::transport::Ticket>()
-                                                && let Ok(copies) =
-                                                    crate::platform::conversation_copies(
-                                                        &ticket.node_id().to_string(),
-                                                    )
-                                            {
-                                                std::thread::spawn(move || {
-                                                    agent_core::conversation_cache::clear(&copies)
-                                                });
-                                            }
                                             cx.notify();
                                         })),
                                 )
@@ -705,7 +723,7 @@ impl Hosts {
                     PopupMenuItem::new(language.text("この端末"))
                         .checked(current.is_none())
                         .on_click(move |_, _, cx| {
-                            let _ = local.update(cx, |view, cx| view.select(None, cx));
+                            let _ = local.update(cx, |view, cx| view.select(None, None, cx));
                         }),
                 );
                 for host in &hosts {
@@ -715,8 +733,9 @@ impl Hosts {
                         PopupMenuItem::new(host.name.clone())
                             .checked(current.as_deref() == Some(&host.id))
                             .on_click(move |_, _, cx| {
-                                let _ = owner
-                                    .update(cx, |view, cx| view.select(Some(host.clone()), cx));
+                                let _ = owner.update(cx, |view, cx| {
+                                    view.select(Some(host.clone()), None, cx)
+                                });
                             }),
                     );
                 }
