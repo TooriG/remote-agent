@@ -418,7 +418,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 var previous = store.presentation()
                 receiveHost(previous, host, true)
                 while (isActive) {
-                    val latest = store.nextPresentation(previous)
+                    store.nextPresentation(previous)
+                    // UI edits may acknowledge newer input before this notification resumes.
+                    val latest = store.presentation()
                     receiveHost(latest, host, latest.changes(previous).list)
                     previous = latest
                 }

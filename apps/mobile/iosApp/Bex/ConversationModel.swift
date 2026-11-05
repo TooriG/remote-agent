@@ -47,8 +47,9 @@ final class ConversationModel {
                     var previous = try pane.presentation()
                     self?.publish(previous)
                     while !Task.isCancelled {
-                        let next = try await pane.nextPresentation(previous: previous)
+                        _ = try await pane.nextPresentation(previous: previous)
                         guard !Task.isCancelled else { return }
+                        let next = try pane.presentation()
                         self?.publish(next)
                         previous = next
                     }
