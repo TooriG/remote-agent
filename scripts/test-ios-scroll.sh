@@ -12,12 +12,13 @@ mkdir -p "$output"
 run_test() {
     local name=$1
     shift
-    local fixture="apps/mobile/iosApp/UITests/Fixtures/$name.swift" key executable pending
+    local fixture="apps/mobile/iosApp/UITests/Fixtures/$name.swift" key bundle executable pending
     key=$({
         printf '%s\n' "$sdk" "$sdk_build" "$compiler" "$swift_target"
         shasum -a 256 "$0" "$@" "$fixture"
     } | shasum -a 256 | cut -d ' ' -f 1)
-    executable="$output/$name/$key"
+    bundle="$output/$name/$key.app"
+    executable="$bundle/Contents/MacOS/$name"
     if [[ ! -x $executable ]]; then
         mkdir -p "$output/$name"
         pending=$(mktemp -d "$output/$name/.build.XXXXXX")
@@ -28,6 +29,21 @@ run_test() {
             rm -rf "$pending"
             return 1
         fi
+        # UIApplication needs an application identity even in a standalone Catalyst fixture.
+        cat > "$pending/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>app.bex.qa.$name</string>
+<key>CFBundleExecutable</key><string>$name</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleName</key><string>Bex UIKit tests</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSUIElement</key><true/>
+</dict></plist>
+PLIST
+        mkdir -p "$bundle/Contents/MacOS"
+        mv -f "$pending/Info.plist" "$bundle/Contents/Info.plist"
         mv -f "$pending/$name" "$executable"
         rmdir "$pending"
     else

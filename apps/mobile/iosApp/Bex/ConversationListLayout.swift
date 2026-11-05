@@ -140,12 +140,13 @@ final class ConversationListCell: UICollectionViewCell {
     }
 
     func show(_ content: AnyView, parent: UIViewController) {
+        let row = AnyView(content.fixedSize(horizontal: false, vertical: true))
         let host: UIHostingController<AnyView>
         if let retained = self.host {
             host = retained
-            host.rootView = content
+            host.rootView = row
         } else {
-            host = UIHostingController(rootView: content)
+            host = UIHostingController(rootView: row)
             self.host = host
         }
         if host.parent == nil {

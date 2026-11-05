@@ -182,14 +182,18 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         let controller = ConversationListController(scroll: scroll)
         mount(controller)
         controller.update(ids: [.message("wrapped")], following: true, request: nil, accessibilityValue: "") { _ in
-            AnyView(Text(String(repeating: "A message wraps at the actual cell width. ", count: 100))
-                .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true))
+            AnyView(VStack(alignment: .leading) {
+                Text(String(repeating: "A message wraps at the actual cell width. ", count: 300))
+                    .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                ScrollView(.horizontal) { Text("A long unwrapped code line").fixedSize() }
+            })
         }
         await layout(controller)
         let view = controller.collectionView!
         let path = IndexPath(item: 0, section: 0)
         let wide = view.layoutAttributesForItem(at: path)!.size
-        check(wide.height > view.bounds.height, "Wrapped text must measure beyond the viewport without clipping")
+        check(wide.height > view.bounds.height && wide.height < 10000,
+              "Wrapped text must measure its contents while a horizontal scroller keeps its ideal height")
         view.contentInset.left = 24
         view.contentInset.right = 24
         view.bounds.size.width /= 2

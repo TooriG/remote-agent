@@ -75,6 +75,9 @@ test('unchanged Swift tests reuse compilation and always execute both fixtures',
   const directory = join(build.target, 'qa/ios-scroll/builds/scroll-tests');
   successfulRun(build, 2);
   const firstBuild = readdirSync(directory)[0];
+  const info = readFileSync(join(directory, firstBuild, 'Contents/Info.plist'), 'utf8');
+  assert.match(info, /<key>CFBundleIdentifier<\/key><string>app\.bex\.qa\.scroll-tests<\/string>/);
+  assert.match(info, /<key>CFBundleExecutable<\/key><string>scroll-tests<\/string>/);
   successfulRun(build, 0);
   writeFileSync(join(build.root, 'apps/mobile/iosApp/Bex/ConversationList.swift'), '// changed source\n');
   successfulRun(build, 1);
@@ -87,7 +90,7 @@ test('unchanged Swift tests reuse compilation and always execute both fixtures',
     { SWIFT_FIXTURE_SDK: join(build.root, 'Other SDK') },
     { SWIFT_FIXTURE_ARCH: 'x86_64' },
   ]) successfulRun(build, 2, overrides);
-  chmodSync(join(directory, currentBuild), 0o644);
+  chmodSync(join(directory, currentBuild, 'Contents/MacOS/scroll-tests'), 0o644);
   successfulRun(build, 1);
   successfulRun(build, 0);
 });
