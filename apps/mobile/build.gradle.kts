@@ -125,22 +125,23 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = System.getenv("AGENT_ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = System.getenv("AGENT_ANDROID_VERSION_CODE")?.let { "0.1.0-preview.$it" } ?: "0.1.0"
+        versionName = System.getenv("AGENT_ANDROID_VERSION_CODE")?.let { "0.1.0.$it" } ?: "0.1.0"
         buildConfigField("String", "BUILD_REVISION", "\"${buildRevision.get().trim()}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += nativeAbis }
     }
     signingConfigs {
-        getByName("debug") {
-            System.getenv("AGENT_ANDROID_PREVIEW_KEYSTORE")?.let { path ->
+        System.getenv("AGENT_ANDROID_KEYSTORE")?.let { path ->
+            create("distribution") {
                 storeFile = file(path)
                 storeType = "pkcs12"
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
+                storePassword = providers.environmentVariable("AGENT_ANDROID_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("AGENT_ANDROID_KEY_ALIAS").get()
+                keyPassword = storePassword
             }
         }
     }
+    buildTypes { getByName("release") { signingConfig = signingConfigs.findByName("distribution") } }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

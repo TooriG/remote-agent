@@ -18,6 +18,8 @@ impl FileChips {
     pub(super) fn new(
         files: Arc<HashMap<usize, MarkdownFileChip>>,
         desktop: &Entity<Desktop>,
+        epoch: u64,
+        metadata: &agent_core::presentation::files::FileMetadataCache,
         cx: &mut App,
     ) -> Self {
         let views = files
@@ -31,6 +33,10 @@ impl FileChips {
                             chip.lookup_path.clone(),
                             chip.caption.clone(),
                             desktop,
+                            epoch,
+                            metadata
+                                .get(&chip.file.path)
+                                .and_then(|entry| entry.metadata.clone()),
                             cx,
                         )
                     }),
@@ -39,7 +45,6 @@ impl FileChips {
             .collect();
         let paths: Vec<_> = files.values().map(|chip| chip.file.path.clone()).collect();
         let owner = desktop.downgrade();
-        let epoch = desktop.read(cx).snapshot.connection.epoch;
         if !paths.is_empty() {
             cx.defer(move |cx| {
                 let _ = owner.update(cx, |desktop, _| {
@@ -52,6 +57,24 @@ impl FileChips {
         Self {
             files,
             views: Arc::new(views),
+        }
+    }
+
+    pub(super) fn sync_metadata(
+        &self,
+        metadata: &agent_core::presentation::files::FileMetadataCache,
+        cx: &mut App,
+    ) {
+        for view in self.views.values() {
+            view.update(cx, |view, cx| {
+                let next = metadata
+                    .get(&view.file.path)
+                    .and_then(|entry| entry.metadata.clone());
+                if view.metadata != next {
+                    view.metadata = next;
+                    cx.notify();
+                }
+            });
         }
     }
 }
@@ -113,7 +136,6 @@ struct FileChip {
     metadata: Option<FileMetadata>,
     focus: FocusHandle,
     epoch: u64,
-    _observation: Subscription,
 }
 impl FileChip {
     fn new(
@@ -121,31 +143,18 @@ impl FileChip {
         lookup_path: Option<String>,
         caption: Option<Vec<MarkdownRun>>,
         desktop: &Entity<Desktop>,
+        epoch: u64,
+        metadata: Option<FileMetadata>,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
-            metadata: desktop
-                .read(cx)
-                .snapshot
-                .file_metadata(file.path.clone())
-                .and_then(|entry| entry.metadata),
+            metadata,
             file,
             lookup_path,
             caption,
             desktop: desktop.downgrade(),
             focus: cx.focus_handle(),
-            epoch: desktop.read(cx).snapshot.connection.epoch,
-            _observation: cx.observe(desktop, |view, desktop, cx| {
-                let metadata = desktop
-                    .read(cx)
-                    .snapshot
-                    .file_metadata(view.file.path.clone())
-                    .and_then(|entry| entry.metadata);
-                if view.metadata != metadata {
-                    view.metadata = metadata;
-                    cx.notify();
-                }
-            }),
+            epoch,
         }
     }
     fn activate(

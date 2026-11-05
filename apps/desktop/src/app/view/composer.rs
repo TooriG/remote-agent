@@ -9,18 +9,25 @@ impl Desktop {
             .content
             .clone()
             .update(cx, |view, cx| {
+                view.pane = self.session.as_ref().map(|session| session.pane.clone());
                 view.set_model(model, cx);
             });
     }
+}
 
-    fn composer_context(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
+impl ComposerContent {
+    fn composer_context(
+        model: &ComposerModel,
+        desktop: &WeakEntity<Desktop>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let language = crate::localization::language(cx);
         let mut row = h_flex()
             .w_full()
             .min_w_0()
             .gap_2()
             .px_2()
-            .child(Self::composer_folder(model, cx));
+            .child(Self::composer_folder(model, desktop, cx));
         if let Some(hosts) = &model.hosts {
             row = row.child(Hosts::menu(
                 hosts,
@@ -95,15 +102,16 @@ impl Desktop {
                         let changes = entity.clone();
                         menu.item(PopupMenuItem::new(language.text("変更を表示")).on_click(
                             move |_, _, cx| {
-                                let _ = changes.update(cx, |s, cx| {
-                                    s.open_review(None, cx);
+                                let _ = changes.update(cx, |_, cx| {
+                                    cx.emit(ComposerAction::Review(None));
                                     cx.notify();
                                 });
                             },
                         ))
                         .item(
                             PopupMenuItem::new(language.text("更新")).on_click(move |_, _, cx| {
-                                let _ = refresh.update(cx, |s, _| s.refresh_review());
+                                let _ = refresh
+                                    .update(cx, |_, cx| cx.emit(ComposerAction::RefreshReview));
                             }),
                         )
                     }),
@@ -112,10 +120,14 @@ impl Desktop {
         row.into_any_element()
     }
 
-    fn composer_folder(model: &ComposerModel, cx: &Context<Self>) -> AnyElement {
+    fn composer_folder(
+        model: &ComposerModel,
+        desktop: &WeakEntity<Desktop>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let language = crate::localization::language(cx);
         let selected_directory = model.selected_directory.clone();
-        let entity = cx.entity().downgrade();
+        let entity = desktop.clone();
         Button::new("composer-folder")
             .debug_selector(|| "composer-folder".into())
             .label(if selected_directory.is_empty() {
@@ -150,7 +162,7 @@ impl Desktop {
                 };
                 let state = owner.read(cx);
                 let selected_directory = state.snapshot.selected_directory();
-                let list = state.snapshot.thread_list();
+                let list = state.publication.list.clone();
                 let unassigned = entity.clone();
                 menu = menu.item(
                     PopupMenuItem::new(language.text("チャット"))
@@ -214,6 +226,9 @@ impl Desktop {
             })
             .into_any_element()
     }
+}
+
+impl Desktop {
     pub(super) fn chat(&self) -> AnyElement {
         v_flex()
             .debug_selector(|| "conversation-chat".into())
@@ -228,14 +243,16 @@ impl Desktop {
             .child(self.composer_view.clone())
             .into_any_element()
     }
+}
 
-    fn render_composer(
-        &mut self,
-        model: &ComposerModel,
-        input: &Entity<TextareaState>,
-        render_owner: EntityId,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+impl ComposerContent {
+    fn render_composer(&self, model: &ComposerModel, cx: &mut Context<Self>) -> AnyElement {
+        let desktop = &self.desktop;
+        let pane = &self.pane;
+        let input = &self.input;
+        let question_input = &self.question_input;
+        let question_secret = &self.question_secret;
+        let render_owner = cx.entity_id();
         let language = crate::localization::language(cx);
         let key = model.key.clone();
         let attachments = &model.attachments;
@@ -251,12 +268,12 @@ impl Desktop {
                     vec![file.name.to_string()],
                 ),
                 cx,
-                move |s, _, cx| {
+                move |_, _, cx| {
                     cx.stop_propagation();
-                    s.dispatch(Intent::RemoveAttachment {
+                    cx.emit(ComposerAction::Dispatch(Intent::RemoveAttachment {
                         draft_key: key.clone(),
                         index: i as u32,
-                    });
+                    }));
                 },
             )
             .debug_selector(move || format!("attachment-remove-{i}"))
@@ -269,11 +286,13 @@ impl Desktop {
                     .size(px(120.))
                     .flex_shrink_0()
                     .child(
-                        div()
-                            .size_full()
-                            .rounded_lg()
-                            .overflow_hidden()
-                            .child(self.image(&file.path, false, 120., true, cx)),
+                        div().size_full().rounded_lg().overflow_hidden().child(
+                            desktop
+                                .update(cx, |desktop, cx| {
+                                    desktop.image(&file.path, false, 120., true, cx)
+                                })
+                                .unwrap_or_else(|_| div().into_any_element()),
+                        ),
                     )
                     .child(deferred(
                         div()
@@ -309,17 +328,20 @@ impl Desktop {
         let phase = model.phase;
         // Dictation in progress finishes into the draft before the composer answers.
         let answering = model.question.as_ref().filter(|_| phase.is_none());
+        let stop_session = model.session.clone();
         let stop = running.clone().map(|id| {
             icon_button(
                 "stop",
                 Icon::default().path("icons/stop.svg"),
                 language.text("停止"),
                 cx,
-                move |s, _, _| {
-                    s.dispatch(Intent::Interrupt(op::Interrupt {
-                        thread_id: s.selected().expect("selected conversation").clone(),
-                        turn_id: id.clone(),
-                    }));
+                move |_, _, cx| {
+                    if let Some(thread_id) = &stop_session {
+                        cx.emit(ComposerAction::Dispatch(Intent::Interrupt(op::Interrupt {
+                            thread_id: thread_id.clone(),
+                            turn_id: id.clone(),
+                        })));
+                    }
                 },
             )
             .disabled(!model.connected || model.busy)
@@ -337,7 +359,7 @@ impl Desktop {
                     IconName::ArrowUp,
                     language.text("送信"),
                     cx,
-                    |s, _, cx| s.send(cx),
+                    |_, _, cx| cx.emit(ComposerAction::Send),
                 )
                 .disabled(
                     !model.connected
@@ -357,9 +379,8 @@ impl Desktop {
                 .accessibility_label(language.text("音声をCodexで文字起こし"))
                 .disabled(!model.connected || model.busy)
                 .on_click(cx.listener(|s, _, window, cx| {
-                    s.composer.input.read(cx).focus_handle(cx).focus(window, cx);
-                    s.start_dictation();
-                    cx.notify();
+                    s.input.read(cx).focus_handle(cx).focus(window, cx);
+                    cx.emit(ComposerAction::StartDictation);
                 }));
             vec![
                 microphone.into_any_element(),
@@ -373,7 +394,7 @@ impl Desktop {
                 let secret = prompt.question.secret;
                 let disabled = !prompt.question.allow_free_text || !prompt.can_respond;
                 let field = if secret {
-                    Input::new(&self.question.secret)
+                    Input::new(question_secret)
                         .appearance(false)
                         .bordered(false)
                         .text_size(px(14.))
@@ -381,7 +402,7 @@ impl Desktop {
                         .disabled(disabled)
                         .into_any_element()
                 } else {
-                    Textarea::new(&self.question.input)
+                    Textarea::new(question_input)
                         .appearance(false)
                         .bordered(false)
                         .text_size(px(14.))
@@ -389,7 +410,14 @@ impl Desktop {
                         .disabled(disabled)
                         .into_any_element()
                 };
-                (field, self.question.focus_handle(secret, cx))
+                (
+                    field,
+                    if secret {
+                        question_secret.read(cx).focus_handle(cx)
+                    } else {
+                        question_input.read(cx).focus_handle(cx)
+                    },
+                )
             }
             None => (
                 Textarea::new(input)
@@ -404,50 +432,78 @@ impl Desktop {
         };
         let composer = v_flex()
             .when(answering.is_none() && model.connected, |composer| {
-                composer.on_drop(cx.listener(
-                    |view, drag: &super::file_tree::FileTreeDrag, window, cx| {
-                        view.add_file_mentions(&drag.mentions, window, cx);
+                composer.on_drop(
+                    cx.listener(|_, drag: &super::file_tree::FileTreeDrag, _, cx| {
+                        cx.emit(ComposerAction::AddMentions(drag.mentions.clone()));
                         cx.stop_propagation();
-                    },
-                ))
+                    }),
+                )
             })
             .track_focus(&focus)
             .map(|composer| {
                 if answering.is_some() {
-                    return composer.capture_action(cx.listener(Self::answer_enter));
+                    return composer.capture_action(cx.listener(
+                        |view, action: &gpui_kit::component::input::Enter, window, cx| {
+                            let owner = view.desktop.clone();
+                            let _ = owner
+                                .update(cx, |desktop, cx| desktop.answer_enter(action, window, cx));
+                        },
+                    ));
                 }
                 composer
                     .key_context("ChatComposer")
-                    .capture_key_down(cx.listener(|s, event: &KeyDownEvent, window, cx| {
-                        let modifiers = event.keystroke.modifiers;
-                        if !(modifiers.shift
-                            || modifiers.control
-                            || modifiers.alt
-                            || modifiers.platform)
-                            && s.completion_key(&event.keystroke.key, window, cx)
-                        {
-                            return;
-                        }
-                        if event.keystroke.key == "escape"
-                            && s.dictation
-                                .as_ref()
-                                .is_some_and(|state| state.phase != Phase::Transcribing)
-                        {
-                            s.cancel_recording();
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
+                    .capture_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                        let owner = view.desktop.clone();
+                        let _ = owner.update(cx, |desktop, cx| {
+                            let modifiers = event.keystroke.modifiers;
+                            if !(modifiers.shift
+                                || modifiers.control
+                                || modifiers.alt
+                                || modifiers.platform)
+                                && desktop.completion_key(&event.keystroke.key, window, cx)
+                            {
+                                return;
+                            }
+                            if event.keystroke.key == "escape"
+                                && desktop
+                                    .dictation
+                                    .as_ref()
+                                    .is_some_and(|state| state.phase != Phase::Transcribing)
+                            {
+                                desktop.cancel_recording();
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        });
                     }))
-                    .capture_action(cx.listener(Self::paste_image))
-                    .capture_action(cx.listener(Self::composer_enter))
                     .capture_action(cx.listener(
-                        |s, _: &gpui_kit::component::input::MoveUp, window, cx| {
-                            s.composer_arrow("up", window, cx);
+                        |view, action: &gpui_kit::component::input::Paste, window, cx| {
+                            let owner = view.desktop.clone();
+                            let _ = owner
+                                .update(cx, |desktop, cx| desktop.paste_image(action, window, cx));
                         },
                     ))
                     .capture_action(cx.listener(
-                        |s, _: &gpui_kit::component::input::MoveDown, window, cx| {
-                            s.composer_arrow("down", window, cx);
+                        |view, action: &gpui_kit::component::input::Enter, window, cx| {
+                            let owner = view.desktop.clone();
+                            let _ = owner.update(cx, |desktop, cx| {
+                                desktop.composer_enter(action, window, cx)
+                            });
+                        },
+                    ))
+                    .capture_action(cx.listener(
+                        |view, _: &gpui_kit::component::input::MoveUp, window, cx| {
+                            let owner = view.desktop.clone();
+                            let _ = owner
+                                .update(cx, |desktop, cx| desktop.composer_arrow("up", window, cx));
+                        },
+                    ))
+                    .capture_action(cx.listener(
+                        |view, _: &gpui_kit::component::input::MoveDown, window, cx| {
+                            let owner = view.desktop.clone();
+                            let _ = owner.update(cx, |desktop, cx| {
+                                desktop.composer_arrow("down", window, cx)
+                            });
                         },
                     ))
                     .child(Self::completion_menu(
@@ -479,7 +535,7 @@ impl Desktop {
                                     IconName::Plus,
                                     language.text("ファイルを添付"),
                                     cx,
-                                    |s, _, _| s.attach(),
+                                    |_, _, cx| cx.emit(ComposerAction::Attach),
                                 )
                                 .debug_selector(|| "attach".into())
                                 .w(px(40.))
@@ -492,31 +548,37 @@ impl Desktop {
                                 ),
                             )
                         })
-                        .child(Self::permission_menu(
+                        .child(Desktop::permission_menu(
                             model.permission_label,
                             model.permission_mode,
                             model.connected && model.provider_available,
                             render_owner,
+                            desktop,
                             cx,
                         ))
                         .child(div().flex_1())
-                        .child(Self::fast_control(
+                        .child(Desktop::fast_control(
                             model.quick_controls.clone(),
                             model.controls_enabled,
                             "model-fast",
                             false,
+                            model.key.clone(),
+                            pane.clone(),
                             cx,
                         ))
-                        .child(Self::model_menu(
+                        .child(Desktop::model_menu(
                             model.model_label.clone(),
                             render_owner,
+                            desktop,
                             cx,
                         ))
-                        .child(Self::effort_control(
+                        .child(Desktop::effort_control(
                             model.quick_controls.clone(),
                             model.controls_enabled,
                             "model-effort",
                             false,
+                            model.key.clone(),
+                            pane.clone(),
                             cx,
                         ))
                         .children(trailing),
@@ -551,7 +613,7 @@ impl Desktop {
             .when_some(model.question.as_ref(), |column, question| {
                 column.child(Self::question_panel(question, cx))
             })
-            .child(Self::composer_context(model, cx))
+            .child(Self::composer_context(model, desktop, cx))
             .child(composer);
         h_flex()
             .justify_center()
@@ -591,6 +653,7 @@ fn round_action(button: Button, inactive: bool, cx: &App) -> Button {
 #[derive(PartialEq)]
 struct ComposerModel {
     key: DraftKey,
+    session: Option<SessionRef>,
     attachments: Vec<Attachment>,
     running: Option<TurnId>,
     empty: bool,
@@ -628,6 +691,7 @@ impl Desktop {
         let permission = self.snapshot.permission_control(self.draft_key());
         ComposerModel {
             key: self.draft_key().clone(),
+            session: self.selected().cloned(),
             attachments: self.draft().attachments.clone(),
             running: self.thread().and_then(|thread| thread.active_turn_id()),
             empty: self.composer.input.read(cx).value().trim().is_empty()
@@ -678,21 +742,45 @@ pub(in crate::app) struct ComposerView {
 pub(in crate::app) struct ComposerContent {
     desktop: WeakEntity<Desktop>,
     input: Entity<TextareaState>,
+    question_input: Entity<TextareaState>,
+    question_secret: Entity<InputState>,
+    pane: Option<Arc<agent_core::store::Pane>>,
     model: Option<ComposerModel>,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
+pub(in crate::app) enum ComposerAction {
+    Dispatch(Intent),
+    Send,
+    Attach,
+    StartDictation,
+    CancelDictation,
+    FinishDictation(bool),
+    AddMentions(String),
+    QuestionCollapsed(Option<(RequestId, String)>),
+    Respond(RequestId, Answer),
+    Review(Option<String>),
+    RefreshReview,
+    ToggleReview,
+    Completion(agent_protocol::composer::Invocation),
+}
+impl EventEmitter<ComposerAction> for ComposerContent {}
 struct ComposerHeight(Pixels);
 impl EventEmitter<ComposerHeight> for ComposerContent {}
 impl ComposerView {
     pub(in crate::app) fn new(
         desktop: &Entity<Desktop>,
         input: Entity<TextareaState>,
+        question_input: Entity<TextareaState>,
+        question_secret: Entity<InputState>,
         cx: &mut Context<Self>,
     ) -> Self {
         let content = cx.new(|_cx| ComposerContent {
             desktop: desktop.downgrade(),
             input: input.clone(),
+            question_input,
+            question_secret,
+            pane: None,
             model: None,
             #[cfg(test)]
             renders: 0,
@@ -740,17 +828,12 @@ impl Render for ComposerContent {
         {
             self.renders += 1;
         }
-        let render_owner = cx.entity().entity_id();
         let owner = cx.entity().downgrade();
         let content = self
-            .desktop
-            .update(cx, |desktop, cx| {
-                // Initialize before the first layout so the conversation never
-                // sees an empty composer and incorrectly resumes tail-following.
-                let model = self.model.get_or_insert_with(|| desktop.composer_model(cx));
-                desktop.render_composer(model, &self.input, render_owner, cx)
-            })
-            .unwrap_or_else(|_| div().into_any_element());
+            .model
+            .as_ref()
+            .map(|model| self.render_composer(model, cx))
+            .unwrap_or_else(|| div().into_any_element());
         div()
             .relative()
             .w_full()
@@ -864,7 +947,8 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.sync_conversation(window, cx);
+                view.project_fixture();
+                view.publish_views(window, cx);
                 view.conversation.update(cx, |view, cx| {
                     view.timeline.list.scroll_to(ListOffset::default());
                     cx.notify();
@@ -900,7 +984,7 @@ mod composer_tests {
                         .unwrap(),
                 );
                 thread.turns = Some(turns(0..8));
-
+                view.project_fixture();
                 cx.notify();
             })
         });
@@ -1105,7 +1189,8 @@ mod composer_tests {
                     }),
                 );
                 view.sync_inputs(window, cx);
-                view.sync_conversation(window, cx);
+                view.project_fixture();
+                view.publish_views(window, cx);
             });
             handle = Some(desktop.clone());
             ComposerView(desktop)

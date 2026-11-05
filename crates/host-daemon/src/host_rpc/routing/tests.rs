@@ -3,7 +3,7 @@ use agent_protocol::models::{Item, Thread, Turn};
 use agent_transport::peer::RpcMessage;
 
 #[test]
-fn subagent_work_and_requests_share_the_root_conversation_activity() {
+fn subagent_work_and_requests_do_not_contribute_to_system_activity() {
     use agent_protocol::{models::SessionStatus, session::RequestDelivery};
     let router = SessionRouter::new();
     let root = SessionRef::new(ProviderKind::Codex, "root".into()).unwrap();
@@ -42,8 +42,17 @@ fn subagent_work_and_requests_share_the_root_conversation_activity() {
         router.session_change(&grandchild, SessionChange::Request { request });
         let waiting = router.task_activity(Vec::new(), 0);
         assert_eq!(waiting.display.current.total, 2);
-        assert_eq!(waiting.display.current.label, "確認待ち 1件 · 実行中 1件");
-        assert_eq!(waiting.waiting.as_slice(), std::slice::from_ref(&root));
+        assert_eq!(waiting.display.current.label, "実行中 2件");
+        assert!(waiting.waiting.is_empty());
+        assert_eq!(
+            waiting
+                .statuses
+                .iter()
+                .find(|(id, _)| id == &grandchild)
+                .unwrap()
+                .1,
+            SessionStatus::Running
+        );
         router.session_change(
             &grandchild,
             SessionChange::RequestDelivery {
@@ -68,14 +77,14 @@ fn subagent_work_and_requests_share_the_root_conversation_activity() {
         );
     }
     assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 1);
-    // Completed actors are evicted; a later child turn retains its conversation identity.
+    // Completed actors are evicted; a later child turn is still excluded.
     router.session_change(
         &grandchild,
         SessionChange::Status {
             status: SessionStatus::Running,
         },
     );
-    assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 2);
+    assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 1);
     router.session_change(
         &grandchild,
         SessionChange::Status {
@@ -176,7 +185,7 @@ fn each_finished_conversation_keeps_a_mark_until_its_result_is_read() {
 }
 
 #[test]
-fn parent_identity_can_arrive_after_newer_task_facts_without_overwriting_them() {
+fn subagent_identity_can_arrive_after_newer_task_facts_without_overwriting_them() {
     use agent_protocol::models::SessionStatus;
     let router = SessionRouter::new();
     let root = SessionRef::new(ProviderKind::Codex, "root".into()).unwrap();
@@ -206,9 +215,16 @@ fn parent_identity_can_arrive_after_newer_task_facts_without_overwriting_them() 
             status: SessionStatus::Idle,
         },
     );
+    let state = router.task_activity(Vec::new(), 0);
+    assert_eq!(state.display.current.total, 0);
     assert_eq!(
-        router.task_activity(Vec::new(), 0).display.current.total,
-        1,
+        state
+            .statuses
+            .iter()
+            .find(|(id, _)| id == &child)
+            .unwrap()
+            .1,
+        SessionStatus::Running,
         "the delayed read preserved the child's newer running state"
     );
     let orphan = SessionRef::new(ProviderKind::Codex, "orphan".into()).unwrap();
@@ -218,41 +234,9 @@ fn parent_identity_can_arrive_after_newer_task_facts_without_overwriting_them() 
             status: SessionStatus::Running,
         },
     );
-    assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 2);
-    router.task_parent(orphan, root);
     assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 1);
-}
-
-#[test]
-fn invalid_parent_cycles_preserve_known_work_without_hanging() {
-    let router = SessionRouter::new();
-    let id = |name: &str| SessionRef::new(ProviderKind::Codex, name.into()).unwrap();
-    let display = router
-        .task_activity(
-            vec![
-                Thread {
-                    id: Some(id("root")),
-                    status: agent_protocol::models::SessionStatus::Running,
-                    ..Default::default()
-                },
-                Thread {
-                    id: Some(id("a")),
-                    parent_id: Some(id("b")),
-                    status: agent_protocol::models::SessionStatus::Running,
-                    ..Default::default()
-                },
-                Thread {
-                    id: Some(id("b")),
-                    parent_id: Some(id("a")),
-                    status: agent_protocol::models::SessionStatus::Running,
-                    ..Default::default()
-                },
-            ],
-            0,
-        )
-        .display;
-    assert_eq!(display.current.total, 3);
-    assert!(display.ongoing);
+    router.task_subagent(orphan);
+    assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 0);
 }
 
 proptest::proptest! {

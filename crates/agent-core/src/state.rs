@@ -286,6 +286,8 @@ pub use operations::OperationStates as Operations;
 group! {
     /// The Host connection and facts the Host states about itself.
     pub struct Connection {
+        #[serde(default)]
+        pub connection_disabled: bool,
         #[serde(skip)]
         pub connected: bool,
         #[serde(default)]
@@ -314,6 +316,10 @@ group! {
 group! {
     /// Host catalogs that control what the composer and settings offer.
     pub struct Catalog {
+        #[serde(skip)]
+        pub provider_settings: Option<Arc<agent_protocol::providers::ProviderSettings>>,
+        #[serde(skip)]
+        pub host_software: Option<Arc<agent_protocol::operations::HostSoftware>>,
         #[serde(default)]
         pub models: Arc<Vec<Model>>,
         #[serde(default)]
@@ -682,9 +688,9 @@ macro_rules! prepare_operations {
 fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>) {
     let mut next = previous.clone();
     prepare_operations!(intent, next, [
-        ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity,
+        ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity, ReadHostSoftware,
         ReadPermissionSettings, UpdatePermissionSettings,
-        ManageCodexCli, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
+        ManageCodexCli, ReadProviderSettings, SetProviderEnabled, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
         ReadAccountLogin, CancelAccountLogin, SubmitAccountLogin, ForkSession,
         StartTerminal, DetachTerminal, KillTerminal, CreateInvitation, RemoveRemoteHost,
         RevokeDevice, ListFiles, ResolveFile, ResolveFileReference, ReadFile,
@@ -698,6 +704,8 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         LoadHostName, LoadHostManagement, LoadModels, ReadModelSettings,
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
+        Intent::RefreshModels => return (next, op::refresh_models()),
+        Intent::SetConnectionEnabled { enabled } => next.connection.connection_disabled = !enabled,
         Intent::SetPreferredEditor { editor } => next.files.preferred_editor = Some(editor),
         Intent::EnsureFileMetadata { paths, now_ms } => {
             let effects = op::ensure_file_metadata(&mut next, paths, now_ms);
@@ -1276,6 +1284,8 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             next.project_import = Arc::default();
             next.terminals = Arc::default();
             Arc::make_mut(&mut next.pane).observed_agents = None;
+            next.catalog.provider_settings = None;
+            next.catalog.host_software = None;
             next.lists.task_activity = None;
             next.lists.activity = Arc::default();
             next.lists.expanded_projects = Arc::default();
@@ -1428,6 +1438,12 @@ impl Snapshot {
 
     fn prepare_connection_refresh(&mut self) -> Vec<Effect> {
         let mut effects = vec![Effect::execute(op::ReadTaskActivity {})];
+        if self.catalog.provider_settings.take().is_some() {
+            effects.push(Effect::execute(op::ReadProviderSettings {}));
+        }
+        if self.catalog.host_software.take().is_some() {
+            effects.push(Effect::execute(op::ReadHostSoftware {}));
+        }
         if self.files.file_open_capabilities_requested {
             effects.push(Effect::execute(op::ReadFileOpenCapabilities {}));
         }
@@ -1444,7 +1460,7 @@ impl Snapshot {
         }
         // The Host catalog can change while a mobile client is backgrounded.
         // Keep cached choices visible until the fresh catalog arrives.
-        effects.push(Effect::execute(op::LoadModels {}));
+        effects.extend(op::refresh_models());
         if self.catalog.account.accounts.is_none() {
             effects.push(Effect::execute(op::ListAccounts {}));
         }

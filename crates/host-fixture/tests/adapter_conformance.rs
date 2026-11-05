@@ -365,40 +365,47 @@ async fn setup_catalog_isolates_stalled_native_providers(
         )
         .unwrap();
     }
-    let discovery_service = service.clone();
-    let session_id = session.id();
-    let discovery = tokio::spawn(async move {
-        discovery_service
-            .dispatch(
-                session_id,
-                &Call::ListModels(op::ListModels {
-                    limit: 100,
-                    cursor: None,
-                }),
-            )
-            .await
-            .unwrap()
-    });
-    let response = tokio::time::timeout(Duration::from_secs(25), async {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while !codex_home.join("model-list-requested").exists()
-                || !claude_home.join("model-list-requested").exists()
-            {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("Codex and Claude discovery must start independently");
-        discovery.await.unwrap()
-    })
-    .await
-    .expect("discovery must finish before the native client's 30-second deadline");
-    let Response::Success { result: catalog } =
-        agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
-    else {
-        panic!("a stalled provider must not discard the catalog");
-    };
-    agent_core::state::operations::LoadModels {}.apply(&mut snapshot, catalog);
+    let mut discoveries = tokio::task::JoinSet::new();
+    for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+        let service = service.clone();
+        let session_id = session.id();
+        discoveries.spawn(async move {
+            let response = service
+                .dispatch(
+                    session_id,
+                    &Call::ListModels(op::ListModels {
+                        provider,
+                        limit: 100,
+                        cursor: None,
+                    }),
+                )
+                .await
+                .unwrap();
+            (provider, response)
+        });
+    }
+    let healthy = usize::from(!codex_stalls) + usize::from(!claude_stalls);
+    for index in 0..2 {
+        let deadline = if index < healthy { 10 } else { 25 };
+        let (provider, response) =
+            tokio::time::timeout(Duration::from_secs(deadline), discoveries.join_next())
+                .await
+                .expect("a healthy provider must finish without waiting for stalled discovery")
+                .unwrap()
+                .unwrap();
+        let Response::Success { result: catalog } =
+            agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
+        else {
+            panic!("discovery must return its provider's catalog or error");
+        };
+        agent_core::state::operations::LoadModels { provider }.apply(&mut snapshot, catalog);
+        if index < healthy {
+            assert!(
+                snapshot.connection_setup().can_start,
+                "healthy models must be usable before the stalled provider finishes"
+            );
+        }
+    }
     let setup = snapshot.connection_setup();
     assert_eq!(setup.can_start, !codex_stalls || !claude_stalls);
     for (provider, stalls) in [
@@ -436,25 +443,28 @@ async fn setup_catalog_isolates_stalled_native_providers(
     for home in [&codex_home, &claude_home] {
         std::fs::write(home.join("model-list-mode"), "ready").unwrap();
     }
-    let retried = tokio::time::timeout(
-        Duration::from_secs(10),
-        service.dispatch(
-            session.id(),
-            &Call::ListModels(op::ListModels {
-                limit: 100,
-                cursor: None,
-            }),
-        ),
-    )
-    .await
-    .expect("discovery must recover after the native provider responds again")
-    .unwrap();
-    let Response::Success { result: catalog } =
-        agent_protocol::protocol::decode::<Response<op::ModelPage>>(&retried.initial).unwrap()
-    else {
-        panic!("retry must return the recovered catalog");
-    };
-    agent_core::state::operations::LoadModels {}.apply(&mut snapshot, catalog);
+    for provider in [ProviderKind::Codex, ProviderKind::Claude] {
+        let retried = tokio::time::timeout(
+            Duration::from_secs(10),
+            service.dispatch(
+                session.id(),
+                &Call::ListModels(op::ListModels {
+                    provider,
+                    limit: 100,
+                    cursor: None,
+                }),
+            ),
+        )
+        .await
+        .expect("discovery must recover after its native provider responds again")
+        .unwrap();
+        let Response::Success { result: catalog } =
+            agent_protocol::protocol::decode::<Response<op::ModelPage>>(&retried.initial).unwrap()
+        else {
+            panic!("retry must return the recovered provider catalog");
+        };
+        agent_core::state::operations::LoadModels { provider }.apply(&mut snapshot, catalog);
+    }
     assert!(snapshot.catalog.model_errors.is_empty());
     let setup = snapshot.connection_setup();
     assert!(setup.can_start);
@@ -1477,14 +1487,26 @@ async fn adapter_initialization_failure_preserves_the_other_provider_and_host() 
     let models = local
         .peer
         .call(&op::ListModels {
+            provider: agent_protocol::session::ProviderKind::Codex,
             cursor: None,
             limit: 100,
         })
         .await
         .unwrap();
     assert!(!models.data.is_empty());
+    assert!(models.provider_errors.is_none());
+    let unavailable = local
+        .peer
+        .call(&op::ListModels {
+            provider: ProviderKind::Claude,
+            cursor: None,
+            limit: 100,
+        })
+        .await
+        .unwrap();
+    assert!(unavailable.data.is_empty());
     assert_eq!(
-        models.provider_errors.unwrap()["claude"]["code"],
+        unavailable.provider_errors.unwrap()["claude"]["code"],
         "provider_unavailable"
     );
     let session = create(&local.peer, ProviderKind::Codex, &root).await;

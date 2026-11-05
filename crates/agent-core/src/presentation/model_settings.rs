@@ -60,6 +60,14 @@ pub struct ModelSpeedChoice {
 }
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
+    pub fn models_loading(&self, provider: Option<ProviderKind>) -> bool {
+        use crate::state::operations::{OperationKey, OperationPhase};
+        self.operations.iter().any(|(key, state)| {
+            matches!(key, OperationKey::Models { provider: owner } if provider.is_none_or(|provider| provider == *owner))
+                && state.phase == OperationPhase::Running
+        })
+    }
+
     pub fn model_provider_for_draft(
         &self,
         thread_id: crate::state::DraftKey,
@@ -86,11 +94,10 @@ impl Snapshot {
 
     pub fn models_matching(&self, provider: Option<ProviderKind>, query: String) -> Vec<Model> {
         let query = query.trim().to_lowercase();
-        let models = self
-            .catalog
-            .models
-            .iter()
-            .filter(|model| provider.is_none_or(|provider| model.model.provider == provider));
+        let models = self.catalog.models.iter().filter(|model| {
+            self.provider_enabled(model.model.provider)
+                && provider.is_none_or(|provider| model.model.provider == provider)
+        });
         if query.is_empty() {
             return models.cloned().collect();
         }
@@ -104,7 +111,8 @@ impl Snapshot {
     }
 
     pub(crate) fn allows_custom_codex_models(&self) -> bool {
-        crate::state::allows_custom_codex_models(self.catalog.account.accounts.as_deref())
+        self.provider_enabled(ProviderKind::Codex)
+            && crate::state::allows_custom_codex_models(self.catalog.account.accounts.as_deref())
     }
 
     /// A recommended picker catalog is not an exhaustive allowlist of Codex IDs.

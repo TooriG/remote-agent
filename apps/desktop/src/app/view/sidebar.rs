@@ -59,7 +59,7 @@ pub(super) enum SidebarRow {
     Project {
         id: String,
         name: String,
-        icon_png: Option<Vec<u8>>,
+        icon: Option<agent_core::presentation::list::ProjectIconImages>,
         monogram: String,
         color: u32,
         root: String,
@@ -147,7 +147,7 @@ impl SidebarRow {
             Self::Project {
                 id: project_id,
                 name,
-                icon_png,
+                icon,
                 monogram,
                 color,
                 root,
@@ -156,12 +156,16 @@ impl SidebarRow {
                 scope,
                 desktop,
             } => {
-                let icon = if let Some(png) = icon_png {
+                let icon = if let Some(icon) = icon {
+                    let png = if cx.theme().is_dark() {
+                        icon.dark_png
+                    } else {
+                        icon.light_png
+                    };
                     img(Arc::new(Image::from_bytes(ImageFormat::Png, png)))
                         .size_4()
                         .flex_shrink_0()
                         .object_fit(ObjectFit::Contain)
-                        .bg(rgb(0x777777))
                         .rounded(px(4.))
                         .into_any_element()
                 } else {
@@ -200,8 +204,10 @@ impl SidebarRow {
                     .clone();
                 let move_bounds = bounds.clone();
                 let style_bounds = bounds.clone();
+                let group = SharedString::from(id.clone());
                 h_flex()
                     .id(id)
+                    .group(group.clone())
                     .w_full()
                     .gap_1()
                     .on_drag_move::<SidebarDrag>(move |event, _, _| {
@@ -249,24 +255,15 @@ impl SidebarRow {
                             .when(collapsed, |button| button.tooltip(name.clone()))
                             .child(icon)
                             .when(!collapsed, |button| {
-                                button
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_sm()
-                                            .text_left()
-                                            .text_ellipsis()
-                                            .child(name),
-                                    )
-                                    .child(
-                                        Icon::new(if expanded {
-                                            IconName::ChevronDown
-                                        } else {
-                                            IconName::ChevronRight
-                                        })
-                                        .size(px(12.)),
-                                    )
+                                button.child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .text_left()
+                                        .text_ellipsis()
+                                        .child(name),
+                                )
                             })
                             .on_click(move |_, _, cx| {
                                 let _ = target.update(cx, |desktop, cx| {
@@ -279,24 +276,30 @@ impl SidebarRow {
                             })),
                     )
                     .when(!collapsed, |row| {
-                        row.child(super::project_management::project_menu_button(
-                            menu_id, menu_owner,
-                        ))
-                        .child(
-                            Button::new("new-project-chat")
-                                .icon(new_chat_icon())
-                                .xsmall()
-                                .ghost()
-                                .tooltip(language.text("このプロジェクトで新しいチャット"))
-                                .accessibility_label(language.text("このプロジェクトで新しいチャット"))
-                                .disabled(!connected)
-                                .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    let _ = desktop.update(cx, |desktop, cx| {
-                                        desktop.new_chat(root.clone(), window, cx);
-                                        cx.notify();
-                                    });
-                                }),
+                        row.child(
+                            h_flex()
+                                .gap_1()
+                                .invisible()
+                                .group_hover(group, |style| style.visible())
+                                .child(super::project_management::project_menu_button(
+                                    menu_id, menu_owner,
+                                ))
+                                .child(
+                                    Button::new("new-project-chat")
+                                        .icon(new_chat_icon())
+                                        .xsmall()
+                                        .ghost()
+                                        .tooltip(language.text("このプロジェクトで新しいチャット"))
+                                        .accessibility_label(language.text("このプロジェクトで新しいチャット"))
+                                        .disabled(!connected)
+                                        .on_click(move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            let _ = desktop.update(cx, |desktop, cx| {
+                                                desktop.new_chat(root.clone(), window, cx);
+                                                cx.notify();
+                                            });
+                                        }),
+                                ),
                         )
                     })
                     .into_any_element()
@@ -328,12 +331,6 @@ impl SidebarItem for SidebarEntry {
 
 /// Everything the sidebar shows. [`SidebarView`] renders only from this value,
 /// so it re-renders exactly when the value changes.
-#[derive(PartialEq)]
-pub(in crate::app) enum SidebarModel {
-    Conversations(Conversations),
-    Settings(SettingsPage),
-}
-
 pub(in crate::app) struct Conversations {
     list: Option<Arc<agent_core::presentation::list::ThreadList>>,
     selected: Option<SessionRef>,
@@ -358,20 +355,17 @@ impl PartialEq for Conversations {
 }
 
 impl Desktop {
-    pub(in crate::app) fn sidebar_model(&self) -> SidebarModel {
-        match self.tab {
-            Tab::Settings => SidebarModel::Settings(self.settings_page),
-            Tab::Chat => SidebarModel::Conversations(Conversations {
-                list: self.publication.list.clone(),
-                selected: self.selected().cloned(),
-                storage_scope: self.snapshot.connection.storage_scope.clone(),
-                connected: self.snapshot.connection.connected,
-                local: self.remote.is_none(),
-                loading_session_list: self
-                    .snapshot
-                    .operation_running(op::OperationKey::SessionList),
-                errors: self.error_rows(&ErrorScope::Projects),
-            }),
+    pub(in crate::app) fn sidebar_model(&self) -> Conversations {
+        Conversations {
+            list: self.publication.list.clone(),
+            selected: self.selected().cloned(),
+            storage_scope: self.snapshot.connection.storage_scope.clone(),
+            connected: self.snapshot.connection.connected,
+            local: self.remote.is_none(),
+            loading_session_list: self
+                .snapshot
+                .operation_running(op::OperationKey::SessionList),
+            errors: self.error_rows(&ErrorScope::Projects),
         }
     }
 }
@@ -380,7 +374,7 @@ impl Desktop {
 /// updates elsewhere in the window do not rebuild it.
 pub(in crate::app) struct SidebarView {
     desktop: WeakEntity<Desktop>,
-    model: SidebarModel,
+    model: Conversations,
     search: Entity<InputState>,
     app_updates: Option<Entity<crate::updates::Updates>>,
     pane: Option<Arc<agent_core::store::Pane>>,
@@ -406,14 +400,13 @@ pub(in crate::app) enum SidebarAction {
     NewChat(String),
     Settings(SettingsPage),
     Refresh,
-    Conversations,
     DismissLocal(op::ErrorId),
 }
 impl EventEmitter<SidebarAction> for SidebarView {}
 impl SidebarView {
     pub(in crate::app) fn sync(
         &mut self,
-        model: SidebarModel,
+        model: Conversations,
         pane: Option<Arc<agent_core::store::Pane>>,
         cx: &mut Context<Self>,
     ) {
@@ -447,16 +440,13 @@ impl Render for SidebarView {
         {
             self.renders += 1;
         }
-        let sidebar = match &self.model {
-            SidebarModel::Conversations(model) => Self::conversation_sidebar(
-                model,
-                &self.search,
-                self.app_updates.clone(),
-                &self.desktop,
-                cx,
-            ),
-            SidebarModel::Settings(page) => Self::settings_sidebar(*page, cx),
-        };
+        let sidebar = Self::conversation_sidebar(
+            &self.model,
+            &self.search,
+            self.app_updates.clone(),
+            &self.desktop,
+            cx,
+        );
         v_flex()
             .debug_selector(|| "desktop-sidebar-shell".into())
             .size_full()
@@ -519,7 +509,7 @@ impl SidebarView {
             projects.push(SidebarRow::Project {
                 id: id.clone(),
                 name: project.name.clone(),
-                icon_png: project.icon_png.clone(),
+                icon: project.icon.clone(),
                 monogram: project.monogram.clone(),
                 color: project.icon_color,
                 root: new_root,
@@ -833,7 +823,15 @@ mod tests {
     struct TaskNavigation(Entity<Desktop>);
     impl Render for TaskNavigation {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let sidebar = self.0.read(cx).sidebar_view.clone().unwrap();
+            let sidebar = self.0.update(cx, |desktop, cx| {
+                let entity = cx.entity();
+                if let Some(sidebar) = &desktop.sidebar_view {
+                    return sidebar.clone();
+                }
+                let sidebar = cx.new(|_| super::SidebarView::new(&entity, desktop));
+                desktop.sidebar_view = Some(sidebar.clone());
+                sidebar
+            });
             self.0.update(cx, |desktop, cx| {
                 let model = desktop.sidebar_model();
                 let pane = desktop.session.as_ref().map(|session| session.pane.clone());
@@ -911,9 +909,12 @@ mod tests {
             });
             let sidebar = desktop.update(cx, |desktop, cx| {
                 desktop.snapshot = store.snapshot();
+                desktop.project_fixture();
                 desktop.session = Some(session);
                 let entity = cx.entity();
-                cx.new(|_| super::SidebarView::new(&entity, desktop))
+                let sidebar = cx.new(|_| super::SidebarView::new(&entity, desktop));
+                desktop.sidebar_view = Some(sidebar.clone());
+                sidebar
             });
             ProjectNavigation(desktop, sidebar)
         });
@@ -936,6 +937,7 @@ mod tests {
         view.update(window, |view, cx| {
             view.0.update(cx, |desktop, cx| {
                 desktop.snapshot = store.snapshot();
+                desktop.project_fixture();
                 cx.notify();
             })
         });
@@ -963,6 +965,7 @@ mod tests {
             view.update(window, |view, cx| {
                 view.0.update(cx, |desktop, cx| {
                     desktop.snapshot = store.snapshot();
+                    desktop.project_fixture();
                     cx.notify();
                 })
             });
@@ -994,7 +997,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn settings_share_sidebar_and_return_to_the_same_conversation(cx: &mut TestAppContext) {
+    fn settings_overlay_keeps_the_sidebar_and_returns_to_the_same_conversation(
+        cx: &mut TestAppContext,
+    ) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1053,6 +1058,7 @@ mod tests {
                 receive.recv().await.unwrap().unwrap().unwrap()
             }));
             desktop.snapshot = store.snapshot();
+            desktop.project_fixture();
             cx.notify();
             desktop
         });
@@ -1072,6 +1078,7 @@ mod tests {
             window.simulate_click(project, Modifiers::default());
             view.update(window, |view, cx| {
                 view.snapshot = view.session.as_ref().unwrap().host.store.snapshot();
+                view.project_fixture();
                 cx.notify();
             });
             window.run_until_parked();
@@ -1086,7 +1093,7 @@ mod tests {
         let settings = window.debug_bounds("sidebar-settings").unwrap().center();
         window.simulate_click(settings, Modifiers::default());
         window.run_until_parked();
-        assert!(window.debug_bounds("refresh-threads").is_none());
+        assert!(window.debug_bounds("refresh-threads").is_some());
         assert!(window.debug_bounds("app-update").is_none());
         assert_eq!(
             window.debug_bounds("desktop-sidebar-shell").unwrap(),
@@ -1094,7 +1101,7 @@ mod tests {
         );
         for page in [
             SettingsPage::General,
-            SettingsPage::Agents,
+            SettingsPage::Providers,
             SettingsPage::Connections,
             SettingsPage::Worktrees,
         ] {
@@ -1114,16 +1121,12 @@ mod tests {
                 })
                 .unwrap();
             assert!(scope.bottom() <= window.debug_bounds("settings-page-heading").unwrap().top());
-            assert!(window.debug_bounds("settings-back").unwrap().top() < px(100.));
+            let modal = window.debug_bounds("settings-modal").unwrap();
+            assert!(modal.origin.x > px(0.));
+            assert!(modal.origin.y > px(0.));
+            assert!(window.debug_bounds("settings-close").unwrap().top() < scope.bottom());
         }
-        let collapse = window.debug_bounds("collapse-sidebar").unwrap().center();
-        window.simulate_click(collapse, Modifiers::default());
-        window.run_until_parked();
-        assert!(window.debug_bounds("desktop-sidebar-shell").is_none());
-        let expand = window.debug_bounds("expand-sidebar").unwrap().center();
-        window.simulate_click(expand, Modifiers::default());
-        window.run_until_parked();
-        let back = window.debug_bounds("settings-back").unwrap().center();
+        let back = window.debug_bounds("settings-close").unwrap().center();
         window.simulate_click(back, Modifiers::default());
         window.run_until_parked();
         assert_eq!(
@@ -1170,6 +1173,7 @@ mod tests {
                     "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
                 .unwrap(),
             ));
+            desktop.project_fixture();
             cx.notify();
             desktop
         });
@@ -1239,6 +1243,7 @@ mod tests {
                         "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
                     .unwrap(),
                 ));
+                desktop.project_fixture();
                 cx.notify();
                 desktop
             });
@@ -1322,6 +1327,7 @@ mod tests {
             });
             desktop.update(cx, |desktop, _| {
                 desktop.snapshot = store.snapshot();
+                desktop.project_fixture();
                 desktop.session = Some(session);
                 desktop.busy = 1;
             });

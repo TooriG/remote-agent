@@ -511,6 +511,11 @@ impl Store {
         };
         // Attach acknowledges transferred ownership before successful setup returns.
         let _cancel = attempt.clone().drop_guard();
+        if !self.snapshot().connection_enabled() {
+            return Err(crate::transport::TransportError::Connection(
+                "接続がオフになっています。".into(),
+            ));
+        }
         let setup = async {
             endpoint.network_change().await;
             let (complete, receiver) = oneshot::channel();
@@ -634,6 +639,11 @@ impl Store {
             (current.clone(), self.request_disconnect()?)
         };
         let _cancel = attempt.clone().drop_guard();
+        if !self.snapshot().connection_enabled() {
+            return Err(crate::transport::TransportError::Connection(
+                "接続がオフになっています。".into(),
+            ));
+        }
         let setup = async {
             disconnected
                 .await
@@ -772,6 +782,9 @@ impl Store {
         pane: &str,
         intent: Intent,
     ) -> impl Future<Output = Result<Outcome, PeerError>> + Send + use<> {
+        let pause = matches!(intent, Intent::SetConnectionEnabled { enabled: false });
+        let attempt = pause.then(|| self.connection_attempt.lock().unwrap());
+        let mut disconnected = None;
         let mut receipt = Err(PeerError::ConnectionClosed("store is closed".into()));
         let publications = self.publications.lock().unwrap().clone();
         if let Some(publications) = publications {
@@ -788,6 +801,16 @@ impl Store {
                 }
                 let (effects, changed) =
                     apply_pane_locked(&mut candidate, Event::Intent(intent), pane);
+                if let Some(attempt) = &attempt {
+                    attempt.cancel();
+                    match self.request_disconnect() {
+                        Ok(result) => disconnected = Some(result),
+                        Err(error) => {
+                            receipt = Err(error);
+                            return false;
+                        }
+                    }
+                }
                 if !effects.is_empty() {
                     let permit = match self.commands.try_reserve() {
                         Ok(permit) => permit,
@@ -804,7 +827,13 @@ impl Store {
                 changed
             });
         }
+        drop(attempt);
         async move {
+            if let Some(result) = disconnected {
+                result
+                    .await
+                    .map_err(|_| PeerError::ConnectionClosed("store is closed".into()))??;
+            }
             match receipt? {
                 None => Ok(Outcome::Applied),
                 Some(result) => result
@@ -1894,7 +1923,11 @@ mod tests {
     #[test]
     fn scheduler_coalesces_latest_reads_until_completion() {
         let mut queue = Scheduler::default();
-        let latest = || queued(op::Scheduling::LatestHostState(op::OperationKey::Models));
+        let latest = || {
+            queued(op::Scheduling::LatestHostState(op::OperationKey::Models {
+                provider: agent_protocol::session::ProviderKind::Codex,
+            }))
+        };
         let Admission::Run(first) = queue.admit(latest(), &Snapshot::default(), 0) else {
             panic!("initial read must run")
         };
@@ -2009,8 +2042,15 @@ mod tests {
     #[test]
     fn scheduler_ignores_superseded_and_unobserved_reads() {
         let mut queue = Scheduler::default();
-        let mut scheduled = queued(op::Scheduling::LatestHostState(op::OperationKey::Models));
-        scheduled.scope.operation = Some((op::OperationKey::Models, 1));
+        let mut scheduled = queued(op::Scheduling::LatestHostState(op::OperationKey::Models {
+            provider: agent_protocol::session::ProviderKind::Codex,
+        }));
+        scheduled.scope.operation = Some((
+            op::OperationKey::Models {
+                provider: agent_protocol::session::ProviderKind::Codex,
+            },
+            1,
+        ));
         assert!(matches!(
             queue.admit(scheduled, &Snapshot::default(), 0),
             Admission::Unobserved(_)
@@ -2775,12 +2815,15 @@ mod model_reconnection_tests {
         assert_eq!(
             effects
                 .iter()
-                .filter(|effect| effect.operation.key() == Some(op::OperationKey::Models))
+                .filter(|effect| effect.operation.key()
+                    == Some(op::OperationKey::Models {
+                        provider: agent_protocol::session::ProviderKind::Codex
+                    }))
                 .count(),
             1
         );
         use op::Operation;
-        op::LoadModels {}.apply(
+        op::LoadModels { provider: agent_protocol::session::ProviderKind::Codex }.apply(
             &mut next,
             agent_protocol::operations::ModelPage {
                 data: serde_json::from_value(serde_json::json!([

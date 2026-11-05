@@ -109,14 +109,6 @@ impl QuestionInput {
         }
     }
 
-    pub(super) fn focus_handle(&self, secret: bool, cx: &App) -> FocusHandle {
-        if secret {
-            self.secret.read(cx).focus_handle(cx)
-        } else {
-            self.input.read(cx).focus_handle(cx)
-        }
-    }
-
     /// Whether Enter commits IME composition rather than answering.
     pub(super) fn composing(&self, secret: bool, window: &mut Window, cx: &mut App) -> bool {
         if secret {

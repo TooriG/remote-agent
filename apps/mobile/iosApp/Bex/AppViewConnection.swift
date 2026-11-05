@@ -6,7 +6,7 @@ extension AppViewModel {
     func connect(afterForeground: Bool = false) {
         if afterForeground {
             connectProfiles(afterForeground: true)
-        } else if screen != .pairing, let profile = profiles.first(where: { $0.id == selectedProfileId }) {
+        } else if let profile = profiles.first(where: { $0.id == selectedProfileId }) {
             connect(profile)
         }
     }
@@ -87,6 +87,7 @@ extension AppViewModel {
     }
 
     private func receiveHost(_ next: Presentation, host: String, listChanged: Bool) {
+        updateConnectionState(next.snapshot(), host: host)
         if selectedProfileId == host {
             publish(next)
         } else {
@@ -95,5 +96,45 @@ extension AppViewModel {
                 updateTaskList()
             }
         }
+    }
+
+    func connectionState(_ host: String) -> HostConnectionState {
+        connectionStates[host] ?? HostConnectionState(AgentCore.Snapshot.empty())
+    }
+
+    func updateConnectionState(_ snapshot: AgentCore.Snapshot, host: String) {
+        let next = HostConnectionState(snapshot)
+        if connectionStates[host] != next {
+            connectionStates[host] = next
+        }
+    }
+
+    func setConnectionEnabled(_ host: String, enabled: Bool) {
+        guard let owner = sessions.session(host: host) else { return }
+        do {
+            let receipt = try owner.dispatch(intent: .setConnectionEnabled(enabled: enabled))
+            updateConnectionState(owner.snapshot(), host: host)
+            if selectedProfileId == host {
+                publish(owner.presentation())
+            }
+            Task { [weak self] in
+                do {
+                    _ = try await receipt.wait()
+                    try await owner.flush()
+                    if enabled, let profile = self?.profiles.first(where: { $0.id == host }) {
+                        self?.connect(profile)
+                    }
+                } catch { self?.notice = error.localizedDescription }
+            }
+        } catch { notice = error.localizedDescription }
+    }
+}
+
+struct HostConnectionState: Equatable {
+    let enabled: Bool
+    let label: String
+    init(_ snapshot: AgentCore.Snapshot) {
+        enabled = snapshot.connectionEnabled()
+        label = snapshot.connectionStatusLabel()
     }
 }

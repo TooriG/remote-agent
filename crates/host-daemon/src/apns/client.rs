@@ -150,8 +150,8 @@ impl Client {
             .credential(environment)
             .context("APNs credentials are missing for the token's environment")?
             .authentication(&self.team_id, now)?;
-        // Dev is an app variant, not an APNs environment. Development signatures
-        // use sandbox; Ad Hoc and TestFlight signatures use production.
+        // Development signatures use sandbox; Ad Hoc, TestFlight and App Store
+        // signatures use production.
         let endpoint = match environment {
             PushEnvironment::Sandbox => "https://api.sandbox.push.apple.com",
             PushEnvironment::Production => "https://api.push.apple.com",

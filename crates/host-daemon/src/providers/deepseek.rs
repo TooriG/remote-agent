@@ -1567,6 +1567,7 @@ mod tests {
             service.dispatch(
                 session.id(),
                 &Call::ListModels(op::ListModels {
+                    provider: agent_protocol::session::ProviderKind::DeepSeek,
                     limit: 100,
                     cursor: None,
                 }),
@@ -1583,7 +1584,7 @@ mod tests {
         assert!(page.data.is_empty());
         assert!(page.next_cursor.is_none());
         let errors = page.provider_errors.unwrap();
-        assert_eq!(errors["codex"]["code"], "provider_unavailable");
+        assert_eq!(errors.len(), 1);
         assert_eq!(errors["deepseek"]["code"], "provider_timeout");
         assert!(!errors.contains_key("claude"));
     }
@@ -1605,6 +1606,7 @@ mod tests {
         });
         let models = adapter
             .models(&op::ListModels {
+                provider: agent_protocol::session::ProviderKind::DeepSeek,
                 limit: 100,
                 cursor: None,
             })
@@ -1826,6 +1828,7 @@ mod tests {
         save_test_key(&adapter, KeyProvider::OpenRouter, Some("test-catalog-only")).await;
         let models = adapter
             .models(&op::ListModels {
+                provider: agent_protocol::session::ProviderKind::DeepSeek,
                 limit: 100,
                 cursor: None,
             })
@@ -1851,6 +1854,7 @@ mod tests {
         assert!(!settings.supported_reasoning_efforts.is_empty());
         let models = adapter
             .models(&op::ListModels {
+                provider: agent_protocol::session::ProviderKind::DeepSeek,
                 limit: 100,
                 cursor: None,
             })
@@ -1904,6 +1908,7 @@ mod tests {
         adapter.model_settings(&selected.id).await.unwrap();
         let page = adapter
             .models(&op::ListModels {
+                provider: agent_protocol::session::ProviderKind::DeepSeek,
                 limit: 100,
                 cursor: None,
             })

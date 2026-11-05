@@ -168,8 +168,25 @@ fn write_value(path: &Path, value: impl Serialize) -> std::io::Result<()> {
 /// Add the most recently saved copies that `snapshot` does not hold yet.
 pub fn restore(directory: &Path, snapshot: &mut Snapshot) {
     if snapshot.lists.threads.is_none()
-        && let Some(list) = read_list(directory, &snapshot.connection.storage_scope)
+        && let Some(mut list) = read_list(directory, &snapshot.connection.storage_scope)
     {
+        // Cached rows can appear immediately, but project pagination starts
+        // from the first page on each launch.
+        let project_limit = ListQuery::default().project_limit;
+        Arc::make_mut(&mut list.query).project_limit = project_limit;
+        let threads = Arc::make_mut(&mut list.threads);
+        threads.has_more_projects |= threads.projects.len() > project_limit as usize;
+        threads.projects.truncate(project_limit as usize);
+        let visible: std::collections::HashSet<_> = threads
+            .projects
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect();
+        threads
+            .project_pages
+            .retain(|id, _| visible.contains(id.as_str()));
+        Arc::make_mut(&mut list.projects).retain(|id, _| visible.contains(id.as_str()));
+        Arc::make_mut(&mut list.expanded).retain(|id, _| visible.contains(id.as_str()));
         snapshot.lists.list_query = list.query;
         snapshot.lists.threads = Some(list.threads);
         snapshot.lists.project_threads = list.projects;
@@ -518,6 +535,89 @@ mod tests {
         assert_eq!(selected.sessions.conversations.len(), 2);
         clear(directory.path());
         assert!(restored(directory.path()).is_empty());
+    }
+
+    #[rstest::rstest]
+    #[case(5, false)]
+    #[case(5, true)]
+    #[case(15, false)]
+    #[case(25, true)]
+    #[tokio::test(start_paused = true)]
+    async fn cached_project_pagination_restarts_at_five(
+        #[case] count: u32,
+        #[case] has_more: bool,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut saved = (*listed("saved chat")).clone();
+        Arc::make_mut(&mut saved.lists.list_query).project_limit = count;
+        let root = Arc::make_mut(saved.lists.threads.as_mut().unwrap());
+        root.has_more_projects = has_more;
+        for index in 1..count {
+            let id = format!("p{index}");
+            root.projects.push(Project {
+                id: id.clone(),
+                name: id.clone(),
+                ..Default::default()
+            });
+            Arc::make_mut(&mut saved.lists.project_threads)
+                .insert(id.clone(), page(vec![], vec![]));
+            Arc::make_mut(&mut saved.lists.expanded_projects).insert(id, 5);
+        }
+        root.project_pages = root
+            .projects
+            .iter()
+            .map(|project| {
+                (
+                    project.id.clone(),
+                    crate::models::ListPage {
+                        limit: 5,
+                        has_more: true,
+                    },
+                )
+            })
+            .collect();
+        Arc::make_mut(&mut saved.lists.expanded_projects).remove("p1");
+        let (updates, receiver) = watch::channel(Arc::new(saved));
+        let saving = tokio::spawn(run(directory.path().into(), receiver));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        list_written(directory.path(), "saved chat").await;
+        drop(updates);
+        saving.await.unwrap();
+
+        let offline = restored_state(directory.path(), "volume");
+        let list = offline.thread_list().unwrap();
+        assert_eq!(list.projects.len(), 5);
+        assert_eq!(list.projects[0].name, "Project");
+        assert_eq!(list.projects[0].threads[0].title, "project chat");
+        assert!(list.projects[0].expanded);
+        assert!(!list.projects[1].expanded);
+        assert_eq!(list.has_more_projects, has_more || count > 5);
+        assert_eq!(offline.lists.project_threads.len(), 5);
+        assert_eq!(
+            offline.lists.threads.as_ref().unwrap().project_pages.len(),
+            5
+        );
+        assert_eq!(offline.lists.expanded_projects.len(), 4);
+        assert_eq!(offline.lists.unconfirmed_lists.len(), 6);
+
+        let (connected, _) = reduce(&offline, Event::Connected);
+        let query = op::ListSessions::new((*connected.lists.list_query).clone())
+            .capture(&connected)
+            .unwrap();
+        assert_eq!(query.project_limit, 5);
+        assert_eq!(
+            query.project_limits.unwrap(),
+            [
+                ("p".into(), 5),
+                ("p2".into(), 5),
+                ("p3".into(), 5),
+                ("p4".into(), 5)
+            ]
+            .into()
+        );
+
+        let (expanded, _) = reduce(&connected, Event::Intent(Intent::ExpandProjects));
+        assert_eq!(expanded.lists.list_query.project_limit, 15);
     }
 
     #[rstest::rstest]

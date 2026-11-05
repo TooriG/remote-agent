@@ -29,7 +29,8 @@ extension LaunchUITests {
         XCTAssertTrue(remove.waitForExistence(timeout: 5))
         remove.tap()
         app.alerts.buttons["接続を解除"].tap()
-        app.buttons["connections.close"].tap()
+        app.navigationBars["環境"].buttons["BackButton"].tap()
+        app.buttons["settings.close"].tap()
         XCTAssertTrue(app.buttons["tasks.connect"].waitForExistence(timeout: 10))
         app.buttons["tasks.connect"].tap()
         XCTAssertTrue(app.staticTexts["pairing.welcome"].waitForExistence(timeout: 10))
@@ -104,15 +105,16 @@ extension LaunchUITests {
     func testSimulatorOpensQrScannerWhileAddingHost() throws {
         let app = try connectedSimulatorApp()
         openConnectionSettings(app)
-        let addHost = app.buttons["profiles.add"]
-        XCTAssertTrue(addHost.waitForExistence(timeout: 10)); addHost.tap()
-        assertUnavailableScannerCanBeCancelled(app)
-        app.buttons["pairing.scan"].tap()
+        XCTAssertTrue(app.buttons["pairing.scan"].exists)
+        XCTAssertTrue(app.buttons["pairing.manual"].exists)
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+        app.buttons["profiles.add"].tap()
+        allowFirstSystemPermissionIfPresent()
         XCTAssertTrue(app.staticTexts["scanner.error"].waitForExistence(timeout: 10))
         app.buttons["scanner.cancel"].tap()
-        let cancel = app.buttons["pairing.cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
-        XCTAssertTrue(addHost.waitForExistence(timeout: 10))
+        assertUnavailableScannerCanBeCancelled(app)
+        XCTAssertTrue(app.buttons["profiles.add"].isHittable)
+        XCTAssertTrue(app.buttons["pairing.scan"].isHittable)
     }
 
     func testSimulatorUsesNativeHostNavigationAndPairingDismissal() throws {
@@ -121,30 +123,20 @@ extension LaunchUITests {
         XCTAssertTrue(selector.waitForExistence(timeout: 10))
         assertConnectionScopeSwitches(app)
         openConnectionSettings(app)
-        let addHost = app.buttons["profiles.add"]
-        tapWhenStable(addHost)
-        let cancel = app.buttons["pairing.cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
-        dismissSimulatorSetupNotification()
-        let pairingBar = app.navigationBars["PCを追加"]
-        XCTAssertTrue(pairingBar.waitForExistence(timeout: 10))
-        waitForStableFrame(pairingBar)
-        pairingBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
-        XCTAssertTrue(cancel.waitForNonExistence(timeout: 10))
-        XCTAssertTrue(selector.waitForExistence(timeout: 10))
-        openConnectionSettings(app)
-        XCTAssertTrue(addHost.isHittable)
-        addHost.tap()
-        XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+        XCTAssertTrue(app.buttons["pairing.manual"].exists)
         let host = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "profiles.", "検証 Host"
         )).firstMatch
         XCTAssertTrue(host.waitForExistence(timeout: 10)); host.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.switches["environment.enabled"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["providers.refresh"].exists)
+        app.navigationBars["検証 Host"].buttons["BackButton"].tap()
+        app.navigationBars["環境"].buttons["BackButton"].tap()
+        app.buttons["settings.close"].tap()
+        XCTAssertTrue(selector.waitForExistence(timeout: 10))
 
         openConnectionSettings(app)
-        addHost.tap()
         app.buttons["pairing.manual"].tap()
         let contents = app.secureTextFields["pairing.contents"]
         contents.tap(); contents.typeText("invalid invitation")
@@ -160,7 +152,7 @@ extension LaunchUITests {
         submitManualPairing(app, payload: payload)
         XCUIDevice.shared.press(.home); app.activate()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 30))
-        XCTAssertFalse(app.buttons["pairing.cancel"].exists)
+        XCTAssertFalse(app.navigationBars["環境"].exists)
         XCTAssertTrue(app.buttons["tasks.connections"].label.contains("検証 Host"))
         app.terminate(); app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 30))
@@ -175,14 +167,6 @@ extension LaunchUITests {
         selector.tap()
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
                                          "tasks.connections.", "検証 Host")).firstMatch.tap()
-    }
-
-    private func dismissSimulatorSetupNotification() {
-        let banner = XCUIApplication(bundleIdentifier: "com.apple.springboard").descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "Ready for Apple Intelligence")).firstMatch
-        if banner.exists {
-            banner.swipeUp()
-        }
     }
 
     func testSimulatorSearchesFromBottomBarAndCreatesInCollapsedProject() throws {

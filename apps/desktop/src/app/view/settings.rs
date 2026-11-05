@@ -1,18 +1,213 @@
+use super::model_settings::provider_icon;
 use super::sidebar::{SidebarEntry, SidebarRow};
 use super::*;
+use agent_protocol::session::ProviderKind;
 
 impl Desktop {
-    pub(in crate::app) fn open_settings(&mut self, page: SettingsPage) {
+    fn provider_settings(&self, cx: &Context<Self>) -> AnyElement {
+        let language = crate::localization::language(cx);
+        let selected = self.account_provider();
+        let disabled = !self.snapshot.connection.connected
+            || self.account.busy
+            || self.snapshot.catalog.account.login.is_some();
+        let mut providers = settings_group()
+            .w(px(250.))
+            .flex_shrink_0()
+            .overflow_hidden();
+        for provider in self.snapshot.connection_setup().agents {
+            let id = provider.provider;
+            let name = provider.name.clone();
+            providers = providers.child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .p_3()
+                    .when(selected == Some(id), |row| {
+                        row.bg(rgb(appearance::SELECTED))
+                    })
+                    .border_b_1()
+                    .border_color(rgb(appearance::BORDER))
+                    .child(
+                        Button::new(format!("provider-{}", id.key()))
+                            .ghost()
+                            .flex_1()
+                            .min_w_0()
+                            .h_auto()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(provider_icon(id))
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap_1()
+                                            .child(div().text_sm().font_semibold().child(name))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(appearance::MUTED))
+                                                    .child(
+                                                        language.text(&provider.label).to_owned(),
+                                                    ),
+                                            ),
+                                    ),
+                            )
+                            .disabled(disabled)
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.model_controls.provider = Some(id);
+                                view.account.sign_out = None;
+                                view.account
+                                    .code
+                                    .update(cx, |input, cx| input.set_value("", window, cx));
+                                if id == ProviderKind::DeepSeek {
+                                    view.dispatch(Intent::ReadDshCredentials(
+                                        op::ReadDshCredentials {},
+                                    ));
+                                }
+                                if id == ProviderKind::Codex {
+                                    view.dispatch(Intent::ManageCodexCli(op::ManageCodexCli {
+                                        update: false,
+                                    }));
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        switch::Switch::new(format!("provider-enabled-{}", id.key()))
+                            .accessibility_label(format!(
+                                "{} {}",
+                                provider.name,
+                                language.text("プロバイダー")
+                            ))
+                            .checked(provider.enabled)
+                            .disabled(
+                                disabled
+                                    || self.snapshot.catalog.provider_settings.is_none()
+                                    || self
+                                        .snapshot
+                                        .operation_running(op::OperationKey::ProviderSettings),
+                            )
+                            .on_click(cx.listener(move |view, enabled, _, cx| {
+                                view.dispatch(Intent::SetProviderEnabled(op::SetProviderEnabled {
+                                    provider: id,
+                                    enabled: *enabled,
+                                }));
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        v_flex()
+            .gap_4()
+            .child(
+                h_flex().justify_end().child(
+                    button(
+                        "providers-refresh",
+                        language.text("状態を確認"),
+                        cx,
+                        |view, _, _| {
+                            view.dispatch(Intent::ReadProviderSettings(
+                                op::ReadProviderSettings {},
+                            ));
+                        },
+                    )
+                    .icon(IconName::Redo)
+                    .ghost()
+                    .disabled(!self.snapshot.connection.connected),
+                ),
+            )
+            .child(
+                h_flex()
+                    .items_start()
+                    .gap_6()
+                    .child(providers)
+                    .child(div().flex_1().min_w_0().child(self.account_controls(cx))),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.snapshot.catalog.account.login.is_some() || self.account.busy {
+            return;
+        }
+        self.tab = Tab::Chat;
+        self.composer
+            .input
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn settings_modal(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("settings-modal-backdrop")
+            .debug_selector(|| "settings-modal-backdrop".into())
+            .absolute()
+            .inset_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_10()
+            .bg(rgba(0x000000b3))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _, window, cx| view.close_settings(window, cx)),
+            )
+            .child(
+                h_flex()
+                    .id("settings-modal")
+                    .debug_selector(|| "settings-modal".into())
+                    .track_focus(&self.settings_focus)
+                    .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "escape" {
+                            view.close_settings(window, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .size_full()
+                    .max_w(px(1280.))
+                    .max_h(px(960.))
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(rgb(appearance::BORDER))
+                    .shadow_lg()
+                    .overflow_hidden()
+                    .bg(rgb(appearance::BACKGROUND))
+                    .child(
+                        self.settings_navigation.clone().cached(
+                            StyleRefinement::default()
+                                .w(px(240.))
+                                .h_full()
+                                .flex_shrink_0(),
+                        ),
+                    )
+                    .child(self.settings(cx)),
+            )
+            .into_any_element()
+    }
+
+    pub(in crate::app) fn open_settings(
+        &mut self,
+        page: SettingsPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.tab = Tab::Settings;
         self.settings_page = page;
+        self.settings_focus.focus(window, cx);
         match page {
             SettingsPage::General | SettingsPage::Connections => {}
-            SettingsPage::Agents => {
-                if self.snapshot.catalog.account.login.is_none() {
-                    self.model_controls.provider = None;
-                }
+            SettingsPage::Providers => {
+                self.model_controls.provider =
+                    self.account_provider().or(Some(ProviderKind::Codex));
                 self.account.sign_out = None;
-                self.refresh_accounts_and_models();
+                self.dispatch(Intent::ReadProviderSettings(op::ReadProviderSettings {}));
                 self.dispatch(Intent::ManageCodexCli(op::ManageCodexCli { update: false }));
             }
             SettingsPage::Worktrees => {
@@ -30,12 +225,12 @@ impl Desktop {
                 language.text("一般"),
                 language.text("この端末で使用するアプリの設定です。"),
             ),
-            SettingsPage::Agents => (
-                language.text("エージェント"),
-                language.text("選択した環境のAIアカウントと使用量を管理します。"),
+            SettingsPage::Providers => (
+                language.text("プロバイダー"),
+                language.text("選択した環境のプロバイダー・アカウント・更新を管理します。"),
             ),
             SettingsPage::Connections => (
-                language.text("端末と接続"),
+                language.text("環境"),
                 language.text("作業する環境と、このPCへ接続する端末を管理します。"),
             ),
             SettingsPage::Worktrees => (
@@ -45,7 +240,7 @@ impl Desktop {
         };
         let body = match self.settings_page {
             SettingsPage::General => self.general_settings(cx),
-            SettingsPage::Agents => self.account_controls(cx),
+            SettingsPage::Providers => self.provider_settings(cx),
             SettingsPage::Connections => self.connection_settings(cx),
             SettingsPage::Worktrees => self.worktree_settings(cx),
         };
@@ -73,14 +268,23 @@ impl Desktop {
                 h_flex()
                     .h(px(crate::WINDOW_HEADER_HEIGHT))
                     .flex_shrink_0()
-                    .when(self.sidebar, |header| header.px_8())
-                    .when(!self.sidebar, |header| {
-                        header
-                            .child(sidebar_header(false, &cx.weak_entity(), cx))
-                            .pr_8()
-                    })
+                    .px_5()
+                    .justify_between()
                     .text_xs()
                     .child(header)
+                    .child(
+                        icon_button(
+                            "settings-close",
+                            IconName::Close,
+                            language.text("閉じる"),
+                            cx,
+                            |view, window, cx| view.close_settings(window, cx),
+                        )
+                        .debug_selector(|| "settings-close".into())
+                        .disabled(
+                            self.snapshot.catalog.account.login.is_some() || self.account.busy,
+                        ),
+                    )
                     .border_b_1()
                     .border_color(rgb(appearance::BORDER)),
             )
@@ -88,7 +292,7 @@ impl Desktop {
                 div()
                     .id(match self.settings_page {
                         SettingsPage::General => "settings-general-scroll",
-                        SettingsPage::Agents => "settings-agents-scroll",
+                        SettingsPage::Providers => "settings-providers-scroll",
                         SettingsPage::Connections => "settings-connections-scroll",
                         SettingsPage::Worktrees => "settings-worktrees-scroll",
                     })
@@ -186,6 +390,13 @@ impl Desktop {
         v_flex()
             .gap_4()
             .child(settings_group().p_5().child(self.language_settings(cx)))
+            .when_some(self.app_updates.as_ref(), |body, updates| {
+                body.child(
+                    settings_group()
+                        .p_5()
+                        .child(crate::updates::Updates::settings(updates, cx)),
+                )
+            })
             .child(
                 h_flex()
                     .gap_2()
@@ -297,6 +508,7 @@ impl Desktop {
                             ConnectionLayout::Settings,
                             self.remote.as_ref().map(|host| host.id.as_str()),
                             self.snapshot.connection.connected,
+                            self.snapshot.connection_enabled(),
                             agent_controls,
                             cx,
                         ))
@@ -874,13 +1086,38 @@ impl Desktop {
     }
 }
 
-impl super::sidebar::SidebarView {
-    pub(in crate::app::view) fn settings_sidebar(
+pub(in crate::app) struct SettingsNavigation {
+    current: SettingsPage,
+    query: String,
+    search: Entity<InputState>,
+}
+impl EventEmitter<SettingsPage> for SettingsNavigation {}
+impl SettingsNavigation {
+    pub(in crate::app) fn new(search: Entity<InputState>) -> Self {
+        Self {
+            current: SettingsPage::General,
+            query: String::new(),
+            search,
+        }
+    }
+    pub(in crate::app) fn sync(
+        &mut self,
         current: SettingsPage,
-        cx: &Context<Self>,
-    ) -> Sidebar<SidebarEntry> {
+        query: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.current != current || self.query != query {
+            self.current = current;
+            self.query = query;
+            cx.notify();
+        }
+    }
+}
+impl Render for SettingsNavigation {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let language = crate::localization::language(cx);
         let mut navigation: Vec<SidebarRow> = Vec::new();
+        let query = self.query.trim().to_lowercase();
         for (label, icon, page) in [
             (
                 language.text("一般"),
@@ -888,12 +1125,12 @@ impl super::sidebar::SidebarView {
                 SettingsPage::General,
             ),
             (
-                language.text("エージェント"),
+                language.text("プロバイダー"),
                 IconName::User,
-                SettingsPage::Agents,
+                SettingsPage::Providers,
             ),
             (
-                language.text("端末と接続"),
+                language.text("環境"),
                 IconName::Network,
                 SettingsPage::Connections,
             ),
@@ -903,29 +1140,26 @@ impl super::sidebar::SidebarView {
                 SettingsPage::Worktrees,
             ),
         ] {
+            if !query.is_empty() && !label.to_lowercase().contains(&query) {
+                continue;
+            }
             navigation.push(
                 SidebarMenuItem::new(label)
                     .icon(icon)
-                    .active(current == page)
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.open_settings(page, cx);
-                        cx.notify();
+                    .active(self.current == page)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(page);
                     }))
                     .into(),
             );
         }
         Sidebar::new("settings-sidebar")
             .header(
-                button(
-                    "settings-back",
-                    language.text("会話に戻る"),
-                    cx,
-                    |_, _, cx| cx.emit(super::sidebar::SidebarAction::Conversations),
-                )
-                .icon(IconName::ArrowLeft)
-                .debug_selector(|| "settings-back".into())
-                .w_full()
-                .h(px(40.)),
+                div().p_3().child(
+                    Input::new(&self.search)
+                        .aria_label(language.text("設定を検索"))
+                        .prefix(Icon::new(IconName::Search).size(px(14.))),
+                ),
             )
             .child(SidebarEntry::from(SidebarRow::Section {
                 label: language.text("設定"),

@@ -9,6 +9,7 @@ import UIKit
 final class AppViewModel {
     @ObservationIgnored private(set) var publication = Presentation.empty()
     private(set) var snapshot = AgentCore.Snapshot.empty()
+    private(set) var connectionStates: [String: HostConnectionState] = [:]
     private(set) var isConnected = false
     private(set) var loadingThreads = false
     private(set) var notices: [ErrorScope: [ErrorNotice]] = [:]
@@ -16,12 +17,11 @@ final class AppViewModel {
     var connections: [String: Task<Void, Never>] = [:]
     var pairingConnection: Task<Void, Never>?
     var isConnecting: Bool {
-        screen == .pairing ? pairingConnection != nil : selectedProfileId.flatMap { connections[$0] } != nil
+        selectedProfileId.flatMap { connections[$0] } != nil
     }
 
     var pairingError: String?
     private(set) var pairingInvitation: Invitation?
-    private var pairingReturnScreen: AppScreen = .threads
     var notice: String?
     var profiles: [HostProfile] = []
     private(set) var selectedProfileId: String?
@@ -89,7 +89,6 @@ final class AppViewModel {
         if selectedProfileId == id, session != nil {
             return
         }
-        screen = .threads
         resetPresentation()
         selectedProfileId = id
         UserDefaults.standard.set(id, forKey: "bex.selected-host")
@@ -123,6 +122,7 @@ final class AppViewModel {
         connections.removeValue(forKey: id)?.cancel()
         observations.removeValue(forKey: id)?.cancel()
         conversations.removeValue(forKey: id)
+        connectionStates.removeValue(forKey: id)
         let old = sessions.remove(host: id)
         if selectedProfileId == id {
             resetPresentation()
@@ -143,7 +143,6 @@ final class AppViewModel {
             activateProfile(host)
         }
         updateTaskList()
-        screen = .profiles
         Task { [weak self] in
             do {
                 do { try await old?.shutdown() } catch { self?.notice = error.localizedDescription }
@@ -162,26 +161,20 @@ final class AppViewModel {
     }
 
     func openPairing() {
-        if screen != .pairing {
-            pairingReturnScreen = screen == .profiles ? .profiles : .threads
-        }
         persist()
+        cancelPairing()
+        screen = .profiles
+    }
+
+    func cancelPairing() {
         pairingConnection?.cancel()
         pairingConnection = nil
         pairingError = nil
         pairingInvitation = nil
-        screen = .pairing
-    }
-
-    func dismissPairing(returnTo: AppScreen? = nil) {
-        pairingConnection?.cancel()
-        pairingConnection = nil
-        pairingInvitation = nil
-        screen = returnTo ?? pairingReturnScreen
     }
 
     func preparePairing(_ contents: String) {
-        guard !isConnecting else { return }
+        guard pairingConnection == nil else { return }
         pairingInvitation = nil
         do {
             pairingInvitation = try parseInvitation(contents: contents, now: UInt64(Date().timeIntervalSince1970))
@@ -190,11 +183,10 @@ final class AppViewModel {
     }
 
     func confirmPairing() {
-        guard !isConnecting, let invitation = pairingInvitation else { return }
+        guard pairingConnection == nil, let invitation = pairingInvitation else { return }
         do {
             let id = try validateInvitation(invitation: invitation, now: UInt64(Date().timeIntervalSince1970))
             pairingError = nil
-            screen = .pairing
             pairingConnection = Task { [weak self] in
                 guard let self else { return }
                 do {

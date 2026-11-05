@@ -40,25 +40,19 @@ impl OperationStates {
         self.entries.get(&self.address(key))
     }
     pub fn get_mut(&mut self, key: &OperationKey) -> Option<&mut OperationState> {
-        {
-            let address = self.address(key);
-            Arc::make_mut(&mut self.entries).get_mut(&address)
-        }
+        let address = self.address(key);
+        Arc::make_mut(&mut self.entries).get_mut(&address)
     }
     pub fn contains_key(&self, key: &OperationKey) -> bool {
         self.get(key).is_some()
     }
     pub fn insert(&mut self, key: OperationKey, value: OperationState) -> Option<OperationState> {
-        {
-            let address = self.address(&key);
-            Arc::make_mut(&mut self.entries).insert(address, value)
-        }
+        let address = self.address(&key);
+        Arc::make_mut(&mut self.entries).insert(address, value)
     }
     pub fn remove(&mut self, key: &OperationKey) -> Option<OperationState> {
-        {
-            let address = self.address(key);
-            Arc::make_mut(&mut self.entries).remove(&address)
-        }
+        let address = self.address(key);
+        Arc::make_mut(&mut self.entries).remove(&address)
     }
     pub fn iter(&self) -> impl Iterator<Item = (&OperationKey, &OperationState)> {
         self.entries.iter().filter_map(|((pane, key), value)| {

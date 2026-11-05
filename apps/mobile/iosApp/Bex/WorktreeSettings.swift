@@ -1,57 +1,44 @@
 import AgentCore
 import SwiftUI
 
-struct SettingsSheet: View {
-    @Environment(\.dismiss) private var dismiss
+struct SettingsScreen: View {
     let model: AppViewModel
-    let openConnections: () -> Void
 
     var body: some View {
-        NavigationStack {
-            List {
-                LanguageSettings()
-                Section("適用範囲") {
-                    SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
-                                        disabled: model.snapshot.accountLogin() != nil, select: model.selectProfile)
-                }
-                Section {
-                    NavigationLink {
-                        if let chat = model.chat {
-                            AgentSettingsScreen(
-                                model: chat,
-                                profiles: model.profiles,
-                                selectProfile: model.selectProfile,
-                                close: { dismiss() }
-                            ).id(chat.host)
-                        }
-                    } label: { Label("アカウント", systemImage: "person.crop.circle") }
-                        .accessibilityIdentifier("settings.agents")
-                        .disabled(!model.isConnected)
-                    Button {
-                        dismiss()
-                        openConnections()
-                    } label: {
-                        HStack {
-                            Label("端末と接続", systemImage: "network")
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                        }.foregroundStyle(.primary)
+        List {
+            Section("接続") {
+                NavigationLink {
+                    ConnectionsScreen(model: model)
+                } label: {
+                    HStack {
+                        Label("環境", systemImage: "desktopcomputer")
+                        Spacer()
+                        Text("\(model.profiles.count)").foregroundStyle(.secondary)
                     }
-                    .accessibilityIdentifier("settings.connections")
-                    NavigationLink {
-                        WorktreeSettingsScreen(model: model).id(model.selectedProfileId)
-                    } label: { Label("ワークツリー", systemImage: "arrow.triangle.branch") }
-                        .accessibilityIdentifier("settings.worktrees")
-                        .disabled(!model.isConnected)
                 }
+                .accessibilityIdentifier("settings.connections")
+                NavigationLink {
+                    ProviderSettingsScreen(model: model)
+                } label: { Label("プロバイダー", systemImage: "cpu") }
+                    .accessibilityIdentifier("settings.providers")
+                    .disabled(model.profiles.isEmpty)
             }
-            .navigationTitle("設定")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完了") { dismiss() }.accessibilityIdentifier("settings.close")
-                }
+            LanguageSettings()
+            Section("プロジェクトと会話") {
+                NavigationLink {
+                    WorktreeSettingsScreen(model: model).id(model.selectedProfileId)
+                } label: { Label("ワークツリー", systemImage: "arrow.triangle.branch") }
+                    .accessibilityIdentifier("settings.worktrees")
+                    .disabled(!model.isConnected)
+            }
+            Section { PrivacyPolicyButton() }
+        }
+        .tint(.blue)
+        .navigationTitle("設定")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("完了", action: model.showThreadList).accessibilityIdentifier("settings.close")
             }
         }
     }
@@ -89,7 +76,8 @@ struct WorktreeSettingsScreen: View {
         Form {
             Section("適用範囲") {
                 SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
-                                    disabled: busy || model.snapshot.accountLogin() != nil, select: model.selectProfile,
+                                    disabled: busy || model.snapshot.accountLogin() != nil,
+                                    select: model.activateProfile,
                                     project: $project,
                                     projects: (model.list?.projects ?? []) + (model.list?.hiddenProjects ?? []))
             }

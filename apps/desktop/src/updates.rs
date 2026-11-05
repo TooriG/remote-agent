@@ -1,11 +1,12 @@
 mod install;
 
-use agent_core::updates::{Channel, Download, RELEASES_URL, select_download};
+use agent_core::updates::{Channel, Download, select_download};
 use futures_util::AsyncReadExt;
 use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
 use gpui_kit::{
     component::{
         button::{Button, ButtonVariants},
+        menu::{DropdownMenu, PopupMenuItem},
         progress::ProgressCircle,
         spinner::Spinner,
         *,
@@ -28,6 +29,7 @@ enum State {
 
 pub struct Updates {
     state: State,
+    channel: Channel,
 }
 
 pub struct RefreshThreads;
@@ -65,10 +67,12 @@ pub fn run_command() -> bool {
 
 impl Updates {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let channel = Channel::for_build(build_number(), crate::platform::development_app());
-        let directory = channel
-            .map(|_| crate::platform::state_dir())
-            .and_then(Result::ok);
+        let directory = crate::platform::state_dir().ok();
+        let channel = directory
+            .as_ref()
+            .and_then(|dir| std::fs::read(dir.join("update-channel.json")).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
         let result = directory
             .as_ref()
             .and_then(|dir| std::fs::read(dir.join(install::RESULT_FILE)).ok())
@@ -79,7 +83,7 @@ impl Updates {
             .and_then(|bytes| serde_json::from_slice::<install::Plan>(&bytes).ok())
             .filter(|plan| {
                 plan.build > build_number()
-                    && Some(plan.channel) == channel
+                    && plan.channel == channel
                     && plan.payload.exists()
                     && std::env::current_exe().ok().as_ref() == Some(&plan.executable)
             });
@@ -119,14 +123,74 @@ impl Updates {
             }
         })
         .detach();
-        Self { state }
+        Self { state, channel }
+    }
+
+    pub fn settings(entity: &Entity<Self>, cx: &App) -> Div {
+        let language = crate::localization::language(cx);
+        let view = entity.read(cx);
+        let channel = view.channel;
+        let disabled = matches!(
+            view.state,
+            State::Downloading(_) | State::Ready(_) | State::Installing
+        );
+        let owner = entity.downgrade();
+        h_flex()
+            .gap_4()
+            .items_center()
+            .child(div().flex_1().child(language.text("更新チャンネル")))
+            .child(
+                Button::new("update-channel")
+                    .label(language.text(match channel {
+                        Channel::Production => "安定版",
+                        Channel::Nightly => "Nightly",
+                    }))
+                    .dropdown_caret(true)
+                    .secondary()
+                    .outline()
+                    .disabled(disabled)
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for (value, label) in [
+                            (Channel::Production, "安定版"),
+                            (Channel::Nightly, "Nightly"),
+                        ] {
+                            let owner = owner.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(language.text(label))
+                                    .checked(value == channel)
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner
+                                            .update(cx, |view, cx| view.select_channel(value, cx));
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
+    }
+
+    fn select_channel(&mut self, value: Channel, cx: &mut Context<Self>) {
+        let result = crate::platform::state_dir()
+            .map_err(anyhow::Error::msg)
+            .and_then(|directory| {
+                agent_local_host::save_private_json(&directory.join("update-channel.json"), &value)
+            });
+        match result {
+            Ok(()) => {
+                self.channel = value;
+                self.state = State::Current;
+                self.check(cx);
+            }
+            Err(error) => self.state = State::Failed(error.to_string()),
+        }
+        cx.notify();
     }
 
     fn check(&mut self, cx: &mut Context<Self>) {
-        let Some(channel) = Channel::for_build(build_number(), crate::platform::development_app())
-        else {
+        if build_number() == 0 {
             return;
-        };
+        }
+        let channel = self.channel;
         if let Ok(directory) = crate::platform::state_dir() {
             let _ = std::fs::remove_file(directory.join(install::RESULT_FILE));
         }
@@ -137,7 +201,7 @@ impl Updates {
             let mut response = http
                 .send(
                     Request::builder()
-                        .uri(RELEASES_URL)
+                        .uri(channel.releases_url())
                         .header("User-Agent", "Bex-Updater")
                         .header("Accept", "application/vnd.github+json")
                         .timeout(Duration::from_secs(30))
@@ -168,6 +232,9 @@ impl Updates {
         cx.spawn(async move |view, cx| {
             let result = work.await.map_err(anyhow::Error::from).and_then(|r| r);
             let _ = view.update(cx, |view, cx| {
+                if view.channel != channel {
+                    return;
+                }
                 view.state = match result {
                     Ok(Some(download)) => State::Available(download),
                     Ok(None) => State::Current,
@@ -512,6 +579,7 @@ mod tests {
     fn the_refresh_control_keeps_its_size_through_update_states(cx: &mut gpui::TestAppContext) {
         cx.update(crate::appearance::init);
         let (view, window) = cx.add_window_view(|_, _| Updates {
+            channel: Channel::Production,
             state: State::Current,
         });
         window.run_until_parked();
@@ -555,6 +623,7 @@ mod tests {
             });
         });
         let (view, window) = cx.add_window_view(|_, _| Updates {
+            channel: Channel::Production,
             state: State::Current,
         });
         let refreshes = Rc::new(Cell::new(0));
@@ -616,6 +685,7 @@ mod tests {
     fn progress_buttons_ignore_repeated_clicks(cx: &mut gpui_kit::TestAppContext) {
         cx.update(crate::appearance::init);
         let (view, window) = cx.add_window_view(|_, _| Updates {
+            channel: Channel::Production,
             state: State::Downloading(50),
         });
         window.run_until_parked();

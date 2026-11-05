@@ -72,7 +72,7 @@ impl Desktop {
         self.insert_completion(candidate.invocation.clone(), window, cx);
         true
     }
-    fn insert_completion(
+    pub(super) fn insert_completion(
         &mut self,
         invocation: Invocation,
         window: &mut Window,
@@ -104,6 +104,9 @@ impl Desktop {
         self.composer.completion_dismissed = false;
         cx.notify();
     }
+}
+
+impl super::view::composer::ComposerContent {
     pub(super) fn completion_menu(
         suggestions: Option<&ComposerSuggestions>,
         selected_index: usize,
@@ -163,8 +166,10 @@ impl Desktop {
                             .child(candidate_label(&candidate.description)),
                     )
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-                    .on_click(cx.listener(move |s, _, window, cx| {
-                        s.insert_completion(candidate.invocation.clone(), window, cx)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(super::view::composer::ComposerAction::Completion(
+                            candidate.invocation.clone(),
+                        ))
                     })),
             );
         }
@@ -192,11 +197,16 @@ mod tests {
     impl Render for CompletionView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             div().w(px(self.1)).child(self.0.update(cx, |view, cx| {
-                Desktop::completion_menu(
-                    view.completion_suggestions(cx).as_ref(),
-                    view.composer.completion_index,
-                    cx,
-                )
+                let suggestions = view.completion_suggestions(cx);
+                let index = view.composer.completion_index;
+                let content = view.composer_view.read(cx).content.clone();
+                content.update(cx, |_, cx| {
+                    super::super::view::composer::ComposerContent::completion_menu(
+                        suggestions.as_ref(),
+                        index,
+                        cx,
+                    )
+                })
             }))
         }
     }

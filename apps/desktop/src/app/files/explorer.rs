@@ -1,8 +1,5 @@
 use super::*;
-use agent_core::presentation::files::{
-    EXPLORER_DEFAULT_WIDTH, EXPLORER_MIN_WIDTH, explorer_key_width, explorer_max_width,
-    explorer_width,
-};
+use agent_core::presentation::files::{EXPLORER_DEFAULT_WIDTH, explorer_width};
 use gpui_kit::component::resizable::ResizableState;
 
 pub(in crate::app) struct FileExplorer {
@@ -79,7 +76,12 @@ impl Desktop {
             self.resize_file_explorer(width, window, cx);
         }
     }
-    fn resize_file_explorer(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::app) fn resize_file_explorer(
+        &mut self,
+        width: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let width = explorer_width(width, self.file_explorer.available);
         if self.file_explorer.state.read(cx).sizes().get(1) != Some(&px(width)) {
             self.file_explorer
@@ -88,60 +90,6 @@ impl Desktop {
         }
         self.file_explorer.save(width);
         cx.notify();
-    }
-    pub(in crate::app) fn file_explorer_key(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let modifiers = event.keystroke.modifiers;
-        if modifiers.alt || modifiers.control || modifiers.platform {
-            return;
-        }
-        let Some(current) = self.file_explorer.state.read(cx).sizes().get(1).copied() else {
-            return;
-        };
-        if let Some(width) = explorer_key_width(
-            &event.keystroke.key,
-            current.into(),
-            self.file_explorer.available,
-        ) {
-            self.resize_file_explorer(width, window, cx);
-            cx.stop_propagation();
-        }
-    }
-    pub(in crate::app) fn file_explorer_handle(
-        &self,
-        active: bool,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let focus = self.file_explorer.focus.clone();
-        div()
-            .id("resize-file-explorer")
-            .size_full()
-            .track_focus(&focus)
-            .tab_index(0)
-            .role(Role::Splitter)
-            .aria_orientation(Orientation::Vertical)
-            .aria_label(crate::localization::language(cx).text("ファイル一覧の幅を変更"))
-            .aria_min_numeric_value(EXPLORER_MIN_WIDTH as f64)
-            .aria_max_numeric_value(explorer_max_width(self.file_explorer.available) as f64)
-            .when_some(
-                self.file_explorer.state.read(cx).sizes().get(1),
-                |handle, width| handle.aria_numeric_value(f32::from(*width) as f64),
-            )
-            .border_l_1()
-            .border_color(rgb(appearance::BORDER))
-            .when(active, |handle| {
-                handle.border_color(rgb(appearance::ACCENT))
-            })
-            .focus_visible(|handle| handle.border_color(rgb(appearance::ACCENT)))
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                focus.focus(window, cx)
-            })
-            .on_key_down(cx.listener(Self::file_explorer_key))
-            .into_any_element()
     }
 }
 

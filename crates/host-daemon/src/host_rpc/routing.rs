@@ -135,7 +135,7 @@ impl SessionRouter {
         bindings: &[(SessionRef, ProviderKind)],
     ) -> Result<(), String> {
         match change {
-            AgentChange::TaskParent { session, parent } => self.task_parent(session, parent),
+            AgentChange::TaskParent { session, .. } => self.task_subagent(session),
             AgentChange::Session { session, change } => self.session_change(&session, change),
             AgentChange::Request {
                 session,

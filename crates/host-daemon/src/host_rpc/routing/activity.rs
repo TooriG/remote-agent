@@ -4,68 +4,31 @@ use super::*;
 #[derive(Default)]
 pub(super) struct Task {
     pub(super) facts: Option<TaskState>,
-    pub(super) parent: Option<SessionRef>,
-    // Parent discovery must not fence out an already pending read of execution facts.
+    pub(super) subagent: bool,
+    // Subagent discovery must not fence out an already pending read of execution facts.
     pub(super) facts_revision: u64,
 }
-/// A conversation and all of its descendants contribute one icon and one count.
-fn conversation<'a>(
-    tasks: &'a HashMap<SessionRef, Task>,
-    session: &'a SessionRef,
-) -> &'a SessionRef {
-    let mut root = session;
-    let mut depth = 0;
-    while let Some(parent) = tasks.get(root).and_then(|task| task.parent.as_ref()) {
-        if depth == tasks.len() {
-            // Invalid ancestry cannot certify that known work has finished.
-            return session;
-        }
-        root = parent;
-        depth += 1;
-    }
-    root
-}
-fn task_groups(
-    tasks: &HashMap<SessionRef, Task>,
-) -> HashMap<&SessionRef, agent_protocol::live_activity::TaskActivitySummary> {
-    use agent_protocol::live_activity::TaskActivitySummary;
-    let mut conversations: HashMap<&SessionRef, TaskActivitySummary> = HashMap::new();
-    for (session, task) in tasks {
-        let Some(facts) = task.facts else { continue };
-        let contribution = TaskActivitySummary::from_statuses([facts.phase().0]);
-        if contribution == TaskActivitySummary::default() {
-            continue;
-        }
-        let summary = conversations
-            .entry(conversation(tasks, session))
-            .or_default();
-        summary.waiting += contribution.waiting;
-        summary.running += contribution.running;
-        summary.unknown += contribution.unknown;
-    }
-    conversations
-}
-/// An idle conversation keeps its finished mark until its own completion is read.
-/// Opening a conversation reads only its own completion, so descendants carry no mark.
+/// Only user conversations contribute to system surfaces. Subagent work,
+/// requests and completions belong inside their conversation, not its task count.
 fn task_display(
     tasks: &HashMap<SessionRef, Task>,
-    groups: &HashMap<&SessionRef, agent_protocol::live_activity::TaskActivitySummary>,
     unread: &[(SessionRef, agent_protocol::ids::TurnId)],
 ) -> agent_protocol::live_activity::TaskActivityDisplay {
-    let mut summary = agent_protocol::live_activity::TaskActivitySummary::default();
-    for group in groups.values() {
-        if group.waiting > 0 {
-            summary.waiting += 1;
-        } else if group.running > 0 {
-            summary.running += 1;
-        } else {
-            summary.unknown += 1;
-        }
-    }
+    let mut summary = agent_protocol::live_activity::TaskActivitySummary::from_statuses(
+        tasks
+            .values()
+            .filter(|task| !task.subagent)
+            .filter_map(|task| task.facts.map(|facts| facts.phase().0)),
+    );
     summary.finished = unread
         .iter()
         .filter(|(session, _)| {
-            conversation(tasks, session) == session && !groups.contains_key(session)
+            tasks.get(session).is_none_or(|task| {
+                !task.subagent
+                    && task.facts.is_none_or(|facts| {
+                        facts.session_status() == agent_protocol::models::SessionStatus::Idle
+                    })
+            })
         })
         .count() as u32;
     summary.display()
@@ -75,29 +38,19 @@ pub(super) fn task_activity_state(
     tasks: &HashMap<SessionRef, Task>,
     unread: Vec<(SessionRef, agent_protocol::ids::TurnId)>,
 ) -> agent_protocol::live_activity::TaskActivityState {
-    let mut statuses: std::collections::BTreeMap<_, _> = tasks
+    let statuses: std::collections::BTreeMap<_, _> = tasks
         .iter()
         .filter_map(|(id, task)| Some((id.clone(), task.facts?.session_status())))
         .collect();
-    let groups = task_groups(tasks);
-    let mut waiting = Vec::new();
-    for (root, summary) in &groups {
-        if summary.waiting > 0 {
-            waiting.push((*root).clone());
-        }
-        statuses.insert(
-            (*root).clone(),
-            if summary.running + summary.waiting > 0 {
-                agent_protocol::models::SessionStatus::Running
-            } else {
-                agent_protocol::models::SessionStatus::Unknown
-            },
-        );
-    }
+    let mut waiting: Vec<_> = tasks
+        .iter()
+        .filter(|(_, task)| !task.subagent && task.facts.is_some_and(|facts| facts.waiting))
+        .map(|(session, _)| session.clone())
+        .collect();
     waiting.sort();
     agent_protocol::live_activity::TaskActivityState {
         revision,
-        display: task_display(tasks, &groups, &unread),
+        display: task_display(tasks, &unread),
         statuses: statuses.into_iter().collect(),
         waiting,
         unread,
@@ -156,11 +109,12 @@ pub(super) fn record_task_facts(
         } if turn.status == agent_protocol::execution::TurnStatus::Completed => Some(&turn.id),
         _ => None,
     };
-    let read_changed = state.reads.record(
-        target,
-        task.session_status() == agent_protocol::models::SessionStatus::Running,
-        completed,
-    );
+    let read_changed = state.tasks.get(target).is_none_or(|task| !task.subagent)
+        && state.reads.record(
+            target,
+            task.session_status() == agent_protocol::models::SessionStatus::Running,
+            completed,
+        );
     let facts_changed = previous != Some(task)
         && (task.phase().0 != "unknown" || previous.is_some_and(|task| task.phase().1));
     if read_changed || facts_changed {
@@ -187,20 +141,16 @@ impl SessionRouter {
     pub(in crate::host_rpc) fn task_activity_revision(&self) -> u64 {
         lock_state(&self.state).task_revision
     }
-    pub(in crate::host_rpc) fn task_parent(&self, session: SessionRef, parent: SessionRef) {
+    pub(in crate::host_rpc) fn task_subagent(&self, session: SessionRef) {
         let mut state = lock_state(&self.state);
-        if state
-            .tasks
-            .get(&session)
-            .and_then(|task| task.parent.as_ref())
-            == Some(&parent)
-        {
+        if state.tasks.get(&session).is_some_and(|task| task.subagent) {
             return;
         }
         state.task_revision += 1;
         let revision = state.task_revision;
+        state.reads.forget(&session);
         let task = state.tasks.entry(session).or_default();
-        task.parent = Some(parent);
+        task.subagent = true;
         let activity = task_activity_state(revision, &state.tasks, state.reads.unread());
         let failed = publish_task_activity(state.apns.as_deref(), &state.sessions, &activity);
         drop(state);
@@ -215,7 +165,7 @@ impl SessionRouter {
             .into_iter()
             .filter_map(|thread| {
                 let target = thread.id.clone()?;
-                let thread_parent = thread.parent_id.clone();
+                let subagent = thread.parent_id.is_some();
                 let actor = self.actor(&target);
                 let owned = lock_state(&actor);
                 let task = if owned.timeline.status
@@ -239,40 +189,43 @@ impl SessionRouter {
                 };
                 drop(owned);
                 self.prune(&target, &actor);
-                task.map(|task| (target, task, thread_parent))
+                Some((target, task, subagent))
             })
             .collect();
         let mut state = lock_state(&self.state);
         let before = state.task_revision;
         // Provider events received while loading the list take precedence, including completion.
-        for (session, task, parent) in tasks {
+        for (session, task, subagent) in tasks {
             let previous = state.tasks.get(&session);
-            // Parent identity is immutable and can arrive with an older execution read.
-            let parent = parent.or_else(|| previous.and_then(|old| old.parent.clone()));
+            // Subagent identity is immutable and can arrive with an older execution read.
+            let subagent = subagent || previous.is_some_and(|old| old.subagent);
             let previous_facts = previous.and_then(|old| old.facts);
             let accepts_facts = !previous.is_some_and(|old| old.facts_revision > read_revision)
-                && (task.phase().0 != "unknown" || previous_facts.is_some_and(|old| old.phase().1))
-                && (previous_facts.is_some() || task.phase().1);
-            let facts = if accepts_facts {
-                Some(task)
+                && task.is_some_and(|task| {
+                    (task.phase().0 != "unknown" || previous_facts.is_some_and(|old| old.phase().1))
+                        && (previous_facts.is_some() || task.phase().1)
+                });
+            let facts = if accepts_facts { task } else { previous_facts };
+            let unchanged =
+                previous_facts == facts && previous.is_some_and(|old| old.subagent) == subagent;
+            let read_changed = if subagent {
+                state.reads.forget(&session)
             } else {
-                previous_facts
+                accepts_facts
+                    && state.reads.record(
+                        &session,
+                        facts.unwrap().session_status()
+                            == agent_protocol::models::SessionStatus::Running,
+                        None,
+                    )
             };
-            let unchanged = previous_facts == facts
-                && previous.and_then(|old| old.parent.as_ref()) == parent.as_ref();
-            let read_changed = accepts_facts
-                && state.reads.record(
-                    &session,
-                    task.session_status() == agent_protocol::models::SessionStatus::Running,
-                    None,
-                );
             if unchanged && !read_changed {
                 continue;
             }
             state.task_revision += 1;
             let revision = state.task_revision;
             let owned = state.tasks.entry(session).or_default();
-            owned.parent = parent;
+            owned.subagent = subagent;
             if owned.facts != facts {
                 owned.facts = facts;
                 owned.facts_revision = revision;
@@ -302,11 +255,7 @@ impl SessionRouter {
         state.apns.as_ref().ok_or("APNs is unavailable")?.register(
             &principal.principal,
             params,
-            task_display(
-                &state.tasks,
-                &task_groups(&state.tasks),
-                &state.reads.unread(),
-            ),
+            task_display(&state.tasks, &state.reads.unread()),
         )
     }
 }

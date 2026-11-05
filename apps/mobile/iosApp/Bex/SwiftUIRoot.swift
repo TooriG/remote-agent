@@ -6,43 +6,15 @@ struct SwiftUIRoot: View {
 
     var body: some View {
         NavigationStack(path: Binding<[AppScreen]>(
-            get: {
-                switch model.screen {
-                case .thread: [.thread]
-                default: []
-                }
-            },
+            get: { model.screen == .threads ? [] : [model.screen] },
             set: { path in
-                if path.isEmpty, model.screen == .thread {
+                if path.isEmpty {
+                    model.cancelPairing()
                     model.showThreadList()
                 }
             }
         )) {
             ThreadsScreen(model: model)
-                .sheet(isPresented: Binding(
-                    get: { model.screen == .profiles || model.screen == .pairing },
-                    set: {
-                        if !$0 {
-                            model.dismissPairing(returnTo: .threads)
-                        }
-                    }
-                )) {
-                    NavigationStack {
-                        if model.screen == .pairing {
-                            pairingScreen
-                        } else {
-                            ProfilesScreen(profiles: model.profiles, notice: model.notice,
-                                           select: model.selectProfile, remove: model.removeProfile,
-                                           add: model.openPairing)
-                                .toolbar {
-                                    ToolbarItem(placement: .confirmationAction) {
-                                        Button("完了", action: model.showThreadList)
-                                            .accessibilityIdentifier("connections.close")
-                                    }
-                                }
-                        }
-                    }
-                }
                 .navigationDestination(for: AppScreen.self) { screen in
                     switch screen {
                     case .thread:
@@ -53,6 +25,8 @@ struct SwiftUIRoot: View {
                                 selectHost: model.openNewThread(on:)
                             )).id(chat.host)
                         }
+                    case .settings: SettingsScreen(model: model)
+                    case .profiles: ConnectionsScreen(model: model)
                     default: EmptyView()
                     }
                 }
@@ -69,88 +43,56 @@ struct SwiftUIRoot: View {
             }
         }
     }
-
-    private var pairingScreen: some View {
-        PairingScreen(connecting: model.isConnecting, error: model.pairingError,
-                      hostName: model.pairingInvitation?.hostName,
-                      aiRecipients: model.pairingInvitation?.aiRecipients ?? [],
-                      transcriptionRecipient: model.pairingInvitation?.transcriptionRecipient,
-                      prepare: model.preparePairing, confirm: model.confirmPairing,
-                      change: model.openPairing, cancel: { model.dismissPairing() })
-    }
 }
 
-private struct PairingScreen: View {
+struct ConnectionsScreen: View {
     @Environment(\.locale) private var locale
-    let connecting: Bool
-    let error: String?
-    let hostName: String?
-    let aiRecipients: [String]
-    let transcriptionRecipient: String?
-    let prepare: (String) -> Void
-    let confirm: () -> Void
-    let change: () -> Void
-    let cancel: () -> Void
+    let model: AppViewModel
     @State private var contents = ""
     @State private var showsManualPairing = false
     @State private var isScanning = false
+    @State private var removing: HostProfile?
     @FocusState private var editingContents: Bool
 
     var body: some View {
-        let recipients = aiRecipients.isEmpty
-            ? localizedUiText(language: locale.appLanguage, source: "未設定") : aiRecipients.joined(separator: "、")
         Form {
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("どこでも、これひとつで。", systemImage: "text.bubble")
-                        .font(.title2.bold())
+            if let notice = model.notice {
+                AppNotice(text: notice)
+            }
+            if !model.profiles.isEmpty {
+                Section("接続先") {
+                    ForEach(model.profiles) { profile in
+                        ConnectionSettingsRow(model: model, profile: profile)
+                            .swipeActions(allowsFullSwipe: false) {
+                                Button("接続を解除", role: .destructive) { removing = profile }
+                            }
+                            .contextMenu {
+                                Button("接続を解除", role: .destructive) { removing = profile }
+                                    .accessibilityIdentifier("connection.remove.\(profile.id)")
+                            }
+                    }
+                }
+            } else {
+                Section {
+                    Text("作業するPCを接続")
+                        .font(.headline)
                         .accessibilityIdentifier("pairing.welcome")
-                    Text("AIとの会話も、ファイルも、ターミナルも。いつもの作業を、手元から。")
+                    Text("接続すると、プロジェクトとタスクがここに表示されます")
                         .foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 8)
             }
-            if let hostName {
-                Section("接続先") {
-                    LabeledContent {
-                        Text(hostName).accessibilityIdentifier("pairing.host")
-                    } label: {
-                        Label("PC", systemImage: "laptopcomputer")
-                    }
-                    .accessibilityElement(children: .contain)
-                    Button("変更") {
-                        contents = ""
-                        showsManualPairing = false
-                        change()
-                    }
-                    .disabled(connecting)
-                    .accessibilityIdentifier("pairing.change")
-                }
-                Section {
-                    Text("メッセージ・添付ファイル・作業に必要なプロジェクトの内容を、このPCと利用するAIサービスに送信します。")
-                    Text(verbatim: localizedUiText(language: locale.appLanguage, source: "AI処理：") + recipients)
-                        .accessibilityIdentifier("pairing.recipients")
-                    if let recipient = transcriptionRecipient {
-                        Text("音声入力：\(recipient)（文字起こし）")
-                    }
-                } header: {
-                    Text("送信する内容")
-                } footer: {
-                    Text("共有PCでは、管理者などが内容を閲覧できる場合があります。")
-                }
-                Section {
-                    Button("同意して接続", action: confirm)
-                        .disabled(connecting)
-                        .accessibilityIdentifier("pairing.confirm")
-                }
+            if let invitation = model.pairingInvitation {
+                pairingConfirmation(invitation)
             } else {
                 Section {
                     Button { isScanning = true } label: {
                         Label("QRコードを読み取る", systemImage: "qrcode.viewfinder")
                     }
                     .accessibilityIdentifier("pairing.scan")
-                    Button("接続情報を入力") { showsManualPairing.toggle() }
-                        .accessibilityIdentifier("pairing.manual")
+                    Button { showsManualPairing.toggle() } label: {
+                        Label("接続情報を入力", systemImage: "doc.on.clipboard")
+                    }
+                    .accessibilityIdentifier("pairing.manual")
                     if showsManualPairing {
                         SecureField("接続情報を貼り付け", text: $contents)
                             .focused($editingContents)
@@ -158,100 +100,48 @@ private struct PairingScreen: View {
                             .accessibilityIdentifier("pairing.contents")
                         Button("接続先を確認") {
                             editingContents = false
-                            prepare(contents)
+                            model.preparePairing(contents)
                             contents = ""
                         }
                         .disabled(contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("pairing.submit")
                     }
                 } header: {
-                    Text("PCと接続")
+                    Text("PCを追加")
                 } footer: {
-                    Text("PCでBexを開き、表示されたQRコードを読み取ってください。")
+                    Text("接続したいPCでBexを開き、表示されたQRコードを読み取ってください。")
                 }
             }
-            if connecting {
+            if model.pairingConnection != nil {
                 ProgressView("接続中…").accessibilityIdentifier("pairing.progress")
-            } else if let error {
+            } else if let error = model.pairingError {
                 AppNotice(text: error)
             }
-            LanguageSettings()
-            Section {
-                PrivacyPolicyButton()
+            if model.profiles.isEmpty {
+                LanguageSettings()
+                Section { PrivacyPolicyButton() }
             }
         }
+        .tint(.blue)
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle("PCを追加")
+        .navigationTitle("環境")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(model.pairingConnection != nil)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { isScanning = true } label: { Label("PCを追加", systemImage: "plus") }
+                    .disabled(model.pairingConnection != nil)
+                    .accessibilityIdentifier("profiles.add")
+            }
+        }
         .sheet(isPresented: $isScanning) {
             QrScannerSheet {
                 isScanning = false
                 if let contents = $0 {
-                    prepare(contents)
+                    model.preparePairing(contents)
                 }
             }
             .interactiveDismissDisabled()
-        }
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("キャンセル", action: cancel)
-                    .accessibilityIdentifier("pairing.cancel")
-            }
-        }
-    }
-}
-
-private struct ProfilesScreen: View {
-    let profiles: [HostProfile]
-    let notice: String?
-    let select: (String) -> Void
-    let remove: (String) -> Void
-    let add: () -> Void
-    @State private var removing: HostProfile?
-
-    var body: some View {
-        List {
-            if let notice {
-                AppNotice(text: notice)
-            }
-            Section {
-                ForEach(profiles, id: \.id) { profile in
-                    Button { select(profile.id) } label: {
-                        HStack {
-                            Label(profile.name, systemImage: "laptopcomputer")
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .accessibilityIdentifier("profiles.\(profile.id)")
-                    .swipeActions(allowsFullSwipe: false) {
-                        Button("接続を解除", role: .destructive) { removing = profile }
-                    }
-                    .contextMenu {
-                        Button("接続を解除", role: .destructive) { removing = profile }
-                            .accessibilityIdentifier("connection.remove.\(profile.id)")
-                    }
-                }
-            } header: {
-                Text("このiPhone").textCase(nil)
-            } footer: {
-                Text("接続先を選んで、タスクを続けられます。")
-            }
-            LanguageSettings()
-            Section {
-                PrivacyPolicyButton()
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("PC")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: add) { Label("PCを追加", systemImage: "plus") }
-                    .accessibilityIdentifier("profiles.add")
-            }
         }
         .alert("このPCとの接続を解除しますか？", isPresented: Binding(
             get: { removing != nil }, set: {
@@ -261,11 +151,44 @@ private struct ProfilesScreen: View {
             }
         )) {
             if let removing {
-                Button("接続を解除", role: .destructive) { remove(removing.id) }
+                Button("接続を解除", role: .destructive) { model.removeProfile(removing.id) }
             }
             Button("キャンセル", role: .cancel) { removing = nil }
         } message: {
             Text("このiPhoneの接続先と認証鍵を削除します。再接続にはペアリングが必要です。")
+        }
+        .onDisappear(perform: model.cancelPairing)
+    }
+
+    @ViewBuilder private func pairingConfirmation(_ invitation: Invitation) -> some View {
+        Section("接続先") {
+            LabeledContent("PC") { Text(invitation.hostName).accessibilityIdentifier("pairing.host") }
+            Button("変更") {
+                contents = ""
+                showsManualPairing = false
+                model.cancelPairing()
+            }
+            .disabled(model.pairingConnection != nil)
+            .accessibilityIdentifier("pairing.change")
+        }
+        Section {
+            Text("メッセージ・添付ファイル・作業に必要なプロジェクトの内容を、このPCと利用するAIサービスに送信します。")
+            Text(verbatim: localizedUiText(language: locale.appLanguage, source: "AI処理：") +
+                (invitation.aiRecipients.isEmpty ? localizedUiText(language: locale.appLanguage, source: "未設定") :
+                    invitation.aiRecipients.joined(separator: "、")))
+                .accessibilityIdentifier("pairing.recipients")
+            if let recipient = invitation.transcriptionRecipient {
+                Text("音声入力：\(recipient)（文字起こし）")
+            }
+        } header: {
+            Text("送信する内容")
+        } footer: {
+            Text("共有PCでは、管理者などが内容を閲覧できる場合があります。")
+        }
+        Section {
+            Button("同意して接続", action: model.confirmPairing)
+                .disabled(model.pairingConnection != nil)
+                .accessibilityIdentifier("pairing.confirm")
         }
     }
 }

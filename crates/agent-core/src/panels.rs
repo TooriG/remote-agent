@@ -57,7 +57,7 @@ impl PanelState {
     }
 }
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct PanelTool {
     pub kind: PanelKind,
     pub key: String,

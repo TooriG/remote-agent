@@ -29,6 +29,10 @@ extension AppViewModel {
         loadingThreads ? .loading : list != nil ? .ready : notice != nil ? .failed : .idle
     }
 
+    func showSettings() {
+        screen = .settings
+    }
+
     func showProfiles() {
         screen = .profiles; perform(.showThreadList)
     }

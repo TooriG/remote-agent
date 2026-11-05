@@ -1,3 +1,5 @@
+#[path = "support/model_catalog.rs"]
+mod test_models;
 use agent_core::state::DraftKey;
 use agent_core::state::{
     Draft, Effect, Event, Intent, Snapshot, operations as op, operations::Operation,
@@ -382,7 +384,9 @@ fn model_settings_corpus() {
         } else {
             applied(
                 &previous,
-                op::LoadModels {},
+                op::LoadModels {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                },
                 serde_json::from_value::<agent_protocol::operations::ModelPage>(
                     json!({"data":models}),
                 )
@@ -575,7 +579,7 @@ fn new_chat_selects_catalog_defaults_in_either_load_order() {
         );
         for load_catalog in [catalog_first, !catalog_first] {
             if load_catalog {
-                op::LoadModels {}.apply(
+                test_models::apply_catalog(
                     &mut current,
                     serde_json::from_value(json!({"data":models})).unwrap(),
                 );
@@ -914,7 +918,7 @@ fn durable_upload_and_pairing_results_survive_navigation() {
 fn disconnected_catalog_reads_do_not_apply_or_retry_stale_responses() {
     let mut state = Snapshot::default();
     let before = state.clone();
-    assert!(op::LoadModels {}.stale(&mut state, serde_json::from_value(json!({
+    assert!(op::LoadModels { provider: agent_protocol::session::ProviderKind::Codex }.stale(&mut state, serde_json::from_value(json!({
         "data":[{"id":"old","model":{"provider": "codex", "id": "old"},"displayName":"Old", "settings": { "defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}]
     })).unwrap()).is_empty());
     assert!(
@@ -967,7 +971,7 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
             }))
             .unwrap(),
         );
-        op::LoadModels {}.apply(
+        test_models::apply_catalog(
             &mut state,
             serde_json::from_value(json!({"data":[{
             "id":"claude:default","model":{"provider": "claude", "id": "default"},"displayName":"Claude", "settings": {
@@ -1032,7 +1036,7 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
             "defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}],
             "serviceTiers":[{"id":"priority","fast":true}]
         }}]})).unwrap();
-        op::LoadModels {}.apply(&mut state, catalog);
+        test_models::apply_catalog(&mut state, catalog);
         assert_eq!(*state.input.drafts[&DraftKey::from("saved")], draft);
         assert!(state.input.drafts[&automatic].model.is_none());
         let explicit = state.pane.navigation.draft_key.clone();

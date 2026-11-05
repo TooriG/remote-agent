@@ -13,6 +13,13 @@ use std::{
 };
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct ProjectIconImages {
+    pub light_png: Vec<u8>,
+    pub dark_png: Vec<u8>,
+}
+
+#[derive(Clone, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ProjectSummary {
     pub host_id: String,
     pub id: String,
@@ -20,7 +27,7 @@ pub struct ProjectSummary {
     /// The native coordinator lives on Claude, separately from local worker sessions.
     pub coordinator_url: Option<String>,
     pub roots: Vec<ProjectRoot>,
-    pub icon_png: Option<Vec<u8>>,
+    pub icon: Option<ProjectIconImages>,
     pub monogram: String,
     pub icon_color: u32,
     pub pinned: bool,
@@ -68,10 +75,13 @@ fn project_summary(project: &Project, display_name: &str) -> ProjectSummary {
         name: display_name.to_owned(),
         coordinator_url: coordinator_url(&project.id),
         roots: project.roots.clone(),
-        icon_png: project
-            .favicon_png
-            .as_ref()
-            .and_then(|png| base64::engine::general_purpose::STANDARD.decode(png).ok()),
+        icon: project.icon.as_ref().and_then(|icon| {
+            let base64 = base64::engine::general_purpose::STANDARD;
+            Some(ProjectIconImages {
+                light_png: base64.decode(&icon.light_png).ok()?,
+                dark_png: base64.decode(&icon.dark_png).ok()?,
+            })
+        }),
         monogram,
         icon_color: COLORS[index],
         pinned: false,
@@ -827,7 +837,30 @@ mod tests {
         };
         let summary = project_summary(&project, &project.name);
         assert_eq!(summary.monogram, monogram);
-        assert!(summary.icon_png.is_none());
+        assert!(summary.icon.is_none());
+    }
+
+    #[test]
+    fn project_logo_appearances_decode_together_and_reject_broken_images() {
+        for (light, dark, expected) in [
+            ("AQID", "BAUG", true),
+            ("!", "BAUG", false),
+            ("AQID", "!", false),
+        ] {
+            let project = Project {
+                icon: Some(crate::models::ProjectIcon {
+                    light_png: light.into(),
+                    dark_png: dark.into(),
+                }),
+                ..Default::default()
+            };
+            let summary = project_summary(&project, "Project");
+            assert_eq!(summary.icon.is_some(), expected);
+            if let Some(images) = summary.icon {
+                assert_eq!(images.light_png, [1, 2, 3]);
+                assert_eq!(images.dark_png, [4, 5, 6]);
+            }
+        }
     }
 
     proptest::proptest! {
@@ -1033,7 +1066,7 @@ mod tests {
             &mut snapshot,
             serde_json::from_value(json!({
                 "data":[{"id":{"provider":"codex","id":"task"},"projectId":"project"}],
-                "projects":[{"id":"project","name":"Old project","roots":[],"faviconPng":"BAUG"}],
+                "projects":[{"id":"project","name":"Old project","roots":[],"icon":{"lightPng":"BAUG","darkPng":"BAUG"}}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{"project":{"limit":5,"hasMore":false}},"limit":5
             }))
             .unwrap(),
@@ -1041,7 +1074,7 @@ mod tests {
         for icon in [Some("AQID"), None] {
             ListSessions::new(Default::default()).apply(&mut snapshot, serde_json::from_value(json!({
                 "data":[],
-                "projects":[{"id":"project","name":"Renamed project","roots":[],"faviconPng":icon}],
+                "projects":[{"id":"project","name":"Renamed project","roots":[],"icon":icon.map(|png| json!({"lightPng":png,"darkPng":"BAUG"}))}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
             })).unwrap());
             crate::state::operations::ReadListDecorations {
@@ -1052,14 +1085,27 @@ mod tests {
             .apply(
                 &mut snapshot,
                 agent_protocol::operations::ListDecorations {
-                    icons: [("project".into(), icon.map(str::to_owned))].into(),
+                    icons: [(
+                        "project".into(),
+                        icon.map(|png| crate::models::ProjectIcon {
+                            light_png: png.into(),
+                            dark_png: "BAUG".into(),
+                        }),
+                    )]
+                    .into(),
                     statuses: vec![],
                 },
             );
             let list = snapshot.thread_list().unwrap();
             let project = &list.projects[0];
             assert_eq!(project.name, "Renamed project");
-            assert_eq!(project.icon_png, icon.map(|_| vec![1, 2, 3]));
+            if let Some(images) = &project.icon {
+                assert!(icon.is_some());
+                assert_eq!(images.light_png, [1, 2, 3]);
+                assert_eq!(images.dark_png, [4, 5, 6]);
+            } else {
+                assert!(icon.is_none());
+            }
             assert_eq!(project.threads[0].id.id, "task");
         }
     }

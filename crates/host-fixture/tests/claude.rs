@@ -56,10 +56,16 @@ async fn connect(host: &HostFixture, snapshot: Snapshot) -> (Store, Endpoint) {
     let store = Store::connect(&endpoint, &host.ticket, snapshot, None, "Fixture device")
         .await
         .unwrap();
-    store
-        .dispatch(Intent::LoadModels(op::LoadModels {}))
-        .await
-        .unwrap();
+    let (codex, claude) = tokio::join!(
+        store.dispatch(Intent::LoadModels(op::LoadModels {
+            provider: ProviderKind::Codex
+        })),
+        store.dispatch(Intent::LoadModels(op::LoadModels {
+            provider: ProviderKind::Claude
+        })),
+    );
+    codex.unwrap();
+    claude.unwrap();
     (store, endpoint)
 }
 
@@ -303,14 +309,18 @@ async fn model_refresh_observes_catalog_changes_without_restarting_host() {
         // Discovery answers from its last result at once and refreshes behind
         // it, so a later read observes the change without restarting the Host.
         store
-            .dispatch(Intent::LoadModels(op::LoadModels {}))
+            .dispatch(Intent::LoadModels(op::LoadModels {
+                provider: ProviderKind::Claude,
+            }))
             .await
             .unwrap();
         assert_eq!(claude_models(&store.snapshot()).len(), 6);
         while claude_models(&store.snapshot()).len() == 6 {
             tokio::time::sleep(Duration::from_millis(50)).await;
             store
-                .dispatch(Intent::LoadModels(op::LoadModels {}))
+                .dispatch(Intent::LoadModels(op::LoadModels {
+                    provider: ProviderKind::Claude,
+                }))
                 .await
                 .unwrap();
         }
@@ -1189,7 +1199,9 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
             "approved"
         );
         store
-            .dispatch(Intent::LoadModels(op::LoadModels {}))
+            .dispatch(Intent::LoadModels(op::LoadModels {
+                provider: ProviderKind::Codex,
+            }))
             .await
             .unwrap();
         assert!(store.snapshot().catalog.model_errors.contains_key("codex"));
@@ -1640,9 +1652,7 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         let snapshot = (*store.snapshot()).clone();
         drop(store); endpoint.close().await; fixture.close().await.unwrap();
         let fixture = start().await.unwrap();
-        let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, snapshot, None, "Fixture device").await.unwrap();
-        store.dispatch(Intent::LoadModels(op::LoadModels {})).await.unwrap();
+        let (store, endpoint) = connect(&fixture, snapshot).await;
         let logged_out = store.snapshot();
         assert!(logged_out.catalog.models.is_empty(), "logged-out Claude and unavailable Codex must not expose models");
         assert!(logged_out.catalog.model_errors.contains_key("codex"), "the catalog must retain the unavailable provider's error");

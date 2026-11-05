@@ -456,6 +456,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
             ..Default::default()
         },
         connection: agent_core::state::Connection {
+            connection_disabled: true,
             storage_scope: "host:area".into(),
             epoch: 99,
             ..Default::default()
@@ -550,6 +551,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
         keys,
         [
             "archived_scopes",
+            "connection_disabled",
             "drafts",
             "file_drafts",
             "navigation",
@@ -559,6 +561,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
         ]
     );
     let restored = agent_core::persistence::decode(&bytes).unwrap();
+    assert!(!restored.connection_enabled());
     assert_eq!(restored.input.drafts, original.input.drafts);
     assert_eq!(
         restored.sessions.pending_submissions,

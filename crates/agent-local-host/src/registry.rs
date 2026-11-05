@@ -92,10 +92,7 @@ impl LocalHostRegistry {
     }
 
     pub fn for_user() -> Result<Self> {
-        let directory = directories::ProjectDirs::from("app", "bex", "BEX")
-            .context("application data directory unavailable")?
-            .data_local_dir()
-            .to_owned();
+        let directory = crate::state_directory(false)?;
         Ok(Self { directory })
     }
 

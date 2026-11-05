@@ -28,7 +28,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.ComposerPresentation
 import dev.remoteagent.core.Intent
-import dev.remoteagent.core.LoadModels
 import dev.remoteagent.core.ModelRef
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ProviderKind
@@ -51,7 +50,7 @@ internal fun ModelPickerButton(
     TextButton(
         onClick = {
             open = true
-            perform(Intent.LoadModels(LoadModels())) {}
+            perform(Intent.RefreshModels) {}
         },
         modifier = modifier.testTag("model.settings"),
     ) {
@@ -113,7 +112,13 @@ internal fun ModelPickerDialog(
                         }
                     }
                 }
-                if (choices.isEmpty()) Text(language.text("モデルがありません。検索条件やPCとの接続を確認してください。"))
+                if (choices.isEmpty()) {
+                    Text(
+                        language.text(
+                            if (snapshot.modelsLoading(null)) "モデルを読み込み中…" else "モデルがありません。検索条件やPCとの接続を確認してください。"
+                        )
+                    )
+                }
                 ModelQuickSettings(snapshot, perform)
                 if (selected?.provider == dev.remoteagent.core.ProviderKind.DEEP_SEEK)
                     CredentialSettings(snapshot, perform)

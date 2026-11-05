@@ -8,10 +8,11 @@ impl Desktop {
         mode: Option<PermissionMode>,
         enabled: bool,
         render_owner: EntityId,
-        cx: &Context<Self>,
+        desktop: &WeakEntity<Desktop>,
+        cx: &App,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
-        let entity = cx.entity().downgrade();
+        let entity = desktop.clone();
         let opening = entity.clone();
         popover::Popover::new("permission-controls")
             .bg(rgb(appearance::SURFACE))

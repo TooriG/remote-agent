@@ -5,6 +5,13 @@ use crate::{
 };
 use proptest::prelude::*;
 
+fn project_icon(png: &str) -> crate::models::ProjectIcon {
+    crate::models::ProjectIcon {
+        light_png: png.into(),
+        dark_png: png.into(),
+    }
+}
+
 fn session(provider: ProviderKind, id: &str) -> SessionRef {
     SessionRef::new(provider, id.into()).unwrap()
 }
@@ -64,7 +71,7 @@ fn project(id: &str, name: &str) -> Project {
         roots: vec![ProjectRoot {
             path: format!("/repo/{name}"),
         }],
-        favicon_png: Some(format!("icon-{name}")),
+        icon: Some(project_icon(&format!("icon-{name}"))),
         ..Default::default()
     }
 }
@@ -169,7 +176,7 @@ fn project_icons_match_ordered_roots_keep_first_values_and_reuse_unchanged_image
                 path: (*path).into(),
             })
             .collect(),
-        favicon_png: icon.map(str::to_owned),
+        icon: icon.map(project_icon),
         ..Default::default()
     };
     for count in [16, 127, 128, 129, 512] {
@@ -188,9 +195,9 @@ fn project_icons_match_ordered_roots_keep_first_values_and_reuse_unchanged_image
             entry("same", "unchanged", &["/a", "/b"], Some("first")),
         ];
         let mut expected = received.clone();
-        expected[0].favicon_png = Some("first".into());
-        expected[1].favicon_png = None;
-        expected[4].favicon_png = Some("empty".into());
+        expected[0].icon = Some(project_icon("first"));
+        expected[1].icon = None;
+        expected[4].icon = Some(project_icon("empty"));
         while cached.len() < count {
             cached.push(entry(
                 &format!("old{}", cached.len()),
@@ -209,7 +216,7 @@ fn project_icons_match_ordered_roots_keep_first_values_and_reuse_unchanged_image
             expected.push(row.clone());
             received.push(row);
         }
-        let original_image = received[5].favicon_png.as_ref().unwrap().as_ptr();
+        let original_image = received[5].icon.as_ref().unwrap().light_png.as_ptr();
         let mut input = list(Vec::new());
         input.projects = received;
         let mut previous = list(Vec::new());
@@ -217,7 +224,7 @@ fn project_icons_match_ordered_roots_keep_first_values_and_reuse_unchanged_image
         let result = merge_received(input, Some(&previous));
         assert_eq!(result.projects, expected);
         assert_eq!(
-            result.projects[5].favicon_png.as_ref().unwrap().as_ptr(),
+            result.projects[5].icon.as_ref().unwrap().light_png.as_ptr(),
             original_image
         );
     }

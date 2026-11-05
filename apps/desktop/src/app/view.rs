@@ -1,5 +1,5 @@
 mod agents;
-mod composer;
+pub(in crate::app) mod composer;
 mod conversation;
 mod errors;
 mod file_icon;
@@ -13,9 +13,9 @@ mod onboarding;
 mod permissions;
 mod project_management;
 mod question;
-mod settings;
+pub(in crate::app) mod settings;
 mod sidebar;
-mod workbench;
+pub(in crate::app) mod workbench;
 use super::*;
 use agent_core::{presentation::error::error_text, state::operations as op};
 use base64::Engine;
@@ -110,8 +110,16 @@ fn sidebar_header(expanded: bool, owner: &WeakEntity<Desktop>, cx: &App) -> Div 
     h_flex()
         .h(px(crate::WINDOW_HEADER_HEIGHT))
         .flex_shrink_0()
-        .pl(px(88.))
+        .pl(px(if cfg!(target_os = "windows") {
+            12.
+        } else {
+            88.
+        }))
         .gap_2()
+        .when(
+            cfg!(target_os = "windows"),
+            crate::window_chrome::drag_region,
+        )
         .child(
             img("icons/icon.png")
                 .size(px(22.))
@@ -122,22 +130,26 @@ fn sidebar_header(expanded: bool, owner: &WeakEntity<Desktop>, cx: &App) -> Div 
             header.w_full().pr_3().child(div().flex_1())
         })
         .child(
-            Button::new(id)
-                .debug_selector(move || id.into())
-                .icon(icon)
-                .small()
-                .ghost()
-                .tooltip(label)
-                .accessibility_label(label)
-                .on_click({
-                    let owner = owner.clone();
-                    move |_, _, cx| {
-                        let _ = owner.update(cx, |desktop, cx| {
-                            desktop.sidebar = !expanded;
-                            cx.notify();
-                        });
-                    }
-                }),
+            div()
+                .when(cfg!(target_os = "windows"), |view| view.occlude())
+                .child(
+                    Button::new(id)
+                        .debug_selector(move || id.into())
+                        .icon(icon)
+                        .small()
+                        .ghost()
+                        .tooltip(label)
+                        .accessibility_label(label)
+                        .on_click({
+                            let owner = owner.clone();
+                            move |_, _, cx| {
+                                let _ = owner.update(cx, |desktop, cx| {
+                                    desktop.sidebar = !expanded;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                ),
         )
 }
 
@@ -190,18 +202,37 @@ fn conversation_file_path(source: &str, cwd: &str) -> Result<PathBuf, String> {
     .ok_or_else(|| "ファイルパスが不正です".into())
 }
 
-impl Render for Desktop {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl Desktop {
+    // Fixtures inject immutable state at the same core projection boundary as Store.
+    #[cfg(test)]
+    pub(in crate::app) fn project_fixture(&mut self) {
+        self.publication = agent_core::presentation::view::Presentation::project(
+            self.snapshot.clone(),
+            Some(&self.publication),
+        );
+    }
+
+    pub(in crate::app) fn publish_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(sidebar) = &self.sidebar_view {
             let model = self.sidebar_model();
             let pane = self.session.as_ref().map(|session| session.pane.clone());
             sidebar.update(cx, |view, cx| view.sync(model, pane, cx));
         }
+        let query = self.settings_search.read(cx).value().to_string();
+        self.settings_navigation
+            .update(cx, |view, cx| view.sync(self.settings_page, query, cx));
         self.publish_conversation(window, cx);
         self.sync_composer(cx);
         let header = self.header_model(crate::localization::language(cx));
         self.header_view
             .update(cx, |view, cx| view.set_model(header, cx));
+        self.sync_surfaces(window, cx);
+    }
+}
+
+impl Render for Desktop {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.publish_views(window, cx);
         if self.media.gallery.is_some() {
             let gallery = self.image_gallery_view(window, cx);
             return h_flex()
@@ -209,18 +240,32 @@ impl Render for Desktop {
                 .bg(rgb(appearance::BACKGROUND))
                 .text_color(rgb(appearance::FOREGROUND))
                 .text_size(px(14.))
-                .child(gallery);
+                .child(gallery)
+                .when(
+                    cfg!(target_os = "windows") && !self.side_chat_mode,
+                    |content| crate::window_chrome::screen(content, "bex", window),
+                );
         }
         if self.import_projects || (self.onboarding && self.tab == Tab::Chat) {
-            return self.onboarding_view(window, cx);
+            return self.onboarding_view(window, cx).when(
+                cfg!(target_os = "windows") && !self.side_chat_mode,
+                |content| crate::window_chrome::screen(content, "bex", window),
+            );
         }
         let main = if self.project_editor.is_some() {
-            self.project_editor_view(cx)
-        } else {
-            match self.tab {
-                Tab::Chat => self.conversation_content(window.viewport_size().width, cx),
-                Tab::Settings => self.settings(cx),
+            let editor = self.project_editor_view(cx);
+            if cfg!(target_os = "windows") && !self.side_chat_mode {
+                crate::window_chrome::screen(
+                    editor,
+                    crate::localization::language(cx).text("プロジェクトを編集"),
+                    window,
+                )
+                .into_any_element()
+            } else {
+                editor
             }
+        } else {
+            self.conversation_content(window.viewport_size().width, cx)
         };
         h_flex()
             .relative()
@@ -251,27 +296,34 @@ impl Render for Desktop {
                     .max_w_full()
                     .child(self.error_notices(ErrorScope::Application, cx)),
             ))
+            .when(self.tab == Tab::Settings, |body| {
+                body.child(deferred(self.settings_modal(cx)))
+            })
     }
 }
 
 impl Desktop {
-    fn panel_toggle(open: bool, cx: &Context<Self>) -> Button {
+    fn panel_toggle(open: bool, owner: &WeakEntity<Desktop>, cx: &App) -> Button {
         let language = crate::localization::language(cx);
-        icon_button(
-            "panel-toggle",
-            IconName::PanelRight,
-            language.text("右パネルを切り替え"),
-            cx,
-            move |view, window, cx| {
-                let key = view.panel_scope();
-                view.panels = view.panels.clone().set_open(key.clone(), !open);
-                if !open && view.panels.get(key.clone()).active.is_none() {
-                    view.panel_focus.focus(window, cx);
-                }
-            },
-        )
-        .debug_selector(|| "panel-toggle".into())
-        .selected(open)
+        let owner = owner.clone();
+        Button::new("panel-toggle")
+            .icon(IconName::PanelRight)
+            .small()
+            .ghost()
+            .tooltip(language.text("右パネルを切り替え"))
+            .accessibility_label(language.text("右パネルを切り替え"))
+            .on_click(move |_, window, cx| {
+                let _ = owner.update(cx, |view, cx| {
+                    let key = view.panel_scope();
+                    view.panels = view.panels.clone().set_open(key.clone(), !open);
+                    if !open && view.panels.get(key).active.is_none() {
+                        view.panel_focus.focus(window, cx);
+                    }
+                    cx.notify();
+                });
+            })
+            .debug_selector(|| "panel-toggle".into())
+            .selected(open)
     }
 
     /// T3's thread details toggle: it shows or hides the docked card, or opens
@@ -280,25 +332,30 @@ impl Desktop {
         inline: bool,
         open: bool,
         render_owner: EntityId,
-        cx: &Context<Self>,
+        desktop: &WeakEntity<Desktop>,
+        cx: &App,
     ) -> AnyElement {
         let label = crate::localization::language(cx).text("スレッド詳細を切り替え");
         let icon = Icon::default().path("icons/square-menu.svg");
         if inline {
-            return icon_button(
-                "thread-details-toggle",
-                icon,
-                label,
-                cx,
-                move |view, _, _| {
-                    view.details = !open;
-                },
-            )
-            .debug_selector(|| "thread-details-toggle".into())
-            .selected(open)
-            .into_any_element();
+            let owner = desktop.clone();
+            return Button::new("thread-details-toggle")
+                .icon(icon)
+                .small()
+                .ghost()
+                .tooltip(label)
+                .accessibility_label(label)
+                .on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.details = !open;
+                        cx.notify();
+                    });
+                })
+                .debug_selector(|| "thread-details-toggle".into())
+                .selected(open)
+                .into_any_element();
         }
-        let entity = cx.entity().downgrade();
+        let entity = desktop.clone();
         let owner = entity.clone();
         popover::Popover::new("thread-details")
             .appearance(false)
@@ -1093,8 +1150,11 @@ mod cache_tests {
                         },
                         move |_| (epoch, Update::Snapshot),
                     ));
-                    receive.recv().await.unwrap().unwrap()
+                    let session = receive.recv().await.unwrap().unwrap();
+                    session.pane.subscribe().wait_for(|value| value.list.is_some()).await.unwrap();
+                    session
                 }));
+                view.accept_snapshot(window, cx);
                 cx.notify();
                 view
             });
@@ -1177,6 +1237,7 @@ mod cache_tests {
             let snapshot = Arc::make_mut(&mut view.snapshot);
             Arc::make_mut(snapshot.lists.threads.as_mut().unwrap()).data[0].status =
                 agent_protocol::models::SessionStatus::Running;
+            view.project_fixture();
             cx.notify();
         });
         cx.run_until_parked();
@@ -1197,6 +1258,7 @@ mod cache_tests {
                     phase: agent_protocol::items::AssistantPhase::Final,
                 },
             ));
+            view.project_fixture();
             cx.notify();
         });
         cx.run_until_parked();

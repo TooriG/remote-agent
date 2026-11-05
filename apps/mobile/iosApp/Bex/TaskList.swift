@@ -4,8 +4,7 @@ import SwiftUI
 struct ThreadsScreen: View {
     let model: AppViewModel
     @State private var search = ""
-    @State private var showingSettings = false
-    @State private var openConnectionsAfterSettings = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let projects = model.list?.projects ?? []
@@ -53,7 +52,7 @@ struct ThreadsScreen: View {
                             } label: {
                                 HStack(spacing: 16) {
                                     ProjectIcon(
-                                        png: project.iconPng,
+                                        png: colorScheme == .dark ? project.icon?.darkPng : project.icon?.lightPng,
                                         monogram: project.monogram,
                                         colorRGB: project.iconColor
                                     )
@@ -227,6 +226,7 @@ struct ThreadsScreen: View {
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                     .accessibilityLabel("Bex")
             }
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .bottomBar) {
                 Button { model.openNewThread(cwd: "") } label: {
                     Image(systemName: "square.and.pencil")
@@ -239,7 +239,7 @@ struct ThreadsScreen: View {
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    Button { showingSettings = true } label: { Label("設定", systemImage: "gearshape") }
+                    Button(action: model.showSettings) { Label("設定", systemImage: "gearshape") }
                         .accessibilityIdentifier("tasks.settings")
                     Button { model.refreshTaskList() } label: { Label("更新", systemImage: "arrow.clockwise") }
                         .disabled(model.threadLoadState == .loading || model.profiles.isEmpty)
@@ -249,14 +249,6 @@ struct ThreadsScreen: View {
                     .accessibilityIdentifier("tasks.menu")
             }
         }
-        .sheet(isPresented: $showingSettings, onDismiss: {
-            if openConnectionsAfterSettings {
-                openConnectionsAfterSettings = false
-                model.showProfiles()
-            }
-        }, content: {
-            SettingsSheet(model: model, openConnections: { openConnectionsAfterSettings = true })
-        })
     }
 }
 

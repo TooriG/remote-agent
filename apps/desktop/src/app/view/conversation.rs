@@ -38,6 +38,7 @@ pub(in crate::app) enum ConversationAction {
 pub(in crate::app) struct ConversationView {
     desktop: WeakEntity<Desktop>,
     model: ConversationModel,
+    metadata: agent_core::presentation::files::FileMetadataCache,
     pub(in crate::app) timeline: Timeline,
     selection: Entity<selection::ConversationSelection>,
     #[cfg(test)]
@@ -52,6 +53,7 @@ impl ConversationView {
         Self {
             desktop: desktop.downgrade(),
             model: ConversationModel::default(),
+            metadata: Default::default(),
             timeline: Timeline::new(),
             selection,
             #[cfg(test)]
@@ -63,6 +65,7 @@ impl ConversationView {
         model: ConversationModel,
         rendered: Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
         requests: Vec<Arc<agent_protocol::requests::Request>>,
+        metadata: agent_core::presentation::files::FileMetadataCache,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -71,6 +74,12 @@ impl ConversationView {
             (None, None) => true,
             _ => false,
         };
+        if self.metadata != metadata {
+            for cached in self.timeline.markdown.values() {
+                cached.file_chips.sync_metadata(&metadata, cx);
+            }
+            self.metadata = metadata;
+        }
         if self.model == model && same_content {
             return;
         }
@@ -84,6 +93,8 @@ impl ConversationView {
                 cached.file_chips = super::markdown_file::FileChips::new(
                     cached.file_chips.files.clone(),
                     &desktop,
+                    model.epoch,
+                    &self.metadata,
                     cx,
                 );
                 cached.parser_revision = uuid::Uuid::new_v4().as_u64_pair().0;
@@ -165,26 +176,17 @@ impl Desktop {
             .cloned()
             .collect();
         self.conversation.update(cx, |view, cx| {
-            view.sync(model, rendered, requests, window, cx)
+            view.sync(
+                model,
+                rendered,
+                requests,
+                self.snapshot.files.workspace.file_metadata.clone(),
+                window,
+                cx,
+            )
         });
     }
 
-    #[cfg(test)]
-    pub(in crate::app) fn sync_conversation(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let model = self.conversation_model();
-        let rendered = self.snapshot.conversation_thread().map(|thread| {
-            agent_core::presentation::conversation::project_conversation(
-                &self.snapshot.pane.navigation.draft_key,
-                &self.snapshot.sessions.pending_submissions,
-                thread,
-                &self.conversation.read(cx).timeline.rendered,
-            )
-        });
-        let requests = self.snapshot.requests().cloned().collect();
-        self.conversation.update(cx, |view, cx| {
-            view.sync(model, rendered, requests, window, cx)
-        });
-    }
     pub(in crate::app) fn conversation_action(
         &mut self,
         action: &ConversationAction,
@@ -199,7 +201,7 @@ impl Desktop {
                 selection::set_composer_text(&self.composer.input, text.clone().into(), window, cx)
             }
             ConversationAction::Usage(provider) => {
-                self.open_settings(SettingsPage::Agents);
+                self.open_settings(SettingsPage::Providers, window, cx);
                 self.model_controls.provider = *provider;
             }
             ConversationAction::OpenUsage => {
@@ -1921,8 +1923,13 @@ impl ConversationView {
             let Some(desktop) = self.desktop.upgrade() else {
                 return div().into_any_element();
             };
-            let file_chips =
-                super::markdown_file::FileChips::new(presentation.files.into(), &desktop, cx);
+            let file_chips = super::markdown_file::FileChips::new(
+                presentation.files.into(),
+                &desktop,
+                self.model.epoch,
+                &self.metadata,
+                cx,
+            );
             let source: SharedString = source.to_owned().into();
             let rendered = match presentation.source {
                 std::borrow::Cow::Borrowed(_) => source.clone(),
@@ -2228,8 +2235,10 @@ mod rendering_tests {
         desktop: Entity<Desktop>,
     }
     impl Render for ConversationView {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.desktop.update(cx, |desktop, _| {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.desktop.update(cx, |desktop, cx| {
+                desktop.project_fixture();
+                desktop.publish_views(window, cx);
                 gpui_kit::div().size_full().flex().flex_col().child(
                     desktop
                         .conversation
@@ -2284,7 +2293,8 @@ mod rendering_tests {
                     cx,
                 );
                 desktop.snapshot = Arc::new(snapshot);
-                desktop.sync_conversation(window, cx);
+                desktop.project_fixture();
+                desktop.publish_views(window, cx);
                 desktop
             });
             Self { desktop }
@@ -2452,6 +2462,7 @@ mod rendering_tests {
                 }
             });
             Arc::make_mut(&mut desktop.snapshot).connection.epoch += 2;
+            desktop.project_fixture();
             cx.notify();
         });
         window.run_until_parked();
@@ -2654,6 +2665,7 @@ mod rendering_tests {
                     .unwrap(),
                 ));
 
+                desktop.project_fixture();
                 cx.notify();
             })
         });

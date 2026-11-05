@@ -13,38 +13,23 @@ case "$profile" in
     release) directory=release ;;
     *) echo "usage: $0 [host|desktop] [dev|release]" >&2; exit 2 ;;
 esac
-channel=${AGENT_DESKTOP_CHANNEL:-}
-if [[ -z $channel ]]; then
-    channel=production
-    if [[ $profile == dev ]]; then channel=development; fi
-fi
-case "$channel" in
-    production|development) ;;
-    *) echo 'Invalid desktop update channel.' >&2; exit 1 ;;
-esac
 packages=(--package host-daemon --package codex-app-server --package agent-process)
 if [[ $product == desktop ]]; then
     [[ $(uname -m) == arm64 ]] || { echo 'The GPUI Mac bundle requires Apple Silicon.' >&2; exit 2; }
     packages+=(--package agent-desktop)
 fi
-identity=${AGENT_CODE_SIGN_IDENTITY:-}
-if [[ -z $identity ]]; then
-    identities=$(/usr/bin/security find-identity -v -p codesigning | awk '/"Apple Development:|"Developer ID Application:/ {print $2}')
-    [[ -n $identities && $identities != *$'\n'* ]] || {
-        echo 'Set AGENT_CODE_SIGN_IDENTITY to one Apple Development or Developer ID Application certificate.' >&2
-        exit 1
-    }
-    identity=$identities
-fi
-[[ $identity != - ]] || { echo 'Certificate signing is required for Mac builds.' >&2; exit 1; }
+keychains=()
+if [[ -n ${AGENT_CODE_SIGN_KEYCHAIN:-} ]]; then keychains+=("$AGENT_CODE_SIGN_KEYCHAIN"); fi
+identity=$(/usr/bin/security find-identity -v -p codesigning "${keychains[@]}" |
+    node scripts/apple-signing.mjs identity "${AGENT_CODE_SIGN_IDENTITY:-}")
 output="$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory)/$directory"
 export AGENT_BUILD_REVISION
 AGENT_BUILD_REVISION=$(git rev-parse HEAD)
 if ! git diff --quiet HEAD --; then AGENT_BUILD_REVISION+=-dirty; fi
 sign() {
-    local options=(--force --sign "$identity")
+    local options=(--force --sign "$identity" --options runtime)
     if [[ ${AGENT_DISTRIBUTION_SIGNING:-0} == 1 ]]; then
-        options+=(--options runtime --timestamp)
+        options+=(--timestamp)
     else
         options+=(--timestamp=none)
     fi
@@ -93,18 +78,14 @@ cp "${AGENT_NODE_RUNTIME:?Use the pinned Nix development environment}/bin/node" 
 cp apps/desktop/macos/Node.Info.plist "$node_bundle/Contents/Info.plist"
 cp "$AGENT_NODE_RUNTIME/share/doc/node/LICENSE" "$resources/Node-LICENSE.txt"
 cp apps/desktop/macos/Info.plist "$bundle/Contents/Info.plist"
-icon=icon
-if [[ $channel == development ]]; then
-    icon=icon-dev
-    /usr/bin/plutil -replace CFBundleIdentifier -string app.bex.dev.desktop "$bundle/Contents/Info.plist"
-    /usr/bin/plutil -replace CFBundleName -string 'Bex Dev' "$bundle/Contents/Info.plist"
-    /usr/bin/plutil -replace CFBundleDisplayName -string 'Bex Dev' "$bundle/Contents/Info.plist"
-fi
-cp "apps/desktop/assets/$icon.icns" "$resources/bex.icns"
+cp apps/desktop/assets/icon.icns "$resources/bex.icns"
 /usr/bin/plutil -insert BEXBuildRevision -string "$AGENT_BUILD_REVISION" "$bundle/Contents/Info.plist"
 if [[ -n ${AGENT_BUILD_NUMBER:-} ]]; then
     [[ $AGENT_BUILD_NUMBER =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid Mac build number.' >&2; exit 1; }
     /usr/bin/plutil -replace CFBundleVersion -string "$AGENT_BUILD_NUMBER" "$bundle/Contents/Info.plist"
+fi
+if [[ -n ${AGENT_MARKETING_VERSION:-} ]]; then
+    /usr/bin/plutil -replace CFBundleShortVersionString -string "$AGENT_MARKETING_VERSION" "$bundle/Contents/Info.plist"
 fi
 # Use macOS's libiconv so the app also runs on Macs without Nix.
 for executable in "$executables/bex" "$executables/host-daemon" "$executables/agent-provider-supervisor"; do
@@ -116,13 +97,16 @@ for executable in "$executables/bex" "$executables/host-daemon" "$executables/ag
         /usr/bin/install_name_tool -change "$library" /usr/lib/libiconv.2.dylib "$executable"
     done < <(/usr/bin/otool -L "$executable" | awk 'NR > 1 {print $1}')
 done
-sign "$executables/bex"
 sign --identifier app.bex.provider-supervisor "$executables/agent-provider-supervisor"
 sign --identifier app.bex.host "$executables/host-daemon"
-sign --options runtime --entitlements apps/desktop/macos/Node.entitlements "$node_bundle"
+sign --entitlements apps/desktop/macos/Node.entitlements "$node_bundle"
 verify "$node_bundle"
-sign "$bundle"
+sign --entitlements apps/desktop/macos/Desktop.entitlements "$bundle"
 verify "$bundle"
+/usr/bin/codesign -d --verbose=2 "$bundle" 2>&1 | grep 'flags=.*runtime' >/dev/null
+/usr/bin/codesign -d --entitlements - --xml "$bundle" |
+    /usr/bin/plutil -convert json -o - - |
+    jq -e '."com.apple.security.device.audio-input" == true' >/dev/null
 # Exercise the signed runtime without an installed Node or Nix on PATH.
 env -i PATH=/usr/bin:/bin "$node" "$resources/agent-claude-sdk.mjs" </dev/null
 if [[ -e $destination ]]; then mv "$destination" "$staging/previous.app"; fi

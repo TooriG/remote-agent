@@ -30,8 +30,12 @@ impl std::ops::Deref for Request {
 pub struct Reader {
     incoming: mpsc::Receiver<Request>,
     scripted_composer_catalog: bool,
+    scripted_model_catalog: bool,
 }
 impl Reader {
+    pub fn script_model_catalog(&mut self) {
+        self.scripted_model_catalog = true;
+    }
     pub fn script_composer_catalog(&mut self) {
         self.scripted_composer_catalog = true;
     }
@@ -43,6 +47,25 @@ impl Reader {
                     &mut send,
                     protocol::Response::Success {
                         result: agent_protocol::models::Empty {},
+                    },
+                )
+                .await?;
+                continue;
+            }
+            // Unrelated tests configure only Codex. Model concurrency tests
+            // explicitly script all providers, just as composer tests do below.
+            if !self.scripted_model_catalog
+                && matches!(&request.call, Call::ListModels(params) if params.provider != agent_protocol::session::ProviderKind::Codex)
+            {
+                let mut send = request.send.lock().await.take().unwrap();
+                agent_transport::framing::write(
+                    &mut send,
+                    protocol::Response::Success {
+                        result: agent_protocol::operations::ModelPage {
+                            data: Vec::new(),
+                            next_cursor: None,
+                            provider_errors: None,
+                        },
                     },
                 )
                 .await?;
@@ -145,6 +168,7 @@ pub fn from_peer(
         Reader {
             incoming,
             scripted_composer_catalog: false,
+            scripted_model_catalog: false,
         },
         Writer {
             state: Mutex::new(State::default()),
@@ -156,10 +180,10 @@ pub fn from_peer(
 pub async fn connect(
     snapshot: &Snapshot,
 ) -> ((Client, agent_transport::framing::Reader), Reader, Writer) {
-    let host = Endpoint::bind(Identity::generate(), Relays::Disabled)
+    let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
         .await
         .unwrap();
-    let client = Endpoint::bind(Identity::generate(), Relays::Disabled)
+    let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
         .await
         .unwrap();
     let trust = Trust {

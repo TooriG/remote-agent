@@ -99,6 +99,19 @@ pub struct HostUpdate {
     pub working_directory: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostSoftware {
+    pub version: String,
+    pub revision: String,
+    pub build: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadHostSoftware {}
+rpc_method!(ReadHostSoftware, ReadHostSoftware, |self| {
+    crate::models::Empty {}
+});
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ListRemoteHosts {}
 rpc_method!(ListRemoteHosts, ListRemotes, |self| crate::models::Empty {});
@@ -178,6 +191,7 @@ pub struct RenameSession {
 
 #[derive(Debug, Serialize, Clone, Deserialize)]
 pub struct ListModels {
+    pub provider: crate::session::ProviderKind,
     pub limit: usize,
     pub cursor: Option<String>,
 }
@@ -185,7 +199,7 @@ pub struct ListModels {
 pub struct ReadModelSettings {
     pub model: crate::models::ModelRef,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPage {
     pub data: Vec<crate::models::Model>,
@@ -373,7 +387,7 @@ pub struct ReadListDecorations {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListDecorations {
-    pub icons: std::collections::BTreeMap<String, Option<String>>,
+    pub icons: std::collections::BTreeMap<String, Option<crate::models::ProjectIcon>>,
     pub statuses: Vec<(
         crate::session::SessionRef,
         Option<crate::models::WorktreeStatus>,

@@ -2,7 +2,7 @@ use super::*;
 use agent_protocol::session::ProviderKind;
 use gpui_kit::Rgba;
 
-fn provider_icon(provider: ProviderKind) -> Icon {
+pub(super) fn provider_icon(provider: ProviderKind) -> Icon {
     Icon::default().path(match provider {
         ProviderKind::Codex => "icons/openai.svg",
         ProviderKind::Claude => "icons/anthropic.svg",
@@ -31,7 +31,7 @@ fn account_identity(provider: Option<ProviderKind>, identity: &str) -> Div {
 impl Desktop {
     pub(super) fn refresh_accounts_and_models(&self) {
         self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
-        self.dispatch(Intent::LoadModels(op::LoadModels {}));
+        self.dispatch(Intent::RefreshModels);
         if self.account_provider() == Some(ProviderKind::DeepSeek) {
             self.dispatch(Intent::ReadDshCredentials(op::ReadDshCredentials {}));
         }
@@ -40,10 +40,11 @@ impl Desktop {
     pub(super) fn model_menu(
         label: String,
         render_owner: EntityId,
-        cx: &Context<Self>,
+        desktop: &WeakEntity<Desktop>,
+        cx: &App,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
-        let entity = cx.entity().downgrade();
+        let entity = desktop.clone();
         let opening = entity.clone();
         popover::Popover::new("model-controls")
             .bg(rgb(appearance::SURFACE))
@@ -255,70 +256,68 @@ impl Desktop {
             || self.busy > 0
             || self.snapshot.catalog.account.login.is_some()
             || !self.snapshot.connection.connected;
-        let mut services = h_flex().gap_1().when(in_settings, |row| {
-            row.w_full()
-                .border_b_1()
-                .border_color(rgb(appearance::BORDER))
-        });
-        for (value, label) in [
-            (ProviderKind::Codex, "Codex"),
-            (ProviderKind::Claude, "Claude"),
-            (ProviderKind::DeepSeek, "DeepSeek"),
-        ] {
-            services = services.child(
-                button(
-                    format!("model-provider-{label}"),
-                    if value == ProviderKind::DeepSeek {
-                        "DSH"
-                    } else {
-                        label
-                    },
-                    cx,
-                    move |s, window, cx| {
-                        if s.model_controls.provider != Some(value) {
-                            s.account
-                                .code
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                        }
-                        s.model_controls.provider = Some(value);
-                        s.account.sign_out = None;
-                        if value == ProviderKind::DeepSeek {
-                            s.dispatch(Intent::ReadDshCredentials(op::ReadDshCredentials {}));
-                        }
-                    },
-                )
-                .debug_selector(move || format!("model-provider-{label}"))
-                .selected(!in_settings && provider == Some(value))
-                .when(in_settings, |button| {
-                    button
-                        .icon(provider_icon(value))
-                        .w(px(120.))
-                        .h(px(40.))
-                        .rounded(px(0.))
-                        .border_b_2()
-                        .border_color(if provider == Some(value) {
-                            rgb(appearance::FOREGROUND)
-                        } else {
-                            rgb(appearance::BORDER).opacity(0.)
-                        })
-                        .text_color(if provider == Some(value) {
-                            rgb(appearance::FOREGROUND)
-                        } else {
-                            rgb(appearance::MUTED)
-                        })
-                })
-                .disabled(disabled)
-                .when(!in_settings, |button| button.flex_1()),
-            );
-        }
         let mut body = v_flex()
             .id("model-account-controls")
             .gap_3()
-            .when(in_settings, |body| body.gap_6())
-            .child(services);
+            .when(in_settings, |body| body.gap_6());
+        if !in_settings {
+            let mut services = h_flex().gap_1();
+            for (value, label) in [
+                (ProviderKind::Codex, "Codex"),
+                (ProviderKind::Claude, "Claude"),
+                (ProviderKind::DeepSeek, "DeepSeek"),
+            ] {
+                services = services.child(
+                    button(
+                        format!("model-provider-{label}"),
+                        if value == ProviderKind::DeepSeek {
+                            "DSH"
+                        } else {
+                            label
+                        },
+                        cx,
+                        move |view, window, cx| {
+                            view.account
+                                .code
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            view.model_controls.provider = Some(value);
+                            view.account.sign_out = None;
+                            if value == ProviderKind::DeepSeek {
+                                view.dispatch(Intent::ReadDshCredentials(
+                                    op::ReadDshCredentials {},
+                                ));
+                            }
+                        },
+                    )
+                    .debug_selector(move || format!("model-provider-{label}"))
+                    .selected(provider == Some(value))
+                    .disabled(disabled)
+                    .flex_1(),
+                );
+            }
+            body = body.child(services);
+        } else if let Some(agent) = self
+            .snapshot
+            .connection_setup()
+            .agents
+            .into_iter()
+            .find(|agent| Some(agent.provider) == provider)
+        {
+            body = body.child(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_lg().font_semibold().child(agent.name))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(appearance::MUTED))
+                            .child(language.text(&agent.label).to_owned()),
+                    ),
+            );
+        }
         let Some(provider) = provider else {
             return body
-                .child(language.text("エージェントを選択してください。"))
+                .child(language.text("プロバイダーを選択してください。"))
                 .into_any_element();
         };
         if provider == ProviderKind::DeepSeek {
@@ -1134,7 +1133,11 @@ impl Desktop {
             .max_h(px(264.))
             .overflow_y_scroll();
         if models.is_empty() && custom_model.is_none() {
-            list = list.child(language.text("利用可能なモデルがありません"));
+            list = list.child(language.text(if self.snapshot.models_loading(provider) {
+                "モデルを読み込み中…"
+            } else {
+                "利用可能なモデルがありません"
+            }));
         }
         for model in models {
             let value = model.model.clone();
@@ -1228,6 +1231,8 @@ impl Desktop {
                                 self.model_controls_enabled(),
                                 "model-picker-effort",
                                 true,
+                                self.draft_key().clone(),
+                                self.session.as_ref().map(|session| session.pane.clone()),
                                 cx,
                             ))
                             .child(Self::fast_control(
@@ -1235,6 +1240,8 @@ impl Desktop {
                                 self.model_controls_enabled(),
                                 "model-picker-speed",
                                 true,
+                                self.draft_key().clone(),
+                                self.session.as_ref().map(|session| session.pane.clone()),
                                 cx,
                             )),
                     )
@@ -1254,7 +1261,9 @@ impl Desktop {
         enabled: bool,
         id: &'static str,
         expanded: bool,
-        cx: &Context<Self>,
+        draft: DraftKey,
+        pane: Option<Arc<agent_core::store::Pane>>,
+        cx: &App,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
         let Some(next) = controls.toggle_fast_to else {
@@ -1287,7 +1296,7 @@ impl Desktop {
             })
             .disabled(!enabled);
         if expanded {
-            let entity = cx.entity().downgrade();
+            let entity = pane.clone();
             button
                 .label(speed_label)
                 .child(Icon::new(IconName::ChevronDown).size(px(14.)))
@@ -1299,16 +1308,16 @@ impl Desktop {
                             |description| format!("{} · {}", choice.label, description),
                         );
                         let entity = entity.clone();
+                        let draft = draft.clone();
                         menu =
                             menu.item(PopupMenuItem::new(label).checked(choice.selected).on_click(
-                                move |_, _, cx| {
-                                    let _ = entity.update(cx, |s, cx| {
-                                        s.dispatch(Intent::SelectServiceTier {
-                                            thread_id: s.draft_key().clone(),
+                                move |_, _, _| {
+                                    if let Some(pane) = &entity {
+                                        drop(pane.dispatch(Intent::SelectServiceTier {
+                                            thread_id: draft.clone(),
                                             service_tier: value.clone(),
-                                        });
-                                        cx.notify();
-                                    });
+                                        }));
+                                    }
                                 },
                             ));
                     }
@@ -1318,12 +1327,14 @@ impl Desktop {
         } else {
             button
                 .w(px(40.))
-                .on_click(cx.listener(move |s, _, _, _| {
-                    s.dispatch(Intent::SelectServiceTier {
-                        thread_id: s.draft_key().clone(),
-                        service_tier: next.clone(),
-                    });
-                }))
+                .on_click(move |_, _, _| {
+                    if let Some(pane) = &pane {
+                        drop(pane.dispatch(Intent::SelectServiceTier {
+                            thread_id: draft.clone(),
+                            service_tier: next.clone(),
+                        }));
+                    }
+                })
                 .into_any_element()
         }
     }
@@ -1333,7 +1344,9 @@ impl Desktop {
         enabled: bool,
         id: &'static str,
         expanded: bool,
-        cx: &Context<Self>,
+        draft: DraftKey,
+        pane: Option<Arc<agent_core::store::Pane>>,
+        cx: &App,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
         if controls.efforts.is_empty() {
@@ -1360,7 +1373,7 @@ impl Desktop {
                     }),
             );
         }
-        let entity = cx.entity().downgrade();
+        let entity = pane.clone();
         Button::new(id)
             .child(bars)
             .ghost()
@@ -1379,17 +1392,17 @@ impl Desktop {
                 for effort in &controls.efforts {
                     let value = effort.clone();
                     let entity = entity.clone();
+                    let draft = draft.clone();
                     menu = menu.item(
                         PopupMenuItem::new(effort.clone())
                             .checked(*effort == controls.effort)
-                            .on_click(move |_, _, cx| {
-                                let _ = entity.update(cx, |s, cx| {
-                                    s.dispatch(Intent::SelectEffort {
-                                        thread_id: s.draft_key().clone(),
+                            .on_click(move |_, _, _| {
+                                if let Some(pane) = &entity {
+                                    drop(pane.dispatch(Intent::SelectEffort {
+                                        thread_id: draft.clone(),
                                         effort: value.clone(),
-                                    });
-                                    cx.notify();
-                                });
+                                    }));
+                                }
                             }),
                     );
                 }
@@ -1504,6 +1517,8 @@ mod tests {
                                 view.model_controls_enabled(),
                                 "model-fast",
                                 false,
+                                view.draft_key().clone(),
+                                view.session.as_ref().map(|session| session.pane.clone()),
                                 cx,
                             ))
                             .child(Desktop::model_menu(
@@ -1512,6 +1527,7 @@ mod tests {
                                         model.display_name.clone()
                                     }),
                                 cx.entity().entity_id(),
+                                &cx.weak_entity(),
                                 cx,
                             ))
                             .child(Desktop::effort_control(
@@ -1519,6 +1535,8 @@ mod tests {
                                 view.model_controls_enabled(),
                                 "model-effort",
                                 false,
+                                view.draft_key().clone(),
+                                view.session.as_ref().map(|session| session.pane.clone()),
                                 cx,
                             )),
                     )

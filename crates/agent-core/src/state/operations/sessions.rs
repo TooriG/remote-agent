@@ -1055,12 +1055,12 @@ mod tests {
             );
         }
         if catalog_at == "before" {
-            LoadModels {}.apply(&mut snapshot, models());
+            LoadModels { provider }.apply(&mut snapshot, models());
         }
         let mut open = ReadThread::open(id.clone());
         open.prepare(&mut snapshot).unwrap();
         if catalog_at == "during" {
-            LoadModels {}.apply(&mut snapshot, models());
+            LoadModels { provider }.apply(&mut snapshot, models());
         }
         let model = crate::models::ModelRef {
             provider,
@@ -1084,7 +1084,7 @@ mod tests {
             },
         );
         if catalog_at == "after" {
-            LoadModels {}.apply(&mut snapshot, models());
+            LoadModels { provider }.apply(&mut snapshot, models());
         }
         let draft = &snapshot.input.drafts[&key];
         assert_eq!(draft.model.as_ref(), Some(&model));
@@ -1379,7 +1379,7 @@ mod tests {
             provider_errors: None,
         };
         if catalog_at == "before" {
-            LoadModels {}.apply(&mut snapshot, catalog());
+            LoadModels { provider }.apply(&mut snapshot, catalog());
         }
         if existing_draft {
             Arc::make_mut(&mut snapshot.input.drafts).insert(
@@ -1400,7 +1400,7 @@ mod tests {
             .prepare(&mut snapshot)
             .unwrap();
         if catalog_at == "during" {
-            LoadModels {}.apply(&mut snapshot, catalog());
+            LoadModels { provider }.apply(&mut snapshot, catalog());
         }
         open_thread(
             &mut snapshot,
@@ -1416,7 +1416,7 @@ mod tests {
             None,
         );
         if catalog_at == "after" {
-            LoadModels {}.apply(&mut snapshot, catalog());
+            LoadModels { provider }.apply(&mut snapshot, catalog());
         }
         let draft = &snapshot.input.drafts[&key];
         assert_eq!(draft.text, if existing_draft { "Unsent input" } else { "" });

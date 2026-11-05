@@ -76,6 +76,7 @@ impl HostRpcService {
                 "The fork source is outside this conversation.",
             ));
         }
+        self.require_provider_enabled(native.provider)?;
         let agent = self.inner.providers.get(native.provider)?;
         if !agent.capabilities().fork {
             return Err(Failure::new(
@@ -676,6 +677,7 @@ impl HostRpcService {
                 ));
             }
         }
+        self.require_provider_enabled(selected.provider)?;
         let agent = self.inner.providers.get(selected.provider)?;
         agent.validate_create()?;
         let mut row = match previous {

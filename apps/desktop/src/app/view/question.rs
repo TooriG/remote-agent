@@ -1,4 +1,5 @@
 //! The question the composer answers, docked above it as on iOS and in T3 Code.
+use super::composer::ComposerAction;
 use super::*;
 use agent_core::questions::{QuestionAction, QuestionPrompt};
 
@@ -85,7 +86,9 @@ impl Desktop {
             self.answer_question(question.prompt.request_id, QuestionAction::Advance);
         }
     }
+}
 
+impl super::composer::ComposerContent {
     pub(super) fn question_panel(question: &ComposerQuestion, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let prompt = &question.prompt;
@@ -148,8 +151,10 @@ impl Desktop {
                         "質問を閉じる"
                     }),
                     cx,
-                    move |s, _, _| {
-                        s.question.collapsed = (!collapsed).then(|| question_key.clone());
+                    move |_, _, cx| {
+                        cx.emit(ComposerAction::QuestionCollapsed(
+                            (!collapsed).then(|| question_key.clone()),
+                        ))
                     },
                 )
                 .debug_selector(|| "question-toggle".into())
@@ -195,8 +200,11 @@ impl Desktop {
                             .rounded_full()
                             .px_5()
                             .disabled(inactive)
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                s.respond(request_id.clone(), Answer::SkipQuestions);
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(ComposerAction::Respond(
+                                    request_id.clone(),
+                                    Answer::SkipQuestions,
+                                ));
                                 cx.notify();
                             })),
                     ),
@@ -267,13 +275,13 @@ impl Desktop {
                                     }),
                             ),
                     )
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.answer_question(
-                            request_id.clone(),
-                            QuestionAction::Choose {
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(ComposerAction::Dispatch(Intent::AnswerQuestion {
+                            request_id: request_id.clone(),
+                            action: QuestionAction::Choose {
                                 choice_id: choice_id.clone(),
                             },
-                        );
+                        }));
                         cx.notify();
                     })),
             );
@@ -294,7 +302,12 @@ impl Desktop {
                 "question-back",
                 language.text("前へ"),
                 cx,
-                move |s, _, _| s.answer_question(request_id.clone(), QuestionAction::Back),
+                move |_, _, cx| {
+                    cx.emit(ComposerAction::Dispatch(Intent::AnswerQuestion {
+                        request_id: request_id.clone(),
+                        action: QuestionAction::Back,
+                    }))
+                },
             )
             .debug_selector(|| "question-back".into())
             .h(px(40.))
@@ -308,8 +321,11 @@ impl Desktop {
             .h(px(32.))
             .px_4()
             .disabled(!question.can_advance)
-            .on_click(cx.listener(move |s, _, _, cx| {
-                s.answer_question(request_id.clone(), QuestionAction::Advance);
+            .on_click(cx.listener(move |_, _, _, cx| {
+                cx.emit(ComposerAction::Dispatch(Intent::AnswerQuestion {
+                    request_id: request_id.clone(),
+                    action: QuestionAction::Advance,
+                }));
                 cx.notify();
             }));
         back.into_iter().chain([advance])

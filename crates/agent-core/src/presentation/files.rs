@@ -154,13 +154,6 @@ pub struct Files {
     pub(crate) selection: std::sync::Arc<crate::state::WorkspaceLocation>,
 }
 #[cfg(feature = "bindings")]
-impl std::ops::Deref for Files {
-    type Target = crate::state::Files;
-    fn deref(&self) -> &Self::Target {
-        &self.resources
-    }
-}
-#[cfg(feature = "bindings")]
 impl crate::state::Snapshot {
     pub fn files_view(&self) -> std::sync::Arc<Files> {
         std::sync::Arc::new(Files {

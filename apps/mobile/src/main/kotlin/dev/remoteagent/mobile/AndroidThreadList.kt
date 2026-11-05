@@ -50,6 +50,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -61,6 +62,7 @@ import androidx.compose.ui.unit.sp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListQuery
 import dev.remoteagent.core.ListSessions
+import dev.remoteagent.core.ProjectIconImages
 import dev.remoteagent.core.ProjectSummary
 import dev.remoteagent.core.ReadThread
 import dev.remoteagent.core.SessionRef
@@ -401,7 +403,7 @@ private fun ProjectRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ProjectIcon(project.iconPng, project.monogram, project.iconColor)
+            ProjectIcon(project.icon, project.monogram, project.iconColor)
             Column(Modifier.weight(1f)) {
                 Text(
                     project.name,
@@ -439,7 +441,9 @@ private fun ProjectRow(
 }
 
 @Composable
-private fun ProjectIcon(png: ByteArray?, monogram: String, colorRgb: UInt) {
+private fun ProjectIcon(icon: ProjectIconImages?, monogram: String, colorRgb: UInt) {
+    val colors = MaterialTheme.colorScheme
+    val png = if (colors.background.luminance() < colors.onBackground.luminance()) icon?.darkPng else icon?.lightPng
     val bitmap = remember(png) { png?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     val color = Color(colorRgb.toInt()).copy(alpha = 1f)
     val modifier = Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).clearAndSetSemantics {}

@@ -988,7 +988,7 @@ mod tests {
                 };
                 let mut result = result;
                 for project in &mut result.projects {
-                    project.favicon_png = decorated.icons[&project.id].clone();
+                    project.icon = decorated.icons[&project.id].clone();
                 }
                 assert_eq!(result.projects.len(), (project_limit as usize).min(6));
                 assert_eq!(result.has_more_projects, project_limit == 5);
@@ -1034,9 +1034,11 @@ mod tests {
                 );
                 assert_eq!(list.projects[0].monogram, "RA");
                 for project in &list.projects {
-                    assert_eq!(project.icon_png.is_some(), has_icon, "{}", project.name);
-                    if let Some(png) = &project.icon_png {
-                        let image = image::load_from_memory(png).unwrap().into_rgba8();
+                    assert_eq!(project.icon.is_some(), has_icon, "{}", project.name);
+                    if let Some(icon) = &project.icon {
+                        let image = image::load_from_memory(&icon.light_png)
+                            .unwrap()
+                            .into_rgba8();
                         assert_eq!(image.dimensions(), (64, 64));
                         assert_eq!(image.get_pixel(32, 32).0, [255, 0, 0, 255]);
                     }

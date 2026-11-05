@@ -151,6 +151,9 @@ contracts! {
     Browser, "host/browser" => (crate::browser::BrowserRequest, crate::browser::BrowserFrame) [clone],
     ConnectionPerformance, "host/diagnostics/connection" => (crate::diagnostics::ConnectionPerformance, m::Empty) [clone],
     CodexCli, "host/codex/cli" => (op::CodexCliRequest, op::CodexCliStatus) [clone],
+    ReadProviderSettings, "host/provider/settings" => (m::Empty, crate::providers::ProviderSettings),
+    ReadHostSoftware, "host/software" => (m::Empty, op::HostSoftware),
+    SetProviderEnabled, "host/provider/enable" => (crate::providers::SetProviderEnabled, crate::providers::ProviderSettings) [clone],
 }
 
 #[cfg(test)]

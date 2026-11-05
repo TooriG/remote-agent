@@ -36,6 +36,7 @@ impl Recovery {
             let work = async {
                 loop {
                     let connected = snapshots.borrow_and_update().connection.connected;
+                    let enabled = snapshots.borrow().connection_enabled();
                     if connected {
                         connected_since.get_or_insert_with(Instant::now);
                     } else if connected_since
@@ -44,7 +45,7 @@ impl Recovery {
                     {
                         failures = 0;
                     }
-                    if connected || !*lifecycle.borrow_and_update() || unauthorized {
+                    if connected || !enabled || !*lifecycle.borrow_and_update() || unauthorized {
                         tokio::select! {
                             result = snapshots.changed() => if result.is_err() { return; },
                             result = lifecycle.changed() => { if result.is_err() { return; } unauthorized = false; },
@@ -61,7 +62,10 @@ impl Recovery {
                         result = lifecycle.changed() => { if result.is_err() { return; } continue; },
                     }
                     let _attempt = attempt.lock().await;
-                    if store.snapshot().connection.connected || !*lifecycle.borrow() {
+                    if store.snapshot().connection.connected
+                        || !store.snapshot().connection_enabled()
+                        || !*lifecycle.borrow()
+                    {
                         continue;
                     }
                     match store.resume(&endpoint, &ticket, &device_name).await {

@@ -66,7 +66,7 @@ dev: (build-desktop-macos "dev")
     #!/usr/bin/env bash
     set -euo pipefail
     target=$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory)
-    open -n "$target/debug/bex.app"
+    AGENT_ACCOUNT_STATE_DIR="${AGENT_ACCOUNT_STATE_DIR:-${HOME}/Library/Application Support/app.bex.BEX}" "$target/debug/bex.app/Contents/MacOS/bex"
 
 # Run isolated iOS Simulator tests; reject skipped and missing results.
 ios-e2e *tests:

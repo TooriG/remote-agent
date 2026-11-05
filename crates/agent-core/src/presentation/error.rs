@@ -123,8 +123,10 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
         SaveFile { .. } => (Workspace, "ファイルを保存できませんでした"),
         WorkspaceReview => (Workspace, "変更を読み込めませんでした"),
         CodexCli => (Settings, "Codex CLIの操作に失敗しました"),
+        ProviderSettings => (Settings, "プロバイダーの設定を変更できませんでした"),
+        HostSoftware => (Settings, "ホストのバージョン情報を取得できませんでした"),
         FileOpenCapabilities => (Settings, "エディターを検出できませんでした"),
-        Models | ModelSettings { .. } => (Settings, "モデルを読み込めませんでした"),
+        Models { .. } | ModelSettings { .. } => (Settings, "モデルを読み込めませんでした"),
         Accounts => (Settings, "アカウントの操作に失敗しました"),
         WorktreeSettings | Worktrees => (Settings, "ワークツリーの操作に失敗しました"),
     })
@@ -145,7 +147,10 @@ impl Snapshot {
                 "再読み込み",
                 Intent::ReadFileOpenCapabilities(op::ReadFileOpenCapabilities {}),
             ),
-            OperationKey::Models => ("再読み込み", Intent::LoadModels(op::LoadModels {})),
+            OperationKey::Models { provider } => (
+                "再読み込み",
+                Intent::LoadModels(op::LoadModels { provider }),
+            ),
             OperationKey::ModelSettings { model } => (
                 "再読み込み",
                 Intent::ReadModelSettings(op::ReadModelSettings { model }),
@@ -153,6 +158,14 @@ impl Snapshot {
             OperationKey::Accounts => (
                 "アカウントを再読み込み",
                 Intent::ListAccounts(op::ListAccounts {}),
+            ),
+            OperationKey::ProviderSettings => (
+                "設定を再読み込み",
+                Intent::ReadProviderSettings(op::ReadProviderSettings {}),
+            ),
+            OperationKey::HostSoftware => (
+                "再読み込み",
+                Intent::ReadHostSoftware(op::ReadHostSoftware {}),
             ),
             OperationKey::Worktrees => ("再読み込み", Intent::ListWorktrees(op::ListWorktrees {})),
             OperationKey::WorktreeSettings => (
@@ -726,7 +739,14 @@ mod notice_tests {
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.lists.list_query).search_term = "keep filter".into();
         let cases = [
-            (OperationKey::Models, Intent::LoadModels(op::LoadModels {})),
+            (
+                OperationKey::Models {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                },
+                Intent::LoadModels(op::LoadModels {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                }),
+            ),
             (
                 OperationKey::ModelSettings {
                     model: model.clone(),
@@ -848,7 +868,9 @@ mod notice_tests {
         );
         assert!(
             store
-                .dispatch(Intent::LoadModels(crate::state::operations::LoadModels {}))
+                .dispatch(Intent::LoadModels(crate::state::operations::LoadModels {
+                    provider: crate::session::ProviderKind::Codex
+                }))
                 .await
                 .is_err()
         );
@@ -899,7 +921,9 @@ mod notice_tests {
 
     #[test]
     fn dismissal_does_not_cancel_a_running_operation() {
-        let key = OperationKey::Models;
+        let key = OperationKey::Models {
+            provider: agent_protocol::session::ProviderKind::Codex,
+        };
         let mut snapshot = Snapshot::default();
         snapshot.operations.insert(
             key.clone(),

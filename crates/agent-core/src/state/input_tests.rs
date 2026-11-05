@@ -94,7 +94,9 @@ fn transcript_uses_the_utf8_end_when_refreshing_completions() {
 fn a_recovery_click_cannot_retry_a_replaced_operation() {
     let mut snapshot = Snapshot::default();
     snapshot.operations.insert(
-        op::OperationKey::Models,
+        op::OperationKey::Models {
+            provider: crate::session::ProviderKind::Codex,
+        },
         op::OperationState {
             generation: 9,
             phase: op::OperationPhase::Failed {
@@ -105,7 +107,9 @@ fn a_recovery_click_cannot_retry_a_replaced_operation() {
     let recover = |generation| {
         Event::Intent(Intent::RecoverError {
             id: op::ErrorId::Operation {
-                key: op::OperationKey::Models,
+                key: op::OperationKey::Models {
+                    provider: crate::session::ProviderKind::Codex,
+                },
                 generation,
             },
         })

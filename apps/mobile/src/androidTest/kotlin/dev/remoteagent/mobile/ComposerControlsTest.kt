@@ -58,7 +58,7 @@ class ComposerControlsTest {
             compose.onNodeWithText("GPT-6.1").performClick()
             compose.onNodeWithText("高").performClick()
             compose.runOnIdle {
-                assertTrue(intents.any { it is Intent.LoadModels })
+                assertTrue(intents.any { it is Intent.RefreshModels })
                 assertTrue(intents.any { it is Intent.SelectModel && it.model.provider == ProviderKind.CLAUDE })
                 assertTrue(intents.any { it is Intent.SelectModel && it.model.id == "gpt-6.1-sol" })
                 assertTrue(intents.any { it is Intent.SelectEffort })

@@ -5,6 +5,7 @@ pub(in crate::app) struct HeaderModel {
     title: String,
     sidebar: bool,
     panel_open: bool,
+    panel_bottom: bool,
     details: bool,
     details_popover: bool,
 }
@@ -16,7 +17,7 @@ pub(in crate::app) struct HeaderView {
     pub(super) renders: usize,
 }
 impl HeaderView {
-    pub(in crate::app) fn new(desktop: &Entity<Desktop>, _: &mut Context<Self>) -> Self {
+    pub(in crate::app) fn new(desktop: &Entity<Desktop>) -> Self {
         Self {
             desktop: desktop.downgrade(),
             model: None,
@@ -39,16 +40,13 @@ impl Render for HeaderView {
         }
         let width = window.viewport_size().width;
         let render_owner = cx.entity_id();
-        self.desktop
-            .update(cx, |_, cx| {
-                self.model
-                    .as_ref()
-                    .map(|model| {
-                        Desktop::render_header(model, width, render_owner, cx).into_any_element()
-                    })
-                    .unwrap_or_else(|| div().into_any_element())
+        self.model
+            .as_ref()
+            .map(|model| {
+                Desktop::render_header(model, width, render_owner, window, &self.desktop, cx)
+                    .into_any_element()
             })
-            .unwrap_or_else(|_| div().into_any_element())
+            .unwrap_or_else(|| div().into_any_element())
     }
 }
 impl Desktop {
@@ -56,7 +54,8 @@ impl Desktop {
         &self,
         language: agent_core::localization::UiLanguage,
     ) -> HeaderModel {
-        let panel_open = self.panels.get(self.panel_scope()).open;
+        let panel = self.panels.get(self.panel_scope());
+        let panel_open = panel.open;
         let title = self
             .thread()
             .and_then(|thread| thread.name.as_deref())
@@ -78,6 +77,7 @@ impl Desktop {
             title,
             sidebar: self.sidebar,
             panel_open,
+            panel_bottom: panel.layout == PanelLayout::Bottom,
             details: self.details,
             details_popover: self.details_popover,
         }
@@ -102,7 +102,9 @@ impl Desktop {
         model: &HeaderModel,
         width: Pixels,
         render_owner: EntityId,
-        cx: &Context<Self>,
+        window: &Window,
+        owner: &WeakEntity<Desktop>,
+        cx: &App,
     ) -> Div {
         let mut header = h_flex()
             .debug_selector(|| "conversation-header".into())
@@ -112,9 +114,7 @@ impl Desktop {
             .px_4()
             .gap_2();
         if !model.sidebar {
-            header = header
-                .pl_0()
-                .child(sidebar_header(false, &cx.weak_entity(), cx));
+            header = header.pl_0().child(sidebar_header(false, owner, cx));
         }
         header
             .child(
@@ -123,6 +123,9 @@ impl Desktop {
                     .min_w_0()
                     .text_sm()
                     .text_ellipsis()
+                    .when(cfg!(target_os = "windows"), |title| {
+                        crate::window_chrome::drag_region(title.h_full().flex().items_center())
+                    })
                     .child(model.title.clone()),
             )
             .child({
@@ -132,10 +135,14 @@ impl Desktop {
                 } else {
                     model.details_popover
                 };
-                Self::details_toggle(inline, open, render_owner, cx)
+                Self::details_toggle(inline, open, render_owner, owner, cx)
             })
             .when(!model.panel_open, |header| {
-                header.child(Self::panel_toggle(false, cx))
+                header.child(Self::panel_toggle(false, owner, cx))
             })
+            .when(
+                cfg!(target_os = "windows") && (!model.panel_open || model.panel_bottom),
+                |header| crate::window_chrome::header(header, window),
+            )
     }
 }

@@ -384,8 +384,7 @@ pub fn run(arguments: &[String]) -> Result<()> {
     let log = log
         .or_else(|| {
             std::env::var_os("HOME").map(|home| {
-                PathBuf::from(home)
-                    .join("Library/Application Support/app.bex.BEX-Dev/logs/host.jsonl")
+                PathBuf::from(home).join("Library/Application Support/app.bex.BEX/logs/host.jsonl")
             })
         })
         .ok_or("Pass --log or set HOME")?;

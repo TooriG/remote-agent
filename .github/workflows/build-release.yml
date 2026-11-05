@@ -1,57 +1,43 @@
-name: Apple release
+name: Build release
 on:
-  workflow_run:
-    workflows: [Native clients]
-    types: [completed]
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      source-sha:
+        type: string
+        required: true
+      channel:
+        type: string
+        required: true
+      source-tag:
+        type: string
+        default: ''
+    outputs:
+      tag:
+        value: ${{ jobs.release.outputs.tag }}
 permissions:
   contents: read
 env:
-  AGENT_RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  AGENT_RELEASE_SHA: ${{ inputs.source-sha }}
+  AGENT_RELEASE_CHANNEL: ${{ inputs.channel }}
+  AGENT_SOURCE_TAG: ${{ inputs.source-tag }}
 jobs:
-  verification:
-    if: >-
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       github.event.workflow_run.conclusion == 'success') ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 65
-    permissions:
-      actions: read
-    steps:
-      - name: Require both workflows to verify this exact main commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          for workflow in portable.yml native.yml; do
-            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch main \
-              --event push --commit "$AGENT_RELEASE_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // ""')
-            test -n "$run"
-            # Native acceptance may finish before Portable checks. Wait on Linux
-            # before allocating the signing runner; only Native clients triggers release.
-            gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 30
-          done
   release:
-    needs: verification
     # Skipped PR and failed-build notifications must not replace a queued release.
     concurrency:
       group: apple-release
       cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.candidate.outputs.tag }}
     runs-on: macos-26
     timeout-minutes: 150
     permissions:
-      actions: write # Dispatch Windows packaging after publishing this exact release.
+      actions: read
       contents: write
     env:
       AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       AGENT_DISTRIBUTION_SIGNING: '1'
-      AGENT_TESTFLIGHT_GROUP: BEX External
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -112,28 +98,76 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_CACHE_KEY: ${{ steps.ios-cache.outputs.cache-primary-key }}
         run: scripts/dev-env.sh node scripts/prune-build-cache.mjs "$RELEASE_CACHE_KEY"
-      - name: Verify Apple processing and distribute to TestFlight
+      - name: Verify the iPhone distribution build
         env:
           AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
           AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
         run: scripts/dev-env.sh node scripts/apple-release.mjs verify
-      - name: Publish the notarized Mac download
+      - name: Stage the release packages
+        id: candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          printf 'Mac and TestFlight build %s.\n\n[iPhone: Get on TestFlight](https://testflight.apple.com/join/UJbK9Ww7)\n\nSource commit: %s\n\nRelease verification: https://github.com/%s/actions/runs/%s\n' \
-            "$AGENT_BUILD_NUMBER" "$AGENT_RELEASE_SHA" "$GITHUB_REPOSITORY" \
-            "${{ github.run_id }}" > target/apple-release/release-notes.txt
-          gh release create "$AGENT_RELEASE_TAG" target/apple-release/bex-macOS-arm64.zip \
-            target/apple-release/bex-macOS-arm64.zip.sha256 \
-            target/apple-release/bex-macOS-arm64-dev.zip target/apple-release/bex-macOS-arm64-dev.zip.sha256 \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$AGENT_RELEASE_SHA" --title "BEX ${AGENT_BUILD_NUMBER}" \
-            --notes-file target/apple-release/release-notes.txt
-          # GITHUB_TOKEN release events do not trigger Native clients. Dispatch
-          # the existing Windows packager explicitly for the same verified tag.
-          gh workflow run native.yml --repo "$GITHUB_REPOSITORY" --ref main \
-            -f "desktop-release-tag=$AGENT_RELEASE_TAG"
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" --method POST \
+            -f "ref=refs/tags/$AGENT_RELEASE_TAG" -f "sha=$AGENT_RELEASE_SHA" > /dev/null
+          files=(target/apple-release/bex-macOS-arm64.zip target/apple-release/bex-macOS-arm64.zip.sha256 target/apple-release/apple-build.json)
+          flags=(--draft)
+          if [[ $AGENT_RELEASE_CHANNEL == nightly ]]; then
+            files+=(target/apple-release/bex-iOS-preview.ipa target/apple-release/bex-iOS-preview.ipa.sha256)
+            flags+=(--prerelease)
+          fi
+          gh release create "$AGENT_RELEASE_TAG" "${files[@]}" "${flags[@]}" \
+            --repo "$GITHUB_REPOSITORY" --target "$AGENT_RELEASE_SHA" \
+            --title "BEX $AGENT_RELEASE_CHANNEL $AGENT_BUILD_NUMBER" \
+            --notes "Source: $AGENT_RELEASE_SHA. Channel: $AGENT_RELEASE_CHANNEL."
+          echo "tag=$AGENT_RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - name: Remove signing credentials
         if: always()
         run: scripts/dev-env.sh node scripts/apple-signing.mjs cleanup
+  windows:
+    needs: release
+    permissions:
+      actions: write
+      contents: write
+    uses: ./.github/workflows/native.yml
+    with:
+      release-tag: ${{ needs.release.outputs.tag }}
+  android:
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/android-download.yml
+    with:
+      release-tag: ${{ needs.release.outputs.tag }}
+    secrets: inherit
+  publish:
+    needs: [release, windows, android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.AGENT_RELEASE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - name: Load App Store credentials for stable release submission
+        if: inputs.channel == 'stable'
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.BEX_ASC_PRIVATE_KEY }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/bex-asc.p8"
+          printf '%s' "$ASC_PRIVATE_KEY" > "$key"
+          echo "AGENT_ASC_PRIVATE_KEY_FILE=$key" >> "$GITHUB_ENV"
+      - name: Verify packages and publish Nightly or submit stable for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
+          AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
+          CANDIDATE_TAG: ${{ needs.release.outputs.tag }}
+        run: scripts/dev-env.sh node scripts/release-candidate.mjs seal "$CANDIDATE_TAG"
+      - name: Remove App Store credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/bex-asc.p8"

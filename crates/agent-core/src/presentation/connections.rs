@@ -16,6 +16,7 @@ pub enum AgentAvailability {
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ConnectionAgent {
     pub provider: ProviderKind,
+    pub enabled: bool,
     pub name: String,
     pub availability: AgentAvailability,
     pub label: String,
@@ -63,16 +64,34 @@ fn availability(
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
+    pub fn connection_enabled(&self) -> bool {
+        !self.connection.connection_disabled
+    }
+
+    pub fn connection_status_label(&self) -> String {
+        if self.connection.connection_disabled {
+            "オフ"
+        } else if self.connection.connected {
+            "接続済み"
+        } else {
+            "未接続"
+        }
+        .into()
+    }
+
+    pub fn provider_enabled(&self, provider: ProviderKind) -> bool {
+        self.catalog
+            .provider_settings
+            .as_ref()
+            .is_none_or(|settings| settings.enabled(provider))
+    }
+
+    pub fn provider_settings_loaded(&self) -> bool {
+        self.catalog.provider_settings.is_some()
+    }
+
     pub fn connection_setup(&self) -> ConnectionSetup {
         use crate::state::operations::{OperationKey, OperationPhase};
-        let checks_failed = self.connection.connected
-            && [OperationKey::Models, OperationKey::Accounts]
-                .iter()
-                .any(|key| {
-                    self.operations
-                        .get(key)
-                        .is_some_and(|state| matches!(state.phase, OperationPhase::Failed { .. }))
-                });
         let agents: Vec<_> = [
             (ProviderKind::Codex, "Codex"),
             (ProviderKind::Claude, "Claude Code"),
@@ -80,6 +99,16 @@ impl Snapshot {
         ]
         .into_iter()
         .map(|(provider, name)| {
+            let enabled = self.provider_enabled(provider);
+            let checks_failed = self.connection.connected
+                && [OperationKey::Models { provider }, OperationKey::Accounts]
+                    .iter()
+                    .any(|key| {
+                        self.operations.get(key).is_some_and(|state| {
+                            matches!(state.phase, OperationPhase::Failed { .. })
+                        })
+                    });
+
             let availability = availability(
                 self.connection.connected,
                 provider,
@@ -88,13 +117,15 @@ impl Snapshot {
                 &self.catalog.model_errors,
             );
             let availability = match availability {
+                _ if !enabled => AgentAvailability::Unavailable,
                 AgentAvailability::Checking if checks_failed => AgentAvailability::Unavailable,
                 availability => availability,
             };
             ConnectionAgent {
                 provider,
+                enabled,
                 name: name.into(),
-                error: (availability == AgentAvailability::Unavailable)
+                error: (enabled && availability == AgentAvailability::Unavailable)
                     .then(|| {
                         self.catalog
                             .model_errors
@@ -111,16 +142,20 @@ impl Snapshot {
                                     .get(&provider)
                                     .map(|error| super::error::error_text(error))
                             })
-                            .or_else(|| self.operation_error(OperationKey::Models))
+                            .or_else(|| self.operation_error(OperationKey::Models { provider }))
                             .or_else(|| self.operation_error(OperationKey::Accounts))
                     })
                     .flatten(),
                 availability,
-                label: match availability {
-                    AgentAvailability::Checking => "確認中…",
-                    AgentAvailability::Ready => "利用可能",
-                    AgentAvailability::LoginRequired => "未ログイン",
-                    AgentAvailability::Unavailable => "設定が必要",
+                label: if !enabled {
+                    "オフ"
+                } else {
+                    match availability {
+                        AgentAvailability::Checking => "確認中…",
+                        AgentAvailability::Ready => "利用可能",
+                        AgentAvailability::LoginRequired => "未ログイン",
+                        AgentAvailability::Unavailable => "設定が必要",
+                    }
                 }
                 .into(),
             }
@@ -237,7 +272,12 @@ mod tests {
     fn failed_checks_stop_spinning_and_retries_keep_cached_ready_agents() {
         use crate::state::operations::{OperationKey, OperationPhase, OperationState};
         use std::sync::Arc;
-        for key in [OperationKey::Models, OperationKey::Accounts] {
+        for key in [
+            OperationKey::Models {
+                provider: agent_protocol::session::ProviderKind::Codex,
+            },
+            OperationKey::Accounts,
+        ] {
             let mut snapshot = Snapshot {
                 connection: crate::state::Connection {
                     connected: true,
@@ -256,12 +296,13 @@ mod tests {
             );
             let setup = snapshot.connection_setup();
             assert!(!setup.can_start);
-            assert!(
-                setup
-                    .agents
-                    .iter()
-                    .all(|agent| agent.availability == AgentAvailability::Unavailable)
-            );
+            assert!(setup.agents.iter().all(|agent| agent.availability
+                == if matches!(key, OperationKey::Models { provider } if provider != agent.provider)
+                {
+                    AgentAvailability::Checking
+                } else {
+                    AgentAvailability::Unavailable
+                }));
             Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(
                 serde_json::from_value(serde_json::json!({
                     "accounts":[{"id":"native","provider":"codex"}],

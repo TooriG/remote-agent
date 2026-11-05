@@ -14,7 +14,7 @@ async function waitFor(check) {
   }
 }
 
-function fixture(t, mode) {
+function fixture(t, mode, channel = 'stable') {
   const root = mkdtempSync(join(tmpdir(), 'apple-pipeline-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
@@ -29,6 +29,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = process.env.APPLE_PIPELINE_ROOT;
 const mode = process.env.APPLE_PIPELINE_MODE;
+const preview = process.env.APPLE_PIPELINE_CHANNEL === 'nightly';
 const name = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const log = (name, args = []) => fs.appendFileSync(path.join(root, 'commands'), JSON.stringify({ name, args }) + '\\n');
@@ -39,7 +40,6 @@ log(name, args);
 (async () => {
   if (name === 'git' && args[0] === 'rev-parse') console.log('fixture-source');
   if (name === 'just' && args[0] === 'build-desktop-macos') {
-    log('desktop-channel', [process.env.AGENT_DESKTOP_CHANNEL]);
     fs.mkdirSync(path.join(root, 'target/release/bex.app'), { recursive: true });
   }
   if (name === 'ditto') write(args.at(-1));
@@ -47,7 +47,7 @@ log(name, args);
     fs.appendFileSync(path.join(root, 'notary.pid'), String(process.pid) + '\\n');
     mark('notary.started');
     await wait('notary.release');
-    console.log(JSON.stringify({ status: mode === 'rejected' || (mode === 'development-rejected' && args[2].endsWith('-dev.zip')) ? 'Invalid' : 'Accepted' }));
+    console.log(JSON.stringify({ status: mode === 'rejected' ? 'Invalid' : 'Accepted' }));
     mark('notary.completed');
     if (mode === 'notary-failure') process.exit(23);
   }
@@ -56,15 +56,17 @@ log(name, args);
     mark('archive.started');
     if (mode === 'archive-failure') process.exit(41);
     if (mode === 'cancel' || mode === 'interrupt') await wait('archive.release');
+    fs.mkdirSync(path.join(args[1], 'Products/Applications', preview ? 'BEX Preview.app' : 'Bex.app'), { recursive: true });
     mark('archive.completed');
   }
   if (name === 'PlistBuddy') {
-    const identifier = args[2].includes('bex-macOS-arm64-dev') ? 'app.bex.dev.desktop' : args[2].includes('bex-macOS-arm64') ? 'app.bex.desktop' : 'dev.remoteagent.mobile.ios';
+    const identifier = args[2].includes('bex-macOS-arm64') ? 'app.bex.desktop' : (preview ? 'dev.remoteagent.mobile.ios.preview' : 'dev.remoteagent.mobile.ios');
     console.log(args[1].includes('CFBundleVersion') ? '101' : identifier);
   }
   if (name === 'jq') {
     if (args.includes('-e')) process.exit(JSON.parse(fs.readFileSync(args.at(-1), 'utf8')).status === 'Accepted' ? 0 : 1);
-    console.log(args.includes('-er') ? 'fixture-profile' : '{}');
+    const values = { '.prefix': 'fixture-profile', '.bundleId': preview ? 'dev.remoteagent.mobile.ios.preview' : 'dev.remoteagent.mobile.ios', '.method': preview ? 'release-testing' : 'app-store-connect' };
+    console.log(args.includes('-er') ? values[args[1]] : '{}');
   }
   if (name === 'plutil') {
     process.stdin.resume();
@@ -73,6 +75,7 @@ log(name, args);
   }
   if (name === 'shasum') console.log('fixture-checksum');
   if (name === 'getconf') console.log(root);
+  if (name === 'xcodebuild') write(path.join(args[args.indexOf('-exportPath') + 1], 'Bex.ipa'));
 })().catch(error => { console.error(error); process.exit(70); });
 `);
   chmodSync(join(bin, 'command'), 0o755);
@@ -85,7 +88,8 @@ log(name, args);
     env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`,
       APPLE_PIPELINE_ROOT: root, APPLE_PIPELINE_MODE: mode,
-      AGENT_BUILD_NUMBER: '101', AGENT_RELEASE_SHA: 'fixture-source',
+      APPLE_PIPELINE_CHANNEL: channel,
+      AGENT_RELEASE_CHANNEL: channel, AGENT_BUILD_NUMBER: '101', AGENT_MARKETING_VERSION: '1.0.1', AGENT_RELEASE_SHA: 'fixture-source',
       AGENT_CODE_SIGN_KEYCHAIN: 'fixture-keychain', AGENT_ASC_PRIVATE_KEY_FILE: 'fixture-key',
       AGENT_ASC_KEY_ID: 'fixture-key-id', AGENT_ASC_ISSUER_ID: 'fixture-issuer',
     },
@@ -110,7 +114,7 @@ log(name, args);
     cancel: signal => process.kill(-child.pid, signal),
     assertNotaryExited() {
       const pids = readFileSync(join(root, 'notary.pid'), 'utf8').trim().split('\n').map(Number);
-      assert.equal(pids.length, 2);
+      assert.equal(pids.length, 1);
       for (const pid of pids) assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
     },
   };
@@ -125,10 +129,10 @@ test('iPhone archiving overlaps Mac notarization and publication waits for both'
   const result = await build.completed;
   assert.equal(result.code, 0, result.stderr);
   const commands = build.commands();
-  assert.deepEqual(commands.filter(command => command.name === 'desktop-channel').map(command => command.args[0]), ['production', 'development']);
+  assert.equal(commands.filter(command => command.name === 'just' && command.args[0] === 'build-desktop-macos').length, 1);
   const notarized = commands.filter(command => command.name === 'xcrun' && command.args[0] === 'notarytool');
-  assert.deepEqual(notarized.map(command => command.args[2].split('/').at(-1)), ['bex-macOS-arm64.zip', 'bex-macOS-arm64-dev.zip']);
-  assert.equal(commands.filter(command => command.name === 'spctl').length, 2);
+  assert.deepEqual(notarized.map(command => command.args[2].split('/').at(-1)), ['bex-macOS-arm64.zip']);
+  assert.equal(commands.filter(command => command.name === 'spctl').length, 1);
   const archive = commands.find(command => command.name === 'just' && command.args[0] === 'ios-archive');
   assert.ok(archive.args.includes('AGENT_IOS_PROFILE_SPECIFIER=fixture-profile $(PRODUCT_BUNDLE_IDENTIFIER)'));
   const exports = commands.filter(command => command.name === 'xcodebuild');
@@ -137,6 +141,21 @@ test('iPhone archiving overlaps Mac notarization and publication waits for both'
     assert.ok(commands.findIndex(command => command.name === name) < commands.findIndex(command => command.name === 'xcodebuild'));
   }
   build.assertNotaryExited();
+});
+
+test('Nightly exports the separate Preview IPA for internal distribution without an App Store upload', { timeout: 20000 }, async t => {
+  const build = fixture(t, 'success', 'nightly');
+  await waitFor(() => build.exists('archive.completed'));
+  build.release();
+  const result = await build.completed;
+  assert.equal(result.code, 0, result.stderr);
+  const commands = build.commands();
+  const archive = commands.find(command => command.name === 'just' && command.args[0] === 'ios-archive');
+  assert.ok(archive.args.some(argument => argument.endsWith('/Config/Preview.xcconfig')));
+  assert.equal(commands.filter(command => command.name === 'xcodebuild').length, 1);
+  assert.ok(!commands.some(command => command.args.includes('record-delivery')));
+  assert.ok(build.exists('target/apple-release/bex-iOS-preview.ipa'));
+  assert.ok(build.exists('target/apple-release/bex-iOS-preview.ipa.sha256'));
 });
 
 test('notarization failure and rejection prevent every iPhone export and upload', { timeout: 20000 }, async t => {
@@ -151,16 +170,6 @@ test('notarization failure and rejection prevent every iPhone export and upload'
       build.assertNotaryExited();
     });
   }
-});
-
-test('a rejected development update prevents distribution even when production notarization succeeds', { timeout: 20000 }, async t => {
-  const build = fixture(t, 'development-rejected');
-  await waitFor(() => build.exists('archive.completed'));
-  build.release();
-  const result = await build.completed;
-  assert.equal(result.code, 1, result.stderr);
-  assert.ok(!build.commands().some(command => command.name === 'xcodebuild'));
-  build.assertNotaryExited();
 });
 
 test('archive failure and cancellation stop and reap the pending notary process', { timeout: 20000 }, async t => {

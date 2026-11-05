@@ -309,7 +309,11 @@ impl Desktop {
         v_flex()
             .size_full()
             .p_4()
-            .pt(px(44.))
+            .pt(px(if cfg!(target_os = "windows") && !self.side_chat_mode {
+                16.
+            } else {
+                44.
+            }))
             .gap_3()
             .child(
                 h_flex()

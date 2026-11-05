@@ -149,8 +149,7 @@ pub fn stage(
             .output()?;
         ensure!(
             output.status.success()
-                && String::from_utf8(output.stdout)?.trim()
-                    == download.channel.mac_bundle_identifier(),
+                && String::from_utf8(output.stdout)?.trim() == "app.bex.desktop",
             "更新ファイルがBexではありません。"
         );
         verify_build(&bundle.join("Contents/MacOS/bex"), download.build)?;

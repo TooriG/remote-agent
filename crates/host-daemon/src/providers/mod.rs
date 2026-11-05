@@ -6,8 +6,10 @@ pub mod deepseek;
 mod refreshed;
 mod registry;
 pub(crate) mod requests;
+mod settings;
 pub use claude::Claude;
 pub(crate) use registry::Registry;
+pub(crate) use settings::Settings;
 
 use crate::dictation::Dictation;
 use agent_protocol::session::ProviderKind;

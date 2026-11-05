@@ -22,3 +22,7 @@ pub mod updates;
 pub mod bindings;
 #[cfg(feature = "bindings")]
 uniffi::setup_scaffolding!();
+
+#[cfg(test)]
+#[path = "../tests/support/model_catalog.rs"]
+mod test_models;

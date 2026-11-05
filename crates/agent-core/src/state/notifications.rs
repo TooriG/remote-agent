@@ -51,6 +51,15 @@ pub(super) fn notification(
     }
 
     match message {
+        Notification::ProviderSettings { settings } => {
+            let mut next = previous.clone();
+            let effects = if next.accept_provider_settings(settings) {
+                op::refresh_models()
+            } else {
+                Vec::new()
+            };
+            (next, effects)
+        }
         Notification::TaskActivity { state } => {
             let mut next = previous.clone();
             let effects = next.accept_task_activity(state);
@@ -187,7 +196,7 @@ impl Snapshot {
                 let page = Arc::make_mut(page);
                 let mut project = project;
                 if let Some(index) = position {
-                    project.favicon_png = page.projects.remove(index).favicon_png;
+                    project.icon = page.projects.remove(index).icon;
                 }
                 page.projects.insert(0, project);
                 page.has_more_projects |=

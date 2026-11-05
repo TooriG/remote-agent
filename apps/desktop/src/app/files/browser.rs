@@ -248,30 +248,4 @@ impl Desktop {
             cx.notify();
         }
     }
-    pub(in crate::app) fn file_tree_key(
-        &mut self,
-        event: &KeyDownEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(browser) = &self.file_browser else {
-            return;
-        };
-        let key = if event.keystroke.key == "f10" && event.keystroke.modifiers.shift {
-            "contextmenu"
-        } else {
-            event.keystroke.key.as_str()
-        };
-        let additive = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
-        let shift = event.keystroke.modifiers.shift;
-        if browser.model.tree.handles_desktop_key(key, additive, shift) {
-            self.file_tree_action(FileTreeAction::Keyboard {
-                key: key.into(),
-                additive,
-                shift,
-            });
-            cx.stop_propagation();
-            cx.notify();
-        }
-    }
 }

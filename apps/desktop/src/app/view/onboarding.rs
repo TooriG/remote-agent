@@ -47,7 +47,29 @@ impl Desktop {
                             )
                         }),
                 );
-            if matches!(
+            if !agent.enabled {
+                row = row.child(
+                    button(
+                        format!("connection-provider-enable-{}", provider.key()),
+                        language.text("オンにする"),
+                        cx,
+                        move |view, _, _| {
+                            view.dispatch(Intent::SetProviderEnabled(op::SetProviderEnabled {
+                                provider,
+                                enabled: true,
+                            }));
+                        },
+                    )
+                    .small()
+                    .ghost()
+                    .disabled(
+                        disabled
+                            || self
+                                .snapshot
+                                .operation_running(op::OperationKey::ProviderSettings),
+                    ),
+                );
+            } else if matches!(
                 agent.availability,
                 AgentAvailability::LoginRequired | AgentAvailability::Unavailable
             ) {
@@ -141,6 +163,7 @@ impl Desktop {
                     ConnectionLayout::Onboarding,
                     current,
                     connected,
+                    self.snapshot.connection_enabled(),
                     agent_controls,
                     cx,
                 )
@@ -297,7 +320,7 @@ impl Desktop {
                                         if view.snapshot.connection.connected {
                                             view.refresh_accounts_and_models();
                                         } else {
-                                            view.connect(None);
+                                            view.connect(None, None);
                                         }
                                         if let Some(hosts) = &view.hosts {
                                             hosts.update(cx, |hosts, _| hosts.refresh());

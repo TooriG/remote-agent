@@ -86,6 +86,12 @@ impl Snapshot {
     pub fn accounts(&self) -> Option<Accounts> {
         self.catalog.account.accounts.as_deref().cloned()
     }
+    pub fn codex_cli_status(&self) -> Option<agent_protocol::operations::CodexCliStatus> {
+        self.catalog.account.codex_cli.as_deref().cloned()
+    }
+    pub fn host_software(&self) -> Option<agent_protocol::operations::HostSoftware> {
+        self.catalog.host_software.as_deref().cloned()
+    }
     pub fn account_is_selected(&self, provider: ProviderKind, id: String) -> bool {
         self.catalog
             .account
@@ -200,7 +206,8 @@ impl WorkspaceReview {
 #[uniffi::export]
 impl Files {
     pub fn file_draft(&self, path: String) -> Option<FileDraft> {
-        self.file_drafts
+        self.resources
+            .file_drafts
             .get(&path)
             .map(|draft| draft.as_ref().clone())
     }
@@ -215,7 +222,7 @@ impl Files {
             .map(|value| Arc::new(WorkspaceReview(value.clone())))
     }
     pub fn worktree_settings(&self) -> Option<WorktreeSettings> {
-        self.workspace.settings.as_deref().cloned()
+        self.resources.workspace.settings.as_deref().cloned()
     }
     pub fn unchanged(&self, other: Arc<Self>) -> bool {
         crate::state::Same::same(&self.resources, &other.resources)

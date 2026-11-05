@@ -40,6 +40,7 @@ pub struct HostRpcService {
 struct ServiceInner {
     browser: OnceLock<Arc<crate::browser::Browser>>,
     providers: crate::providers::Registry,
+    provider_settings: crate::providers::Settings,
     projects: ProjectStore,
     router: SessionRouter,
     event_pumps: std::sync::Once,
@@ -84,6 +85,9 @@ impl HostRpcService {
                     projects.path().with_file_name("bex-model-selections.json"),
                 ),
                 browser: OnceLock::new(),
+                provider_settings: crate::providers::Settings::new(
+                    projects.path().with_file_name("bex-providers.json"),
+                ),
                 providers,
                 dictation,
                 worktrees: crate::worktrees::Worktrees::new(projects.path()),
@@ -548,7 +552,17 @@ impl HostRpcService {
                     .await?
                     .into()
             }
-            Call::ComposerCatalog(params) => self.inner.providers.catalog(&params.cwd).await.into(),
+            Call::ComposerCatalog(params) => {
+                let settings = self.inner.provider_settings.read()?;
+                let mut catalog = self.inner.providers.catalog(&params.cwd).await;
+                catalog
+                    .candidates
+                    .retain(|candidate| settings.enabled(candidate.invocation.provider));
+                catalog
+                    .errors
+                    .retain(|provider, _| settings.enabled(*provider));
+                catalog.into()
+            }
             Call::ReadAccountUsage(params) => self
                 .inner
                 .providers
@@ -592,7 +606,41 @@ impl HostRpcService {
                 .update_dsh_credential(update.clone())
                 .await?
                 .into(),
-            Call::ListModels(params) => self.inner.providers.models(params).await?.into(),
+            Call::ReadProviderSettings(_) => self.inner.provider_settings.read()?.into(),
+            Call::ReadHostSoftware(_) => op::HostSoftware {
+                version: env!("CARGO_PKG_VERSION").into(),
+                revision: option_env!("AGENT_BUILD_REVISION")
+                    .unwrap_or("development")
+                    .into(),
+                build: option_env!("AGENT_BUILD_NUMBER")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0),
+            }
+            .into(),
+            Call::SetProviderEnabled(params) => {
+                let settings = self
+                    .inner
+                    .provider_settings
+                    .set_enabled(params.provider, params.enabled)?;
+                self.inner.router.broadcast(
+                    agent_protocol::protocol::Notification::ProviderSettings {
+                        settings: settings.clone(),
+                    },
+                );
+                settings.into()
+            }
+            Call::ListModels(params) => {
+                if self
+                    .inner
+                    .provider_settings
+                    .read()?
+                    .enabled(params.provider)
+                {
+                    self.inner.providers.models(params).await?.into()
+                } else {
+                    op::ModelPage::default().into()
+                }
+            }
             _ => {
                 return Err(Failure::new(
                     "method_not_found",
@@ -604,6 +652,16 @@ impl HostRpcService {
 
     pub(crate) fn files(&self) -> &crate::workspace_files::WorkspaceFiles {
         &self.inner.files
+    }
+
+    fn require_provider_enabled(&self, provider: ProviderKind) -> Result<(), Failure> {
+        if !self.inner.provider_settings.read()?.enabled(provider) {
+            return Err(Failure::new(
+                "provider_disabled",
+                "この環境でプロバイダーがオフになっています。設定からオンにしてください。",
+            ));
+        }
+        Ok(())
     }
 
     fn start_event_pumps(&self) {
@@ -699,6 +757,92 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn provider_switches_broadcast_and_gate_new_work_while_retaining_history_access() {
+        use super::conversations::tests::{NativeAgent, call};
+        use super::*;
+        use agent_protocol::{
+            protocol::Notification,
+            providers::{ProviderSettings, SetProviderEnabled},
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+        let host = HostRpcService::new(
+            [agent.backend()],
+            ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        let client = host.open_session();
+        let mut other = host.open_session();
+        let settings: ProviderSettings = call(
+            &host,
+            client.id(),
+            Call::SetProviderEnabled(SetProviderEnabled {
+                provider: ProviderKind::Codex,
+                enabled: false,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(!settings.enabled(ProviderKind::Codex));
+        let notified = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let message =
+                    agent_protocol::protocol::decode::<Notification>(&other.recv().await.unwrap())
+                        .unwrap();
+                if let Notification::ProviderSettings { settings } = message {
+                    break settings;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(notified, settings);
+        let read: ProviderSettings = call(
+            &host,
+            other.id(),
+            Call::ReadProviderSettings(agent_protocol::models::Empty {}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read, settings);
+        assert_eq!(
+            host.creation_agent(ProviderKind::Codex, None)
+                .err()
+                .unwrap()
+                .code,
+            "provider_disabled"
+        );
+        assert!(
+            host.inner.providers.get(ProviderKind::Codex).is_ok(),
+            "history and running work keep their provider"
+        );
+        let models: op::ModelPage = call(
+            &host,
+            other.id(),
+            Call::ListModels(op::ListModels {
+                provider: ProviderKind::Codex,
+                limit: 100,
+                cursor: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(models.data.is_empty());
+        assert!(models.provider_errors.is_none());
+        let enabled: ProviderSettings = call(
+            &host,
+            other.id(),
+            Call::SetProviderEnabled(SetProviderEnabled {
+                provider: ProviderKind::Codex,
+                enabled: true,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(enabled.enabled(ProviderKind::Codex));
+        assert!(host.creation_agent(ProviderKind::Codex, None).is_ok());
+    }
+
     #[tokio::test]
     async fn file_failures_are_classified_without_losing_visualization_recovery() {
         use super::conversations::tests::call;
@@ -835,26 +979,28 @@ mod tests {
             ProjectStore::new(root.path().join("worktrees.json")),
         );
         let session = service.open_session();
-        let response = service
-            .dispatch(
-                session.id(),
-                &Call::ListModels(op::ListModels {
-                    cursor: None,
-                    limit: 100,
-                }),
-            )
-            .await
-            .unwrap();
-        let Response::Success { result: page } =
-            agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial).unwrap()
-        else {
-            panic!("catalog failures must retain each provider's error");
-        };
-        assert!(page.data.is_empty());
-        assert!(page.next_cursor.is_none());
-        let errors = page.provider_errors.unwrap();
-        assert_eq!(errors.len(), providers.len());
         for provider in providers {
+            let response = service
+                .dispatch(
+                    session.id(),
+                    &Call::ListModels(op::ListModels {
+                        provider,
+                        cursor: None,
+                        limit: 100,
+                    }),
+                )
+                .await
+                .unwrap();
+            let Response::Success { result: page } =
+                agent_protocol::protocol::decode::<Response<op::ModelPage>>(&response.initial)
+                    .unwrap()
+            else {
+                panic!("catalog failures must retain each provider's error");
+            };
+            assert!(page.data.is_empty());
+            assert!(page.next_cursor.is_none());
+            let errors = page.provider_errors.unwrap();
+            assert_eq!(errors.len(), 1);
             assert_eq!(errors[provider.key()]["code"], "provider_unavailable");
         }
     }

@@ -89,7 +89,9 @@ impl Operation for SelectAccount {
         apply_selection(snapshot, output);
         vec![
             Effect::execute(ListAccounts {}),
-            Effect::execute(LoadModels {}),
+            Effect::execute(LoadModels {
+                provider: self.provider,
+            }),
         ]
     }
 }
@@ -136,7 +138,7 @@ impl Operation for SelectAccountForDraft {
                 id: self.id.clone(),
             })
             .await?;
-        Ok((selection, context.client.models().await))
+        Ok((selection, context.client.models(self.provider).await))
     }
 
     fn apply(self, snapshot: &mut Snapshot, (selection, catalog): Self::Output) -> Vec<Effect> {
@@ -151,7 +153,7 @@ impl Operation for SelectAccountForDraft {
         apply_selection(snapshot, selection);
         match catalog {
             Ok(catalog) => {
-                LoadModels {}.apply(snapshot, catalog);
+                LoadModels { provider }.apply(snapshot, catalog);
                 if snapshot
                     .catalog
                     .models
@@ -249,7 +251,9 @@ impl Operation for ReadAccountLogin {
             }
             return vec![
                 Effect::execute(ListAccounts {}),
-                Effect::execute(LoadModels {}),
+                Effect::execute(LoadModels {
+                    provider: self.provider,
+                }),
             ];
         }
         Vec::new()
@@ -286,7 +290,9 @@ impl Operation for LogoutAccount {
         Arc::make_mut(&mut snapshot.catalog.account).accounts = None;
         let mut effects = vec![
             Effect::execute(ListAccounts {}),
-            Effect::execute(LoadModels {}),
+            Effect::execute(LoadModels {
+                provider: self.provider,
+            }),
         ];
         if self.provider == crate::session::ProviderKind::DeepSeek {
             Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials = None;
@@ -330,7 +336,9 @@ impl Operation for UpdateDshCredential {
         Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials = Some(Arc::new(credentials));
         vec![
             Effect::execute(ListAccounts {}),
-            Effect::execute(LoadModels {}),
+            Effect::execute(LoadModels {
+                provider: crate::session::ProviderKind::DeepSeek,
+            }),
         ]
     }
 }
@@ -371,7 +379,7 @@ mod account_model_tests {
             {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Sonnet","isDefault":true, "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
         ]})).unwrap();
         if models_first {
-            LoadModels {}.apply(
+            crate::test_models::apply_catalog(
                 &mut snapshot,
                 rpc::ModelPage {
                     data: models.data.clone(),
@@ -387,7 +395,7 @@ mod account_model_tests {
         if models_first {
             ListAccounts {}.apply(&mut snapshot, accounts);
         } else {
-            LoadModels {}.apply(&mut snapshot, models);
+            crate::test_models::apply_catalog(&mut snapshot, models);
         }
         assert_eq!(
             snapshot.model_provider_for_draft(key.clone()),
@@ -567,7 +575,7 @@ mod account_model_tests {
                 .map(String::as_str),
             Some("claude:c")
         );
-        LoadModels {}.apply(
+        crate::test_models::apply_catalog(
             &mut snapshot,
             rpc::ModelPage {
                 data: vec![codex.clone()],

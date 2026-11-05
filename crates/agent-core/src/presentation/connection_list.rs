@@ -92,7 +92,7 @@ mod tests {
                 name: "repo".into(),
                 coordinator_url: None,
                 roots: vec![],
-                icon_png: None,
+                icon: None,
                 monogram: "R".into(),
                 icon_color: 0,
                 pinned: false,

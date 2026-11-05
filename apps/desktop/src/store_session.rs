@@ -58,6 +58,7 @@ impl Sessions {
         &self,
         remote: Option<&str>,
         runtime: Runtime,
+        enabled: Option<bool>,
     ) -> Result<StoreSession, String> {
         let host = match remote {
             Some(ticket) => {
@@ -87,7 +88,16 @@ impl Sessions {
             return Err("sessions are closed".into());
         }
         if let Some(owner) = entry.as_ref() {
-            if !owner.store.snapshot().connection.connected {
+            if let Some(enabled) = enabled {
+                owner
+                    .store
+                    .dispatch(agent_core::state::Intent::SetConnectionEnabled { enabled })
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            if !owner.store.snapshot().connection.connected
+                && owner.store.snapshot().connection_enabled()
+            {
                 runtime
                     .connections
                     .resume(&owner.store, remote)
@@ -101,7 +111,7 @@ impl Sessions {
             Arc::new(crate::platform::SessionStorage { path }),
             runtime.connections.preferences.clone(),
         );
-        let snapshot = persistence
+        let mut snapshot = persistence
             .restore(false, Some(crate::platform::conversation_copies(&host)?))
             .await
             .map_err(|error| match error {
@@ -112,6 +122,15 @@ impl Sessions {
                     reason.to_string()
                 }
             })?;
+        if let Some(enabled) = enabled {
+            snapshot = agent_core::state::reduce(
+                &snapshot,
+                agent_core::state::Event::Intent(agent_core::state::Intent::SetConnectionEnabled {
+                    enabled,
+                }),
+            )
+            .0;
+        }
         let cwd = snapshot
             .pane
             .navigation
@@ -402,7 +421,13 @@ mod tests {
         runtime.sessions.close().await;
         assert!(primary.pane.snapshot().is_err());
         assert!(side.pane.snapshot().is_err());
-        assert!(runtime.sessions.open(None, runtime.clone()).await.is_err());
+        assert!(
+            runtime
+                .sessions
+                .open(None, runtime.clone(), None)
+                .await
+                .is_err()
+        );
         assert!(store.dispatch(Intent::ShowThreadList).await.is_err());
     }
 

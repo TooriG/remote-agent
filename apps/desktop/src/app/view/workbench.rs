@@ -9,7 +9,6 @@ struct WorkbenchModel {
     standalone: bool,
     details_popover: bool,
     panel: PanelState,
-    titles: Vec<String>,
     browsers: Vec<(u64, Entity<crate::browser::Browser>)>,
     sidebar: bool,
     side_chat_mode: bool,
@@ -19,23 +18,71 @@ struct WorkbenchModel {
     explorer_state: Entity<gpui_kit::component::resizable::ResizableState>,
     explorer_width: f32,
     explorer_max: f32,
-    file: Option<String>,
-    file_truncated: bool,
-    saving: bool,
-    file_failed: bool,
+    explorer_available: f32,
+    explorer_focus: FocusHandle,
+    cwd: String,
+    review_files: Vec<String>,
+    editor: FileEditorModel,
     review: Option<(u64, u64, usize)>,
     agents: Vec<AgentSummary>,
     resource: Option<AnyView>,
     resource_message: &'static str,
     file_search: Entity<InputState>,
-    editor_input: Entity<gpui_kit::component::input::EditorState>,
     focus: FocusHandle,
 }
+
+#[derive(PartialEq)]
+struct FileEditorModel {
+    path: Option<String>,
+    target: Option<String>,
+    failed: bool,
+    input: Entity<gpui_kit::component::input::EditorState>,
+    saving: bool,
+    truncated: bool,
+    draft: DraftKey,
+}
+
+pub(in crate::app) enum WorkbenchAction {
+    Activate(u64),
+    Close(u64),
+    Open(Panel),
+    Layout(PanelLayout),
+    Hide,
+    Download(String),
+    Save,
+    Reload(String),
+    Edit(DraftKey, String),
+    RefreshReview,
+    Review(String),
+    Notice(errors::NoticeAction),
+    Dispatch(Intent),
+    Tree(
+        agent_core::presentation::files::FileTreeKey,
+        agent_core::presentation::files::FileTreeAction,
+    ),
+    TreeSelect(
+        agent_core::presentation::files::FileTreeKey,
+        String,
+        bool,
+        bool,
+    ),
+    TreeMenu(
+        agent_core::presentation::files::FileTreeKey,
+        String,
+        Point<Pixels>,
+    ),
+    TreeBounds(Bounds<Pixels>),
+    ExplorerFit(f32),
+    ExplorerResize(f32),
+    ExplorerCommit,
+}
+impl EventEmitter<WorkbenchAction> for WorkbenchView {}
 
 pub(in crate::app) struct WorkbenchView {
     desktop: WeakEntity<Desktop>,
     _explorer: Subscription,
     model: Option<WorkbenchModel>,
+    titles: BTreeMap<u64, String>,
     _browsers: Vec<Subscription>,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
@@ -51,6 +98,7 @@ impl WorkbenchView {
             desktop: desktop.downgrade(),
             _explorer: cx.observe(explorer, |_, _, cx| cx.notify()),
             model: None,
+            titles: BTreeMap::new(),
             _browsers: Vec::new(),
             #[cfg(test)]
             renders: 0,
@@ -64,6 +112,17 @@ impl WorkbenchView {
         if self.model.as_ref().map(|model| &model.browsers)
             != model.as_ref().map(|model| &model.browsers)
         {
+            self.titles = model
+                .as_ref()
+                .into_iter()
+                .flat_map(|model| &model.browsers)
+                .map(|(id, browser)| {
+                    (
+                        *id,
+                        browser.read(cx).title(crate::localization::language(cx)),
+                    )
+                })
+                .collect();
             self._browsers = model
                 .as_ref()
                 .into_iter()
@@ -73,17 +132,8 @@ impl WorkbenchView {
                     cx.subscribe(
                         browser,
                         move |view, _, title: &crate::browser::BrowserTitle, cx| {
-                            let Some(model) = &mut view.model else { return };
-                            let Some(index) = model
-                                .panel
-                                .surfaces
-                                .iter()
-                                .position(|surface| surface.id == id)
-                            else {
-                                return;
-                            };
-                            if model.titles[index] != title.0 {
-                                model.titles[index] = title.0.clone();
+                            if view.titles.get(&id) != Some(&title.0) {
+                                view.titles.insert(id, title.0.clone());
                                 cx.notify();
                             }
                         },
@@ -97,24 +147,92 @@ impl WorkbenchView {
 }
 
 impl Render for WorkbenchView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         {
             self.renders += 1;
         }
-        let render_owner = cx.entity_id();
-        self.desktop
-            .update(cx, |_, cx| {
-                self.model
-                    .as_ref()
-                    .map(|model| Desktop::render_workbench(model, render_owner, cx))
-                    .unwrap_or_else(|| div().into_any_element())
-            })
-            .unwrap_or_else(|_| div().into_any_element())
+        self.model
+            .as_ref()
+            .map(|model| Self::render_workbench(model, &self.titles, &self.desktop, window, cx))
+            .unwrap_or_else(|| div().into_any_element())
     }
 }
 
 impl Desktop {
+    pub(in crate::app) fn workbench_action(
+        &mut self,
+        action: &WorkbenchAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use WorkbenchAction::*;
+        match action {
+            Activate(id) => self.activate_surface(*id, window, cx),
+            Close(id) => self.close_surface(*id, window, cx),
+            Open(panel) => self.open_panel(*panel, window, cx),
+            Layout(layout) => {
+                self.panels = self.panels.clone().set_layout(self.panel_scope(), *layout)
+            }
+            Hide => self.panels = self.panels.clone().set_open(self.panel_scope(), false),
+            Download(path) => self.download(path.clone()),
+            Save => self.save_file(),
+            Reload(path) => {
+                self.open_file(path.clone(), None, true, cx);
+            }
+            Edit(draft, text) => self.dispatch(Intent::SetDraftText {
+                thread_id: draft.clone(),
+                text: text.clone(),
+            }),
+            RefreshReview => self.refresh_review(),
+            Review(path) => self.open_review(Some(path), cx),
+            Notice(action) => self.notice_action(action.clone(), window, cx),
+            Dispatch(intent) => self.dispatch(intent.clone()),
+            Tree(key, action) => {
+                if !self
+                    .file_browser
+                    .as_ref()
+                    .is_some_and(|browser| &browser.model.key == key)
+                {
+                    return;
+                }
+                self.dispatch(Intent::FileTree {
+                    key: key.clone(),
+                    action: action.clone(),
+                });
+                if matches!(
+                    action,
+                    agent_core::presentation::files::FileTreeAction::Refresh
+                ) {
+                    let panel = self.panels.get(self.panel_scope());
+                    if panel.kind() == Panel::File
+                        && let Some(path) =
+                            panel.selected().and_then(|surface| surface.path.clone())
+                    {
+                        self.dispatch(Intent::ReadFile(op::ReadFile {
+                            path,
+                            discard_draft: false,
+                        }));
+                    }
+                }
+            }
+            TreeSelect(key, path, multiple, extend) => {
+                self.select_file_tree_row(key, path, *multiple, *extend, cx)
+            }
+            TreeMenu(key, path, point) => self.show_tree_file_menu(key, path, *point, window, cx),
+            TreeBounds(bounds) => {
+                if let Some(browser) = &mut self.file_browser {
+                    browser.bounds = *bounds;
+                }
+                return;
+            }
+            ExplorerFit(available) => self.fit_file_explorer(*available, window, cx),
+            ExplorerResize(width) => self.resize_file_explorer(*width, window, cx),
+            ExplorerCommit => self.commit_file_explorer_width(window, cx),
+        }
+        cx.notify();
+    }
+
     fn workbench_visible(&self, open: bool) -> bool {
         self.visible
             && open
@@ -251,24 +369,6 @@ impl Desktop {
                 _ => None,
             })
             .collect();
-        let titles = panel
-            .surfaces
-            .iter()
-            .map(|surface| {
-                browsers
-                    .iter()
-                    .find(|(id, _)| *id == surface.id)
-                    .map_or_else(
-                        || {
-                            surface.path.as_ref().map_or_else(
-                                || agent_core::panels::panel_title(surface.kind),
-                                |path| file_name(path),
-                            )
-                        },
-                        |(_, view)| view.read(cx).title(crate::localization::language(cx)),
-                    )
-            })
-            .collect();
         let file = (kind == Panel::File)
             .then(|| self.snapshot.pane.workspace.file.as_ref())
             .flatten()
@@ -277,13 +377,13 @@ impl Desktop {
                     == Some(file.path.as_str())
             })
             .map(|file| file.path.clone());
+        let target = panel.selected().and_then(|surface| surface.path.clone());
         Some(WorkbenchModel {
             standalone: !self.side_chat_mode
                 && (panel.layout == PanelLayout::Expanded
                     || (panel.layout == PanelLayout::Right && width < px(1080.))),
             details_popover: self.details_popover,
             panel,
-            titles,
             browsers,
             resource,
             resource_message: if pending {
@@ -308,23 +408,39 @@ impl Desktop {
                 self.file_explorer.preferred,
                 self.file_explorer.available,
             ),
+            explorer_available: self.file_explorer.available,
+            explorer_focus: self.file_explorer.focus.clone(),
+            cwd: self.snapshot.pane.navigation.cwd.clone(),
+            review_files: self
+                .snapshot
+                .pane
+                .workspace
+                .review
+                .as_ref()
+                .map(|review| review.files.iter().map(|file| file.path.clone()).collect())
+                .unwrap_or_default(),
             explorer_max: agent_core::presentation::files::explorer_max_width(
                 self.file_explorer.available,
             ),
-            file_truncated: file.is_some()
-                && self
+            editor: FileEditorModel {
+                target,
+                draft: self.draft_key().clone(),
+                input: self.editor.input.clone(),
+                truncated: file.is_some()
+                    && self
+                        .snapshot
+                        .pane
+                        .workspace
+                        .file
+                        .as_ref()
+                        .is_some_and(|file| file.truncated),
+                path: file,
+                saving: kind == Panel::File && self.busy > 0,
+                failed: self
                     .snapshot
-                    .pane
-                    .workspace
-                    .file
-                    .as_ref()
-                    .is_some_and(|file| file.truncated),
-            file,
-            saving: kind == Panel::File && self.busy > 0,
-            file_failed: self
-                .snapshot
-                .operation_error(op::OperationKey::File)
-                .is_some(),
+                    .operation_error(op::OperationKey::File)
+                    .is_some(),
+            },
             review: (kind == Panel::Diff)
                 .then(|| self.snapshot.pane.workspace.review.as_ref())
                 .flatten()
@@ -335,7 +451,6 @@ impl Desktop {
                 Vec::new()
             },
             file_search: self.file_search.clone(),
-            editor_input: self.editor.input.clone(),
             focus: self.panel_focus.clone(),
         })
     }
@@ -367,7 +482,7 @@ impl Desktop {
             !self.snapshot.pane.navigation.cwd.is_empty(),
         )
     }
-    pub(super) fn open_review(&mut self, path: Option<&str>, cx: &mut Context<Self>) {
+    pub(in crate::app) fn open_review(&mut self, path: Option<&str>, cx: &mut Context<Self>) {
         let id = self.open_surface(self.panel_scope(), Panel::Diff, None);
         self.tab = Tab::Chat;
         let diff = self.workspace_diff(id, cx);
@@ -377,7 +492,9 @@ impl Desktop {
         self.refresh_review();
         cx.notify();
     }
+}
 
+impl super::composer::ComposerContent {
     pub(super) fn review_card(
         review: &agent_protocol::models::WorkspaceReview,
         expanded: bool,
@@ -402,8 +519,8 @@ impl Desktop {
                 h_flex()
                     .id("review-summary")
                     .cursor_pointer()
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.open_review(None, cx);
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(super::composer::ComposerAction::Review(None));
                         cx.notify();
                     }))
                     .gap_3()
@@ -441,9 +558,9 @@ impl Desktop {
                             "review-changes",
                             language.text("レビューする"),
                             cx,
-                            |s, _, cx| {
+                            |_, _, cx| {
                                 cx.stop_propagation();
-                                s.open_review(None, cx);
+                                cx.emit(super::composer::ComposerAction::Review(None));
                             },
                         )
                         .border_1()
@@ -462,8 +579,10 @@ impl Desktop {
                         h_flex()
                             .id(SharedString::from(format!("review-file-{}", file.path)))
                             .cursor_pointer()
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                s.open_review(Some(&path), cx);
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(super::composer::ComposerAction::Review(Some(
+                                    path.clone(),
+                                )));
                                 cx.notify();
                             }))
                             .px_3()
@@ -496,7 +615,7 @@ impl Desktop {
                                 )
                             },
                             cx,
-                            |s, _, _| s.review_expanded = !s.review_expanded,
+                            |_, _, cx| cx.emit(super::composer::ComposerAction::ToggleReview),
                         )
                         .icon(if expanded {
                             IconName::ChevronUp
@@ -508,16 +627,75 @@ impl Desktop {
             })
             .into_any_element()
     }
-    fn file_editor(
-        path: Option<&str>,
-        target: Option<&str>,
-        failed: bool,
-        input: &Entity<gpui_kit::component::input::EditorState>,
-        saving: bool,
-        truncated: bool,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+}
+
+impl WorkbenchView {
+    fn explorer_handle(model: &WorkbenchModel, active: bool, cx: &Context<Self>) -> AnyElement {
+        let focus = model.explorer_focus.clone();
+        div()
+            .id("resize-file-explorer")
+            .size_full()
+            .track_focus(&focus)
+            .tab_index(0)
+            .role(Role::Splitter)
+            .aria_orientation(Orientation::Vertical)
+            .aria_label(crate::localization::language(cx).text("ファイル一覧の幅を変更"))
+            .aria_min_numeric_value(EXPLORER_MIN_WIDTH as f64)
+            .aria_max_numeric_value(model.explorer_max as f64)
+            .when_some(
+                model.explorer_state.read(cx).sizes().get(1),
+                |handle, width| handle.aria_numeric_value(f32::from(*width) as f64),
+            )
+            .border_l_1()
+            .border_color(rgb(appearance::BORDER))
+            .when(active, |handle| {
+                handle.border_color(rgb(appearance::ACCENT))
+            })
+            .focus_visible(|handle| handle.border_color(rgb(appearance::ACCENT)))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                focus.focus(window, cx)
+            })
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
+                let modifiers = event.keystroke.modifiers;
+                if modifiers.alt || modifiers.control || modifiers.platform {
+                    return;
+                }
+                let Some(model) = &view.model else {
+                    return;
+                };
+                let Some(current) = model.explorer_state.read(cx).sizes().get(1).copied() else {
+                    return;
+                };
+                if let Some(width) = agent_core::presentation::files::explorer_key_width(
+                    &event.keystroke.key,
+                    current.into(),
+                    model.explorer_available,
+                ) {
+                    cx.emit(WorkbenchAction::ExplorerResize(width));
+                    cx.stop_propagation();
+                }
+            }))
+            .into_any_element()
+    }
+
+    fn file_editor(model: &FileEditorModel, cx: &Context<Self>) -> AnyElement {
+        let path = model.path.as_deref();
+        let target = model.target.as_deref();
+        let failed = model.failed;
+        let input = &model.input;
+        let saving = model.saving;
+        let truncated = model.truncated;
+        let draft = &model.draft;
         let language = crate::localization::language(cx);
+        let reload = path.map(str::to_owned);
+        let draft = draft.clone();
+        let edit = path.map(|path| {
+            agent_core::localization::localized_ui_format(
+                language,
+                "ファイル {0} を編集してください。\n\n".into(),
+                vec![path.to_owned()],
+            )
+        });
         let mut editor = v_flex()
             .debug_selector(|| "conversation-file".into())
             .size_full()
@@ -544,8 +722,8 @@ impl Desktop {
                             IconName::ArrowDown,
                             language.text("ダウンロード"),
                             cx,
-                            move |view, _, cx| {
-                                view.download(download.clone());
+                            move |_, _, cx| {
+                                cx.emit(WorkbenchAction::Download(download.clone()));
                                 cx.notify();
                             },
                         )
@@ -571,9 +749,7 @@ impl Desktop {
                         .gap_2()
                         .flex_wrap()
                         .child(
-                            button("save-file", language.text("保存"), cx, |s, _, _| {
-                                s.save_file()
-                            })
+                            button("save-file", language.text("保存"), cx, |_, _, cx| cx.emit(WorkbenchAction::Save))
                             .primary()
                             .disabled(saving || truncated),
                         )
@@ -582,30 +758,14 @@ impl Desktop {
                             IconName::RotateCw,
                             language.text("再読み込み・下書きを破棄"),
                             cx,
-                            |s, _, cx| {
-                                if let Some(file) = &s.snapshot.pane.workspace.file {
-                                    s.open_file(file.path.clone(), None, true, cx);
-                                }
-                            },
+                            move |_, _, cx| { if let Some(path) = &reload { cx.emit(WorkbenchAction::Reload(path.clone())); } },
                         ))
                         .child(
                             button(
                                 "ai-edit",
                                 language.text("AI に編集を依頼"),
                                 cx,
-                                move |s, _, _| {
-                                    if let Some(file) = &s.snapshot.pane.workspace.file {
-                                        s.dispatch(Intent::SetDraftText {
-                                            thread_id: s.draft_key().clone(),
-                                            text: agent_core::localization::localized_ui_format(
-                                                language,
-                                                "ファイル {0} を編集してください。\n\n".into(),
-                                                vec![file.path.clone()],
-                                            ),
-                                        });
-                                    }
-                                    s.tab = Tab::Chat;
-                                },
+                                move |_, _, cx| { if let Some(text) = &edit { cx.emit(WorkbenchAction::Edit(draft.clone(), text.clone())); } },
                             )
                             .icon(IconName::Bot),
                         ),
@@ -633,10 +793,13 @@ impl Desktop {
     }
     fn render_workbench(
         model: &WorkbenchModel,
-        render_owner: EntityId,
+        titles: &BTreeMap<u64, String>,
+        desktop: &WeakEntity<Desktop>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
+        let render_owner = cx.entity_id();
         let panel = &model.panel;
         let layout = panel.layout;
         let active = panel.active;
@@ -644,9 +807,14 @@ impl Desktop {
         let tabs = panel
             .surfaces
             .iter()
-            .zip(&model.titles)
-            .map(|(surface, title)| {
+            .map(|surface| {
                 let id = surface.id;
+                let title = titles.get(&id).cloned().unwrap_or_else(|| {
+                    surface.path.as_ref().map_or_else(
+                        || agent_core::panels::panel_title(surface.kind),
+                        |path| file_name(path),
+                    )
+                });
                 h_flex()
                     .gap_1()
                     .rounded_md()
@@ -659,8 +827,8 @@ impl Desktop {
                             .ghost()
                             .selected(Some(id) == active)
                             .debug_selector(move || format!("surface-tab-{id}"))
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                view.activate_surface(id, window, cx)
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(WorkbenchAction::Activate(id))
                             })),
                     )
                     .child(
@@ -669,7 +837,7 @@ impl Desktop {
                             IconName::Close,
                             language.text("タブを閉じる"),
                             cx,
-                            move |view, window, cx| view.close_surface(id, window, cx),
+                            move |_, _, cx| cx.emit(WorkbenchAction::Close(id)),
                         )
                         .debug_selector(move || {
                             if Some(id) == active {
@@ -693,7 +861,12 @@ impl Desktop {
             .dropdown_menu(move |mut menu, _, cx| {
                 let tools = menu_owner
                     .upgrade()
-                    .map(|view| view.read(cx).panel_tools())
+                    .and_then(|view| {
+                        view.read(cx)
+                            .model
+                            .as_ref()
+                            .map(|model| model.tools.clone())
+                    })
                     .unwrap_or_default();
                 for tool in tools {
                     let owner = menu_owner.clone();
@@ -701,9 +874,9 @@ impl Desktop {
                         PopupMenuItem::new(tool.label)
                             .icon(panel_icon(tool.kind))
                             .disabled(!tool.enabled)
-                            .on_click(move |_, window, cx| {
+                            .on_click(move |_, _, cx| {
                                 let _ = owner
-                                    .update(cx, |view, cx| view.open_panel(tool.kind, window, cx));
+                                    .update(cx, |_, cx| cx.emit(WorkbenchAction::Open(tool.kind)));
                             }),
                     );
                 }
@@ -716,8 +889,7 @@ impl Desktop {
             .gap_1()
             .flex_shrink_0()
             .when(model.standalone && !model.sidebar, |bar| {
-                bar.pl_0()
-                    .child(sidebar_header(false, &cx.weak_entity(), cx))
+                bar.pl_0().child(sidebar_header(false, desktop, cx))
             })
             .child(
                 h_flex()
@@ -740,15 +912,14 @@ impl Desktop {
                         },
                         language.text("パネルを拡大・縮小"),
                         cx,
-                        |view, _, _| {
-                            let key = view.panel_scope();
-                            let layout =
-                                if view.panels.get(key.clone()).layout == PanelLayout::Expanded {
+                        move |_, _, cx| {
+                            cx.emit(WorkbenchAction::Layout(
+                                if layout == PanelLayout::Expanded {
                                     PanelLayout::Right
                                 } else {
                                     PanelLayout::Expanded
-                                };
-                            view.panels = view.panels.clone().set_layout(key, layout);
+                                },
+                            ))
                         },
                     )
                     .debug_selector(|| "panel-expand".into()),
@@ -759,14 +930,12 @@ impl Desktop {
                         IconName::PanelBottom,
                         language.text("下・右の配置を切り替え"),
                         cx,
-                        move |view, _, _| {
-                            let layout = if layout == PanelLayout::Bottom {
+                        move |_, _, cx| {
+                            cx.emit(WorkbenchAction::Layout(if layout == PanelLayout::Bottom {
                                 PanelLayout::Right
                             } else {
                                 PanelLayout::Bottom
-                            };
-                            view.panels =
-                                view.panels.clone().set_layout(view.panel_scope(), layout);
+                            }))
                         },
                     )
                     .debug_selector(|| "panel-bottom".into())
@@ -774,14 +943,15 @@ impl Desktop {
                 )
                 // The panel covers the conversation header, so it carries the toggle.
                 .when(model.standalone, |bar| {
-                    bar.child(Self::details_toggle(
+                    bar.child(Desktop::details_toggle(
                         false,
                         model.details_popover,
                         render_owner,
+                        desktop,
                         cx,
                     ))
                 })
-                .child(Self::panel_toggle(true, cx))
+                .child(Desktop::panel_toggle(true, desktop, cx))
             })
             .when(model.side_chat_mode, |bar| {
                 bar.child(
@@ -790,150 +960,160 @@ impl Desktop {
                         IconName::ArrowLeft,
                         language.text("サイドチャットに戻る"),
                         cx,
-                        |view, _, _| {
-                            view.panels = view.panels.clone().set_open(view.panel_scope(), false)
-                        },
+                        |_, _, cx| cx.emit(WorkbenchAction::Hide),
                     )
                     .debug_selector(|| "back-side-chat".into()),
                 )
             });
-        let body =
-            match kind {
-                Panel::Home => {
-                    let mut chooser = v_flex().w_full().max_w(px(300.)).gap_1().child(
-                        div()
-                            .text_sm()
-                            .mb_3()
-                            .text_center()
-                            .child(language.text("機能を開く")),
+        let toolbar = toolbar.when(
+            cfg!(target_os = "windows")
+                && !model.side_chat_mode
+                && (model.standalone || layout == PanelLayout::Right),
+            |toolbar| crate::window_chrome::header(toolbar, window),
+        );
+        let body = match kind {
+            Panel::Home => {
+                let mut chooser = v_flex().w_full().max_w(px(300.)).gap_1().child(
+                    div()
+                        .text_sm()
+                        .mb_3()
+                        .text_center()
+                        .child(language.text("機能を開く")),
+                );
+                for (ix, tool) in model.tools.iter().enumerate() {
+                    let panel = tool.kind;
+                    chooser = chooser.child(
+                        button(
+                            format!("tool-{ix}"),
+                            tool.label.clone(),
+                            cx,
+                            move |_, _, cx| {
+                                cx.emit(WorkbenchAction::Open(panel));
+                            },
+                        )
+                        .debug_selector(move || format!("surface-{ix}"))
+                        .icon(panel_icon(panel))
+                        .w_full()
+                        .h_8()
+                        .justify_start()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(appearance::MUTED))
+                                .child(tool.shortcut.clone()),
+                        )
+                        .disabled(!tool.enabled),
                     );
-                    for (ix, tool) in model.tools.iter().enumerate() {
-                        let panel = tool.kind;
-                        chooser = chooser.child(
-                            button(
-                                format!("tool-{ix}"),
-                                tool.label.clone(),
-                                cx,
-                                move |view, window, cx| {
-                                    view.open_panel(panel, window, cx);
-                                },
-                            )
-                            .debug_selector(move || format!("surface-{ix}"))
-                            .icon(panel_icon(panel))
-                            .w_full()
-                            .h_8()
-                            .justify_start()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(appearance::MUTED))
-                                    .child(tool.shortcut.clone()),
-                            )
-                            .disabled(!tool.enabled),
-                        );
-                    }
-                    v_flex()
-                        .id("surface-launcher")
-                        .debug_selector(|| "surface-launcher".into())
-                        .size_full()
-                        .p_6()
-                        .items_center()
-                        .justify_center()
-                        .track_focus(&model.focus)
-                        .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.modifiers.control
-                                || event.keystroke.modifiers.platform
-                                || event.keystroke.modifiers.alt
-                            {
-                                return;
-                            }
-                            let Some(tool) = view.panel_tools().into_iter().find(|tool| {
+                }
+                v_flex()
+                    .id("surface-launcher")
+                    .debug_selector(|| "surface-launcher".into())
+                    .size_full()
+                    .p_6()
+                    .items_center()
+                    .justify_center()
+                    .track_focus(&model.focus)
+                    .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
+                        if event.keystroke.modifiers.control
+                            || event.keystroke.modifiers.platform
+                            || event.keystroke.modifiers.alt
+                        {
+                            return;
+                        }
+                        let Some(tool) = view
+                            .model
+                            .as_ref()
+                            .into_iter()
+                            .flat_map(|model| model.tools.iter())
+                            .find(|tool| {
                                 tool.shortcut
                                     .eq_ignore_ascii_case(event.keystroke.key.as_str())
-                            }) else {
-                                return;
-                            };
-                            if tool.enabled {
-                                view.open_panel(tool.kind, window, cx);
-                                cx.stop_propagation();
+                            })
+                        else {
+                            return;
+                        };
+                        if tool.enabled {
+                            cx.emit(WorkbenchAction::Open(tool.kind));
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(chooser)
+                    .into_any_element()
+            }
+            Panel::Agents => Desktop::agents_panel(&model.agents, language),
+            Panel::Files => super::file_tree::render_tree(
+                model.tree.as_ref(),
+                &model.file_search,
+                &model.focus,
+                &model.cwd,
+                cx,
+            ),
+            Panel::File => div()
+                .size_full()
+                .on_prepaint({
+                    let owner = cx.entity().downgrade();
+                    move |bounds, window, cx| {
+                        let available = f32::from(bounds.size.width);
+                        if let Some(owner) = owner.upgrade()
+                            && owner
+                                .read(cx)
+                                .model
+                                .as_ref()
+                                .is_some_and(|model| model.explorer_available != available)
+                        {
+                            window.defer(cx, move |_, cx| {
+                                owner.update(cx, |_, cx| {
+                                    cx.emit(WorkbenchAction::ExplorerFit(available))
+                                })
+                            });
+                        }
+                    }
+                })
+                .child(
+                    h_resizable("file-explorer-split")
+                        .with_state(&model.explorer_state)
+                        .with_handle_appearance(Rc::new({
+                            let owner = cx.entity().downgrade();
+                            move |handle, _, cx| {
+                                owner
+                                    .update(cx, |view, cx| {
+                                        view.model.as_ref().map(|model| {
+                                            Self::explorer_handle(model, handle.is_active(), cx)
+                                        })
+                                    })
+                                    .ok()
+                                    .flatten()
                             }
                         }))
-                        .child(chooser)
-                        .into_any_element()
-                }
-                Panel::Agents => Self::agents_panel(&model.agents, language),
-                Panel::Files => {
-                    Self::files_tree(model.tree.as_ref(), &model.file_search, &model.focus, cx)
-                }
-                Panel::File => div()
-                    .size_full()
-                    .on_prepaint({
-                        let owner = cx.entity().downgrade();
-                        move |bounds, window, cx| {
-                            let available = f32::from(bounds.size.width);
-                            if let Some(owner) = owner.upgrade()
-                                && owner.read(cx).file_explorer.available != available
-                            {
-                                window.defer(cx, move |window, cx| {
-                                    owner.update(cx, |view, cx| {
-                                        view.fit_file_explorer(available, window, cx)
-                                    })
-                                });
+                        .on_resize({
+                            let owner = cx.entity().downgrade();
+                            move |_, _, cx| {
+                                let _ = owner
+                                    .update(cx, |_, cx| cx.emit(WorkbenchAction::ExplorerCommit));
                             }
-                        }
-                    })
-                    .child(
-                        h_resizable("file-explorer-split")
-                            .with_state(&model.explorer_state)
-                            .with_handle_appearance(Rc::new({
-                                let owner = cx.entity().downgrade();
-                                move |handle, _, cx| {
-                                    owner
-                                        .update(cx, |view, cx| {
-                                            view.file_explorer_handle(handle.is_active(), cx)
-                                        })
-                                        .ok()
-                                }
-                            }))
-                            .on_resize({
-                                let owner = cx.entity().downgrade();
-                                move |_, window, cx| {
-                                    let _ = owner.update(cx, |view, cx| {
-                                        view.commit_file_explorer_width(window, cx)
-                                    });
-                                }
-                            })
-                            .child(
-                                resizable_panel()
-                                    .size_range(px(EXPLORER_CONTENT_MIN_WIDTH)..Pixels::MAX)
-                                    .child(Self::file_editor(
-                                        model.file.as_deref(),
-                                        model
-                                            .panel
-                                            .selected()
-                                            .and_then(|surface| surface.path.as_deref()),
-                                        model.file_failed,
-                                        &model.editor_input,
-                                        model.saving,
-                                        model.file_truncated,
-                                        cx,
-                                    )),
-                            )
-                            .child(
-                                resizable_panel()
-                                    .size(px(model.explorer_width))
-                                    .size_range(px(EXPLORER_MIN_WIDTH)..px(model.explorer_max))
-                                    .fixed()
-                                    .child(Self::files_tree(
-                                        model.tree.as_ref(),
-                                        &model.file_search,
-                                        &model.focus,
-                                        cx,
-                                    )),
-                            ),
-                    )
-                    .into_any_element(),
-                Panel::Diff => v_flex()
+                        })
+                        .child(
+                            resizable_panel()
+                                .size_range(px(EXPLORER_CONTENT_MIN_WIDTH)..Pixels::MAX)
+                                .child(Self::file_editor(&model.editor, cx)),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size(px(model.explorer_width))
+                                .size_range(px(EXPLORER_MIN_WIDTH)..px(model.explorer_max))
+                                .fixed()
+                                .child(super::file_tree::render_tree(
+                                    model.tree.as_ref(),
+                                    &model.file_search,
+                                    &model.focus,
+                                    &model.cwd,
+                                    cx,
+                                )),
+                        ),
+                )
+                .into_any_element(),
+            Panel::Diff => {
+                v_flex()
                     .size_full()
                     .min_h_0()
                     .p_4()
@@ -955,13 +1135,10 @@ impl Desktop {
                                 IconName::RotateCw,
                                 language.text("変更を更新"),
                                 cx,
-                                |s, _, _| s.refresh_review(),
+                                |_, _, cx| cx.emit(WorkbenchAction::RefreshReview),
                             )),
                     )
-                    .child(Self::diff_file_menu(
-                        model.review.map_or(0, |review| review.2),
-                        cx,
-                    ))
+                    .child(Self::diff_file_menu(&model.review_files, cx))
                     .child(
                         div().flex_1().min_h_0().children(
                             model
@@ -970,17 +1147,18 @@ impl Desktop {
                                 .map(|view| view.cached(StyleRefinement::default().size_full())),
                         ),
                     )
-                    .into_any_element(),
-                Panel::SideChat | Panel::Terminal | Panel::Browser => {
-                    if let Some(view) = &model.resource {
-                        view.clone()
-                            .cached(StyleRefinement::default().size_full())
-                            .into_any_element()
-                    } else {
-                        div().p_4().child(model.resource_message).into_any_element()
-                    }
+                    .into_any_element()
+            }
+            Panel::SideChat | Panel::Terminal | Panel::Browser => {
+                if let Some(view) = &model.resource {
+                    view.clone()
+                        .cached(StyleRefinement::default().size_full())
+                        .into_any_element()
+                } else {
+                    div().p_4().child(model.resource_message).into_any_element()
                 }
-            };
+            }
+        };
         v_flex()
             .size_full()
             .min_h_0()
@@ -991,7 +1169,7 @@ impl Desktop {
                 ErrorScope::Workspace,
                 None,
                 cx,
-                Desktop::notice_action,
+                |_, action, _, cx| cx.emit(WorkbenchAction::Notice(action)),
             ))
             .child(div().flex_1().min_h_0().flex().child(body))
             .into_any_element()
@@ -1023,32 +1201,31 @@ impl Desktop {
         );
         view
     }
-    fn diff_file_menu(files: usize, cx: &Context<Self>) -> AnyElement {
+}
+
+impl WorkbenchView {
+    fn diff_file_menu(files: &[String], cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let entity = cx.entity().downgrade();
+        let files = files.to_vec();
         Button::new("diff-file-navigation")
             .debug_selector(|| "diff-file-navigation".into())
             .label(agent_core::localization::localized_ui_format(
                 language,
                 "ファイルを選択 ({0})".into(),
-                vec![files.to_string()],
+                vec![files.len().to_string()],
             ))
             .accessibility_label(language.text("差分のファイルを選択"))
             .dropdown_caret(true)
             .ghost()
-            .dropdown_menu(move |mut menu, _, cx| {
-                if let Some(owner) = entity.upgrade()
-                    && let Some(review) = &owner.read(cx).snapshot.pane.workspace.review
-                {
-                    for file in &review.files {
-                        let path = file.path.clone();
-                        let entity = entity.clone();
-                        menu = menu.item(PopupMenuItem::new(path.clone()).on_click(
-                            move |_, _, cx| {
-                                let _ = entity.update(cx, |s, cx| s.open_review(Some(&path), cx));
-                            },
-                        ));
-                    }
+            .dropdown_menu(move |mut menu, _, _| {
+                for path in &files {
+                    let path = path.clone();
+                    let entity = entity.clone();
+                    menu = menu.item(PopupMenuItem::new(path.clone()).on_click(move |_, _, cx| {
+                        let _ = entity
+                            .update(cx, |_, cx| cx.emit(WorkbenchAction::Review(path.clone())));
+                    }));
                 }
                 menu
             })

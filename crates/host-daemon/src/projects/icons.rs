@@ -1,9 +1,9 @@
 //! Discover local project branding, following T3 Code's common icon locations.
+use agent_protocol::models::ProjectIcon;
 use base64::Engine;
 use std::{
     io::{Cursor, Read},
-    path::Path,
-    sync::LazyLock,
+    path::{Path, PathBuf},
 };
 
 const ICON_SIZE: u32 = 64;
@@ -41,37 +41,73 @@ const SOURCES: &[&str] = &[
     "src/index.html",
 ];
 
-/// Optional branding must never prevent opening the task list. Resolve afresh on
-/// refresh, and keep file reads and image decoding off the async executor.
-pub(crate) fn resolve(root: &Path) -> Option<String> {
+mod appearance;
+mod native;
+mod web;
+
+struct IconSource {
+    light: Vec<PathBuf>,
+    dark: Vec<PathBuf>,
+}
+
+impl IconSource {
+    fn image(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        Self {
+            light: vec![path.clone()],
+            dark: vec![path],
+        }
+    }
+}
+
+/// Resolve both appearances off the async executor. Clients can change their
+/// appearance without a refresh, and a missing icon never blocks the list.
+pub(crate) fn resolve(root: &Path) -> Option<ProjectIcon> {
     if !root.is_absolute() {
         return None;
     }
     let root = root.canonicalize().ok()?;
-    let mut candidates = CANDIDATES.iter().map(|path| (*path).to_owned()).chain(
-        SOURCES
-            .iter()
-            .filter_map(|source| {
-                let bytes = read_within(&root, source)?;
-                icon_href(std::str::from_utf8(&bytes).ok()?)
-            })
-            .flat_map(|href| {
-                let href = href.trim_start_matches('/');
-                [format!("public/{href}"), href.to_owned()]
-            }),
-    );
-    candidates
-        .find_map(|path| {
-            let bytes = read_within(&root, &path)?;
-            thumbnail(
-                &bytes,
-                Path::new(&path).extension().is_some_and(|ext| ext == "svg"),
-            )
+    let declared = SOURCES.iter().filter_map(|source| {
+        let bytes = read_within(&root, Path::new(source))?;
+        web::source(std::str::from_utf8(&bytes).ok()?)
+    });
+    declared
+        .chain(CANDIDATES.iter().map(|path| IconSource::image(*path)))
+        .find_map(|source| resolve_source(&root, source))
+        .or_else(|| {
+            native::sources(&root)
+                .into_iter()
+                .find_map(|source| resolve_source(&root, source))
         })
-        .map(|png| base64::engine::general_purpose::STANDARD.encode(png))
 }
 
-fn read_within(root: &Path, relative: &str) -> Option<Vec<u8>> {
+fn resolve_source(root: &Path, source: IconSource) -> Option<ProjectIcon> {
+    let light = render_paths(root, &source.light, false);
+    let dark = render_paths(root, &source.dark, true);
+    let (light_png, dark_png) = match (light, dark) {
+        (Some(light), Some(dark)) => (light, dark),
+        (Some(png), None) | (None, Some(png)) => (png.clone(), png),
+        (None, None) => return None,
+    };
+    Some(ProjectIcon {
+        light_png,
+        dark_png,
+    })
+}
+
+fn render_paths(root: &Path, paths: &[PathBuf], dark: bool) -> Option<String> {
+    paths.iter().find_map(|path| {
+        let bytes = read_within(root, path)?;
+        let png = thumbnail(
+            &bytes,
+            path.extension().is_some_and(|ext| ext == "svg"),
+            dark,
+        )?;
+        Some(base64::engine::general_purpose::STANDARD.encode(png))
+    })
+}
+
+fn read_within(root: &Path, relative: &Path) -> Option<Vec<u8>> {
     let path = root.join(relative).canonicalize().ok()?;
     if !path.starts_with(root) {
         return None;
@@ -86,32 +122,12 @@ fn read_within(root: &Path, relative: &str) -> Option<Vec<u8>> {
     (bytes.len() as u64 <= MAX_FILE_BYTES).then_some(bytes)
 }
 
-fn icon_href(source: &str) -> Option<String> {
-    static LINKS: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"(?i)<link\b[^>]*>").unwrap());
-    static REL: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r#"(?i)\brel\s*([=:])\s*["'](?:icon|shortcut icon)["']"#).unwrap()
-    });
-    static HREF: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r#"(?i)\bhref\s*[=:]\s*["']([^"'?#]+)"#).unwrap());
-    LINKS
-        .find_iter(source)
-        .map(|tag| tag.as_str())
-        .filter(|entry| REL.is_match(entry))
-        .find_map(|entry| HREF.captures(entry).map(|capture| capture[1].to_owned()))
-        .or_else(|| {
-            source
-                .split(['{', '}'])
-                .filter(|entry| {
-                    REL.captures(entry)
-                        .is_some_and(|capture| &capture[1] == ":")
-                })
-                .find_map(|entry| HREF.captures(entry).map(|capture| capture[1].to_owned()))
-        })
-}
-
-fn thumbnail(bytes: &[u8], svg: bool) -> Option<Vec<u8>> {
+fn thumbnail(bytes: &[u8], svg: bool, dark: bool) -> Option<Vec<u8>> {
     if svg {
+        let themed = std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|svg| appearance::svg(svg, dark));
+        let bytes = themed.as_ref().map_or(bytes, |svg| svg.as_bytes());
         let options = resvg::usvg::Options {
             // Project icons are self-contained; don't load referenced host files.
             image_href_resolver: resvg::usvg::ImageHrefResolver {
@@ -152,9 +168,10 @@ mod tests {
 
     const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64"><rect width="128" height="64" fill="#ff0000"/></svg>"##;
 
-    fn decoded(root: &Path) -> image::RgbaImage {
+    fn decoded(root: &Path, dark: bool) -> image::RgbaImage {
+        let icon = resolve(root).unwrap();
         let bytes = base64::engine::general_purpose::STANDARD
-            .decode(resolve(root).unwrap())
+            .decode(if dark { icon.dark_png } else { icon.light_png })
             .unwrap();
         image::load_from_memory(&bytes).unwrap().into_rgba8()
     }
@@ -168,12 +185,12 @@ mod tests {
             .save(root.join("public/favicon.png"))
             .unwrap();
         std::fs::write(root.join("favicon.svg"), SVG).unwrap();
-        let icon = decoded(root);
+        let icon = decoded(root, false);
         assert_eq!(icon.dimensions(), (64, 64));
         assert_eq!(icon.get_pixel(32, 32).0, [255, 0, 0, 255]);
         assert_eq!(icon.get_pixel(32, 0).0[3], 0);
         std::fs::write(root.join("favicon.svg"), "invalid SVG").unwrap();
-        assert_eq!(decoded(root).get_pixel(32, 32).0, [0, 0, 255, 255]);
+        assert_eq!(decoded(root, false).get_pixel(32, 32).0, [0, 0, 255, 255]);
         std::fs::remove_file(root.join("public/favicon.png")).unwrap();
         assert!(resolve(root).is_none());
     }
@@ -191,12 +208,8 @@ mod tests {
             r#"const links = [{ rel: 'icon', href: '/brand/app.ico' }];"#,
         ] {
             std::fs::write(root.join("index.html"), source).unwrap();
-            assert_eq!(decoded(root).get_pixel(16, 16).0, [0, 255, 0, 255]);
+            assert_eq!(decoded(root, false).get_pixel(16, 16).0, [0, 255, 0, 255]);
         }
-        assert!(
-            icon_href(r#"<link rel="icon"><link rel="stylesheet" href="/style.css">"#).is_none()
-        );
-        assert!(icon_href(r#"[{rel: 'icon'}, {href: '/unrelated.png'}]"#).is_none());
     }
 
     #[test]
@@ -215,7 +228,7 @@ mod tests {
         let mut svg = SVG.as_bytes().to_vec();
         svg.resize(MAX_FILE_BYTES as usize, b' ');
         std::fs::write(root.join("favicon.svg"), &svg).unwrap();
-        assert_eq!(decoded(&root).get_pixel(32, 32).0, [255, 0, 0, 255]);
+        assert_eq!(decoded(&root, false).get_pixel(32, 32).0, [255, 0, 0, 255]);
         svg.push(b' ');
         std::fs::write(root.join("favicon.svg"), svg).unwrap();
         assert!(resolve(&root).is_none());
@@ -231,7 +244,7 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(decoded(&root).pixels().all(|pixel| pixel.0[3] == 0));
+        assert!(decoded(&root, false).pixels().all(|pixel| pixel.0[3] == 0));
         std::fs::remove_file(root.join("favicon.svg")).unwrap();
         #[cfg(unix)]
         {
@@ -264,16 +277,142 @@ mod tests {
         reader.join().unwrap();
         assert!(icon.is_none());
     }
+    fn color_file(root: &Path, path: &str, color: [u8; 4]) {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image::RgbaImage::from_pixel(64, 64, image::Rgba(color))
+            .save(path)
+            .unwrap();
+    }
 
-    proptest::proptest! {
-        #[test]
-        fn icon_declarations_accept_attribute_order_and_whitespace(
-            name in "[a-z]{1,20}", whitespace in "[ \\t]{0,5}", href_first in proptest::bool::ANY,
-        ) {
-            let href = format!("href{whitespace}={whitespace}\"/{name}.png?revision=1\"");
-            let rel = format!("rel{whitespace}={whitespace}\"icon\"");
-            let source = if href_first { format!("<link {href} {rel}>") } else { format!("<link {rel} {href}>") };
-            proptest::prop_assert_eq!(icon_href(&source), Some(format!("/{name}.png")));
+    #[test]
+    fn native_app_icons_keep_their_logo_and_switch_declared_appearances() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let catalog = "apps/mobile/iosApp/Native/Assets.xcassets/AppIcon.appiconset";
+        color_file(root, &format!("{catalog}/light.png"), [255, 0, 0, 255]);
+        color_file(root, &format!("{catalog}/dark.png"), [0, 255, 0, 255]);
+        color_file(root, &format!("{catalog}/tinted.png"), [0, 0, 255, 255]);
+        color_file(root, "apps/desktop/assets/icon.png", [255, 0, 255, 255]);
+        std::fs::write(root.join(catalog).join("Contents.json"), serde_json::json!({"images":[
+            {"filename":"tinted.png","size":"1024x1024","appearances":[{"appearance":"luminosity","value":"tinted"}]},
+            {"filename":"dark.png","size":"1024x1024","appearances":[{"appearance":"luminosity","value":"dark"}]},
+            {"filename":"light.png","size":"1024x1024"}
+        ]}).to_string()).unwrap();
+        assert_eq!(decoded(root, false).get_pixel(32, 32).0, [255, 0, 0, 255]);
+        assert_eq!(decoded(root, true).get_pixel(32, 32).0, [0, 255, 0, 255]);
+        std::fs::remove_file(root.join(catalog).join("dark.png")).unwrap();
+        assert_eq!(decoded(root, true).get_pixel(32, 32).0, [255, 0, 0, 255]);
+        std::fs::write(root.join(catalog).join("Contents.json"), "invalid").unwrap();
+        assert_eq!(decoded(root, false).get_pixel(32, 32).0, [255, 0, 255, 255]);
+    }
+
+    #[test]
+    fn the_real_bex_app_icon_is_found_in_its_native_project_layout() {
+        let directory = tempfile::tempdir().unwrap();
+        let catalog = directory
+            .path()
+            .join("apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset");
+        std::fs::create_dir_all(&catalog).unwrap();
+        let png = include_bytes!(
+            "../../../../apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+        );
+        std::fs::write(catalog.join("AppIcon.png"), png).unwrap();
+        std::fs::write(catalog.join("Contents.json"), include_bytes!("../../../../apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/Contents.json")).unwrap();
+        let expected = image::load_from_memory(png)
+            .unwrap()
+            .thumbnail(64, 64)
+            .into_rgba8();
+        assert_eq!(decoded(directory.path(), false), expected);
+        assert_eq!(decoded(directory.path(), true), expected);
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        assert_eq!(decoded(repository, false), expected);
+    }
+
+    #[test]
+    fn web_media_links_override_neutral_fallbacks_and_render_both_variants() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        color_file(root, "public/light.png", [255, 0, 0, 255]);
+        color_file(root, "public/dark.png", [0, 255, 0, 255]);
+        std::fs::write(root.join("favicon.svg"), SVG).unwrap();
+        std::fs::write(root.join("index.html"), r#"<link rel="icon" href="/favicon.svg"><link media="(prefers-color-scheme: dark)" rel="icon" href="/dark.png"><link media="(prefers-color-scheme: light)" rel="icon" href="/light.png">"#).unwrap();
+        assert_eq!(decoded(root, false).get_pixel(32, 32).0, [255, 0, 0, 255]);
+        assert_eq!(decoded(root, true).get_pixel(32, 32).0, [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn svg_media_rules_and_current_color_follow_the_client_appearance() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("favicon.svg");
+        std::fs::write(&path, r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><style>path { fill: black; } @media (prefers-color-scheme: dark) { path { fill: white; } }</style><path d="M0 0h64v64H0z"/></svg>"#).unwrap();
+        assert_eq!(
+            decoded(directory.path(), false).get_pixel(32, 32).0,
+            [0, 0, 0, 255]
+        );
+        assert_eq!(
+            decoded(directory.path(), true).get_pixel(32, 32).0,
+            [255, 255, 255, 255]
+        );
+        std::fs::write(&path, r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><path fill="currentColor" d="M0 0h64v64H0z"/></svg>"#).unwrap();
+        assert_eq!(
+            decoded(directory.path(), false).get_pixel(32, 32).0,
+            [0, 0, 0, 255]
+        );
+        assert_eq!(
+            decoded(directory.path(), true).get_pixel(32, 32).0,
+            [255, 255, 255, 255]
+        );
+        std::fs::write(&path, r#"<svg xmlns="http://www.w3.org/2000/svg" color="red" width="64" height="64"><path fill="currentColor" d="M0 0h64v64H0z"/></svg>"#).unwrap();
+        assert_eq!(
+            decoded(directory.path(), true).get_pixel(32, 32).0,
+            [255, 0, 0, 255]
+        );
+        std::fs::write(&path, SVG).unwrap();
+        assert_eq!(
+            decoded(directory.path(), true).get_pixel(32, 32).0,
+            [255, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn native_catalogs_cannot_read_images_outside_the_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("project");
+        let catalog = root.join("AppIcon.appiconset");
+        std::fs::create_dir_all(&catalog).unwrap();
+        color_file(directory.path(), "private.png", [255, 0, 0, 255]);
+        std::fs::write(
+            catalog.join("Contents.json"),
+            r#"{"images":[{"filename":"../../private.png"}]}"#,
+        )
+        .unwrap();
+        assert!(resolve(&root).is_none());
+    }
+    #[test]
+    fn a_single_declared_appearance_remains_visible_in_both_themes() {
+        for media in ["light", "dark"] {
+            let directory = tempfile::tempdir().unwrap();
+            color_file(directory.path(), "brand.png", [0, 255, 0, 255]);
+            std::fs::write(
+                directory.path().join("index.html"),
+                format!(
+                    r#"<link rel="icon" href="/brand.png" media="(prefers-color-scheme: {media})">"#
+                ),
+            )
+            .unwrap();
+            assert_eq!(
+                decoded(directory.path(), false).get_pixel(32, 32).0,
+                [0, 255, 0, 255]
+            );
+            assert_eq!(
+                decoded(directory.path(), true).get_pixel(32, 32).0,
+                [0, 255, 0, 255]
+            );
         }
     }
 }

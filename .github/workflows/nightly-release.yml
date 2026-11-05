@@ -1,0 +1,62 @@
+name: Nightly release
+on:
+  workflow_run:
+    workflows: [Native clients]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  AGENT_RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+jobs:
+  verification:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      supported: ${{ steps.source.outputs.supported }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.AGENT_RELEASE_SHA }}
+          persist-credentials: false
+      - id: source
+        name: Require release support in the verified revision
+        run: |
+          if [[ -f scripts/release-candidate.mjs ]]; then
+            echo 'supported=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Require both workflows to verify this exact main commit
+        if: steps.source.outputs.supported == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in portable.yml native.yml; do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch main \
+              --event push --commit "$AGENT_RELEASE_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // ""')
+            test -n "$run"
+            # Native acceptance may finish before Portable checks. Wait on Linux
+            # before allocating the signing runner; only Native clients triggers release.
+            gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 30
+          done
+  release:
+    needs: verification
+    if: needs.verification.outputs.supported == 'true'
+    permissions:
+      actions: write
+      contents: write
+    uses: ./.github/workflows/build-release.yml
+    with:
+      source-sha: ${{ github.event.workflow_run.head_sha || github.sha }}
+      channel: nightly
+    secrets: inherit

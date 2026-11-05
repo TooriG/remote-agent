@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build standard icons from the logo and reuse the iPhone Dev artwork. Requires macOS.
+# Build standard app icons from the logo. Requires macOS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source=apps/desktop/assets/logo.png
@@ -16,7 +16,13 @@ let context = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 
     bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
     bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
 let bounds = CGRect(x: 0, y: 0, width: 1024, height: 1024)
-context.setFillColor(CGColor(gray: 1, alpha: 1))
+let color = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "release"
+let background: CGColor = switch color {
+case "preview": CGColor(red: 0.74, green: 0.67, blue: 1, alpha: 1)
+case "dev": CGColor(red: 1, green: 0.78, blue: 0.36, alpha: 1)
+default: CGColor(gray: 1, alpha: 1)
+}
+context.setFillColor(background)
 context.fill(bounds)
 context.draw(image, in: bounds)
 let destination = CGImageDestinationCreateWithURL(
@@ -28,6 +34,12 @@ xcrun swiftc "$temporary/app-icon.swift" -o "$temporary/app-icon"
 icon=apps/desktop/assets/icon.png
 "$temporary/app-icon" "$source" "$icon"
 cp "$icon" apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+for variant in Preview Dev; do
+    app_icon="apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon$variant.appiconset"
+    mkdir -p "$app_icon"
+    cp apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/Contents.json "$app_icon/Contents.json"
+    "$temporary/app-icon" "$source" "$app_icon/AppIcon.png" "$(printf '%s' "$variant" | tr '[:upper:]' '[:lower:]')"
+done
 sips -z 192 192 "$icon" --out apps/mobile/src/main/res/drawable/agent_icon.png >/dev/null
 create_icns() {
     local image=$1 destination=$2 iconset="$temporary/Bex.iconset" size doubled
@@ -40,5 +52,3 @@ create_icns() {
     iconutil -c icns "$iconset" -o "$destination"
 }
 create_icns "$icon" apps/desktop/assets/icon.icns
-create_icns apps/mobile/iosApp/Bex/Assets.xcassets/AppIconDev.appiconset/AppIcon.png \
-    apps/desktop/assets/icon-dev.icns

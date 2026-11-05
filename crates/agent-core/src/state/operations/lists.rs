@@ -82,14 +82,14 @@ impl Operation for ReadListDecorations {
                     output
                         .icons
                         .get(&project.id)
-                        .filter(|icon| **icon != project.favicon_png)
+                        .filter(|icon| **icon != project.icon)
                         .map(|icon| (index, icon))
                 })
                 .collect();
             if !icons.is_empty() {
                 let list = Arc::make_mut(list);
                 for (index, icon) in icons {
-                    list.projects[index].favicon_png = icon.clone();
+                    list.projects[index].icon = icon.clone();
                 }
             }
         }
@@ -369,7 +369,7 @@ fn retained_project_icons(
             .map(|project| {
                 (
                     (project.id.as_str(), project.roots.as_slice()),
-                    &project.favicon_png,
+                    &project.icon,
                 )
             })
             .collect::<HashMap<_, _>>()
@@ -382,12 +382,12 @@ fn retained_project_icons(
             None => cached
                 .iter()
                 .find(|old| old.id == project.id && old.roots == project.roots)
-                .map(|old| &old.favicon_png),
+                .map(|old| &old.icon),
         };
         if let Some(icon) = icon
-            && &project.favicon_png != icon
+            && &project.icon != icon
         {
-            project.favicon_png = icon.clone();
+            project.icon = icon.clone();
         }
     }
     received
@@ -944,8 +944,8 @@ mod tests {
         assert_eq!(connected.lists.threads.as_ref().unwrap().limit, 15);
         assert_eq!(
             effects.len(),
-            3,
-            "status, models, and accounts only; no list read"
+            5,
+            "status, three independent model reads, and accounts only; no list read"
         );
         let (renamed, effects) = super::super::super::notifications::notification(
             &connected,
@@ -1757,8 +1757,8 @@ mod tests {
         let (_, effects) = reduce(&snapshot, Event::Connected);
         assert_eq!(
             effects.len(),
-            5,
-            "reconnecting loads the task aggregate without fetching an unobserved fleet"
+            7,
+            "reconnecting loads task aggregate and each model provider without an unobserved fleet"
         );
         let (ignored, effects) = reduce_intent(
             &snapshot,
@@ -1791,8 +1791,8 @@ mod tests {
         let (_, effects) = reduce(&watching, Event::Connected);
         assert_eq!(
             effects.len(),
-            6,
-            "reconnect refreshes only the observed fleet"
+            8,
+            "reconnect refreshes each model provider and only the observed fleet"
         );
         let (closed, effects) = reduce_intent(&watching, Intent::WatchAgents { thread_id: None });
         assert!(effects.is_empty());

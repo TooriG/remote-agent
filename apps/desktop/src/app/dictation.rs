@@ -1,3 +1,4 @@
+use super::view::composer::ComposerAction;
 use super::*;
 use agent_core::state::operations as op;
 
@@ -20,7 +21,7 @@ pub(super) struct Dictation {
     preparation: Option<agent_core::client::DictationPreparation>,
     pub(super) levels: std::collections::VecDeque<f32>,
 }
-impl Desktop {
+impl super::view::composer::ComposerContent {
     pub(super) fn dictation_bar(
         phase: Option<Phase>,
         levels: &std::collections::VecDeque<f32>,
@@ -42,7 +43,7 @@ impl Desktop {
                     IconName::Close,
                     language.text("録音を取り消す (Esc)"),
                     cx,
-                    |s, _, _| s.cancel_recording(),
+                    |_, _, cx| cx.emit(ComposerAction::CancelDictation),
                 )
                 .disabled(phase == Phase::Transcribing),
             )
@@ -84,7 +85,7 @@ impl Desktop {
                     Icon::default().path("icons/stop.svg"),
                     language.text("録音を終了して文字起こし"),
                     cx,
-                    |s, _, _| s.finish_dictation(false),
+                    |_, _, cx| cx.emit(ComposerAction::FinishDictation(false)),
                 )
                 .disabled(!recording),
             )
@@ -94,7 +95,7 @@ impl Desktop {
                     IconName::ArrowUp,
                     language.text("文字起こしして送信"),
                     cx,
-                    |s, _, cx| s.send(cx),
+                    |_, _, cx| cx.emit(ComposerAction::Send),
                 )
                 .primary()
                 .large()
@@ -105,6 +106,8 @@ impl Desktop {
             )
             .into_any_element()
     }
+}
+impl Desktop {
     pub(super) fn start_dictation(&mut self) {
         if self.dictation.is_some() || !self.snapshot.connection.connected || self.busy > 0 {
             return;

@@ -1,4 +1,19 @@
 use super::*;
+pub use agent_protocol::operations::ReadHostSoftware;
+
+impl Operation for ReadHostSoftware {
+    rpc_operation!();
+    fn key(&self) -> Option<OperationKey> {
+        Some(OperationKey::HostSoftware)
+    }
+    fn scheduling(&self) -> Scheduling {
+        Scheduling::LatestHostState(OperationKey::HostSoftware)
+    }
+    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+        snapshot.catalog.host_software = Some(Arc::new(output));
+        Vec::new()
+    }
+}
 pub use agent_protocol::live_activity::{
     MarkSessionRead, ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity,
 };

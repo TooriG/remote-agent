@@ -21,6 +21,7 @@ use std::{io::Write, sync::Arc};
 
 pub(super) enum HostEvent {
     Selected(Option<RemoteHost>),
+    Enabled(Option<RemoteHost>, bool),
     Removed(String),
     Failed(String),
 }
@@ -173,7 +174,7 @@ impl Hosts {
         self.runtime.handle.spawn(async move {
             match runtime
                 .sessions
-                .open(None, runtime.clone())
+                .open(None, runtime.clone(), None)
                 .await
                 .and_then(|session| session.side(String::new()))
             {
@@ -348,6 +349,7 @@ impl Hosts {
         layout: ConnectionLayout,
         current: Option<&str>,
         connected: bool,
+        enabled: bool,
         agent_controls: Div,
         cx: &Context<Self>,
     ) -> Div {
@@ -366,9 +368,12 @@ impl Hosts {
         {
             let selected = current == remote.map(|host| host.id.as_str());
             let destination = remote.cloned();
+            let toggle_destination = destination.clone();
             let name = remote.map_or(language.text("このPC"), |host| host.name.as_str());
             let label = if selected {
-                if connected {
+                if !enabled {
+                    language.text("オフ")
+                } else if connected {
                     language.text("接続済み")
                 } else {
                     language.text("接続中…")
@@ -433,6 +438,20 @@ impl Hosts {
                                 })
                                 .child(label),
                         )
+                        .when(!cards, |row| {
+                            row.child(
+                                switch::Switch::new(format!("connection-enabled-{index}"))
+                                    .accessibility_label(name.to_owned())
+                                    .checked(selected && enabled)
+                                    .disabled(self.busy)
+                                    .on_click(cx.listener(move |_, enabled, _, cx| {
+                                        cx.emit(HostEvent::Enabled(
+                                            toggle_destination.clone(),
+                                            *enabled,
+                                        ));
+                                    })),
+                            )
+                        })
                         .when_some(
                             remote.filter(|host| !cards && !host.id.starts_with("wsl:")),
                             |row, remote| {

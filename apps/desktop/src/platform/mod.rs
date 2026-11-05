@@ -64,33 +64,15 @@ pub(crate) use wsl::ProjectSelection;
 pub(crate) use wsl::distributions as wsl_distributions;
 
 pub(crate) fn state_dir() -> Result<PathBuf, String> {
-    std::env::var_os("AGENT_STATE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            directories::ProjectDirs::from(
-                "app",
-                "bex",
-                if development_app() { "BEX-Dev" } else { "BEX" },
-            )
-            .map(|project| project.data_local_dir().to_path_buf())
-        })
-        .ok_or_else(|| "application data directory unavailable".into())
+    if let Some(path) = std::env::var_os("AGENT_STATE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    agent_local_host::state_directory(cfg!(debug_assertions)).map_err(|error| error.to_string())
 }
 
 /// One Host's conversation copies, shared by its main and side windows.
 pub(crate) fn conversation_copies(host: &str) -> Result<PathBuf, String> {
     Ok(state_dir()?.join(format!("desktop-conversations-{host}")))
-}
-
-pub(crate) fn development_app() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        objc2_foundation::NSBundle::mainBundle()
-            .bundleIdentifier()
-            .is_some_and(|id| id.to_string() == "app.bex.dev.desktop")
-    }
-    #[cfg(not(target_os = "macos"))]
-    false
 }
 
 pub(crate) async fn ssh_invitation(
@@ -148,6 +130,9 @@ impl Connections {
         remote: Option<&str>,
         snapshot: Snapshot,
     ) -> anyhow::Result<Arc<Store>> {
+        if !snapshot.connection_enabled() {
+            return Ok(Arc::new(Store::offline(snapshot)));
+        }
         let device_name = tokio::task::spawn_blocking(agent_local_host::machine_name).await?;
         let startup = self.startup.lock().await;
         if let Some(remote) = remote {
@@ -290,7 +275,9 @@ impl Connections {
             let mut snapshots = store.subscribe();
             let mut delay = Duration::from_millis(250);
             while snapshots
-                .wait_for(|snapshot| !snapshot.connection.connected)
+                .wait_for(|snapshot| {
+                    !snapshot.connection.connected && snapshot.connection_enabled()
+                })
                 .await
                 .is_ok()
             {
@@ -298,7 +285,9 @@ impl Connections {
                 if snapshots.has_changed().is_err() {
                     break;
                 }
-                if snapshots.borrow().connection.connected {
+                if snapshots.borrow().connection.connected
+                    || !snapshots.borrow().connection_enabled()
+                {
                     delay = Duration::from_millis(250);
                     continue;
                 }
@@ -342,7 +331,7 @@ pub(crate) fn isolated_host() -> anyhow::Result<bool> {
     isolation_setting(
         value.as_deref(),
         std::env::var_os("AGENT_STATE_DIR").is_some(),
-        development_app(),
+        cfg!(debug_assertions),
     )
 }
 
@@ -414,14 +403,7 @@ fn start_host(directory: &std::path::Path, isolated: bool) -> anyhow::Result<std
     if isolated {
         command.arg("--isolated");
     }
-    let accounts = std::env::var_os("AGENT_ACCOUNT_STATE_DIR").map(PathBuf::from);
-    let accounts = if accounts.is_none() && development_app() {
-        let registry = LocalHostRegistry::for_user()?;
-        Some(registry.resolve(registry.directory())?.directory)
-    } else {
-        accounts
-    };
-    if let Some(directory) = accounts {
+    if let Some(directory) = std::env::var_os("AGENT_ACCOUNT_STATE_DIR") {
         command.arg("--account-state-dir").arg(directory);
     }
     os::prepare_host(&mut command);
@@ -449,28 +431,23 @@ mod tests {
     use super::isolation_setting;
 
     #[test]
-    fn dev_launch_is_isolated_without_environment_and_explicit_settings_are_validated() {
-        for (value, directory, development, expected) in [
-            (None, false, false, false),
-            (None, true, false, false),
-            (None, false, true, true),
-            (None, true, true, true),
-            (Some("0"), false, false, false),
-            (Some("0"), true, false, false),
-            (Some("0"), false, true, false),
-            (Some("0"), true, true, false),
-            (Some("1"), true, false, true),
-            (Some("1"), false, true, true),
-            (Some("1"), true, true, true),
-        ] {
-            assert_eq!(
-                isolation_setting(value, directory, development).unwrap(),
-                expected
-            );
+    fn release_channels_share_the_normal_host_and_source_development_is_isolated() {
+        for directory in [false, true] {
+            for development in [false, true] {
+                assert_eq!(
+                    isolation_setting(None, directory, development).unwrap(),
+                    development
+                );
+                assert!(!isolation_setting(Some("0"), directory, development).unwrap());
+            }
         }
-        assert!(isolation_setting(Some("1"), false, false).is_err());
+        assert!(isolation_setting(Some("1"), true, false).unwrap());
+        assert!(isolation_setting(Some("1"), false, true).unwrap());
+        let error = isolation_setting(Some("1"), false, false).unwrap_err();
+        assert!(error.to_string().contains("AGENT_STATE_DIR"));
         for invalid in ["", "true", "2"] {
-            assert!(isolation_setting(Some(invalid), true, true).is_err());
+            let error = isolation_setting(Some(invalid), true, true).unwrap_err();
+            assert!(error.to_string().contains("0 or 1"));
         }
     }
 }

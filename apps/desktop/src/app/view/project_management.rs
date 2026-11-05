@@ -15,7 +15,7 @@ fn action(
 
 pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> impl IntoElement {
     Button::new("project-menu")
-        .label("…")
+        .icon(IconName::Ellipsis)
         .xsmall()
         .ghost()
         .accessibility_label("プロジェクトの操作")
