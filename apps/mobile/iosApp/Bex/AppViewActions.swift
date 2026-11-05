@@ -81,8 +81,8 @@ extension AppViewModel {
         set { perform(.setDraftText(threadId: coreDraftKey, text: newValue)) }
     }
 
-    func showProfiles() {
-        screen = .profiles; perform(.showThreadList)
+    func showSettings() {
+        screen = .settings
     }
 
     func showThreadList() {

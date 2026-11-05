@@ -2,7 +2,7 @@ import AgentCore
 import Foundation
 
 // These values contain rendered rows, never mutable conversation state.
-enum AppScreen: Hashable { case pairing, profiles, threads, thread }
+enum AppScreen: Hashable { case settings, profiles, threads, thread }
 enum LoadState { case idle, loading, ready, failed }
 struct HostProfile: Codable, Identifiable, Equatable {
     let id: String

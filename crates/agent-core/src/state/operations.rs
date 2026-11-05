@@ -51,6 +51,12 @@ pub enum Intent {
         id: ErrorId,
     },
     ManageCodexCli(ManageCodexCli),
+    ReadProviderSettings(ReadProviderSettings),
+    ReadHostSoftware(ReadHostSoftware),
+    SetProviderEnabled(SetProviderEnabled),
+    SetConnectionEnabled {
+        enabled: bool,
+    },
     ReadTaskActivity(ReadTaskActivity),
     RegisterLiveActivity(RegisterLiveActivity),
     UnregisterLiveActivity(UnregisterLiveActivity),
@@ -288,6 +294,8 @@ pub enum OperationKey {
     },
     WorkspaceReview,
     CodexCli,
+    ProviderSettings,
+    HostSoftware,
     Models {
         provider: crate::session::ProviderKind,
     },
@@ -466,6 +474,8 @@ mod composer;
 pub use composer::*;
 mod codex_cli;
 pub use codex_cli::*;
+mod providers;
+pub use providers::*;
 mod accounts;
 pub use accounts::*;
 mod terminal;

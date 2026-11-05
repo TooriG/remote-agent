@@ -123,6 +123,8 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
         SaveFile { .. } => (Workspace, "ファイルを保存できませんでした"),
         WorkspaceReview => (Workspace, "変更を読み込めませんでした"),
         CodexCli => (Settings, "Codex CLIの操作に失敗しました"),
+        ProviderSettings => (Settings, "プロバイダーの設定を変更できませんでした"),
+        HostSoftware => (Settings, "ホストのバージョン情報を取得できませんでした"),
         FileOpenCapabilities => (Settings, "エディターを検出できませんでした"),
         Models { .. } | ModelSettings { .. } => (Settings, "モデルを読み込めませんでした"),
         Accounts => (Settings, "アカウントの操作に失敗しました"),
@@ -157,6 +159,14 @@ impl Snapshot {
             OperationKey::Accounts => (
                 "アカウントを再読み込み",
                 Intent::ListAccounts(op::ListAccounts {}),
+            ),
+            OperationKey::ProviderSettings => (
+                "設定を再読み込み",
+                Intent::ReadProviderSettings(op::ReadProviderSettings {}),
+            ),
+            OperationKey::HostSoftware => (
+                "再読み込み",
+                Intent::ReadHostSoftware(op::ReadHostSoftware {}),
             ),
             OperationKey::Worktrees => ("再読み込み", Intent::ListWorktrees(op::ListWorktrees {})),
             OperationKey::WorktreeSettings => (

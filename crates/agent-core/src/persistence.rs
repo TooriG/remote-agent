@@ -98,6 +98,8 @@ mod tests {
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
     #[serde(default)]
+    connection_disabled: bool,
+    #[serde(default)]
     project_preferences: Arc<BTreeMap<String, BTreeMap<String, crate::state::ProjectPreferences>>>,
     storage_scope: String,
     archived_scopes: Arc<BTreeMap<String, Arc<ScopedData>>>,
@@ -111,6 +113,7 @@ pub struct PersistedState {
 impl PersistedState {
     pub fn capture(snapshot: &Snapshot) -> Self {
         Self {
+            connection_disabled: snapshot.connection_disabled,
             project_preferences: snapshot.project_preferences.clone(),
             storage_scope: snapshot.storage_scope.clone(),
             archived_scopes: snapshot.archived_scopes.clone(),
@@ -197,6 +200,7 @@ pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {
     }
     let saved: PersistedState = serde_json::from_slice(bytes)?;
     Ok(Snapshot {
+        connection_disabled: saved.connection_disabled,
         project_preferences: saved.project_preferences,
         storage_scope: saved.storage_scope,
         archived_scopes: saved.archived_scopes,

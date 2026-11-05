@@ -99,6 +99,19 @@ pub struct HostUpdate {
     pub working_directory: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostSoftware {
+    pub version: String,
+    pub revision: String,
+    pub build: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadHostSoftware {}
+rpc_method!(ReadHostSoftware, ReadHostSoftware, |self| {
+    crate::models::Empty {}
+});
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ListRemoteHosts {}
 rpc_method!(ListRemoteHosts, ListRemotes, |self| crate::models::Empty {});

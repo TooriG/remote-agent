@@ -329,13 +329,7 @@ impl SidebarItem for SidebarSection {
 /// Everything the sidebar shows. [`SidebarView`] renders only from this value,
 /// so it re-renders exactly when the value changes.
 #[derive(PartialEq)]
-pub(in crate::app) enum SidebarModel {
-    Conversations(Conversations),
-    Settings(SettingsPage),
-}
-
-#[derive(PartialEq)]
-pub(in crate::app) struct Conversations {
+pub(in crate::app) struct SidebarModel {
     list: Option<agent_core::presentation::list::ThreadList>,
     selected: Option<SessionRef>,
     storage_scope: String,
@@ -348,19 +342,16 @@ pub(in crate::app) struct Conversations {
 
 impl Desktop {
     pub(in crate::app) fn sidebar_model(&self) -> SidebarModel {
-        match self.tab {
-            Tab::Settings => SidebarModel::Settings(self.settings_page),
-            Tab::Chat => SidebarModel::Conversations(Conversations {
-                list: self.snapshot.thread_list(),
-                selected: self.selected().cloned(),
-                storage_scope: self.snapshot.storage_scope.clone(),
-                connected: self.snapshot.connected,
-                local: self.remote.is_none(),
-                loading_session_list: self
-                    .snapshot
-                    .operation_running(op::OperationKey::SessionList),
-                errors: self.error_rows(&ErrorScope::Projects),
-            }),
+        SidebarModel {
+            list: self.snapshot.thread_list(),
+            selected: self.selected().cloned(),
+            storage_scope: self.snapshot.storage_scope.clone(),
+            connected: self.snapshot.connected,
+            local: self.remote.is_none(),
+            loading_session_list: self
+                .snapshot
+                .operation_running(op::OperationKey::SessionList),
+            errors: self.error_rows(&ErrorScope::Projects),
         }
     }
 }
@@ -411,15 +402,12 @@ impl Render for SidebarView {
         // sole source of what is shown.
         self.desktop
             .update(cx, |_, cx| {
-                let sidebar = match &self.model {
-                    SidebarModel::Conversations(model) => Desktop::conversation_sidebar(
-                        model,
-                        &self.search,
-                        self.app_updates.clone(),
-                        cx,
-                    ),
-                    SidebarModel::Settings(page) => Desktop::settings_sidebar(*page, cx),
-                };
+                let sidebar = Desktop::conversation_sidebar(
+                    &self.model,
+                    &self.search,
+                    self.app_updates.clone(),
+                    cx,
+                );
                 v_flex()
                     .debug_selector(|| "desktop-sidebar-shell".into())
                     .size_full()
@@ -442,7 +430,7 @@ impl Render for SidebarView {
 }
 
 impl Desktop {
-    fn project_sidebar_rows(model: &Conversations, cx: &Context<Self>) -> Vec<SidebarRow> {
+    fn project_sidebar_rows(model: &SidebarModel, cx: &Context<Self>) -> Vec<SidebarRow> {
         let language = crate::localization::language(cx);
         let list = &model.list;
         let loading_session_list = model.loading_session_list;
@@ -571,7 +559,7 @@ impl Desktop {
     }
 
     fn conversation_sidebar(
-        model: &Conversations,
+        model: &SidebarModel,
         search: &Entity<InputState>,
         app_updates: Option<Entity<crate::updates::Updates>>,
         cx: &Context<Self>,
@@ -677,8 +665,8 @@ impl Desktop {
                             IconName::Settings,
                             language.text("設定を開く"),
                             cx,
-                            |s, _, _| {
-                                s.open_settings(SettingsPage::General);
+                            |s, window, cx| {
+                                s.open_settings(SettingsPage::General, window, cx);
                             },
                         )
                         .debug_selector(|| "sidebar-settings".into()),
@@ -944,7 +932,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn settings_share_sidebar_and_return_to_the_same_conversation(cx: &mut TestAppContext) {
+    fn settings_overlay_keeps_the_sidebar_and_returns_to_the_same_conversation(
+        cx: &mut TestAppContext,
+    ) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1030,7 +1020,7 @@ mod tests {
         let settings = window.debug_bounds("sidebar-settings").unwrap().center();
         window.simulate_click(settings, Modifiers::default());
         window.run_until_parked();
-        assert!(window.debug_bounds("refresh-threads").is_none());
+        assert!(window.debug_bounds("refresh-threads").is_some());
         assert!(window.debug_bounds("app-update").is_none());
         assert_eq!(
             window.debug_bounds("desktop-sidebar-shell").unwrap(),
@@ -1038,7 +1028,7 @@ mod tests {
         );
         for page in [
             SettingsPage::General,
-            SettingsPage::Agents,
+            SettingsPage::Providers,
             SettingsPage::Connections,
             SettingsPage::Worktrees,
         ] {
@@ -1058,16 +1048,12 @@ mod tests {
                 })
                 .unwrap();
             assert!(scope.bottom() <= window.debug_bounds("settings-page-heading").unwrap().top());
-            assert!(window.debug_bounds("settings-back").unwrap().top() < px(100.));
+            let modal = window.debug_bounds("settings-modal").unwrap();
+            assert!(modal.origin.x > px(0.));
+            assert!(modal.origin.y > px(0.));
+            assert!(window.debug_bounds("settings-close").unwrap().top() < scope.bottom());
         }
-        let collapse = window.debug_bounds("collapse-sidebar").unwrap().center();
-        window.simulate_click(collapse, Modifiers::default());
-        window.run_until_parked();
-        assert!(window.debug_bounds("desktop-sidebar-shell").is_none());
-        let expand = window.debug_bounds("expand-sidebar").unwrap().center();
-        window.simulate_click(expand, Modifiers::default());
-        window.run_until_parked();
-        let back = window.debug_bounds("settings-back").unwrap().center();
+        let back = window.debug_bounds("settings-close").unwrap().center();
         window.simulate_click(back, Modifiers::default());
         window.run_until_parked();
         assert_eq!(

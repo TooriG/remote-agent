@@ -174,6 +174,9 @@ impl ClientSession {
 
     pub async fn resume(self: Arc<Self>, ticket: String) -> Result<bool, AgentError> {
         let store = self.clone().ready().await?;
+        if !store.snapshot().connection_enabled() {
+            return Ok(false);
+        }
         let reused = tokio::select! {
             biased;
             _ = self.stop.cancelled() => return Err(error("session closed")),
@@ -409,6 +412,76 @@ mod tests {
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn switching_a_connection_off_survives_restore_without_losing_the_draft() {
+        let storage = Arc::new(Storage::default());
+        let session = open(storage.clone());
+        session.clone().ready().await.unwrap();
+        session
+            .dispatch(Intent::SetDraftText {
+                thread_id: Default::default(),
+                text: "Keep my work".into(),
+            })
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        session
+            .dispatch(Intent::SetConnectionEnabled { enabled: false })
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        session.clone().flush().await.unwrap();
+        session.shutdown().await.unwrap();
+
+        let restored = open(storage.clone());
+        restored.clone().ready().await.unwrap();
+        assert!(!restored.snapshot().connection_enabled());
+        assert_eq!(
+            restored.snapshot().draft(Default::default()).text,
+            "Keep my work"
+        );
+        // An off connection must not even parse a ticket or load an identity.
+        assert!(
+            !restored
+                .clone()
+                .resume("not a ticket".into())
+                .await
+                .unwrap()
+        );
+        restored
+            .dispatch(Intent::SetConnectionEnabled { enabled: true })
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        assert!(restored.snapshot().connection_enabled());
+        assert!(
+            restored
+                .clone()
+                .resume("not a ticket".into())
+                .await
+                .is_err()
+        );
+
+        storage.fail_save.store(true, Ordering::SeqCst);
+        restored
+            .dispatch(Intent::SetConnectionEnabled { enabled: false })
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        assert!(restored.clone().flush().await.is_err());
+        assert!(!restored.snapshot().connection_enabled());
+        storage.fail_save.store(false, Ordering::SeqCst);
+        restored.clone().flush().await.unwrap();
+        let saved = crate::persistence::decode(&storage.bytes.lock().unwrap()).unwrap();
+        assert!(!saved.connection_enabled());
+        assert_eq!(saved.draft(Default::default()).text, "Keep my work");
+        restored.shutdown().await.unwrap();
+    }
 
     #[tokio::test]
     async fn publication_allows_reentrant_session_reads_and_flush() {
@@ -742,6 +815,36 @@ mod tests {
                 "Windows recovered",
             )
             .await;
+            mac.dispatch(Intent::SetConnectionEnabled { enabled: false })
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+            connected(&mac_store, false).await;
+            assert!(mac_store.reconnect(connect(&mac_host)).await.is_err());
+            clients.record_scene(3);
+            clients.record_scene(1);
+            assert!(
+                tokio::time::timeout(pause, mac_host.accept())
+                    .await
+                    .is_err(),
+                "an off connection retried after a foreground wakeup"
+            );
+            read_name(
+                &windows,
+                &mut windows_reader,
+                &windows_writer,
+                "Windows stays connected",
+            )
+            .await;
+            mac.dispatch(Intent::SetConnectionEnabled { enabled: true })
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+            let (_mac_peer, mut mac_reader, mac_writer) = incoming(&mac_host).await;
+            connected(&mac_store, true).await;
+            read_name(&mac, &mut mac_reader, &mac_writer, "Mac enabled again").await;
             clients
                 .remove("windows".into())
                 .unwrap()

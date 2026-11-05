@@ -101,7 +101,7 @@ enum Tab {
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsPage {
     General,
-    Agents,
+    Providers,
     Connections,
     Worktrees,
 }
@@ -175,6 +175,8 @@ pub(crate) struct Desktop {
     worktrees: forms::WorktreeForm,
     tab: Tab,
     settings_page: SettingsPage,
+    settings_search: Entity<InputState>,
+    settings_focus: FocusHandle,
     sidebar: bool,
     /// Whether thread details stay docked beside the chat when they fit.
     details: bool,
@@ -218,8 +220,8 @@ fn general_snapshot_changed(before: &Snapshot, after: &Snapshot) -> bool {
             archived_scopes, account, conversations, expanded_projects,
             project_threads, models, model_errors, question_drafts, draft_sessions, pending_submissions,
             workspace, workspaces, navigation, activity, management, list_query, subscriptions],
-        optional: [permission_settings, task_activity, threads, file_open_capabilities],
-        values: [recent_chats, operation_sequence, model_preferences, preferred_editor, file_open_capabilities_requested, host_name, host_ticket, host_home_directory, storage_scope,
+        optional: [permission_settings, task_activity, threads, file_open_capabilities, provider_settings, host_software],
+        values: [connection_disabled, recent_chats, operation_sequence, model_preferences, preferred_editor, file_open_capabilities_requested, host_name, host_ticket, host_home_directory, storage_scope,
             observed_agents, epoch, connected, connection_generation, connection_failure, error]
     );
     let empty = Draft::default();
@@ -317,6 +319,8 @@ impl Desktop {
         let editor = forms::FileEditor::new(window, cx);
         let model_controls = forms::ModelControls::new(window, cx);
         let account = forms::AccountForm::new(window, cx);
+        let settings_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(language.text("設定を検索")));
         let search =
             cx.new(|cx| InputState::new(window, cx).placeholder(language.text("会話を検索")));
         let file_search =
@@ -462,6 +466,11 @@ impl Desktop {
                     cx.notify();
                 }
             }),
+            cx.subscribe(&settings_search, |_, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
             cx.subscribe(&account.code, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -502,6 +511,9 @@ impl Desktop {
                 cx.subscribe_in(hosts, window, |view, _, event, window, cx| {
                     match event {
                         HostEvent::Selected(remote) => view.switch_host(remote.clone(), window, cx),
+                        HostEvent::Enabled(remote, enabled) => {
+                            view.set_connection_enabled(remote.clone(), *enabled, window, cx)
+                        }
                         HostEvent::Failed(error) => view.set_error(error.clone()),
                         HostEvent::Removed(id)
                             if view.remote.as_ref().is_some_and(|remote| &remote.id == id) =>
@@ -561,6 +573,8 @@ impl Desktop {
             worktrees,
             tab: Tab::Chat,
             settings_page: SettingsPage::General,
+            settings_search,
+            settings_focus: cx.focus_handle(),
             sidebar: true,
             details: true,
             details_popover: false,
@@ -597,12 +611,12 @@ impl Desktop {
                 Update::InitialHost,
             );
         } else {
-            view.connect(None);
+            view.connect(None, None);
         }
         cx.notify();
         view
     }
-    fn connect(&mut self, previous: Option<StoreSession>) {
+    fn connect(&mut self, previous: Option<StoreSession>, enabled: Option<bool>) {
         let previous = previous.and_then(|mut session| session.close());
         self.epoch += 1;
         self.connecting = true;
@@ -654,7 +668,7 @@ impl Desktop {
                     Arc::new(platform::SessionStorage { path }),
                     connections.preferences.clone(),
                 );
-                let snapshot = persistence
+                let mut snapshot = persistence
                     .restore(false, Some(platform::conversation_copies(&host)?))
                     .await
                     .map_err(|reason| match reason {
@@ -663,6 +677,13 @@ impl Desktop {
                         }
                         RestoreError::Storage(reason) => reason.to_string(),
                     })?;
+                if let Some(enabled) = enabled {
+                    snapshot = agent_core::state::reduce(
+                        &snapshot,
+                        agent_core::state::Event::Intent(Intent::SetConnectionEnabled { enabled }),
+                    )
+                    .0;
+                }
                 let initial_cwd = initial_cwd.or_else(|| {
                     snapshot
                         .navigation
@@ -722,6 +743,23 @@ impl Desktop {
             }
         });
     }
+    fn load_host_configuration(&self) {
+        if !self.snapshot.connected {
+            return;
+        }
+        self.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
+        self.dispatch(Intent::ReadFileOpenCapabilities(
+            op::ReadFileOpenCapabilities {},
+        ));
+        self.dispatch(Intent::ReadProviderSettings(op::ReadProviderSettings {}));
+        if self.import_projects {
+            self.dispatch(Intent::ScanProjects(op::ScanProjects {}));
+        }
+        if self.tab == Tab::Settings {
+            self.dispatch(Intent::ReadHostSoftware(op::ReadHostSoftware {}));
+            self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
+        }
+    }
     fn effect<T: Send + 'static>(
         &self,
         future: impl Future<Output = Result<T, String>> + Send + 'static,
@@ -777,16 +815,7 @@ impl Desktop {
                         if let Some(text) = self.pending_explanation.take() {
                             self.explain_selection(&text, cx);
                         }
-                        self.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
-                        self.dispatch(Intent::ReadFileOpenCapabilities(
-                            op::ReadFileOpenCapabilities {},
-                        ));
-                        if self.import_projects {
-                            self.dispatch(Intent::ScanProjects(op::ScanProjects {}));
-                        }
-                        if self.tab == Tab::Settings {
-                            self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
-                        }
+                        self.load_host_configuration();
                     }
                     Err(error) => {
                         self.local_errors.insert(ErrorScope::Application, error);
@@ -1335,6 +1364,26 @@ impl Desktop {
             },
         );
     }
+    fn set_connection_enabled(
+        &mut self,
+        remote: Option<RemoteHost>,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.remote != remote {
+            if enabled {
+                self.switch_host(remote, window, cx);
+            }
+        } else if enabled {
+            let previous = self.session.take();
+            self.connect(previous, Some(true));
+        } else {
+            self.dispatch(Intent::SetConnectionEnabled { enabled });
+        }
+        cx.notify();
+    }
+
     fn switch_host(
         &mut self,
         remote: Option<RemoteHost>,
@@ -1368,7 +1417,7 @@ impl Desktop {
         self.composer
             .input
             .update(cx, |input, cx| input.set_value(value, window, cx));
-        self.connect(previous);
+        self.connect(previous, Some(true));
     }
     fn send(&mut self, cx: &Context<Self>) {
         if !self.snapshot.connected || self.busy > 0 {
@@ -1643,7 +1692,7 @@ impl Desktop {
         match result {
             Ok(remote) => {
                 self.remote = remote;
-                self.connect(None);
+                self.connect(None, None);
             }
             Err(error) => self.set_error(error),
         }

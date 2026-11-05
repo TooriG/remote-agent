@@ -436,6 +436,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
         ..Default::default()
     });
     let mut original = Snapshot {
+        connection_disabled: true,
         storage_scope: "host:area".into(),
         conversations: Arc::new(
             [(
@@ -529,6 +530,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
         keys,
         [
             "archived_scopes",
+            "connection_disabled",
             "drafts",
             "file_drafts",
             "navigation",
@@ -538,6 +540,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
         ]
     );
     let restored = agent_core::persistence::decode(&bytes).unwrap();
+    assert!(!restored.connection_enabled());
     assert_eq!(restored.drafts, original.drafts);
     assert_eq!(restored.pending_submissions, original.pending_submissions);
     assert_eq!(restored.file_drafts, original.file_drafts);

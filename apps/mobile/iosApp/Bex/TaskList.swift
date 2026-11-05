@@ -4,8 +4,6 @@ import SwiftUI
 struct ThreadsScreen: View {
     @ObservedObject var model: AppViewModel
     @State private var search = ""
-    @State private var showingSettings = false
-    @State private var openConnectionsAfterSettings = false
 
     var body: some View {
         let projects = model.list?.projects ?? []
@@ -240,7 +238,7 @@ struct ThreadsScreen: View {
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    Button { showingSettings = true } label: { Label("設定", systemImage: "gearshape") }
+                    Button(action: model.showSettings) { Label("設定", systemImage: "gearshape") }
                         .accessibilityIdentifier("tasks.settings")
                     Button { model.refreshTaskList() } label: { Label("更新", systemImage: "arrow.clockwise") }
                         .disabled(model.threadLoadState == .loading || model.profiles.isEmpty)
@@ -250,14 +248,6 @@ struct ThreadsScreen: View {
                     .accessibilityIdentifier("tasks.menu")
             }
         }
-        .sheet(isPresented: $showingSettings, onDismiss: {
-            if openConnectionsAfterSettings {
-                openConnectionsAfterSettings = false
-                model.showProfiles()
-            }
-        }, content: {
-            SettingsSheet(model: model, openConnections: { openConnectionsAfterSettings = true })
-        })
     }
 }
 

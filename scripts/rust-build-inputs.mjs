@@ -33,7 +33,7 @@ export function compilerEnvironment(environment, host) {
     'CC', 'CXX', 'AR', 'AS', 'LD', 'RANLIB',
     'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'LIBCLANG_PATH', 'BINDGEN_EXTRA_CLANG_ARGS',
     'NIX_CFLAGS_COMPILE', 'NIX_LDFLAGS', 'NIX_ENFORCE_PURITY', 'ANDROID_NDK_HOME', 'CARGO_NDK_PLATFORM',
-    'AGENT_BUILD_REVISION', 'NODE_OPTIONS',
+    'AGENT_BUILD_REVISION', 'AGENT_BUILD_NUMBER', 'NODE_OPTIONS',
   ]);
   for (const target of ['HOST', 'TARGET']) {
     for (const suffix of ['CC', 'CXX', 'AR', 'RANLIB', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS']) {

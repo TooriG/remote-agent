@@ -231,10 +231,7 @@ impl Render for Desktop {
                 editor
             }
         } else {
-            match self.tab {
-                Tab::Chat => self.conversation_content(window.viewport_size().width, cx),
-                Tab::Settings => self.settings(window, cx),
-            }
+            self.conversation_content(window.viewport_size().width, cx)
         };
         h_flex()
             .relative()
@@ -265,6 +262,9 @@ impl Render for Desktop {
                     .max_w_full()
                     .child(self.error_notices(ErrorScope::Application, cx)),
             ))
+            .when(self.tab == Tab::Settings, |body| {
+                body.child(deferred(self.settings_modal(cx)))
+            })
     }
 }
 

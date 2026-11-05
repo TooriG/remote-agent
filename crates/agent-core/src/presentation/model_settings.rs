@@ -92,10 +92,10 @@ impl Snapshot {
 
     pub fn models_matching(&self, provider: Option<ProviderKind>, query: String) -> Vec<Model> {
         let query = query.trim().to_lowercase();
-        let models = self
-            .models
-            .iter()
-            .filter(|model| provider.is_none_or(|provider| model.model.provider == provider));
+        let models = self.models.iter().filter(|model| {
+            self.provider_enabled(model.model.provider)
+                && provider.is_none_or(|provider| model.model.provider == provider)
+        });
         if query.is_empty() {
             return models.cloned().collect();
         }
@@ -109,7 +109,8 @@ impl Snapshot {
     }
 
     pub(crate) fn allows_custom_codex_models(&self) -> bool {
-        crate::state::allows_custom_codex_models(self.account.accounts.as_deref())
+        self.provider_enabled(ProviderKind::Codex)
+            && crate::state::allows_custom_codex_models(self.account.accounts.as_deref())
     }
 
     /// A recommended picker catalog is not an exhaustive allowlist of Codex IDs.

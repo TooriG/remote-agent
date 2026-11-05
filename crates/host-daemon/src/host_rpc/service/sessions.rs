@@ -150,6 +150,7 @@ impl HostRpcService {
         if let Some(row) = self.inner.conversations.get(target)? {
             return self.fork_conversation(&row, &params.last_turn_id).await;
         }
+        self.require_provider_enabled(target.provider)?;
         let agent = self.inner.providers.get(target.provider)?;
         require_capability::<agent_protocol::protocol::contracts::ForkSession>(
             agent.capabilities().fork,
@@ -314,6 +315,7 @@ impl HostRpcService {
         target: &agent_protocol::session::SessionRef,
         input: &op::Submission,
     ) -> Result<op::SubmissionReceipt, Failure> {
+        self.require_provider_enabled(target.provider)?;
         if input
             .model
             .as_ref()
@@ -651,6 +653,7 @@ impl HostRpcService {
         provider: ProviderKind,
         model: Option<&agent_protocol::models::ModelRef>,
     ) -> Result<Arc<dyn Agent>, Failure> {
+        self.require_provider_enabled(provider)?;
         if model.is_some_and(|model| model.provider != provider || model.id.trim().is_empty()) {
             return Err(Failure::new(
                 "provider_mismatch",

@@ -7,8 +7,31 @@ use agent_protocol::file_tree::EntryKind;
 use agent_protocol::live_activity::*;
 use agent_protocol::permissions::*;
 use agent_protocol::project_import::ScanProjects;
+use agent_protocol::providers::*;
 use agent_protocol::{browser::*, composer::*, diagnostics::*, operations::*, requests::*};
 use serde_json::Value;
+#[uniffi::remote(Record)]
+struct ReadProviderSettings {}
+#[uniffi::remote(Record)]
+struct ReadHostSoftware {}
+#[uniffi::remote(Record)]
+struct HostSoftware {
+    pub version: String,
+    pub revision: String,
+    pub build: u64,
+}
+#[uniffi::remote(Record)]
+struct SetProviderEnabled {
+    pub provider: ProviderKind,
+    pub enabled: bool,
+}
+#[uniffi::remote(Record)]
+struct CodexCliStatus {
+    pub running: bool,
+    pub version: Option<String>,
+    pub restart_required: bool,
+    pub error: Option<String>,
+}
 #[uniffi::remote(Enum)]
 enum EntryKind {
     Directory,

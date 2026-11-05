@@ -67,7 +67,7 @@ extension LaunchUITests {
     func testSimulatorWeeklyUsageNamesFableAndSettingsOmitModelDefaults() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.menu"].tap(); app.buttons["tasks.settings"].tap()
-        XCTAssertTrue(app.buttons["settings.agents"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["settings.providers"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["settings.models"].exists)
         app.buttons["settings.close"].tap()
         app.buttons["tasks.new.project.simulator-project"].tap()

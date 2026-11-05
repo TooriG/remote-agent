@@ -39,7 +39,13 @@ impl Operation for LoadModels {
     fn apply(self, snapshot: &mut Snapshot, catalog: Self::Output) -> Vec<Effect> {
         let models = Arc::make_mut(&mut snapshot.models);
         models.retain(|model| model.model.provider != self.provider);
-        models.extend(catalog.data);
+        if snapshot
+            .provider_settings
+            .as_ref()
+            .is_none_or(|settings| settings.enabled(self.provider))
+        {
+            models.extend(catalog.data);
+        }
         models.sort_by_key(|model| model.model.provider);
         let errors = Arc::make_mut(&mut snapshot.model_errors);
         errors.remove(self.provider.key());

@@ -15,12 +15,11 @@ final class AppViewModel: ObservableObject {
     @Published var connections: [String: Task<Void, Never>] = [:]
     @Published var pairingConnection: Task<Void, Never>?
     var isConnecting: Bool {
-        screen == .pairing ? pairingConnection != nil : selectedProfileId.flatMap { connections[$0] } != nil
+        selectedProfileId.flatMap { connections[$0] } != nil
     }
 
     @Published var pairingError: String?
     @Published private(set) var pairingInvitation: Invitation?
-    private var pairingReturnScreen: AppScreen = .threads
     @Published var notice: String?
     @Published var profiles: [HostProfile] = []
     @Published private(set) var selectedProfileId: String?
@@ -94,7 +93,6 @@ final class AppViewModel: ObservableObject {
         if selectedProfileId == id, session != nil {
             return
         }
-        screen = .threads
         resetPresentation()
         selectedProfileId = id
         UserDefaults.standard.set(id, forKey: "bex.selected-host")
@@ -144,7 +142,6 @@ final class AppViewModel: ObservableObject {
             activateProfile(host)
         }
         updateTaskList()
-        screen = .profiles
         Task { [weak self] in
             do {
                 do { try await old?.shutdown() } catch { self?.notice = error.localizedDescription }
@@ -163,26 +160,20 @@ final class AppViewModel: ObservableObject {
     }
 
     func openPairing() {
-        if screen != .pairing {
-            pairingReturnScreen = screen == .profiles ? .profiles : .threads
-        }
         persist()
+        cancelPairing()
+        screen = .profiles
+    }
+
+    func cancelPairing() {
         pairingConnection?.cancel()
         pairingConnection = nil
         pairingError = nil
         pairingInvitation = nil
-        screen = .pairing
-    }
-
-    func dismissPairing(returnTo: AppScreen? = nil) {
-        pairingConnection?.cancel()
-        pairingConnection = nil
-        pairingInvitation = nil
-        screen = returnTo ?? pairingReturnScreen
     }
 
     func preparePairing(_ contents: String) {
-        guard !isConnecting else { return }
+        guard pairingConnection == nil else { return }
         pairingInvitation = nil
         do {
             pairingInvitation = try parseInvitation(contents: contents, now: UInt64(Date().timeIntervalSince1970))
@@ -191,11 +182,10 @@ final class AppViewModel: ObservableObject {
     }
 
     func confirmPairing() {
-        guard !isConnecting, let invitation = pairingInvitation else { return }
+        guard pairingConnection == nil, let invitation = pairingInvitation else { return }
         do {
             let id = try validateInvitation(invitation: invitation, now: UInt64(Date().timeIntervalSince1970))
             pairingError = nil
-            screen = .pairing
             pairingConnection = Task { [weak self] in
                 guard let self else { return }
                 do {

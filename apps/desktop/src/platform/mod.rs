@@ -130,6 +130,9 @@ impl Connections {
         remote: Option<&str>,
         snapshot: Snapshot,
     ) -> anyhow::Result<Arc<Store>> {
+        if !snapshot.connection_enabled() {
+            return Ok(Arc::new(Store::offline(snapshot)));
+        }
         let device_name = tokio::task::spawn_blocking(agent_local_host::machine_name).await?;
         let startup = self.startup.lock().await;
         if let Some(remote) = remote {
@@ -245,7 +248,7 @@ impl Connections {
             let mut snapshots = store.subscribe();
             let mut delay = Duration::from_millis(250);
             while snapshots
-                .wait_for(|snapshot| !snapshot.connected)
+                .wait_for(|snapshot| !snapshot.connected && snapshot.connection_enabled())
                 .await
                 .is_ok()
             {
@@ -253,7 +256,7 @@ impl Connections {
                 if snapshots.has_changed().is_err() {
                     break;
                 }
-                if snapshots.borrow().connected {
+                if snapshots.borrow().connected || !snapshots.borrow().connection_enabled() {
                     delay = Duration::from_millis(250);
                     continue;
                 }

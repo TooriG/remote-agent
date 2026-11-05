@@ -6,7 +6,7 @@ extension AppViewModel {
     func connect(afterForeground: Bool = false) {
         if afterForeground {
             connectProfiles(afterForeground: true)
-        } else if screen != .pairing, let profile = profiles.first(where: { $0.id == selectedProfileId }) {
+        } else if let profile = profiles.first(where: { $0.id == selectedProfileId }) {
             connect(profile)
         }
     }
@@ -88,6 +88,7 @@ extension AppViewModel {
     }
 
     private func receiveHost(_ next: AgentCore.Snapshot, host: String, listChanged: Bool) {
+        objectWillChange.send()
         if selectedProfileId == host {
             publish(next)
         } else {
@@ -96,5 +97,26 @@ extension AppViewModel {
                 updateTaskList()
             }
         }
+    }
+
+    func connectionSnapshot(_ host: String) -> AgentCore.Snapshot {
+        sessions.session(host: host)?.snapshot() ?? AgentCore.Snapshot.empty()
+    }
+
+    func setConnectionEnabled(_ host: String, enabled: Bool) {
+        guard let owner = sessions.session(host: host) else { return }
+        do {
+            let receipt = try owner.dispatch(intent: .setConnectionEnabled(enabled: enabled))
+            objectWillChange.send()
+            Task { [weak self] in
+                do {
+                    _ = try await receipt.wait()
+                    try await owner.flush()
+                    if enabled, let profile = self?.profiles.first(where: { $0.id == host }) {
+                        self?.connect(profile)
+                    }
+                } catch { self?.notice = error.localizedDescription }
+            }
+        } catch { notice = error.localizedDescription }
     }
 }

@@ -206,7 +206,7 @@ impl Desktop {
                 selection::set_composer_text(&self.composer.input, text.clone().into(), window, cx)
             }
             ConversationAction::Usage(provider) => {
-                self.open_settings(SettingsPage::Agents);
+                self.open_settings(SettingsPage::Providers, window, cx);
                 self.model_controls.provider = *provider;
             }
             ConversationAction::OpenUsage => {

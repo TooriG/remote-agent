@@ -16,6 +16,7 @@ pub enum AgentAvailability {
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ConnectionAgent {
     pub provider: ProviderKind,
+    pub enabled: bool,
     pub name: String,
     pub availability: AgentAvailability,
     pub label: String,
@@ -63,6 +64,31 @@ fn availability(
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
+    pub fn connection_enabled(&self) -> bool {
+        !self.connection_disabled
+    }
+
+    pub fn connection_status_label(&self) -> String {
+        if self.connection_disabled {
+            "オフ"
+        } else if self.connected {
+            "接続済み"
+        } else {
+            "未接続"
+        }
+        .into()
+    }
+
+    pub fn provider_enabled(&self, provider: ProviderKind) -> bool {
+        self.provider_settings
+            .as_ref()
+            .is_none_or(|settings| settings.enabled(provider))
+    }
+
+    pub fn provider_settings_loaded(&self) -> bool {
+        self.provider_settings.is_some()
+    }
+
     pub fn connection_setup(&self) -> ConnectionSetup {
         use crate::state::operations::{OperationKey, OperationPhase};
         let agents: Vec<_> = [
@@ -72,6 +98,7 @@ impl Snapshot {
         ]
         .into_iter()
         .map(|(provider, name)| {
+            let enabled = self.provider_enabled(provider);
             let checks_failed = self.connected
                 && [OperationKey::Models { provider }, OperationKey::Accounts]
                     .iter()
@@ -89,13 +116,15 @@ impl Snapshot {
                 &self.model_errors,
             );
             let availability = match availability {
+                _ if !enabled => AgentAvailability::Unavailable,
                 AgentAvailability::Checking if checks_failed => AgentAvailability::Unavailable,
                 availability => availability,
             };
             ConnectionAgent {
                 provider,
+                enabled,
                 name: name.into(),
-                error: (availability == AgentAvailability::Unavailable)
+                error: (enabled && availability == AgentAvailability::Unavailable)
                     .then(|| {
                         self.model_errors
                             .get(provider.key())
@@ -115,11 +144,15 @@ impl Snapshot {
                     })
                     .flatten(),
                 availability,
-                label: match availability {
-                    AgentAvailability::Checking => "確認中…",
-                    AgentAvailability::Ready => "利用可能",
-                    AgentAvailability::LoginRequired => "未ログイン",
-                    AgentAvailability::Unavailable => "設定が必要",
+                label: if !enabled {
+                    "オフ"
+                } else {
+                    match availability {
+                        AgentAvailability::Checking => "確認中…",
+                        AgentAvailability::Ready => "利用可能",
+                        AgentAvailability::LoginRequired => "未ログイン",
+                        AgentAvailability::Unavailable => "設定が必要",
+                    }
                 }
                 .into(),
             }

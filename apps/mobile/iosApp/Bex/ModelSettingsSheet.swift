@@ -37,8 +37,8 @@ struct ModelSettingsScreen: View {
     var body: some View {
         Form {
             ErrorNotices(model: model, scope: .settings)
-            Section("エージェント") {
-                Picker("エージェント", selection: Binding<ProviderKind?>(
+            Section("プロバイダー") {
+                Picker("プロバイダー", selection: Binding<ProviderKind?>(
                     get: { provider }, set: {
                         if let value = $0 {
                             selectProvider(value)
@@ -57,7 +57,9 @@ struct ModelSettingsScreen: View {
             quickControls
             Section {
                 NavigationLink {
-                    AgentSettingsScreen(model: model, provider: provider, close: close)
+                    if let provider {
+                        ProviderAccountScreen(model: model, provider: provider, close: close)
+                    }
                 } label: {
                     if provider == .deepSeek {
                         Label("APIキー", systemImage: "key")
@@ -66,6 +68,7 @@ struct ModelSettingsScreen: View {
                     }
                 }
                 .accessibilityIdentifier("model.accounts.manage")
+                .disabled(provider == nil)
                 if let account = selectedAccount {
                     WeeklyUsageView(windows: model.snapshot.accountWeeklyUsage(
                         provider: account.provider, id: account.id
@@ -88,8 +91,7 @@ struct ModelSettingsScreen: View {
             }
         }
         .onAppear {
-            model.perform(.listAccounts(ListAccounts()))
-            model.perform(.refreshModels)
+            model.perform(.readProviderSettings(ReadProviderSettings()))
         }
         .onChange(of: model.selectedProfileId) { _ in
             providerOverride = nil

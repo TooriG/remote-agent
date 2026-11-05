@@ -21,5 +21,6 @@ pub mod paths;
 pub mod permissions;
 pub mod project_import;
 pub mod protocol;
+pub mod providers;
 pub mod requests;
 pub mod session;

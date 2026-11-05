@@ -1,11 +1,10 @@
 import AgentCore
 import SwiftUI
 
-struct AgentSettingsScreen: View {
+struct ProviderAccountScreen: View {
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.locale) private var locale
     @ObservedObject var model: AppViewModel
-    @State var provider: ProviderKind?
+    let provider: ProviderKind
     let close: () -> Void
     @State private var changingAccount = false
     @State private var loadingAccounts = false
@@ -16,13 +15,6 @@ struct AgentSettingsScreen: View {
     @State private var cancellingLogin = false
     @State private var pollingLogin: Task<Void, Never>?
     @State private var signOutId: String?
-    private var providerName: String {
-        guard let provider = login?.provider ?? provider else {
-            return localizedUiText(language: locale.appLanguage, source: "エージェント")
-        }
-        return provider.bexName
-    }
-
     private var accounts: [Account] {
         model.accounts.filter { $0.provider == provider }
     }
@@ -55,25 +47,17 @@ struct AgentSettingsScreen: View {
         List {
             Section("適用範囲") {
                 SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
-                                    disabled: changingAccount || loginInProgress, select: model.selectProfile)
+                                    disabled: changingAccount || loginInProgress, select: model.activateProfile)
             }
             if let login {
                 AccountLoginSection(
-                    login: login, providerName: providerName, loginCode: $loginCode,
+                    login: login, providerName: provider.bexName, loginCode: $loginCode,
                     progressMessage: loginProgressMessage, loginError: loginError,
                     submit: { submitLoginCode(login.loginId, provider: login.provider) },
                     retry: { pollLogin(login.loginId, provider: login.provider) }
                 )
             } else {
                 Section {
-                    Picker("エージェント", selection: $provider) {
-                        Text("Codex").tag(Optional(ProviderKind.codex))
-                        Text("Claude Code").tag(Optional(ProviderKind.claude))
-                        Text("DeepSeek Harness").tag(Optional(ProviderKind.deepSeek))
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("account.provider")
-                    .disabled(busy)
                     if let agent {
                         Label(
                             agent.label,
@@ -90,9 +74,10 @@ struct AgentSettingsScreen: View {
                 } else {
                     accountSection
                 }
+                ProviderRuntimeSection(model: model, provider: provider)
             }
         }
-        .navigationTitle("アカウント")
+        .navigationTitle(provider.bexName)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(loginInProgress)
         .toolbar {
@@ -123,25 +108,19 @@ struct AgentSettingsScreen: View {
             Text("この環境に保存されたアカウントからサインアウトします。再び使うにはサインインが必要です。")
         }
         .interactiveDismissDisabled(loginInProgress)
-        .onAppear {
-            provider = provider ?? model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)
-            refresh()
-        }
-        .onChange(of: model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)) { value in
-            if provider == nil {
-                provider = value
-            }
-        }
+        .onAppear(perform: refresh)
         .onChange(of: model.isConnected) { connected in
             if connected {
                 refresh()
             }
         }
-        .onChange(of: provider) { _ in loginError = nil; loginCode = ""; refresh() }
         .onChange(of: model.selectedProfileId) { _ in
             loginError = nil
             loginCode = ""
             signOutId = nil
+            if model.isConnected {
+                refresh()
+            }
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active, let login {
@@ -152,7 +131,7 @@ struct AgentSettingsScreen: View {
     }
 }
 
-extension AgentSettingsScreen {
+extension ProviderAccountScreen {
     private var credentialSection: some View {
         let controls = model.snapshot.credentialControls()
         let selected = controls.first { $0.provider == credentialProvider }
@@ -222,7 +201,7 @@ extension AgentSettingsScreen {
                 }
             }
             if accounts.isEmpty, !loadingAccounts, agent?.error == nil {
-                Text("\(providerName) にサインインして利用を開始できます。")
+                Text("\(provider.bexName) にサインインして利用を開始できます。")
                     .foregroundStyle(.secondary)
             }
             if loadingAccounts {
@@ -239,20 +218,19 @@ extension AgentSettingsScreen {
                 Text("アカウント")
                 Spacer()
                 Button("追加", systemImage: "plus", action: startLogin)
-                    .accessibilityIdentifier("model.account.add").disabled(busy || provider == nil)
+                    .accessibilityIdentifier("model.account.add").disabled(busy)
                 Button(action: refresh) { Image(systemName: "arrow.clockwise") }
                     .accessibilityLabel("モデルと使用量を更新")
                     .accessibilityIdentifier("account.refresh")
                     .disabled(loadingAccounts || busy)
             }
         } footer: {
-            Text("この環境の\(providerName)で使用します。同じ環境を使う端末にも反映されます。")
+            Text("この環境の\(provider.bexName)で使用します。同じ環境を使う端末にも反映されます。")
         }
         .buttonStyle(.borderless)
     }
 
     private func chooseAccount(_ id: String) {
-        guard let provider else { return }
         changingAccount = true
         model.perform(.selectAccount(SelectAccount(provider: provider, id: id))) { _ in changingAccount = false }
     }
@@ -270,14 +248,12 @@ extension AgentSettingsScreen {
     }
 
     private func signOut(_ id: String) {
-        guard let provider else { return }
         signOutId = nil
         changingAccount = true
         model.perform(.logoutAccount(LogoutAccount(provider: provider, id: id))) { _ in changingAccount = false }
     }
 
     private func startLogin() {
-        guard let provider else { return }
         loginCode = ""
         loginRequestInFlight = true
         loginError = nil

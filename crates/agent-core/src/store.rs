@@ -494,6 +494,11 @@ impl Store {
         };
         // Attach acknowledges transferred ownership before successful setup returns.
         let _cancel = attempt.clone().drop_guard();
+        if !self.snapshot().connection_enabled() {
+            return Err(crate::transport::TransportError::Connection(
+                "接続がオフになっています。".into(),
+            ));
+        }
         let setup = async {
             endpoint.network_change().await;
             let (complete, receiver) = oneshot::channel();
@@ -617,6 +622,11 @@ impl Store {
             (current.clone(), self.request_disconnect()?)
         };
         let _cancel = attempt.clone().drop_guard();
+        if !self.snapshot().connection_enabled() {
+            return Err(crate::transport::TransportError::Connection(
+                "接続がオフになっています。".into(),
+            ));
+        }
         let setup = async {
             disconnected
                 .await
@@ -737,6 +747,10 @@ impl Store {
         &self,
         intent: Intent,
     ) -> impl Future<Output = Result<Outcome, PeerError>> + Send + use<> {
+        let pause = matches!(intent, Intent::SetConnectionEnabled { enabled: false });
+        // Match connection completion's order: attempt ownership before publication.
+        let attempt = pause.then(|| self.connection_attempt.lock().unwrap());
+        let mut disconnected = None;
         let mut receipt = Err(PeerError::ConnectionClosed("store is closed".into()));
         let publications = self.publications.lock().unwrap().clone();
         if let Some(publications) = publications {
@@ -748,6 +762,16 @@ impl Store {
                 }
                 let mut candidate = current.clone();
                 let (effects, changed) = apply_locked(&mut candidate, Event::Intent(intent));
+                if let Some(attempt) = &attempt {
+                    attempt.cancel();
+                    match self.request_disconnect() {
+                        Ok(result) => disconnected = Some(result),
+                        Err(error) => {
+                            receipt = Err(error);
+                            return false;
+                        }
+                    }
+                }
                 if !effects.is_empty() {
                     let permit = match self.commands.try_reserve() {
                         Ok(permit) => permit,
@@ -764,7 +788,13 @@ impl Store {
                 changed
             });
         }
+        drop(attempt);
         async move {
+            if let Some(result) = disconnected {
+                result
+                    .await
+                    .map_err(|_| PeerError::ConnectionClosed("store is closed".into()))??;
+            }
             match receipt? {
                 None => Ok(Outcome::Applied),
                 Some(result) => result
@@ -842,6 +872,9 @@ impl<T> PartialEq for SharedIdentity<'_, T> {
 fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     // No `..`: adding a Snapshot field must update the publication contract.
     let Snapshot {
+        connection_disabled,
+        provider_settings,
+        host_software,
         preferred_editor,
         file_open_capabilities,
         file_open_capabilities_requested,
@@ -892,6 +925,9 @@ fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
     (
         (
             recent_chats,
+            connection_disabled,
+            provider_settings,
+            host_software,
             model_preferences,
             preferred_editor,
             file_open_capabilities_requested,

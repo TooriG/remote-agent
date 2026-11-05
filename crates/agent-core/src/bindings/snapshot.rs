@@ -96,6 +96,12 @@ impl Snapshot {
     pub fn accounts(&self) -> Option<Accounts> {
         self.account.accounts.as_deref().cloned()
     }
+    pub fn codex_cli_status(&self) -> Option<agent_protocol::operations::CodexCliStatus> {
+        self.account.codex_cli.as_deref().cloned()
+    }
+    pub fn host_software(&self) -> Option<agent_protocol::operations::HostSoftware> {
+        self.host_software.as_deref().cloned()
+    }
     pub fn account_is_selected(&self, provider: ProviderKind, id: String) -> bool {
         self.account.accounts.as_ref().is_some_and(|accounts| {
             accounts

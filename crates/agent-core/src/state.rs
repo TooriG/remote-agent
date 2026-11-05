@@ -222,6 +222,12 @@ pub struct ProjectImportState {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct Snapshot {
+    #[serde(default)]
+    pub connection_disabled: bool,
+    #[serde(skip)]
+    pub provider_settings: Option<Arc<agent_protocol::providers::ProviderSettings>>,
+    #[serde(skip)]
+    pub host_software: Option<Arc<agent_protocol::operations::HostSoftware>>,
     #[serde(skip)]
     pub preferred_editor: Option<agent_protocol::editors::EditorId>,
     #[serde(skip)]
@@ -536,9 +542,9 @@ macro_rules! prepare_operations {
 fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>) {
     let mut next = previous.clone();
     prepare_operations!(intent, next, [
-        ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity,
+        ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity, ReadHostSoftware,
         ReadPermissionSettings, UpdatePermissionSettings,
-        ManageCodexCli, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
+        ManageCodexCli, ReadProviderSettings, SetProviderEnabled, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
         ReadAccountLogin, CancelAccountLogin, SubmitAccountLogin, ForkSession,
         StartTerminal, DetachTerminal, KillTerminal, CreateInvitation, RemoveRemoteHost,
         RevokeDevice, ListFiles, ResolveFile, ResolveFileReference, ReadFile,
@@ -553,6 +559,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
         Intent::RefreshModels => return (next, op::refresh_models()),
+        Intent::SetConnectionEnabled { enabled } => next.connection_disabled = !enabled,
         Intent::SetPreferredEditor { editor } => next.preferred_editor = Some(editor),
         Intent::EnsureFileMetadata { paths, now_ms } => {
             let effects = op::ensure_file_metadata(&mut next, paths, now_ms);
@@ -1108,6 +1115,8 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             next.project_import = Arc::default();
             next.terminals = Arc::default();
             next.observed_agents = None;
+            next.provider_settings = None;
+            next.host_software = None;
             next.task_activity = None;
             next.activity = Arc::default();
             next.expanded_projects = Arc::default();
@@ -1242,6 +1251,12 @@ impl Snapshot {
 
     fn prepare_connection_refresh(&mut self) -> Vec<Effect> {
         let mut effects = vec![Effect::execute(op::ReadTaskActivity {})];
+        if self.provider_settings.take().is_some() {
+            effects.push(Effect::execute(op::ReadProviderSettings {}));
+        }
+        if self.host_software.take().is_some() {
+            effects.push(Effect::execute(op::ReadHostSoftware {}));
+        }
         if self.file_open_capabilities_requested {
             effects.push(Effect::execute(op::ReadFileOpenCapabilities {}));
         }

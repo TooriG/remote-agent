@@ -2,7 +2,7 @@ use super::*;
 use agent_protocol::session::ProviderKind;
 use gpui_kit::Rgba;
 
-fn provider_icon(provider: ProviderKind) -> Icon {
+pub(super) fn provider_icon(provider: ProviderKind) -> Icon {
     Icon::default().path(match provider {
         ProviderKind::Codex => "icons/openai.svg",
         ProviderKind::Claude => "icons/anthropic.svg",
@@ -255,70 +255,68 @@ impl Desktop {
             || self.busy > 0
             || self.snapshot.account.login.is_some()
             || !self.snapshot.connected;
-        let mut services = h_flex().gap_1().when(in_settings, |row| {
-            row.w_full()
-                .border_b_1()
-                .border_color(rgb(appearance::BORDER))
-        });
-        for (value, label) in [
-            (ProviderKind::Codex, "Codex"),
-            (ProviderKind::Claude, "Claude"),
-            (ProviderKind::DeepSeek, "DeepSeek"),
-        ] {
-            services = services.child(
-                button(
-                    format!("model-provider-{label}"),
-                    if value == ProviderKind::DeepSeek {
-                        "DSH"
-                    } else {
-                        label
-                    },
-                    cx,
-                    move |s, window, cx| {
-                        if s.model_controls.provider != Some(value) {
-                            s.account
-                                .code
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                        }
-                        s.model_controls.provider = Some(value);
-                        s.account.sign_out = None;
-                        if value == ProviderKind::DeepSeek {
-                            s.dispatch(Intent::ReadDshCredentials(op::ReadDshCredentials {}));
-                        }
-                    },
-                )
-                .debug_selector(move || format!("model-provider-{label}"))
-                .selected(!in_settings && provider == Some(value))
-                .when(in_settings, |button| {
-                    button
-                        .icon(provider_icon(value))
-                        .w(px(120.))
-                        .h(px(40.))
-                        .rounded(px(0.))
-                        .border_b_2()
-                        .border_color(if provider == Some(value) {
-                            rgb(appearance::FOREGROUND)
-                        } else {
-                            rgb(appearance::BORDER).opacity(0.)
-                        })
-                        .text_color(if provider == Some(value) {
-                            rgb(appearance::FOREGROUND)
-                        } else {
-                            rgb(appearance::MUTED)
-                        })
-                })
-                .disabled(disabled)
-                .when(!in_settings, |button| button.flex_1()),
-            );
-        }
         let mut body = v_flex()
             .id("model-account-controls")
             .gap_3()
-            .when(in_settings, |body| body.gap_6())
-            .child(services);
+            .when(in_settings, |body| body.gap_6());
+        if !in_settings {
+            let mut services = h_flex().gap_1();
+            for (value, label) in [
+                (ProviderKind::Codex, "Codex"),
+                (ProviderKind::Claude, "Claude"),
+                (ProviderKind::DeepSeek, "DeepSeek"),
+            ] {
+                services = services.child(
+                    button(
+                        format!("model-provider-{label}"),
+                        if value == ProviderKind::DeepSeek {
+                            "DSH"
+                        } else {
+                            label
+                        },
+                        cx,
+                        move |view, window, cx| {
+                            view.account
+                                .code
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            view.model_controls.provider = Some(value);
+                            view.account.sign_out = None;
+                            if value == ProviderKind::DeepSeek {
+                                view.dispatch(Intent::ReadDshCredentials(
+                                    op::ReadDshCredentials {},
+                                ));
+                            }
+                        },
+                    )
+                    .debug_selector(move || format!("model-provider-{label}"))
+                    .selected(provider == Some(value))
+                    .disabled(disabled)
+                    .flex_1(),
+                );
+            }
+            body = body.child(services);
+        } else if let Some(agent) = self
+            .snapshot
+            .connection_setup()
+            .agents
+            .into_iter()
+            .find(|agent| Some(agent.provider) == provider)
+        {
+            body = body.child(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_lg().font_semibold().child(agent.name))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(appearance::MUTED))
+                            .child(language.text(&agent.label).to_owned()),
+                    ),
+            );
+        }
         let Some(provider) = provider else {
             return body
-                .child(language.text("エージェントを選択してください。"))
+                .child(language.text("プロバイダーを選択してください。"))
                 .into_any_element();
         };
         if provider == ProviderKind::DeepSeek {

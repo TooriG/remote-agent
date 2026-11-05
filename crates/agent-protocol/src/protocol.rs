@@ -12,6 +12,10 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method")]
 pub enum Notification {
+    #[serde(rename = "host/provider/settingsChanged")]
+    ProviderSettings {
+        settings: crate::providers::ProviderSettings,
+    },
     #[serde(rename = "host/taskActivity/changed")]
     TaskActivity {
         state: crate::live_activity::TaskActivityState,
@@ -117,6 +121,8 @@ macro_rules! results {
     }
 }
 results! {
+    ProviderSettings(crate::providers::ProviderSettings),
+    HostSoftware(crate::operations::HostSoftware),
     FileMetadataEntries(crate::file_metadata::FileMetadataEntries),
     HostUpdate(crate::operations::HostUpdate), HostIdentity(crate::operations::HostIdentity),
     HandoffHistory(crate::handoff::Page),
