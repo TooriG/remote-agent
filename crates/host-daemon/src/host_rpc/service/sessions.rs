@@ -166,6 +166,10 @@ impl HostRpcService {
         target: &agent_protocol::session::SessionRef,
         params: &op::Interrupt,
     ) -> Result<agent_protocol::models::Empty, Failure> {
+        let (handled, turn_id) = self.capacity_interrupt(target, &params.turn_id);
+        if handled {
+            return Ok(agent_protocol::models::Empty {});
+        }
         let row = self.inner.conversations.get(target)?;
         if let Some(row) = row.as_ref().filter(|row| {
             row.startup.as_ref().is_some_and(|startup| {
@@ -181,7 +185,7 @@ impl HostRpcService {
         }
         let native = row.as_ref().map_or(target, |row| &row.active);
         let turn = if let Some(row) = row.as_ref() {
-            let (source, id) = row.source(&params.turn_id)?;
+            let (source, id) = row.source(&turn_id)?;
             if &source != native {
                 return Err(Failure::new(
                     "invalid_turn",
@@ -190,7 +194,7 @@ impl HostRpcService {
             }
             id.into()
         } else {
-            params.turn_id.clone()
+            turn_id
         };
         self.inner
             .providers
@@ -233,6 +237,7 @@ impl HostRpcService {
         target: &agent_protocol::session::SessionRef,
         input: &op::Submission,
     ) -> Result<op::SubmissionReceipt, Failure> {
+        self.capacity_input(target);
         let mut row = self.inner.conversations.get(target)?;
         if let Some(current) = row.as_ref().filter(|row| {
             row.startup.as_ref().is_some_and(|startup| {
@@ -392,7 +397,12 @@ impl HostRpcService {
                 reload,
                 self.browser_config(&root.to_string())?,
             )
-            .await?;
+            .await;
+        if matches!(input.input.as_slice(), [op::Input::Text { text }] if text.trim().eq_ignore_ascii_case("/compact"))
+        {
+            self.capacity_compaction(root);
+        }
+        let receipt = receipt?;
         if starts_turn {
             let same_model = input
                 .model

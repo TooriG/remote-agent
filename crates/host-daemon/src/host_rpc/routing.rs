@@ -343,7 +343,6 @@ impl SessionRouter {
         result
     }
 
-    #[cfg(test)]
     pub(crate) fn current_turn(
         &self,
         target: &SessionRef,
