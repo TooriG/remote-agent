@@ -43,7 +43,6 @@ private struct NativeTerminalView: UIViewRepresentable {
             target: view, action: #selector(HostTerminalView.selectTextOnLongPress(_:))
         )
         longPress.minimumPressDuration = 0.7
-        longPress.delegate = view
         view.addGestureRecognizer(longPress)
         return view
     }
@@ -133,15 +132,9 @@ private struct NativeTerminalView: UIViewRepresentable {
 }
 
 /// Emulator responses are produced by the Host; SwiftTerm still handles native user input.
-private final class HostTerminalView: SwiftTerm.TerminalView, UIGestureRecognizerDelegate {
+private final class HostTerminalView: SwiftTerm.TerminalView {
     @TaskLocal private nonisolated static var isPasting = false
     var copyTitle = "コピー"
-
-    func gestureRecognizer(_: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-        // A competing edit-menu long press or tap must not replace the word
-        // selection when this gesture finishes.
-        other is UILongPressGestureRecognizer || other is UITapGestureRecognizer
-    }
 
     @objc func selectTextOnLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .ended else { return }
