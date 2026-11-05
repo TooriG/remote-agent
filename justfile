@@ -40,8 +40,12 @@ unit-tests *targets:
     exit "$failed"
 
 # macOS-only unit tests; CI runs these separately from portable validation.
-apple-unit-tests:
+apple-unit-tests: macos-unit-tests ios-unit-tests
+
+macos-unit-tests:
     cargo test --locked -p native-focus --test native_focus
+
+ios-unit-tests:
     bash scripts/test-ios-scroll.sh
 
 # Prune inactive Cargo outputs older than 3 days or over the 32 GiB idle budget, here and on the remote builder.

@@ -133,14 +133,18 @@ final class ConversationListController: UICollectionViewController {
         source = pending
         if changed {
             indices = nextIndices
+            if layout.following {
+                requestedEdge = .bottom
+            }
             applying = true
             var snapshot = NSDiffableDataSourceSnapshot<Int, ConversationList.RowID>()
             snapshot.appendSections([0])
             snapshot.appendItems(source.ids)
             data.apply(snapshot, animatingDifferences: false) { [weak self] in
-                guard let self else { return }
+                guard let self, active else { return }
                 applying = false
                 refreshVisibleRows()
+                restoreReadingPosition()
                 applyPending()
             }
         } else {
@@ -190,8 +194,22 @@ final class ConversationListController: UICollectionViewController {
     private func scrollToRequestedEdge() {
         guard !applying, !source.ids.isEmpty, let edge = requestedEdge else { return }
         requestedEdge = nil
-        collectionView.scrollToItem(at: IndexPath(item: edge == .bottom ? source.ids.count - 1 : 0, section: 0),
-                                    at: edge == .bottom ? .bottom : .top, animated: false)
+        collectionView.layoutIfNeeded()
+        let offset = edge == .bottom ? layout.bottomOffset(in: collectionView) : -collectionView.adjustedContentInset
+            .top
+        collectionView.setContentOffset(
+            CGPoint(x: -collectionView.adjustedContentInset.left, y: offset),
+            animated: false
+        )
+    }
+
+    private func restoreReadingPosition() {
+        guard !layout.following, layout.anchor != nil else { return }
+        collectionView.layoutIfNeeded()
+        collectionView.setContentOffset(
+            layout.targetContentOffset(forProposedContentOffset: collectionView.contentOffset),
+            animated: false
+        )
     }
 
     private func latestIsVisible() -> Bool {
@@ -236,6 +254,13 @@ final class ConversationListController: UICollectionViewController {
             captureAnchor(allowed: indices)
         }
         publishVisibility()
+    }
+
+    override func scrollViewDidChangeAdjustedContentInset(_: UIScrollView) {
+        if layout.following {
+            requestedEdge = .bottom
+            view.setNeedsLayout()
+        }
     }
 
     override func scrollViewDidEndDecelerating(_: UIScrollView) {

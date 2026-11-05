@@ -11,6 +11,7 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
     var following = true
     var anchor: Anchor?
     var indexPath: (ConversationList.RowID) -> IndexPath? = { _ in nil }
+    private var alignment: CGFloat = 0
 
     override init() {
         super.init()
@@ -37,12 +38,31 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
         guard let collectionView else { return }
         let insets = collectionView.adjustedContentInset
         let viewport = collectionView.bounds.height - insets.top - insets.bottom
-        let height = super.collectionViewContentSize.height - sectionInset.top
-        let top = max(6, viewport - height)
-        if abs(top - sectionInset.top) > 0.5 {
-            sectionInset.top = top
-            super.prepare()
-        }
+        // Changing flow metrics here discards self-sizing measurements and creates a layout loop.
+        // Alignment translates the measured geometry without invalidating those measurements.
+        alignment = max(0, viewport - super.collectionViewContentSize.height)
+    }
+
+    override var collectionViewContentSize: CGSize {
+        var size = super.collectionViewContentSize
+        size.height += alignment
+        return size
+    }
+
+    override func layoutAttributesForItem(at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
+        super.layoutAttributesForItem(at: indexPath).map { translated($0, by: alignment) }
+    }
+
+    override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
+        super.layoutAttributesForElements(in: rect.offsetBy(dx: 0, dy: -alignment))?
+            .map { translated($0, by: alignment) }
+    }
+
+    private func translated(_ attributes: UICollectionViewLayoutAttributes,
+                            by offset: CGFloat) -> UICollectionViewLayoutAttributes {
+        guard let copy = attributes.copy() as? UICollectionViewLayoutAttributes else { return attributes }
+        copy.frame.origin.y += offset
+        return copy
     }
 
     override func targetContentOffset(forProposedContentOffset proposedContentOffset: CGPoint) -> CGPoint {
@@ -62,8 +82,10 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
         withOriginalAttributes originalAttributes: UICollectionViewLayoutAttributes
     )
         -> UICollectionViewLayoutInvalidationContext {
-        let context = super.invalidationContext(forPreferredLayoutAttributes: preferredAttributes,
-                                                withOriginalAttributes: originalAttributes)
+        let context = super.invalidationContext(
+            forPreferredLayoutAttributes: translated(preferredAttributes, by: -alignment),
+            withOriginalAttributes: translated(originalAttributes, by: -alignment)
+        )
         guard let collectionView else { return context }
         let delta = preferredAttributes.size.height - originalAttributes.size.height
         if following {
@@ -72,12 +94,12 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
         } else {
             let insets = collectionView.adjustedContentInset
             let viewport = collectionView.bounds.height - insets.top - insets.bottom
-            let height = collectionViewContentSize.height - sectionInset.top + delta
-            let alignment = max(6, viewport - height) - sectionInset.top
+            let height = collectionViewContentSize.height - alignment + delta
+            let shift = max(0, viewport - height) - alignment
             let above = anchor.flatMap { indexPath($0.id) }.map { originalAttributes.indexPath < $0 }
                 ?? (originalAttributes.frame.maxY <= collectionView.contentOffset.y
                     + collectionView.adjustedContentInset.top)
-            context.contentOffsetAdjustment.y = alignment + (above ? delta : 0)
+            context.contentOffsetAdjustment.y = shift + (above ? delta : 0)
         }
         return context
     }
@@ -91,7 +113,7 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
         if following, let collectionView, newBounds.height != collectionView.bounds.height {
             context.contentOffsetAdjustment.y = max(-collectionView.adjustedContentInset.top,
                                                     collectionViewContentSize
-                                                        .height - max(0, sectionInset.top - 6) - newBounds.height
+                                                        .height - alignment - newBounds.height
                                                         + collectionView.adjustedContentInset.bottom) - collectionView
                 .contentOffset.y
         }
@@ -99,7 +121,7 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
     }
 
     func bottomOffset(in scroll: UIScrollView, growth: CGFloat = 0) -> CGFloat {
-        let height = collectionViewContentSize.height + growth - max(0, sectionInset.top - 6)
+        let height = collectionViewContentSize.height - alignment + growth
         return max(-scroll.adjustedContentInset.top,
                    height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
     }
@@ -118,14 +140,19 @@ final class ConversationListCell: UICollectionViewCell {
     }
 
     func show(_ content: AnyView, parent: UIViewController) {
-        let host = host ?? UIHostingController(rootView: content)
-        self.host = host
-        host.rootView = content
+        let host: UIHostingController<AnyView>
+        if let retained = self.host {
+            host = retained
+            host.rootView = content
+        } else {
+            host = UIHostingController(rootView: content)
+            self.host = host
+        }
         if host.parent == nil {
-            parent.addChild(host)
-            host.view.backgroundColor = .clear
             host.safeAreaRegions = []
             host.sizingOptions = .intrinsicContentSize
+            parent.addChild(host)
+            host.view.backgroundColor = .clear
             host.view.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(host.view)
             NSLayoutConstraint.activate([
@@ -139,7 +166,7 @@ final class ConversationListCell: UICollectionViewCell {
     }
 
     func unmount() {
-        guard let host else { return }
+        guard let host, host.parent != nil else { return }
         host.willMove(toParent: nil)
         host.view.removeFromSuperview()
         host.removeFromParent()
@@ -156,7 +183,8 @@ final class ConversationListCell: UICollectionViewCell {
         guard let attributes = layoutAttributes.copy() as? UICollectionViewLayoutAttributes else {
             return layoutAttributes
         }
-        guard let host else { return attributes }
+        // Recycling must not replace a measured row's size with the empty hosting view's size.
+        guard let host, host.parent != nil else { return attributes }
         let proposal = CGSize(width: attributes.size.width, height: .greatestFiniteMagnitude)
         attributes.size.height = max(1, ceil(host.sizeThatFits(in: proposal).height))
         return attributes

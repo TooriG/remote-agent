@@ -3,7 +3,7 @@ import UIKit
 
 @main @MainActor
 final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
-    private var window: UIWindow?
+    var window: UIWindow?
 
     func application(_: UIApplication,
                      didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
@@ -110,7 +110,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         let scroll = ConversationScrollState()
         let controller = ConversationListController(scroll: scroll)
         mount(controller)
-        let ids = [ConversationList.RowID.message("first"), .message("last")]
+        var ids = [ConversationList.RowID.message("first"), .message("last")]
         func update(_ height: CGFloat) {
             controller.update(ids: ids, following: scroll.following, request: scroll.request,
                               accessibilityValue: "") { index in
@@ -128,6 +128,15 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         let grown = view.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))!
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
                 - grown.frame.maxY - 6) < 1, "Following must track streamed self-sizing growth")
+        view.contentInset.bottom += 200
+        await layout(controller)
+        check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
+                - grown.frame.maxY - 6) < 1, "Keyboard insets must keep the latest message visible")
+        ids.append(.message("appended"))
+        update(1600)
+        await layout(controller)
+        check(view.indexPathsForVisibleItems.contains(IndexPath(item: 2, section: 0)),
+              "Following must reveal appended rows after a nonanimated diffable update")
         check(controller.scrollViewShouldScrollToTop(view) && !scroll.following,
               "Status-bar navigation must detach before UIKit scrolls")
     }
