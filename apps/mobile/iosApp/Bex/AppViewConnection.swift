@@ -102,13 +102,6 @@ extension AppViewModel {
         connectionStates[host] ?? HostConnectionState(AgentCore.Snapshot.empty())
     }
 
-    func updateConnectionState(_ snapshot: AgentCore.Snapshot, host: String) {
-        let next = HostConnectionState(snapshot)
-        if connectionStates[host] != next {
-            connectionStates[host] = next
-        }
-    }
-
     func setConnectionEnabled(_ host: String, enabled: Bool) {
         guard let owner = sessions.session(host: host) else { return }
         do {

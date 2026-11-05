@@ -275,6 +275,13 @@ extension AppViewModel {
         }
     }
 
+    func updateConnectionState(_ snapshot: AgentCore.Snapshot, host: String) {
+        let next = HostConnectionState(snapshot)
+        if connectionStates[host] != next {
+            connectionStates[host] = next
+        }
+    }
+
     func updateProfile(_ next: AgentCore.Snapshot, host: String?) {
         // The Host's latest addresses let the next cold connection dial it directly.
         if let index = profiles.firstIndex(where: { $0.id == host }) {

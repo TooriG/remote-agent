@@ -169,7 +169,7 @@ struct ProviderSettingsSection: View {
 }
 
 struct ProviderRuntimeSection: View {
-    let model: AppViewModel
+    let model: ConversationModel
     let provider: ProviderKind
 
     var body: some View {
@@ -198,7 +198,7 @@ struct ProviderRuntimeSection: View {
                 Text(verbatim: "Codex CLI")
             }
             .disabled(!model.isConnected || updating)
-            .task(id: "\(model.selectedProfileId ?? ""):\(model.isConnected)") {
+            .task(id: "\(model.host):\(model.isConnected)") {
                 if model.isConnected {
                     model.perform(.manageCodexCli(ManageCodexCli(update: false)))
                 }
