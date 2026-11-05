@@ -150,10 +150,6 @@ impl RenderedTurn {
     pub fn conversation_rows(&self) -> Vec<ConversationRow> {
         self.rows.clone()
     }
-
-    pub fn progress_label(&self, include_action: bool, now_seconds: f64) -> String {
-        self.work_progress(include_action).label(now_seconds)
-    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -2577,8 +2573,8 @@ mod progress_tests {
             let mut progress = turn.work_progress(false);
             progress.action = Some("cargo test".into());
             assert_eq!(progress.label(108.5), "8秒 作業中 · cargo test");
-            assert_eq!(turn.progress_label(false, 110.5), "10秒 作業中…");
-            assert_eq!(turn.progress_label(false, 99.), "0秒 作業中…");
+            assert_eq!(turn.work_progress(false).label(110.5), "10秒 作業中…");
+            assert_eq!(turn.work_progress(false).label(99.), "0秒 作業中…");
         }
         assert_eq!(
             WorkProgress {
@@ -2610,10 +2606,10 @@ mod progress_tests {
         let conversation = project_conversation(&Snapshot::default(), source, &None);
         let turn = &conversation.turns[0];
         assert_eq!(
-            turn.progress_label(true, 108.5),
+            turn.work_progress(true).label(108.5),
             "8秒 作業中 · Webを検索: latest action"
         );
-        assert_eq!(turn.progress_label(false, 108.5), "8秒 作業中…");
+        assert_eq!(turn.work_progress(false).label(108.5), "8秒 作業中…");
         let progress = turn.work_progress(true);
         drop(conversation);
         assert_eq!(

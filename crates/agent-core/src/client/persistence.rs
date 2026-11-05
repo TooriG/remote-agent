@@ -319,7 +319,7 @@ impl Persistence {
                 _ = tokio::time::sleep(std::time::Duration::from_millis(250)), if dirty => None,
             };
             if let Some(next) = next {
-                let immediate = !next.list_unchanged(previous.clone());
+                let immediate = !next.list_unchanged(&previous);
                 previous = next;
                 dirty = true;
                 if !immediate {

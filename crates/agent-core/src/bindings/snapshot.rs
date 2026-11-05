@@ -243,9 +243,9 @@ mod tests {
         };
         store.dispatch(edit()).await.unwrap();
         let edited = store.snapshot();
-        assert!(!edited.unchanged(before));
+        assert!(edited.changes(before).changed);
         store.dispatch(edit()).await.unwrap();
-        assert!(edited.unchanged(store.snapshot()));
+        assert!(!edited.changes(store.snapshot()).changed);
         store.close().await.unwrap();
     }
 
@@ -267,7 +267,7 @@ mod tests {
             }))
             .unwrap(),
         ));
-        assert!(initial.list_unchanged(Arc::new(initial.clone())));
+        assert!(initial.list_unchanged(&initial.clone()));
         let mut unrelated = initial.clone();
         Arc::make_mut(&mut unrelated.operations).insert(
             OperationKey::TaskActivity,
@@ -276,7 +276,7 @@ mod tests {
                 phase: OperationPhase::Running,
             },
         );
-        assert!(unrelated.list_unchanged(Arc::new(initial.clone())));
+        assert!(unrelated.list_unchanged(&initial));
         let mut root_loading = initial.clone();
         Arc::make_mut(&mut root_loading.operations).insert(
             OperationKey::SessionList,
@@ -285,12 +285,12 @@ mod tests {
                 phase: OperationPhase::Running,
             },
         );
-        assert!(!root_loading.list_unchanged(Arc::new(initial.clone())));
-        assert!(root_loading.list_unchanged(Arc::new(root_loading.clone())));
+        assert!(!root_loading.list_unchanged(&initial));
+        assert!(root_loading.list_unchanged(&root_loading.clone()));
         let loading = root_loading.clone();
         Arc::make_mut(&mut root_loading.operations).clear();
-        assert!(!root_loading.list_unchanged(Arc::new(loading)));
-        assert!(root_loading.list_unchanged(Arc::new(initial.clone())));
+        assert!(!root_loading.list_unchanged(&loading));
+        assert!(root_loading.list_unchanged(&initial));
         let (opened, _) = crate::state::reduce(
             &initial,
             Event::Intent(Intent::SetProjectExpanded {
@@ -299,7 +299,7 @@ mod tests {
             }),
         );
         assert!(opened.thread_list().unwrap().projects[0].expanded);
-        assert!(!opened.list_unchanged(Arc::new(initial)));
+        assert!(!opened.list_unchanged(&initial));
         let mut disconnected = opened.clone();
         disconnected.connected = false;
         assert!(
@@ -307,7 +307,7 @@ mod tests {
                 .error
                 .is_some()
         );
-        assert!(!disconnected.list_unchanged(Arc::new(opened.clone())));
+        assert!(!disconnected.list_unchanged(&opened));
         let key = OperationKey::ProjectList {
             project_id: "old".into(),
         };
@@ -320,13 +320,13 @@ mod tests {
             },
         );
         assert!(loading.thread_list().unwrap().projects[0].loading);
-        assert!(!loading.list_unchanged(Arc::new(opened)));
+        assert!(!loading.list_unchanged(&opened));
         let mut failed = loading.clone();
         Arc::make_mut(&mut failed.operations)
             .get_mut(&key)
             .unwrap()
             .generation = 2;
-        assert!(failed.list_unchanged(Arc::new(loading.clone())));
+        assert!(failed.list_unchanged(&loading));
         Arc::make_mut(&mut failed.operations)
             .get_mut(&key)
             .unwrap()
@@ -342,7 +342,7 @@ mod tests {
                 .and_then(|error| error.details.as_deref()),
             Some("unavailable")
         );
-        assert!(!failed.list_unchanged(Arc::new(loading)));
+        assert!(!failed.list_unchanged(&loading));
         let mut loaded = failed.clone();
         ListProjectSessions { project_id: "old".into(), limit: 5, search_term: String::new() }.apply(&mut loaded, serde_json::from_value(serde_json::json!({
             "data":[{"id":{"provider":"codex","id":"old-task"},"name":"Old task","projectId":"old","status":"running"}], "projects":[], "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
@@ -353,7 +353,7 @@ mod tests {
         assert!(project.threads[0].active);
         assert!(!project.loading);
         assert!(project.error.is_none());
-        assert!(!loaded.list_unchanged(Arc::new(failed)));
+        assert!(!loaded.list_unchanged(&failed));
         let (closed, _) = crate::state::reduce(
             &loaded,
             Event::Intent(Intent::SetProjectExpanded {
@@ -363,11 +363,11 @@ mod tests {
         );
         assert!(!closed.thread_list().unwrap().projects[0].expanded);
         assert!(closed.thread_list().unwrap().projects[0].threads.is_empty());
-        assert!(!closed.list_unchanged(Arc::new(loaded)));
+        assert!(!closed.list_unchanged(&loaded));
         let mut archived = closed.clone();
         Arc::make_mut(&mut archived.archived_scopes).insert("previous".into(), Arc::default());
         assert!(archived.thread_list().unwrap().notice.is_none());
-        assert!(!archived.list_unchanged(Arc::new(closed)));
+        assert!(!archived.list_unchanged(&closed));
     }
 
     #[test]

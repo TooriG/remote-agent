@@ -11,12 +11,8 @@ pub struct SnapshotChanges {
     pub reconnected: bool,
 }
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
-    pub fn unchanged(&self, other: Arc<Self>) -> bool {
-        std::ptr::eq(self, other.as_ref())
-    }
-    pub fn list_unchanged(&self, other: Arc<Self>) -> bool {
+    pub(crate) fn list_unchanged(&self, other: &Self) -> bool {
         let same_list = match (&self.threads, &other.threads) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
@@ -63,6 +59,10 @@ impl Snapshot {
                 })
             })
     }
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
     pub fn conversation_unchanged(&self, other: Arc<Self>) -> bool {
         let id = self.navigation.thread_id.as_ref();
         if id != other.navigation.thread_id.as_ref()
@@ -82,8 +82,8 @@ impl Snapshot {
     }
     pub fn changes(&self, previous: Arc<Self>) -> SnapshotChanges {
         SnapshotChanges {
-            changed: !self.unchanged(previous.clone()),
-            list: !self.list_unchanged(previous.clone()),
+            changed: !std::ptr::eq(self, previous.as_ref()),
+            list: !self.list_unchanged(&previous),
             models: !Arc::ptr_eq(&self.models, &previous.models),
             conversation: !self.conversation_unchanged(previous.clone()),
             reconnected: self.connected
@@ -306,19 +306,19 @@ mod tests {
                 ..Default::default()
             });
             let mut next = previous.as_ref().clone();
-            assert!(next.list_unchanged(previous.clone()));
+            assert!(next.list_unchanged(&previous));
             Arc::make_mut(next.task_activity.as_mut().unwrap()).revision += 1;
-            assert!(next.list_unchanged(previous.clone()));
+            assert!(next.list_unchanged(&previous));
             if count > 0 {
                 Arc::make_mut(next.task_activity.as_mut().unwrap())
                     .waiting
                     .last_mut()
                     .unwrap()
                     .provider = ProviderKind::Claude;
-                assert!(!next.list_unchanged(previous.clone()));
+                assert!(!next.list_unchanged(&previous));
             }
             next.task_activity = None;
-            assert_eq!(next.list_unchanged(previous.clone()), count == 0);
+            assert_eq!(next.list_unchanged(&previous), count == 0);
         }
     }
 }

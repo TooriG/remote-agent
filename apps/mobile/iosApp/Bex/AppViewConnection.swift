@@ -68,8 +68,9 @@ extension AppViewModel {
                     _ = try await owner.nextSnapshot(previous: previous)
                     guard let self, !Task.isCancelled else { return }
                     let latest = owner.snapshot()
-                    receiveHost(latest, host: host, listChanged: latest.changes(previous: previous).list)
-                    if latest.changes(previous: previous).reconnected {
+                    let changes = latest.changes(previous: previous)
+                    receiveHost(latest, host: host, listChanged: changes.list)
+                    if changes.reconnected {
                         liveActivities.resendTokens(hostID: host)
                         if selectedProfileId == host {
                             notice = nil
