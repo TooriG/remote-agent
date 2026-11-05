@@ -28,6 +28,7 @@ function fixture(t) {
   const commands = {
     cargo: 'printf \'{"target_directory":"%s"}\\n\' "$SWIFT_FIXTURE_TARGET"',
     uname: 'echo "${SWIFT_FIXTURE_ARCH:-arm64}"',
+    codesign: 'echo sign >> "$SWIFT_FIXTURE_LOG"\nexit "${SWIFT_FIXTURE_SIGN_STATUS:-0}"',
     xcrun: [
       'case "$*" in',
       '  "--sdk macosx --show-sdk-path") echo "$SWIFT_FIXTURE_SDK" ;;',
@@ -87,9 +88,13 @@ test('unchanged Swift tests reuse compilation and always execute both fixtures',
     { SWIFT_FIXTURE_SDK: join(build.root, 'Other SDK') },
     { SWIFT_FIXTURE_ARCH: 'x86_64' },
   ]) successfulRun(build, 2, overrides);
-  chmodSync(join(directory, currentBuild), 0o644);
+  const app = join(directory, currentBuild, 'Contents');
+  assert.match(readFileSync(join(app, 'Info.plist'), 'utf8'), /<key>CFBundleIdentifier<\/key><string>app\.bex\.tests\.scroll-tests<\/string>/);
+  chmodSync(join(app, 'MacOS/scroll-tests'), 0o644);
   successfulRun(build, 1);
   successfulRun(build, 0);
+  rmSync(join(app, 'Info.plist'));
+  successfulRun(build, 1);
 });
 
 test('failed compilations are retried and cached test failures still fail verification', (t) => {
@@ -97,6 +102,9 @@ test('failed compilations are retried and cached test failures still fail verifi
   const compilation = build.run({ SWIFT_FIXTURE_COMPILE_STATUS: '1' });
   assert.equal(compilation.status, 1);
   assert.deepEqual(compilation.commands, ['compile']);
+  const signing = build.run({ SWIFT_FIXTURE_SIGN_STATUS: '1' });
+  assert.equal(signing.status, 1);
+  assert.deepEqual(signing.commands, ['compile', 'sign']);
   successfulRun(build, 2);
   const failure = build.run({ SWIFT_FIXTURE_TEST_STATUS: '7' });
   assert.equal(failure.status, 7);

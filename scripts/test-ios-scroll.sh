@@ -12,24 +12,40 @@ mkdir -p "$output"
 run_test() {
     local name=$1
     shift
-    local fixture="apps/mobile/iosApp/UITests/Fixtures/$name.swift" key executable pending
+    local fixture="apps/mobile/iosApp/UITests/Fixtures/$name.swift" key app executable pending_dir pending
     key=$({
         printf '%s\n' "$sdk" "$sdk_build" "$compiler" "$swift_target"
         shasum -a 256 "$0" "$@" "$fixture"
     } | shasum -a 256 | cut -d ' ' -f 1)
-    executable="$output/$name/$key"
-    if [[ ! -x $executable ]]; then
+    app="$output/$name/$key.app"
+    executable="$app/Contents/MacOS/$name"
+    if [[ ! -x $executable || ! -s "$app/Contents/Info.plist" ]]; then
         mkdir -p "$output/$name"
-        pending=$(mktemp -d "$output/$name/.build.XXXXXX")
+        pending_dir=$(mktemp -d "$output/$name/.build.XXXXXX")
+        pending="$pending_dir/$name.app"
+        mkdir -p "$pending/Contents/MacOS"
+        # UIApplication needs a bundle identifier even for an isolated Catalyst fixture.
+        cat > "$pending/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>app.bex.tests.$name</string>
+<key>CFBundleExecutable</key><string>$name</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleVersion</key><string>1</string>
+</dict></plist>
+PLIST
         if ! xcrun swiftc -sdk "$sdk" -target "$swift_target" \
             -F "$sdk/System/iOSSupport/System/Library/Frameworks" \
             -L "$sdk/System/iOSSupport/usr/lib" \
-            "$@" "$fixture" -o "$pending/$name"; then
-            rm -rf "$pending"
+            "$@" "$fixture" -o "$pending/Contents/MacOS/$name" \
+            || ! codesign --force --sign - "$pending"; then
+            rm -rf "$pending_dir"
             return 1
         fi
-        mv -f "$pending/$name" "$executable"
-        rmdir "$pending"
+        rm -rf "$app"
+        mv "$pending" "$app"
+        rmdir "$pending_dir"
     else
         echo "Reusing unchanged $name build"
     fi
