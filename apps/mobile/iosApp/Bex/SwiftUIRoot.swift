@@ -162,8 +162,13 @@ struct ConnectionsScreen: View {
 
     @ViewBuilder private func pairingConfirmation(_ invitation: Invitation) -> some View {
         Section("接続先") {
-            LabeledContent("PC") { Text(invitation.hostName).accessibilityIdentifier("pairing.host") }
-                .accessibilityElement(children: .contain)
+            // The title initializer combines the Host value with its label for accessibility.
+            LabeledContent {
+                Text(invitation.hostName).accessibilityIdentifier("pairing.host")
+            } label: {
+                Label("PC", systemImage: "laptopcomputer")
+            }
+            .accessibilityElement(children: .contain)
             Button("変更") {
                 contents = ""
                 showsManualPairing = false
