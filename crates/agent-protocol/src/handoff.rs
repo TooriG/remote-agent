@@ -5,6 +5,7 @@ use crate::{
     models::Turn,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 pub const DEFAULT_BUDGET: usize = 16_000;
 const EXCERPT_CHARS: usize = 4_000;
@@ -158,6 +159,38 @@ pub struct Context {
     pub omitted: usize,
 }
 
+#[derive(Serialize)]
+struct NativeText<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    text: Cow<'a, str>,
+}
+
+#[derive(Serialize)]
+struct NativeMessage<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    role: Role,
+    content: [NativeText<'a>; 1],
+}
+
+impl<'a> NativeMessage<'a> {
+    fn new(role: Role, text: Cow<'a, str>) -> Self {
+        Self {
+            kind: "message",
+            role,
+            content: [NativeText {
+                kind: if role == Role::User {
+                    "input_text"
+                } else {
+                    "output_text"
+                },
+                text,
+            }],
+        }
+    }
+}
+
 impl Context {
     pub fn render(&self) -> String {
         std::iter::once(self.coverage.clone())
@@ -169,23 +202,53 @@ impl Context {
     /// Charge UTF-8 JSON bytes conservatively, including attribution and native
     /// message envelopes. A model tokenizer is deliberately not assumed.
     fn cost(&self) -> usize {
-        let native = self.native_items();
-        serde_json::to_vec(&native)
-            .expect("history serializes")
-            .len()
-            .max(
-                serde_json::to_vec(&self.render())
-                    .expect("text serializes")
-                    .len(),
-            )
-            + 256
+        // Size checks serialize the same envelopes without a JSON value tree.
+        let native =
+            json_len(&self.native_messages().collect::<Vec<_>>()).expect("history serializes");
+        let text = json_len(&self.render()).expect("text serializes");
+        native.max(text) + 256
+    }
+
+    fn native_messages(&self) -> impl Iterator<Item = NativeMessage<'_>> {
+        std::iter::once(NativeMessage::new(
+            Role::User,
+            Cow::Borrowed(self.coverage.as_str()),
+        ))
+        .chain(
+            self.messages
+                .iter()
+                .map(|message| NativeMessage::new(message.role, Cow::Owned(message.render()))),
+        )
     }
 
     pub fn native_items(&self) -> Vec<serde_json::Value> {
-        use serde_json::json;
-        std::iter::once(json!({"type":"message","role":"user","content":[{"type":"input_text","text":self.coverage}]}))
-            .chain(self.messages.iter().map(|message| json!({"type":"message","role":message.role,"content":[{"type":if message.role == Role::User {"input_text"} else {"output_text"},"text":message.render()}]}))).collect()
+        self.native_messages()
+            .map(|message| serde_json::to_value(message).expect("history serializes"))
+            .collect()
     }
+}
+
+fn json_len(value: &impl Serialize) -> serde_json::Result<usize> {
+    struct Length(usize);
+    impl std::io::Write for Length {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.write_all(bytes)?;
+            Ok(bytes.len())
+        }
+        fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| std::io::Error::other("JSON length exceeds address space"))?;
+            Ok(())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut length = Length(0);
+    serde_json::to_writer(&mut length, value)?;
+    Ok(length.0)
 }
 
 pub fn select(
@@ -386,6 +449,52 @@ mod tests {
         assert_eq!(selected.omitted, 1);
         assert!(selected.cost() <= 2000);
         assert!(select(&messages, "coverage", 0).is_err());
+    }
+
+    #[test]
+    fn native_history_payload_keeps_envelopes_roles_and_attribution() {
+        let context = Context {
+            coverage: "Coverage \"quoted\"\n🦀".into(),
+            messages: vec![
+                Message {
+                    role: Role::User,
+                    text: "User \"text\"\u{0000}".into(),
+                    source: "turn=user".into(),
+                },
+                Message {
+                    role: Role::Assistant,
+                    text: "回答🦀".into(),
+                    source: "turn=assistant".into(),
+                },
+            ],
+            omitted: 3,
+        };
+        assert_eq!(
+            context.native_items(),
+            vec![
+                serde_json::json!({"type":"message","role":"user","content":[{"type":"input_text","text":"Coverage \"quoted\"\n🦀"}]}),
+                serde_json::json!({"type":"message","role":"user","content":[{"type":"input_text","text":"[Historical User; turn=user]\nUser \"text\"\u{0000}"}]}),
+                serde_json::json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"[Historical Assistant; turn=assistant]\n回答🦀"}]}),
+            ]
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn cost_matches_the_serialized_native_and_text_payloads(
+            data in proptest::collection::vec((proptest::prelude::any::<bool>(),".{0,120}",".{0,40}"),0..20),
+            coverage in ".{0,120}",
+            omitted in 0usize..1000,
+        ) {
+            let context=Context {
+                coverage,
+                messages:data.into_iter().map(|(assistant,text,source)|Message {role:if assistant {Role::Assistant}else{Role::User},text,source}).collect(),
+                omitted,
+            };
+            let native=serde_json::to_vec(&context.native_items()).unwrap().len();
+            let text=serde_json::to_vec(&context.render()).unwrap().len();
+            proptest::prop_assert_eq!(context.cost(),native.max(text)+256);
+        }
     }
 
     #[test]
