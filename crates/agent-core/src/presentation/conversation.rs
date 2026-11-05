@@ -10,6 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+mod images;
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.
@@ -964,7 +965,7 @@ fn render_turn(
         source,
         pending,
         requests,
-        rows,
+        rows: images::without_repeated_generated_images(rows),
     })
 }
 

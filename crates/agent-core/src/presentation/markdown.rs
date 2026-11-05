@@ -356,13 +356,19 @@ fn inline(
         _ => None,
     };
     if let Some(destination) = destination
-        && let Some(file) = links::file_reference(destination, links::Syntax::Link)
+        && let Some(mut file) = links::file_reference(destination, links::Syntax::Link)
     {
+        // Keep authored descriptions, as T3 Code does beside its file chips.
+        // Native chips use that description as their label instead of an opaque basename.
+        let caption = links::caption_text(node);
+        if !links::is_file_label(&caption, &file) {
+            file.label = caption;
+        }
         runs.push(MarkdownRun {
             text: file.label.clone(),
             link: Some(destination.into()),
             file: Some(file),
-            ..Default::default()
+            ..style
         });
         return;
     }

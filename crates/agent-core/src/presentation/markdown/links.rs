@@ -206,6 +206,16 @@ pub(super) fn is_file_label(label: &str, file: &MarkdownFileReference) -> bool {
             .is_some_and(|prefix| prefix.ends_with('/'))
 }
 
+pub(super) fn caption_text(node: &markdown::mdast::Node) -> String {
+    if matches!(node, markdown::mdast::Node::Html(_)) {
+        return String::new();
+    }
+    match node.children() {
+        Some(children) => children.iter().map(caption_text).collect(),
+        None => node.to_string(),
+    }
+}
+
 /// Home expansion is performed only by the connected Host, never inferred from cwd.
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn markdown_file_target(

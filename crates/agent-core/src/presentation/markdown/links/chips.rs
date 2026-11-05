@@ -151,16 +151,6 @@ pub(in crate::presentation::markdown) fn file_chips(
     chips
 }
 
-fn caption_text(node: &Node) -> String {
-    if matches!(node, Node::Html(_)) {
-        return String::new();
-    }
-    match node.children() {
-        Some(children) => children.iter().map(caption_text).collect(),
-        None => node.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::super::markdown_presentation;

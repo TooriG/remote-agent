@@ -134,6 +134,36 @@ fn desktop_disambiguates_parents_but_mobile_uses_basename_only() {
     );
 }
 
+#[rstest::rstest]
+#[case::inline("[修正版の画像](/images/exec-generated.png)", "修正版の画像")]
+#[case::reference(
+    "[修正版の画像][result]\n\n[result]: /images/exec-generated.png",
+    "修正版の画像"
+)]
+#[case::formatted("[**修正版**の画像](/images/exec-generated.png)", "修正版の画像")]
+#[case::filename(
+    "[exec-generated.png](/images/exec-generated.png)",
+    "exec-generated.png"
+)]
+#[case::path(
+    "[/images/exec-generated.png](/images/exec-generated.png)",
+    "exec-generated.png"
+)]
+#[case::empty("[](/images/exec-generated.png)", "exec-generated.png")]
+fn native_file_links_keep_authored_descriptions(#[case] source: &str, #[case] expected: &str) {
+    let blocks = super::super::markdown_blocks(source.into());
+    let MarkdownBlock::Paragraph { runs, .. } = &blocks[0] else {
+        panic!("paragraph")
+    };
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].text, expected);
+    assert_eq!(runs[0].link.as_deref(), Some("/images/exec-generated.png"));
+    let file = runs[0].file.as_ref().unwrap();
+    assert_eq!(file.label, expected);
+    assert_eq!(file.path, "/images/exec-generated.png");
+    assert_eq!(file.kind, MarkdownFileKind::Image);
+}
+
 #[test]
 fn desktop_parents_expand_until_distinct_even_when_one_path_is_a_suffix() {
     let files = [
@@ -254,7 +284,7 @@ proptest::proptest! {
 }
 
 #[test]
-fn descriptive_captions_are_kept_on_desktop_and_replaced_on_mobile() {
+fn descriptive_captions_are_kept_on_desktop_and_mobile() {
     let source = "[**設計資料**](docs/overview.md) and `src/main.rs:4` and `README.md`\n\n```rs\nsrc/main.rs\n```";
     let desktop = super::super::markdown_presentation(source, "/repo", None);
     assert_eq!(desktop.source, source);
@@ -269,7 +299,7 @@ fn descriptive_captions_are_kept_on_desktop_and_replaced_on_mobile() {
     };
     assert_eq!(
         runs.iter().map(|run| run.text.as_str()).collect::<String>(),
-        "overview.md and main.rs · L4 and README.md"
+        "設計資料 and main.rs · L4 and README.md"
     );
     assert_eq!(runs.iter().filter(|run| run.file.is_some()).count(), 2);
     assert!(
