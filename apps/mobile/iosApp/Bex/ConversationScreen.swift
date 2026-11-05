@@ -129,9 +129,10 @@ struct ThreadScreen: View {
                         }
                     }
                     .scrollTargetLayout()
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
                 }
+                // Margins belong to the viewport, including when a scroll target is restored after resizing.
+                .contentMargins(.horizontal, 16, for: .scrollContent)
+                .contentMargins(.vertical, 6, for: .scrollContent)
                 .coordinateSpace(name: "conversation-viewport")
                 .onPreferenceChange(ConversationRowFrames.self) { layout in
                     restoreReadingPosition(scrollController.historyDidLayout(

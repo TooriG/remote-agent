@@ -96,6 +96,8 @@ extension LaunchUITests {
         // fail; page failure presentation is covered by the shared core tests.
         waitForStableFrame(latest)
         let readingPosition = latest.frame.minY
+        let text = latest.textViews["message.assistant-text"]
+        assertConversationTextMargins(text, in: app)
         loadEarlier.tap()
         let loaded = expectation(for: NSPredicate { _, _ in self.loadedItems(in: detail) > initialItems },
                                  evaluatedWith: detail)
@@ -105,6 +107,7 @@ extension LaunchUITests {
         waitForStableFrame(latest)
         XCTAssertEqual(latest.frame.minY, readingPosition, accuracy: 3)
         XCTAssertTrue(latest.isHittable, "Loading a page must preserve the current reading position")
+        assertConversationTextMargins(text, in: app)
         captureScreen(app, named: "Earlier history preserved the latest message position")
     }
 

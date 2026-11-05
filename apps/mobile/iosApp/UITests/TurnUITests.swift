@@ -30,7 +30,12 @@ extension LaunchUITests {
                 repeating: "Keep the latest message visible.\n",
                 count: 6
             )
-            message.tap(); message.typeText(prompt)
+            let tail = answers.allElementsBoundByIndex.last
+                ?? app.textViews.matching(NSPredicate(
+                    format: "value == %@", "Latest interrupted conversation message is visible."
+                )).firstMatch
+            focusComposerKeepingLatestVisible(in: app, latest: tail)
+            message.typeText(prompt)
             XCTAssertTrue(app.keyboards.firstMatch.exists)
             app.buttons["task.send"].tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
@@ -45,6 +50,7 @@ extension LaunchUITests {
             }, evaluatedWith: app)
             wait(for: [finished], timeout: 20)
             XCTAssertFalse(latestButton.exists, "The completed answer must remain at the bottom")
+            assertConversationTextMargins(answers.allElementsBoundByIndex.last ?? answers.firstMatch, in: app)
         }
     }
 

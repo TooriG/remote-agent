@@ -206,20 +206,22 @@ extension LaunchUITests {
         try startSimulatorConversation(app, promptText: "[long-markdown] Render the complete stream")
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
-        message.tap(); message.typeText("Keep this draft")
+        let completed = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "MARKDOWN_STREAM_COMPLETE"))
+            .firstMatch
+        focusComposerKeepingLatestVisible(in: app, latest: completed)
+        message.typeText("Keep this draft")
         waitForDraftText(message, text: "Keep this draft")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
         XCTAssertTrue(message.waitForExistence(timeout: 20))
         waitForDraftText(message, text: "Keep this draft")
-        let completed = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "MARKDOWN_STREAM_COMPLETE"))
-            .firstMatch
         XCTAssertTrue(completed.waitForExistence(timeout: 30))
         let visible = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: completed)
         wait(for: [visible], timeout: 5)
         XCTAssertFalse(app.buttons["task.latest"].exists,
                        "Streaming growth of the same row must keep its final text visible")
+        assertConversationTextMargins(completed, in: app)
         captureScreen(app, named: "Long Markdown stream completed with draft preserved")
         app.buttons["task.top"].tap()
         let code = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Markdown stream fixture"))
@@ -235,6 +237,25 @@ extension LaunchUITests {
         latest.tap()
         let returned = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: completed)
         wait(for: [returned], timeout: 5)
+        assertConversationTextMargins(completed, in: app)
+    }
+
+    func focusComposerKeepingLatestVisible(in app: XCUIApplication, latest: XCUIElement) {
+        app.descendants(matching: .any)["task.message"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        assertConversationTextMargins(latest, in: app)
+        XCTAssertTrue(latest.isHittable, "Opening the keyboard must keep the conversation visible")
+        XCTAssertFalse(app.buttons["task.latest"].exists,
+                       "Opening the keyboard must keep following the latest message")
+    }
+
+    func assertConversationTextMargins(_ text: XCUIElement, in app: XCUIApplication,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(text.waitForExistence(timeout: 10), file: file, line: line)
+        waitForStableFrame(text)
+        let viewport = app.descendants(matching: .any)["task.detail"].frame
+        XCTAssertEqual(text.frame.minX, viewport.minX + 16, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(text.frame.maxX, viewport.maxX - 16, accuracy: 1, file: file, line: line)
     }
 
     func testSimulatorReopensCompletedHistoryCollapsed() throws {
