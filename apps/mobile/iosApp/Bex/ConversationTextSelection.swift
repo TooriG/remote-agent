@@ -66,19 +66,7 @@ struct AssistantSelectableText: UIViewRepresentable {
                     self?.parent.actions.askInSideChat?(text)
                 })
             }
-            return UIMenu(children: actions + suggestedActions.compactMap(Self.removingCopy))
-        }
-
-        private static func removingCopy(_ element: UIMenuElement) -> UIMenuElement? {
-            if let command = element as? UICommand,
-               command.action == #selector(UIResponderStandardEditActions.copy(_:)) {
-                return nil
-            }
-            if let menu = element as? UIMenu {
-                let children = menu.children.compactMap(removingCopy)
-                return children.isEmpty ? nil : menu.replacingChildren(children)
-            }
-            return element
+            return UIMenu(children: actions + suggestedActions.compactMap(removingCopyCommand))
         }
 
         func textView(_: UITextView, menuConfigurationFor textItem: UITextItem,
@@ -105,6 +93,18 @@ struct AssistantSelectableText: UIViewRepresentable {
             return UIAction { [weak self] _ in self?.parent.openURL(url) }
         }
     }
+}
+
+@MainActor func removingCopyCommand(_ element: UIMenuElement) -> UIMenuElement? {
+    if let command = element as? UICommand,
+       command.action == #selector(UIResponderStandardEditActions.copy(_:)) {
+        return nil
+    }
+    if let menu = element as? UIMenu {
+        let children = menu.children.compactMap(removingCopyCommand)
+        return children.isEmpty ? nil : menu.replacingChildren(children)
+    }
+    return element
 }
 
 enum ConversationAttributedText {

@@ -30,20 +30,15 @@ private struct NativeTerminalView: UIViewRepresentable {
         Coordinator(session: session, handle: handle, cwd: cwd)
     }
 
-    func makeUIView(context: Context) -> SwiftTerm.TerminalView {
+    func makeUIView(context: Context) -> HostTerminalView {
         let view = HostTerminalView(frame: .zero)
         view.terminalDelegate = context.coordinator
         view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         view.accessibilityIdentifier = "terminal.screen"
-        // Keep SwiftTerm's gesture timing, but select text directly on long press.
-        for case let gesture as UILongPressGestureRecognizer in view.gestureRecognizers ?? [] {
-            gesture.removeTarget(nil, action: nil)
-            gesture.addTarget(view, action: #selector(HostTerminalView.selectTextOnLongPress(_:)))
-        }
         return view
     }
 
-    static func dismantleUIView(_ view: SwiftTerm.TerminalView, coordinator: Coordinator) {
+    static func dismantleUIView(_ view: HostTerminalView, coordinator: Coordinator) {
         view.terminalDelegate = nil
         coordinator.dismantled = true
         if coordinator.started {
@@ -51,7 +46,8 @@ private struct NativeTerminalView: UIViewRepresentable {
         }
     }
 
-    func updateUIView(_ view: SwiftTerm.TerminalView, context: Context) {
+    func updateUIView(_ view: HostTerminalView, context: Context) {
+        view.copyTitle = localizedUiText(language: context.environment.locale.appLanguage, source: "コピー")
         let coordinator = context.coordinator
         guard let terminal else { return }
         view.accessibilityValue = terminal.acceptsInput && !terminal.loading ? "入力可能" : nil
@@ -129,15 +125,16 @@ private struct NativeTerminalView: UIViewRepresentable {
 /// Emulator responses are produced by the Host; SwiftTerm still handles native user input.
 private final class HostTerminalView: SwiftTerm.TerminalView {
     @TaskLocal private nonisolated static var isPasting = false
+    var copyTitle = "コピー"
 
-    @objc func selectTextOnLongPress(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
-        // Seed SwiftTerm's selection position through its public menu API.
-        // Existing selections retain their range when the menu is reopened.
-        showStandardContextMenu(at: gesture.location(in: self))
-        if !hasActiveSelection {
-            select(nil)
+    @objc func editMenu(for _: UITextRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
+        // Terminal selection belongs to the emulator, while UITextInput's range
+        // tracks keyboard composition. Supply Copy from the emulator selection.
+        guard hasActiveSelection else { return nil }
+        let copy = UIAction(title: copyTitle, image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+            self?.copy(nil)
         }
+        return UIMenu(children: [copy] + suggestedActions.compactMap(removingCopyCommand))
     }
 
     override func paste(_ sender: Any?) {

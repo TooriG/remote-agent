@@ -81,7 +81,7 @@ extension LaunchUITests {
         closeWorkbench(app)
     }
 
-    func testSimulatorNativeTerminalCopiesTextOnLongPress() throws {
+    func testSimulatorNativeTerminalCopiesSelectedText() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.new.project.simulator-project"].tap()
         app.buttons["task.tools"].tap()
@@ -95,6 +95,9 @@ extension LaunchUITests {
         waitForStableFrame(terminal)
         terminal.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: 20, dy: 8)).press(forDuration: 1.2)
+        let select = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Select", "選択"])).firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 5)); select.tap()
+        captureScreen(app, named: "Selected terminal word exposes the Copy action")
         let copy = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Copy", "コピー"])).firstMatch
         XCTAssertTrue(copy.waitForExistence(timeout: 5)); copy.tap()
         closeWorkbench(app)
@@ -105,7 +108,7 @@ extension LaunchUITests {
         let paste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
         XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
         waitForDraftText(composer, text: "Needle")
-        captureScreen(app, named: "Terminal long press copies only the selected word")
+        captureScreen(app, named: "Terminal copies only the selected word")
     }
 
     func testSimulatorNativeTerminalPastesMultilineText() throws {
