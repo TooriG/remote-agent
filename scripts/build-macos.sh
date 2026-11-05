@@ -18,16 +18,10 @@ if [[ $product == desktop ]]; then
     [[ $(uname -m) == arm64 ]] || { echo 'The GPUI Mac bundle requires Apple Silicon.' >&2; exit 2; }
     packages+=(--package agent-desktop)
 fi
-identity=${AGENT_CODE_SIGN_IDENTITY:-}
-if [[ -z $identity ]]; then
-    identities=$(/usr/bin/security find-identity -v -p codesigning | awk '/"Apple Development:|"Developer ID Application:/ {print $2}')
-    [[ -n $identities && $identities != *$'\n'* ]] || {
-        echo 'Set AGENT_CODE_SIGN_IDENTITY to one Apple Development or Developer ID Application certificate.' >&2
-        exit 1
-    }
-    identity=$identities
-fi
-[[ $identity != - ]] || { echo 'Certificate signing is required for Mac builds.' >&2; exit 1; }
+keychains=()
+if [[ -n ${AGENT_CODE_SIGN_KEYCHAIN:-} ]]; then keychains+=("$AGENT_CODE_SIGN_KEYCHAIN"); fi
+identity=$(/usr/bin/security find-identity -v -p codesigning "${keychains[@]}" |
+    node scripts/apple-signing.mjs identity "${AGENT_CODE_SIGN_IDENTITY:-}")
 output="$(cargo metadata --no-deps --format-version 1 | jq -er .target_directory)/$directory"
 export AGENT_BUILD_REVISION
 AGENT_BUILD_REVISION=$(git rev-parse HEAD)

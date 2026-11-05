@@ -1,15 +1,31 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const root = join(process.env.RUNNER_TEMP, 'agent-apple-signing');
-const chain = join(root, 'BEX.keychain-db');
+// Keep the macOS privacy identity stable across development and distribution.
+export function macSigningIdentity(identities, requested = '') {
+  const candidates = [...new Set([...identities.matchAll(/([A-F0-9]{40}) "Developer ID Application:[^\n]+\(K65K9J8686\)"/g)].map(match => match[1]))];
+  if (requested) {
+    if (!candidates.includes(requested)) throw new Error('AGENT_CODE_SIGN_IDENTITY must be the SHA-1 of a BEX Developer ID Application certificate (K65K9J8686).');
+    return requested;
+  }
+  if (candidates.length !== 1) throw new Error('One BEX Developer ID Application certificate (K65K9J8686) is required; set AGENT_CODE_SIGN_IDENTITY to its SHA-1 if multiple are installed.');
+  return candidates[0];
+}
+
 const security = (...args) => {
   try { return execFileSync('/usr/bin/security', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
   catch { throw new Error(`Signing keychain operation ${args[0]} failed.`); }
 };
-try {
-  if (process.argv[2] === 'prepare') {
+function main(operation, requested) {
+  if (operation === 'identity') {
+    console.log(macSigningIdentity(readFileSync(0, 'utf8'), requested));
+    return;
+  }
+  const root = join(process.env.RUNNER_TEMP, 'agent-apple-signing');
+  const chain = join(root, 'BEX.keychain-db');
+  if (operation === 'prepare') {
     for (const name of ['AGENT_SIGNING_KEYCHAIN_BASE64', 'AGENT_SIGNING_KEYCHAIN_PASSWORD', 'AGENT_ASC_PRIVATE_KEY', 'AGENT_ASC_KEY_ID', 'AGENT_ASC_ISSUER_ID']) {
       if (!process.env[name]) throw new Error(`GitHub secret ${name} is required.`);
     }
@@ -22,15 +38,20 @@ try {
     security('set-key-partition-list', '-S', 'apple-tool:,apple:,codesign:', '-s', '-k', process.env.AGENT_SIGNING_KEYCHAIN_PASSWORD, chain);
     security('list-keychains', '-d', 'user', '-s', chain, ...previous);
     const identities = security('find-identity', '-v', '-p', 'codesigning', chain);
-    const developerIds = [...identities.matchAll(/([A-F0-9]{40}) "Developer ID Application:[^\n]+\(K65K9J8686\)"/g)];
-    if (developerIds.length !== 1 || !identities.includes('Apple Distribution:') || !identities.includes('(K65K9J8686)')) throw new Error('BEX distribution signing identities are missing or ambiguous.');
+    const identity = macSigningIdentity(identities);
+    if (!identities.includes('Apple Distribution:')) throw new Error('BEX distribution signing identities are missing or ambiguous.');
     const keyPath = join(root, 'AuthKey.p8');
     writeFileSync(keyPath, process.env.AGENT_ASC_PRIVATE_KEY, { mode: 0o600 });
-    appendFileSync(process.env.GITHUB_ENV, `AGENT_CODE_SIGN_KEYCHAIN=${chain}\nAGENT_CODE_SIGN_IDENTITY=${developerIds[0][1]}\nAGENT_ASC_PRIVATE_KEY_FILE=${keyPath}\n`);
-  } else if (process.argv[2] === 'cleanup') {
+    appendFileSync(process.env.GITHUB_ENV, `AGENT_CODE_SIGN_KEYCHAIN=${chain}\nAGENT_CODE_SIGN_IDENTITY=${identity}\nAGENT_ASC_PRIVATE_KEY_FILE=${keyPath}\n`);
+  } else if (operation === 'cleanup') {
     let previous;
     try { previous = JSON.parse(readFileSync(join(root, 'previous.json'), 'utf8')); } catch { previous = null; }
     if (previous) security('list-keychains', '-d', 'user', '-s', ...previous);
     rmSync(root, { recursive: true, force: true });
-  } else throw new Error('Use apple-signing.mjs prepare or cleanup.');
-} catch (error) { console.error(error.message); process.exitCode = 1; }
+  } else throw new Error('Use apple-signing.mjs identity, prepare or cleanup.');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try { main(process.argv[2], process.argv[3]); }
+  catch (error) { console.error(error.message); process.exitCode = 1; }
+}
