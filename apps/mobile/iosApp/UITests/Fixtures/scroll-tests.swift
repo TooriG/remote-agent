@@ -126,8 +126,13 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         update(1600)
         await layout(controller)
         let grown = view.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))!
+        check(abs(grown.frame.height - 1600) < 1,
+              "A streamed row must be remeasured: height=\(grown.frame.height)")
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
-                - grown.frame.maxY - 6) < 1, "Following must track streamed self-sizing growth")
+                  - grown.frame.maxY - 6) < 1,
+        "Following must track streamed self-sizing growth: offset=\(view.contentOffset.y), "
+            + "viewport=\(view.bounds.height), inset=\(view.adjustedContentInset.bottom), "
+            + "last=\(grown.frame), content=\(view.contentSize)")
         view.contentInset.bottom += 200
         await layout(controller)
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom

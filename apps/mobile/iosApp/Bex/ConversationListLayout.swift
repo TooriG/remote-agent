@@ -164,6 +164,8 @@ final class ConversationListCell: UICollectionViewCell {
             ])
             host.didMove(toParent: parent)
         }
+        // UIKit observes invalidation of the cell's content view, not the child controller's view.
+        contentView.invalidateIntrinsicContentSize()
     }
 
     func unmount() {
