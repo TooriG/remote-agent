@@ -73,29 +73,25 @@ impl<'a> From<&'a Item> for ItemMetadata<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Role {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
     Hidden,
     User,
     Activity,
     Response,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Segment {
-    pub id: String,
-    pub start: usize,
-    pub end: usize,
-    pub answer: Option<usize>,
-    pub last: bool,
-    pub collapsible: bool,
-    pub initially_expanded: bool,
-    pub label: Option<String>,
+struct Segment {
+    id: String,
+    start: usize,
+    end: usize,
+    answer: Option<usize>,
+    last: bool,
+    collapsible: bool,
+    label: Option<String>,
 }
 impl Segment {
-    pub fn role(&self, index: usize, item: ItemMetadata<'_>) -> Role {
+    fn role(&self, index: usize, item: ItemMetadata<'_>) -> Role {
         match item.kind {
             GroupKind::Hidden => Role::Hidden,
             GroupKind::User => Role::User,
@@ -108,14 +104,37 @@ impl Segment {
     }
 }
 
-pub fn project(turn: &Turn) -> impl Iterator<Item = Segment> {
+#[cfg(test)]
+fn project(turn: &Turn) -> impl Iterator<Item = Segment> {
     let items = turn.items.as_deref().unwrap_or_default();
     project_items(turn, items.len(), move |index| items[index].as_ref().into())
 }
 
+#[cfg(test)]
+fn assert_work_starts_collapsed(turn: &Turn) {
+    use conversation::{ConversationRowContent, activity_is_expanded, project_conversation};
+    use std::sync::Arc;
+    let rendered = project_conversation(
+        &crate::state::Snapshot::default(),
+        Arc::new(crate::models::Thread {
+            turns: Some(vec![Arc::new(turn.clone())]),
+            ..Default::default()
+        }),
+        &None,
+    );
+    let mut activities = 0;
+    for row in &rendered.turns[0].rows {
+        if let ConversationRowContent::ActivityHeader { activity } = &row.content {
+            activities += 1;
+            assert!(!activity_is_expanded(&activity.status, None));
+        }
+    }
+    assert!(activities > 0);
+}
+
 /// The accessor lets clients project interleaved pending input without cloning
 /// native item bodies. It must return the same item for an index throughout a call.
-pub fn project_items<'a>(
+fn project_items<'a>(
     turn: &'a Turn,
     count: usize,
     item: impl Fn(usize) -> ItemMetadata<'a> + 'a,
@@ -184,7 +203,6 @@ pub fn project_items<'a>(
             answer,
             last: end == count,
             collapsible: false,
-            initially_expanded: false,
             label: None,
         };
         segment.collapsible =
@@ -298,7 +316,7 @@ fn work_summary(turn: &Turn) -> String {
 /// the first item; an unloaded anchor goes at the tail. Repeated native IDs use
 /// the latest occurrence, never duplicating
 /// a pending input. Indices >= item_count refer to the pending input slice.
-pub fn source_order<'a>(
+fn source_order<'a>(
     item_count: usize,
     item_id: impl Fn(usize) -> &'a str,
     anchors: impl IntoIterator<Item = Option<&'a str>>,
@@ -527,7 +545,7 @@ mod presentation_tests {
             "f".into()
         );
         assert!(p.collapsible);
-        assert!(!p.initially_expanded);
+        assert_work_starts_collapsed(&turn);
         assert_eq!(p.label.as_deref(), Some("2件の過去のメッセージ"));
     }
     #[test]
@@ -562,10 +580,7 @@ mod presentation_tests {
     ) {
         let turn = turn!({"id":"turn","status":status,"items":[{"id":"u","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"userMessage":{"text":"Inspect","content":[]}}}}},{"id":"c","status":command_status,"clientInputId":null,"body":{"inline":{"body":{"commandExecution":{"command":"pwd","cwd":null,"output":"","exitCode":null}}}}},{"id":"a","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"Result","phase":"unknown"}}}}}]});
         let group = project(&turn).find(|part| part.collapsible).unwrap();
-        assert!(
-            !group.initially_expanded,
-            "command group opened without a user action: turn={status}, command={command_status}"
-        );
+        assert_work_starts_collapsed(&turn);
         assert_eq!(
             rows(&group, &turn, Role::Activity).next().unwrap().id,
             "c".into()
@@ -580,7 +595,7 @@ mod presentation_tests {
             order(&turn),
             ["u", "intro", "c1", "c2", "progress", "tool", "followup"]
         );
-        assert!(project(&turn).all(|part| !part.initially_expanded));
+        assert_work_starts_collapsed(&turn);
         let labels: Vec<_> = project(&turn)
             .filter(|part| part.collapsible)
             .map(|part| part.label.unwrap())
@@ -696,7 +711,7 @@ mod projection_tests {
             segment.role(1, turn.items.as_ref().unwrap()[1].as_ref().into()),
             Role::Response
         );
-        assert!(!segment.initially_expanded);
+        assert_work_starts_collapsed(&turn);
     }
     #[test]
     fn pending_metadata_preserves_source_positions() {

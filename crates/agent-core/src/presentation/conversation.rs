@@ -107,29 +107,15 @@ pub struct ActivityPresentation {
     pub id: String,
     pub status: String,
     pub activity_summary: String,
-    pub activity_initially_expanded: bool,
     pub activity_can_collapse: bool,
     pub is_in_progress: bool,
     pub load_items: Option<crate::state::operations::LoadTurnItems>,
 }
-#[derive(Clone)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-pub struct ActivityExpansion {
-    pub status: String,
-    pub expanded: bool,
-}
-/// A manual choice belongs to this group's current status; a transition restores
-/// the core default rather than expanding neighboring or newly hydrated work.
+/// Work starts collapsed. A manual choice belongs to the current status;
+/// a transition closes it again, including after deferred-detail hydration.
 #[cfg_attr(feature = "bindings", uniffi::export)]
-pub fn activity_is_expanded(
-    activity: &ActivityPresentation,
-    choice: Option<ActivityExpansion>,
-) -> bool {
-    choice
-        .filter(|choice| choice.status == activity.status)
-        .map_or(activity.activity_initially_expanded, |choice| {
-            choice.expanded
-        })
+pub fn activity_is_expanded(status: &str, expanded_status: Option<String>) -> bool {
+    expanded_status.as_deref() == Some(status)
 }
 
 /// Fill the viewport on opening and continue at the oldest visible boundary.
@@ -900,8 +886,6 @@ fn render_turn(
                     id: segment.id.clone(),
                     status: source.status.label().into(),
                     activity_summary: summary,
-                    activity_initially_expanded: segment.initially_expanded
-                        && !source.items_summary,
                     activity_can_collapse: segment.collapsible || source.items_summary,
                     is_in_progress: in_progress,
                     load_items: session.filter(|_| source.items_summary).map(|thread_id| {
@@ -1226,6 +1210,20 @@ mod tests {
     use serde_json::json;
     use std::collections::HashSet;
 
+    #[test]
+    fn work_expansion_requires_an_explicit_choice_for_the_current_status() {
+        let statuses = ["running", "completed", "failed", "interrupted", "unknown"];
+        for status in statuses {
+            assert!(!activity_is_expanded(status, None));
+            for previous in statuses {
+                assert_eq!(
+                    activity_is_expanded(status, Some(previous.into())),
+                    status == previous,
+                );
+            }
+        }
+    }
+
     #[rstest::rstest]
     #[case::initial_viewport_needs_more(true, false, true, true, true, true)]
     #[case::wait_for_initial_latest_position(true, false, true, false, true, false)]
@@ -1363,7 +1361,7 @@ mod tests {
                 })
                 .unwrap();
             assert!(activity.activity_can_collapse);
-            assert!(!activity_is_expanded(activity, None));
+            assert!(!activity_is_expanded(&activity.status, None));
             let edit = rows
                 .iter()
                 .find_map(|row| match &row.content {
@@ -1765,20 +1763,14 @@ mod tests {
         assert!(rows.iter().any(|row| row.id == accepted_id));
         for row in rows {
             if let ConversationRowContent::ActivityHeader { activity } = row.content {
-                assert!(!activity_is_expanded(&activity, None));
+                assert!(!activity_is_expanded(&activity.status, None));
                 assert!(activity_is_expanded(
-                    &activity,
-                    Some(ActivityExpansion {
-                        status: activity.status.clone(),
-                        expanded: true
-                    })
+                    &activity.status,
+                    Some(activity.status.clone())
                 ));
                 assert!(!activity_is_expanded(
-                    &activity,
-                    Some(ActivityExpansion {
-                        status: "running".into(),
-                        expanded: true
-                    })
+                    &activity.status,
+                    Some("running".into())
                 ));
             }
         }
@@ -2022,7 +2014,7 @@ mod tests {
         let ConversationRowContent::ActivityHeader { activity } = &rows[1].content else {
             panic!("summary activity is inaccessible")
         };
-        assert!(!activity.activity_initially_expanded);
+        assert!(!activity_is_expanded(&activity.status, None));
         assert!(activity.activity_can_collapse);
         assert_eq!(activity.load_items.as_ref().unwrap().thread_id.id, "thread");
         assert_eq!(
@@ -2053,6 +2045,7 @@ mod tests {
                 ..Default::default()
             };
             // IDs deliberately disagree with submission order.
+            let mut activity_ids = HashSet::new();
             for id in ["z-first", "a-second", "m-third"] {
                 Arc::make_mut(&mut snapshot.drafts).insert(
                     agent_protocol::session::SessionRef {
@@ -2077,6 +2070,21 @@ mod tests {
                 )
                 .0;
                 snapshot = reduce(&snapshot, Event::SubmissionUnknown(id.into())).0;
+                if status == "running" {
+                    let rendered = project_snapshot(snapshot.clone(), None);
+                    let activity = rendered.turns[0]
+                        .rows
+                        .iter()
+                        .find_map(|row| match &row.content {
+                            ConversationRowContent::ActivityHeader { activity } => Some(activity),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert!(
+                        activity_ids.insert(activity.id.clone()),
+                        "a new input must not inherit another group's expansion"
+                    );
+                }
             }
             let first = project_snapshot(snapshot.clone(), None);
             let texts = |rendered: &RenderedConversation| {

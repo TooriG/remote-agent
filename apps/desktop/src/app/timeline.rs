@@ -165,7 +165,7 @@ pub(super) struct Timeline {
     pub(super) diffs: HashMap<String, Entity<DiffView>>,
     pub(super) markdown: HashMap<String, MarkdownContent>,
     pub(super) expanded_items: HashSet<String>,
-    pub(super) expanded_work: HashMap<String, ActivityExpansion>,
+    pub(super) expanded_work: HashMap<String, String>,
     pub(super) requests: HashMap<RequestId, RequestInputs>,
 }
 
@@ -331,7 +331,7 @@ impl Timeline {
 
 fn conversation_rows(
     rendered: &Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
-    expanded_work: &HashMap<String, agent_core::presentation::conversation::ActivityExpansion>,
+    expanded_work: &HashMap<String, String>,
 ) -> Vec<ConversationRow> {
     let mut rows = Vec::new();
     if let Some(rendered) = rendered {
@@ -345,7 +345,7 @@ fn conversation_rows(
                 match &row.content {
                     ConversationRowContent::ActivityHeader { activity } => {
                         expanded = agent_core::presentation::conversation::activity_is_expanded(
-                            activity,
+                            &activity.status,
                             expanded_work.get(&activity.id).cloned(),
                         );
                     }

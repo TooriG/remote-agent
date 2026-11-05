@@ -1,6 +1,6 @@
 use super::*;
 use agent_core::presentation::conversation::{
-    ActionTone, ActivityExpansion, ConversationRowContent, WorkProgress, activity_is_expanded,
+    ActionTone, ConversationRowContent, WorkProgress, activity_is_expanded,
 };
 
 #[derive(Default, PartialEq)]
@@ -834,8 +834,10 @@ impl ConversationView {
             }
             ConversationRowContent::ActivityHeader { activity } => {
                 let id = &activity.id;
-                let expanded =
-                    activity_is_expanded(activity, self.timeline.expanded_work.get(id).cloned());
+                let expanded = activity_is_expanded(
+                    &activity.status,
+                    self.timeline.expanded_work.get(id).cloned(),
+                );
                 let (label, content) = if activity.is_in_progress {
                     let view = WorkProgressView::view(
                         &row.id,
@@ -868,13 +870,13 @@ impl ConversationView {
                         .child(div().flex_1().min_w_0().text_ellipsis().child(content))
                         .child(if expanded { "⌄" } else { "›" })
                         .on_click(cx.listener(move |view, _, _, cx| {
-                            view.timeline.expanded_work.insert(
-                                toggle.clone(),
-                                ActivityExpansion {
-                                    status: status.clone(),
-                                    expanded: !expanded,
-                                },
-                            );
+                            if expanded {
+                                view.timeline.expanded_work.remove(&toggle);
+                            } else {
+                                view.timeline
+                                    .expanded_work
+                                    .insert(toggle.clone(), status.clone());
+                            }
                             if !expanded && let Some(params) = &load_items {
                                 cx.emit(ConversationAction::Dispatch(Intent::LoadTurnItems(
                                     params.clone(),

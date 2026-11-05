@@ -190,13 +190,16 @@ extension ThreadScreen {
 
     @ViewBuilder
     func activityHeader(_ turn: ActivityPresentation) -> some View {
-        let expanded = AgentCore.activityIsExpanded(activity: turn, choice: activityExpansionOverrides[turn.id])
+        let expanded = AgentCore.activityIsExpanded(
+            status: turn.status,
+            expandedStatus: activityExpansionOverrides[turn.id]
+        )
         let header = ThreadActivityHeader(summary: turn.activitySummary, canCollapse: turn.activityCanCollapse,
                                           isInProgress: turn.isInProgress, expanded: expanded)
         if turn.activityCanCollapse {
             Button {
                 isFollowingLatest = false
-                activityExpansionOverrides[turn.id] = ActivityExpansion(status: turn.status, expanded: !expanded)
+                activityExpansionOverrides[turn.id] = expanded ? nil : turn.status
                 if !expanded, let params = turn.loadItems {
                     model.perform(.loadTurnItems(params))
                 }
@@ -266,13 +269,13 @@ struct LatestBoundary: Hashable {
 }
 
 func conversationRows(_ rows: [ThreadConversationRow],
-                      expansion: [String: ActivityExpansion]) -> [ThreadConversationRow] {
+                      expansion: [String: String]) -> [ThreadConversationRow] {
     var expanded = false
     return rows.filter { row in
         guard case let .native(native, _) = row.content else { return true }
         switch native.content {
         case let .activityHeader(activity):
-            expanded = AgentCore.activityIsExpanded(activity: activity, choice: expansion[activity.id])
+            expanded = AgentCore.activityIsExpanded(status: activity.status, expandedStatus: expansion[activity.id])
             return true
         case .activity: return expanded
         // Only rendered rows can own the latest-boundary marker.

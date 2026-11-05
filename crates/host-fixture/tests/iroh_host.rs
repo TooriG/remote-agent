@@ -1542,7 +1542,7 @@ async fn generated_images_are_visible_on_open_reopen_and_older_pages_without_exp
                 let images: Vec<_> = turn.rows.iter().filter_map(|row| match &row.content {
                     ConversationRowContent::Response { item, .. } if !item.data.image_sources.is_empty() => Some(item),
                     ConversationRowContent::ActivityHeader { activity } => {
-                        assert!(!activity_is_expanded(activity, None));
+                        assert!(!activity_is_expanded(&activity.status, None));
                         None
                     }
                     ConversationRowContent::Activity { .. } => panic!("work details were loaded"),

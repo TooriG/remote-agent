@@ -24,7 +24,7 @@ struct ThreadScreen: View {
     @State var scrollPosition = ScrollPosition(idType: String.self, edge: .bottom)
     @State var visibleLatest: LatestBoundary?
     @State var expandedItemIds = Set<String>()
-    @State var activityExpansionOverrides = [String: ActivityExpansion]()
+    @State var activityExpansionOverrides = [String: String]()
     @FocusState var composerFocused: Bool
 
     var body: some View {

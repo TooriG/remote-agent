@@ -13,10 +13,7 @@ use crate::{Runtime, appearance, diff::DiffView, platform, store_session::StoreS
 use agent_core::{
     client::persistence::{Persistence, RestoreError},
     panels::{PanelKind as Panel, PanelLayout, PanelScope, Panels},
-    presentation::{
-        conversation::{ActivityExpansion, ConversationRowContent},
-        error::ErrorScope,
-    },
+    presentation::{conversation::ConversationRowContent, error::ErrorScope},
     state::{Attachment, Draft, DraftKey, Intent, Snapshot},
     store::Outcome,
 };

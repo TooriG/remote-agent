@@ -10,13 +10,7 @@ pub struct Browser {
     state_directory: PathBuf,
     aliases: Mutex<HashMap<String, String>>,
     pub(super) stop: tokio_util::sync::CancellationToken,
-    bridge_directory: tempfile::TempDir,
-}
-
-impl Drop for Browser {
-    fn drop(&mut self) {
-        self.stop.cancel();
-    }
+    pub(super) bridge_directory: tempfile::TempDir,
 }
 
 impl Browser {
@@ -43,14 +37,6 @@ impl Browser {
 
     pub async fn bind_scope(&self, scope: String, thread: String) {
         self.aliases.lock().await.insert(scope, thread);
-    }
-    pub fn provider_config(&self, thread: &str) -> Result<serde_json::Value, String> {
-        Ok(
-            serde_json::json!({"command":std::env::current_exe().map_err(|e| e.to_string())?,"args":["browser-mcp","--socket",self.socket(),"--thread",thread]}),
-        )
-    }
-    pub(super) fn socket(&self) -> PathBuf {
-        self.bridge_directory.path().join("bridge.sock")
     }
     pub async fn shutdown(&self) {
         self.stop.cancel();
@@ -153,12 +139,7 @@ impl Browser {
         thread: &str,
         action: BrowserAction,
     ) -> Result<BrowserFrame, String> {
-        action.validate()?;
-        if credentials::manages_credentials(&action) {
-            return Err(
-                "ログイン状態と保存パスワードは、ブラウザのメニューから取り込んでください。".into(),
-            );
-        }
+        super::validate_agent_action(&action)?;
         let scope = self
             .aliases
             .lock()

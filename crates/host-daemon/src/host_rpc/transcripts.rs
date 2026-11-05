@@ -168,7 +168,7 @@ impl Transcripts {
                 .execute("DELETE FROM turns WHERE provider = ?1 AND id = ?2", key)
                 .map_err(failure)?;
             for (position, turn) in turns.iter().enumerate() {
-                insert(transaction, conversation, position as i64, turn)?;
+                write_turn(transaction, conversation, position as i64, turn)?;
             }
             transaction
                 .execute(
@@ -225,13 +225,7 @@ impl Transcripts {
                     key,
                 )
                 .map_err(failure)?;
-            transaction
-                .execute(
-                    "DELETE FROM turns WHERE provider = ?1 AND id = ?2 AND position = ?3",
-                    params![conversation.provider.key(), conversation.id, position],
-                )
-                .map_err(failure)?;
-            insert(transaction, conversation, position, &turn)?;
+            write_turn(transaction, conversation, position, &turn)?;
             advance(transaction, conversation.provider.key(), &conversation.id)
         })
     }
@@ -258,13 +252,7 @@ impl Transcripts {
             let Some(turn) = change(turn) else {
                 return Ok(());
             };
-            transaction
-                .execute(
-                    "DELETE FROM turns WHERE provider = ?1 AND id = ?2 AND position = ?3",
-                    params![conversation.provider.key(), conversation.id, position],
-                )
-                .map_err(failure)?;
-            insert(transaction, conversation, position, &turn)?;
+            write_turn(transaction, conversation, position, &turn)?;
             advance(transaction, conversation.provider.key(), &conversation.id)
         })
     }
@@ -548,7 +536,7 @@ fn advance(transaction: &Transaction, provider: &str, id: &str) -> Result<(), St
     Ok(())
 }
 
-fn insert(
+fn write_turn(
     transaction: &Transaction,
     conversation: &SessionRef,
     position: i64,
@@ -557,7 +545,9 @@ fn insert(
     transaction
         .prepare_cached(
             "INSERT INTO turns (provider, id, position, turn_id, running, body)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (provider, id, position) DO UPDATE SET
+                 turn_id = excluded.turn_id, running = excluded.running, body = excluded.body",
         )
         .map_err(failure)?
         .execute(params![
@@ -814,7 +804,8 @@ mod tests {
             .with(|connection| {
                 connection
                     .execute_batch(
-                        "CREATE TRIGGER reject_turn BEFORE INSERT ON turns WHEN NEW.turn_id = 'rejected'
+                        "CREATE TRIGGER reject_turn BEFORE INSERT ON turns
+                         WHEN NEW.turn_id = 'rejected' OR NEW.running = 1
                          BEGIN SELECT RAISE(ABORT, 'rejected by test'); END;",
                     )
                     .map_err(failure)
@@ -829,8 +820,25 @@ mod tests {
                 )
                 .is_err()
         );
+        assert!(
+            store
+                .record(&target, &turn("first", &["a"], TurnStatus::Running), None)
+                .is_err()
+        );
+        assert!(
+            store
+                .update_turn(&target, &"first".into(), None, |mut turn| {
+                    turn.status = TurnStatus::Running;
+                    Some(turn)
+                })
+                .is_err()
+        );
         let unchanged = store.window(&target, None, 10).unwrap().unwrap();
         assert_eq!(texts(&unchanged), ["first/a"]);
+        assert_eq!(
+            unchanged.response.thread.turns.as_ref().unwrap()[0].status,
+            TurnStatus::Completed
+        );
         assert_eq!(unchanged.response.thread.transcript_version, version);
         store
             .record(

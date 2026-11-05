@@ -45,7 +45,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.remoteagent.core.ActivityExpansion
 import dev.remoteagent.core.ActivityPresentation
 import dev.remoteagent.core.ConversationRow
 import dev.remoteagent.core.ConversationRowContent
@@ -74,7 +73,7 @@ internal fun ThreadDetailScreen(
     val threadId = snapshot.navigation().threadId
     var recoveryExpanded by remember(threadId, snapshot.navigation().draftKey) { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    var activityExpansion by remember(threadId) { mutableStateOf(emptyMap<String, ActivityExpansion>()) }
+    var activityExpansion by remember(threadId) { mutableStateOf(emptyMap<String, String>()) }
     var following by remember(threadId) { mutableStateOf(true) }
     ObserveFollowing(listState, snapshot, following, { following = it }, older, scrollToTopRequest)
     Column(modifier.fillMaxSize()) {
@@ -104,8 +103,10 @@ internal fun ThreadDetailScreen(
                             },
                         activityHeader = { activity ->
                             ActivityHeader(activity, activityExpansion[activity.id]) { choice ->
-                                activityExpansion = activityExpansion + (activity.id to choice)
-                                if (choice.expanded) activity.loadItems?.let { perform(Intent.LoadTurnItems(it)) {} }
+                                activityExpansion =
+                                    if (choice == null) activityExpansion - activity.id
+                                    else activityExpansion + (activity.id to choice)
+                                if (choice != null) activity.loadItems?.let { perform(Intent.LoadTurnItems(it)) {} }
                             }
                         },
                     )
@@ -151,14 +152,14 @@ private fun BoxScope.LatestMessageButton(
 
 private fun LazyListScope.conversationRows(
     rows: List<ConversationRow>,
-    activityExpansion: Map<String, ActivityExpansion>,
+    activityExpansion: Map<String, String>,
     render: @Composable (ConversationRow) -> Unit,
 ) {
     var expanded = false
     rows.forEach { row ->
         val content = row.content
         if (content is ConversationRowContent.ActivityHeader) {
-            expanded = activityIsExpanded(content.activity, activityExpansion[content.activity.id])
+            expanded = activityIsExpanded(content.activity.status, activityExpansion[content.activity.id])
         }
         if (content !is ConversationRowContent.Activity || expanded) {
             item(key = row.id) { render(row) }
@@ -228,11 +229,11 @@ private fun ConversationContent(
 @Composable
 private fun ActivityHeader(
     activity: ActivityPresentation,
-    choice: ActivityExpansion?,
-    toggle: (ActivityExpansion) -> Unit,
+    choice: String?,
+    toggle: (String?) -> Unit,
 ) {
-    val expanded = activityIsExpanded(activity, choice)
-    TextButton(onClick = { if (activity.activityCanCollapse) toggle(ActivityExpansion(activity.status, !expanded)) }) {
+    val expanded = activityIsExpanded(activity.status, choice)
+    TextButton(onClick = { if (activity.activityCanCollapse) toggle(if (expanded) null else activity.status) }) {
         Text(
             LocalUiLanguage.current.text(activity.activitySummary) +
                 if (activity.activityCanCollapse) if (expanded) " ⌄" else " ›" else ""
