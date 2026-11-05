@@ -163,8 +163,10 @@ impl SidebarRow {
                     .clone();
                 let move_bounds = bounds.clone();
                 let style_bounds = bounds.clone();
+                let group = SharedString::from(id.clone());
                 h_flex()
                     .id(id)
+                    .group(group.clone())
                     .w_full()
                     .gap_1()
                     .on_drag_move::<SidebarDrag>(move |event, _, _| {
@@ -212,24 +214,15 @@ impl SidebarRow {
                             .when(collapsed, |button| button.tooltip(name.clone()))
                             .child(icon)
                             .when(!collapsed, |button| {
-                                button
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_sm()
-                                            .text_left()
-                                            .text_ellipsis()
-                                            .child(name),
-                                    )
-                                    .child(
-                                        Icon::new(if expanded {
-                                            IconName::ChevronDown
-                                        } else {
-                                            IconName::ChevronRight
-                                        })
-                                        .size(px(12.)),
-                                    )
+                                button.child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .text_left()
+                                        .text_ellipsis()
+                                        .child(name),
+                                )
                             })
                             .on_click(move |_, _, cx| {
                                 let _ = target.update(cx, |desktop, cx| {
@@ -242,24 +235,30 @@ impl SidebarRow {
                             })),
                     )
                     .when(!collapsed, |row| {
-                        row.child(super::project_management::project_menu_button(
-                            menu_id, menu_owner,
-                        ))
-                        .child(
-                            Button::new("new-project-chat")
-                                .icon(new_chat_icon())
-                                .xsmall()
-                                .ghost()
-                                .tooltip(language.text("このプロジェクトで新しいチャット"))
-                                .accessibility_label(language.text("このプロジェクトで新しいチャット"))
-                                .disabled(!connected)
-                                .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    let _ = desktop.update(cx, |desktop, cx| {
-                                        desktop.new_chat(root.clone(), window, cx);
-                                        cx.notify();
-                                    });
-                                }),
+                        row.child(
+                            h_flex()
+                                .gap_1()
+                                .invisible()
+                                .group_hover(group, |style| style.visible())
+                                .child(super::project_management::project_menu_button(
+                                    menu_id, menu_owner,
+                                ))
+                                .child(
+                                    Button::new("new-project-chat")
+                                        .icon(new_chat_icon())
+                                        .xsmall()
+                                        .ghost()
+                                        .tooltip(language.text("このプロジェクトで新しいチャット"))
+                                        .accessibility_label(language.text("このプロジェクトで新しいチャット"))
+                                        .disabled(!connected)
+                                        .on_click(move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            let _ = desktop.update(cx, |desktop, cx| {
+                                                desktop.new_chat(root.clone(), window, cx);
+                                                cx.notify();
+                                            });
+                                        }),
+                                ),
                         )
                     })
                     .into_any_element()
