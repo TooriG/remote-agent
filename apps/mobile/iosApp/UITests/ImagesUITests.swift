@@ -136,11 +136,15 @@ extension LaunchUITests {
             } else {
                 app.otherElements["file.preview.media"].tap()
             }
-            let pause = app.buttons.matching(NSPredicate(format: "label IN %@", ["Pause", "一時停止"])).firstMatch
-            XCTAssertTrue(pause.waitForExistence(timeout: 15), "The native player must start playback")
-            XCTAssertTrue(pause.isHittable)
-            XCTAssertTrue(pause.isEnabled)
-            pause.tap()
+            // AVKit hides its controls during playback. Keep the control's stable identity across label changes
+            // and exercise it immediately after observing playback, before its chrome disappears.
+            let toggle = app.buttons["Play/Pause"]
+            let playing = expectation(for: NSPredicate(format: "label IN %@", ["Pause", "一時停止"]),
+                                      evaluatedWith: toggle)
+            wait(for: [playing], timeout: 15)
+            toggle.tap()
+            let paused = expectation(for: NSPredicate(format: "label IN %@", ["Play", "再生"]), evaluatedWith: toggle)
+            wait(for: [paused], timeout: 5)
         case .web:
             let content = app.webViews.firstMatch
             XCTAssertTrue(content.waitForExistence(timeout: 15))

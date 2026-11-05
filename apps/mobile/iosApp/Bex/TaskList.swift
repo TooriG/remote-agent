@@ -69,6 +69,7 @@ struct ThreadsScreen: View {
                             } label: {
                                 Image(systemName: "square.and.pencil").font(.title3)
                                     .foregroundColor(.secondary).frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("\(project.name)で新しいタスク")
