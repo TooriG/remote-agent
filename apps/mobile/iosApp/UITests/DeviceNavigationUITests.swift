@@ -4,7 +4,7 @@ import XCTest
 
 /// XCTest selectors remain on LaunchUITests for the fixture runner.
 extension LaunchUITests {
-    func assertTerminalReady(_ app: XCUIApplication) {
+    private func assertTerminalReady(_ app: XCUIApplication) {
         let terminal = app.descendants(matching: .any)["terminal.screen"]
         let ready = expectation(for: NSPredicate(format: "value == %@", "入力可能"), evaluatedWith: terminal)
         wait(for: [ready], timeout: 10)
@@ -79,6 +79,43 @@ extension LaunchUITests {
         data.buttons["閉じる"].tap()
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         closeWorkbench(app)
+    }
+
+    func testSimulatorNativeTerminalCopiesTextOnLongPress() throws {
+        let app = try connectedSimulatorApp()
+        app.buttons["tasks.new.project.simulator-project"].tap()
+        app.buttons["task.tools"].tap()
+        openWorkbenchTool(app, "terminal")
+        assertTerminalReady(app)
+        let terminal = app.descendants(matching: .any)["terminal.screen"]
+        terminal.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        terminal.typeText("printf '\\033[2J\\033[HNeedle Alpha Bravo\\n'; exit 0\n")
+        let status = app.staticTexts["終了 · 0"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        waitForStableFrame(terminal)
+        // Anchor below the status text, which shifts the terminal when the shell exits.
+        let word = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: terminal.frame.minX + 20 - app.frame.minX,
+            dy: status.frame.maxY + 8 - app.frame.minY
+        ))
+        word.press(forDuration: 1.2)
+        let copy = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Copy", "コピー"])).firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        captureScreen(app, named: "Terminal long press selects a word and exposes Copy")
+        // A second long press on Bravo reopens the menu without changing Needle's selection.
+        word.withOffset(CGVector(dx: 100, dy: 0)).press(forDuration: 1.2)
+        XCTAssertTrue(copy.waitForExistence(timeout: 5)); copy.tap()
+        closeWorkbench(app)
+        let composer = app.textFields["task.message"]
+        // Project drafts survive earlier tests and app relaunches.
+        replaceFieldText(composer, text: "")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        composer.press(forDuration: 1.2)
+        let paste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        waitForDraftText(composer, text: "Needle")
+        captureScreen(app, named: "Terminal long press preserves and copies only the selected word")
     }
 
     func testSimulatorNativeTerminalPastesMultilineText() throws {

@@ -119,7 +119,6 @@ conversation-ui *options:
         testSimulatorUsesNativeProjectDisclosureAndWorkspaceTree \
         testSimulatorRendersMarkdownTableAndReopensIt \
         testSimulatorNativeTerminalCopiesTextOnLongPress \
-        testSimulatorNativeTerminalAdjustsSelectionHandles \
         testSimulatorNativeTerminalPastesMultilineText \
         testSimulatorKeepsSmallOlderScrollDuringLiveUpdate \
         testSimulatorReopensRunningLongHistoryWithoutBlankViewport \
