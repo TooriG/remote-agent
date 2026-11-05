@@ -1,5 +1,49 @@
 //! Conversation lists: native titles merged with registered projects and Host conversations.
 use super::*;
+use crate::providers::SessionSummary;
+
+fn append_named_titles(
+    mut summaries: Vec<SessionSummary>,
+    threads: Vec<Thread>,
+) -> Vec<SessionSummary> {
+    let original_len = summaries.len();
+    let large_batch = threads.len() >= 64;
+    let mut ids = None;
+    for thread in threads {
+        // Small pages and batches need no index. Include earlier appends if
+        // the retained page grows large enough to benefit during this batch.
+        if large_batch && ids.is_none() && summaries.len() >= 128 {
+            ids = Some(
+                summaries
+                    .iter()
+                    .map(|summary| summary.thread.id.clone())
+                    .collect::<std::collections::HashSet<_>>(),
+            );
+        }
+        let unseen = match &mut ids {
+            Some(ids) => ids.insert(thread.id.clone()),
+            None => !summaries
+                .iter()
+                .any(|summary| summary.thread.id == thread.id),
+        };
+        if unseen {
+            summaries.push(SessionSummary {
+                branch: thread.git_branch.clone(),
+                thread,
+            });
+        }
+    }
+    if summaries.len() != original_len {
+        summaries.sort_by(|left, right| {
+            right
+                .thread
+                .updated_at
+                .unwrap_or_default()
+                .total_cmp(&left.thread.updated_at.unwrap_or_default())
+        });
+    }
+    summaries
+}
 
 impl HostRpcService {
     pub(super) async fn list_sessions(
@@ -178,27 +222,20 @@ impl HostRpcService {
         // Reuse the first pages and give subsequent reads only the time left.
         let deadline =
             tokio::time::Instant::now() + SESSION_LIST_TIMEOUT.saturating_sub(first_pages_elapsed);
+        let mut named_by_provider = std::collections::BTreeMap::<_, Vec<_>>::new();
         for (provider, response) in self.named_conversation_titles(search, deadline).await? {
+            named_by_provider
+                .entry(provider)
+                .or_default()
+                .push(response.thread);
+        }
+        for (provider, threads) in named_by_provider {
             if let Some(index) = agents
                 .iter()
                 .position(|(candidate, _)| *candidate == provider)
                 && let Ok(page) = &mut first_pages[index]
-                && !page
-                    .data
-                    .iter()
-                    .any(|summary| summary.thread.id == response.thread.id)
             {
-                page.data.push(crate::providers::SessionSummary {
-                    branch: response.thread.git_branch.clone(),
-                    thread: response.thread,
-                });
-                page.data.sort_by(|left, right| {
-                    right
-                        .thread
-                        .updated_at
-                        .unwrap_or_default()
-                        .total_cmp(&left.thread.updated_at.unwrap_or_default())
-                });
+                page.data = append_named_titles(std::mem::take(&mut page.data), threads);
             }
         }
         let initial_elapsed = started.elapsed();
@@ -221,12 +258,7 @@ impl HostRpcService {
                         self.inner
                             .conversations
                             .summary(summary.thread)
-                            .map(|thread| {
-                                thread.map(|thread| crate::providers::SessionSummary {
-                                    thread,
-                                    branch,
-                                })
-                            }),
+                            .map(|thread| thread.map(|thread| SessionSummary { thread, branch })),
                     )
                 })
                 .boxed();
@@ -242,7 +274,7 @@ impl HostRpcService {
             saved_by_provider
                 .entry(thread.active_provider.expect("saved title provider"))
                 .or_default()
-                .push(Ok(crate::providers::SessionSummary {
+                .push(Ok(SessionSummary {
                     branch: thread.git_branch.clone(),
                     thread,
                 }));
@@ -439,6 +471,226 @@ fn title_first_page_size(query: crate::projects::titles::TitleQuery<'_>) -> u32 
 
 #[cfg(test)]
 mod tests {
+    fn named_thread(
+        id: Option<&str>,
+        provider: agent_protocol::session::ProviderKind,
+        name: &str,
+        updated_at: Option<f64>,
+    ) -> super::Thread {
+        super::Thread {
+            id: id.map(|id| agent_protocol::session::SessionRef {
+                provider,
+                id: id.into(),
+            }),
+            name: Some(name.into()),
+            preview: Some(format!("preview-{name}")),
+            git_branch: Some(format!("git-{name}")),
+            updated_at,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn named_titles_keep_existing_rows_first_new_payloads_and_stable_timestamp_ties() {
+        use super::*;
+        use agent_protocol::session::ProviderKind::{Claude, Codex};
+        for existing_count in [3, 128] {
+            for incoming_count in [6, 63, 64, 65] {
+                let mut existing = vec![
+                    SessionSummary {
+                        thread: named_thread(Some("a"), Codex, "existing", Some(5.)),
+                        branch: Some("original branch".into()),
+                    },
+                    SessionSummary {
+                        thread: named_thread(Some("a"), Codex, "existing duplicate", Some(1.)),
+                        branch: None,
+                    },
+                    SessionSummary {
+                        thread: named_thread(None, Codex, "existing anonymous", None),
+                        branch: Some("anonymous branch".into()),
+                    },
+                ];
+                for index in 3..existing_count {
+                    existing.push(SessionSummary {
+                        thread: named_thread(
+                            Some("a"),
+                            Codex,
+                            &format!("existing duplicate {index}"),
+                            Some(1.),
+                        ),
+                        branch: None,
+                    });
+                }
+                let mut incoming = vec![
+                    named_thread(Some("a"), Codex, "ignored existing update", Some(999.)),
+                    named_thread(Some("b"), Codex, "first new b", Some(5.)),
+                    named_thread(Some("b"), Codex, "ignored new b update", Some(999.)),
+                    named_thread(Some("b"), Claude, "other provider b", Some(5.)),
+                    named_thread(None, Codex, "ignored anonymous update", Some(999.)),
+                    named_thread(Some("c"), Codex, "new c", None),
+                ];
+                incoming.resize(incoming_count, incoming[0].clone());
+                let original = |row: &SessionSummary| (row.thread.clone(), row.branch.clone());
+                let appended = |thread: &Thread| (thread.clone(), thread.git_branch.clone());
+                let mut expected = vec![
+                    original(&existing[0]),
+                    appended(&incoming[1]),
+                    appended(&incoming[3]),
+                    original(&existing[1]),
+                ];
+                expected.extend(existing[3..].iter().map(original));
+                expected.push(original(&existing[2]));
+                expected.push(appended(&incoming[5]));
+                let result = append_named_titles(existing, incoming)
+                    .into_iter()
+                    .map(|row| (row.thread, row.branch))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    result, expected,
+                    "existing={existing_count}, incoming={incoming_count}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_only_named_titles_leave_the_original_page_order_untouched() {
+        use super::*;
+        use agent_protocol::session::ProviderKind::Codex;
+        for count in [0, 1, 64] {
+            let existing = vec![
+                SessionSummary {
+                    thread: named_thread(None, Codex, "anonymous", None),
+                    branch: Some("original".into()),
+                },
+                SessionSummary {
+                    thread: named_thread(Some("a"), Codex, "first", Some(5.)),
+                    branch: None,
+                },
+                SessionSummary {
+                    thread: named_thread(Some("a"), Codex, "duplicate", Some(1.)),
+                    branch: None,
+                },
+            ];
+            let expected = existing
+                .iter()
+                .map(|row| (row.thread.clone(), row.branch.clone()))
+                .collect::<Vec<_>>();
+            let incoming = (0..count)
+                .map(|index| {
+                    named_thread(
+                        if index % 2 == 0 { Some("a") } else { None },
+                        Codex,
+                        "ignored",
+                        Some(999.),
+                    )
+                })
+                .collect();
+            let result = append_named_titles(existing, incoming)
+                .into_iter()
+                .map(|row| (row.thread, row.branch))
+                .collect::<Vec<_>>();
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn named_title_index_includes_items_appended_before_it_was_created() {
+        use super::*;
+        use agent_protocol::session::ProviderKind::Codex;
+        let mut incoming = (0..200)
+            .map(|index| {
+                let id = format!("chat-{index}");
+                named_thread(
+                    if index == 150 { None } else { Some(&id) },
+                    Codex,
+                    &format!("original {index}"),
+                    Some(0.),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = incoming.clone();
+        incoming.push(named_thread(
+            Some("chat-0"),
+            Codex,
+            "ignored late duplicate",
+            Some(999.),
+        ));
+        incoming.push(named_thread(
+            None,
+            Codex,
+            "ignored anonymous duplicate",
+            Some(999.),
+        ));
+        let result = append_named_titles(Vec::new(), incoming);
+        assert_eq!(result.len(), expected.len());
+        for (row, thread) in result.into_iter().zip(expected) {
+            assert_eq!(row.thread, thread);
+            assert_eq!(row.branch, thread.git_branch);
+        }
+    }
+
+    #[test]
+    fn named_titles_keep_total_timestamp_order_and_original_float_bits() {
+        use super::*;
+        use agent_protocol::session::ProviderKind::Codex;
+        let positive_nan = 0x7ff8_0000_0000_0003;
+        let negative_nan = 0xfff8_0000_0000_0002;
+        let existing = [
+            ("z-none", None),
+            ("negative zero", Some(-0.)),
+            ("positive nan", Some(f64::from_bits(positive_nan))),
+            ("negative nan", Some(f64::from_bits(negative_nan))),
+            ("a-zero", Some(0.)),
+            ("one", Some(1.)),
+        ]
+        .into_iter()
+        .map(|(name, time)| SessionSummary {
+            thread: named_thread(Some(name), Codex, name, time),
+            branch: None,
+        })
+        .collect();
+        let result = append_named_titles(
+            existing,
+            vec![named_thread(
+                Some("infinity"),
+                Codex,
+                "infinity",
+                Some(f64::INFINITY),
+            )],
+        );
+        assert_eq!(
+            result
+                .iter()
+                .map(|row| row.thread.name.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "positive nan",
+                "infinity",
+                "one",
+                "z-none",
+                "a-zero",
+                "negative zero",
+                "negative nan"
+            ]
+        );
+        assert_eq!(
+            result
+                .iter()
+                .map(|row| row.thread.updated_at.map(f64::to_bits))
+                .collect::<Vec<_>>(),
+            [
+                Some(positive_nan),
+                Some(f64::INFINITY.to_bits()),
+                Some(1f64.to_bits()),
+                None,
+                Some(0f64.to_bits()),
+                Some((-0f64).to_bits()),
+                Some(negative_nan)
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn prefetched_project_titles_continue_past_the_first_native_page() {
         use super::*;
