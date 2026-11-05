@@ -58,7 +58,8 @@ impl Snapshot {
             .filter(|c| {
                 Some(c.invocation.provider) == provider
                     && c.invocation.kind == kind
-                    && (c.invocation.name.to_lowercase().contains(&filter)
+                    && (filter.is_empty()
+                        || c.invocation.name.to_lowercase().contains(&filter)
                         || c.description.to_lowercase().contains(&filter))
             })
             .cloned()
@@ -265,6 +266,75 @@ mod tests {
         assert_eq!(suggestions.candidates[0].invocation, claude);
         assert_eq!(suggestions.candidates.len(), 1);
         assert_eq!(suggestions.status.as_deref(), Some("Claude unavailable"));
+    }
+
+    #[test]
+    fn suggestions_match_names_or_descriptions_with_unicode_and_keep_provider_and_kind() {
+        use InvocationKind::{Plugin, Skill};
+        use agent_protocol::session::ProviderKind::{Claude, Codex};
+        use std::sync::Arc;
+        let candidate = |name: &str, description: &str, provider, kind| ComposerCandidate {
+            invocation: Invocation {
+                name: name.into(),
+                provider,
+                kind,
+                ..skill()
+            },
+            description: description.into(),
+        };
+        let candidates = vec![
+            candidate("İSTANBUL", "Name only match", Codex, Skill),
+            candidate("deploy", "Remote OPERATIONS", Codex, Skill),
+            candidate("audit", "Nothing related", Codex, Skill),
+            candidate("İSTANBUL", "Remote OPERATIONS", Claude, Skill),
+            candidate("İSTANBUL", "Remote OPERATIONS", Codex, Plugin),
+        ];
+        let mut snapshot = Snapshot {
+            composer_catalog: Some(Arc::new(ComposerCatalog {
+                candidates: candidates.clone(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        Arc::make_mut(
+            Arc::make_mut(&mut snapshot.drafts)
+                .entry(snapshot.navigation.draft_key.clone())
+                .or_default(),
+        )
+        .model = Some(agent_protocol::models::ModelRef {
+            provider: Codex,
+            id: "model".into(),
+        });
+        for (text, expected) in [
+            ("/", vec![0, 1, 2]),
+            ("/i\u{307}stan", vec![0]),
+            ("/OPERATIONS", vec![1]),
+            ("/istanbul", vec![]),
+            ("@", vec![4]),
+        ] {
+            let result = snapshot
+                .composer_suggestions(text.into(), text.len() as u32)
+                .unwrap();
+            assert_eq!(
+                result.candidates,
+                expected
+                    .into_iter()
+                    .map(|index| candidates[index].clone())
+                    .collect::<Vec<_>>(),
+                "{text}",
+            );
+            assert_eq!(
+                result.status.as_deref(),
+                result
+                    .candidates
+                    .is_empty()
+                    .then_some("該当する候補がありません"),
+            );
+        }
+        assert_eq!(
+            snapshot.composer_catalog.as_ref().unwrap().candidates,
+            candidates
+        );
     }
 
     #[test]

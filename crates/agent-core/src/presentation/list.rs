@@ -414,9 +414,10 @@ impl Snapshot {
                                     )
                             })
                             .filter(|thread| {
-                                task_title(thread.name.as_deref(), thread.preview.as_deref())
-                                    .to_lowercase()
-                                    .contains(&search)
+                                search.is_empty()
+                                    || task_title(thread.name.as_deref(), thread.preview.as_deref())
+                                        .to_lowercase()
+                                        .contains(&search)
                             })
                             .collect::<Vec<_>>();
                         summary.threads.splice(
