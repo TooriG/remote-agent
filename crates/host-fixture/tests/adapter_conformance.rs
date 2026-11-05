@@ -946,12 +946,12 @@ async fn worktree_lists_read_each_native_page_once_and_refresh_activity() {
             .filter(|entry| entry["method"] == "thread/list")
             .count()
     };
-    for running in [true, false] {
+    for (subagent, running) in [(false, true), (false, false), (true, true), (true, false)] {
         let threads: Vec<_> = (0..101)
             .map(|index| {
                 serde_json::json!({
                     "id":format!("page-{index}"),
-                    "parentThreadId":(index == 0).then_some("parent-outside-the-checkout"),
+                    "parentThreadId":(index == 0 && subagent).then_some("parent-outside-the-checkout"),
                     "cwd":if index == 0 { &paths[0] } else { &paths[1] },
                     "name":format!("Conversation {index}: {running}"),
                     "updatedAt":index,
@@ -1003,16 +1003,17 @@ async fn worktree_lists_read_each_native_page_once_and_refresh_activity() {
             .call(&agent_protocol::live_activity::ReadTaskActivity {})
             .await
             .unwrap();
-        assert_eq!(activity.display.current.total, u32::from(running));
-        assert_eq!(activity.display.ongoing, running);
+        let counted = running && !subagent;
+        assert_eq!(activity.display.current.total, u32::from(counted));
+        assert_eq!(activity.display.ongoing, counted);
         assert_eq!(
             activity.display.current.label,
-            if running {
+            if counted {
                 "実行中 1件"
             } else {
                 "すべてのタスクが終了"
             },
-            "task activity includes the oldest native page outside the visible title list"
+            "task activity counts user conversations from every native page, excluding subagents"
         );
     }
     local.close().await;
