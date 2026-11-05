@@ -548,7 +548,7 @@ impl Desktop {
             },
             connection_list: None,
             connected_hosts: Default::default(),
-            connection_names: vec![("local".into(), language.text("このPC").into())],
+            connection_names: vec![("local".into(), "このPC".into())],
             hosts,
             app_updates,
             side_chat_mode,

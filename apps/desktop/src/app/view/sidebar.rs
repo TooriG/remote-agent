@@ -809,10 +809,21 @@ impl SidebarView {
     }
     fn connection_menu(model: &Conversations, cx: &Context<Self>) -> AnyElement {
         let owner = cx.entity().downgrade();
-        let choices = model.connections.clone();
         let selected = model.host.clone();
         let all = model.all;
         let language = crate::localization::language(cx);
+        let choices: Vec<_> = model
+            .connections
+            .iter()
+            .map(|(id, name)| {
+                let name = if id == "local" && name == "このPC" {
+                    language.text(name).to_owned()
+                } else {
+                    name.clone()
+                };
+                (id.clone(), name)
+            })
+            .collect();
         let label = if all {
             language.text("すべての接続先").to_owned()
         } else {
@@ -1284,6 +1295,19 @@ mod tests {
             assert!(modal.origin.x > px(0.));
             assert!(modal.origin.y > px(0.));
             assert!(window.debug_bounds("settings-close").unwrap().top() < scope.bottom());
+            if page == SettingsPage::Worktrees {
+                let before = window.debug_bounds("settings-page-heading").unwrap();
+                window.simulate_event(gpui::ScrollWheelEvent {
+                    position: gpui::point(modal.right() - px(30.), modal.center().y),
+                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-500.))),
+                    touch_phase: gpui::TouchPhase::Moved,
+                    ..Default::default()
+                });
+                window.run_until_parked();
+                let after = window.debug_bounds("settings-page-heading");
+                assert!(after.is_none_or(|after| after.top() < before.top()));
+                assert!(window.debug_bounds("settings-close").unwrap().top() < scope.bottom());
+            }
         }
         let back = window.debug_bounds("settings-close").unwrap().center();
         window.simulate_click(back, Modifiers::default());
