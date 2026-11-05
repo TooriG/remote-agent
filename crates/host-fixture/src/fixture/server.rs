@@ -247,6 +247,7 @@ struct Threads {
     saved_threads: Option<IndexMap<String, SharedThread>>,
     list_contents: Option<Vec<u8>>,
     next_thread: i32,
+    turn_ordinals: HashMap<String, usize>,
 }
 
 const THREAD_START: &str = "thread/start";
@@ -258,6 +259,14 @@ fn thread_id(params: &Value) -> &str {
 }
 
 impl Threads {
+    fn turn_suffix(&mut self, thread_id: &str, observed_turns: usize) -> String {
+        // List fixtures replace native history while the Host retains its
+        // imported transcript. Each conversation's live IDs stay unique across resets.
+        let ordinal = self.turn_ordinals.entry(thread_id.into()).or_default();
+        *ordinal = (*ordinal).max(observed_turns) + 1;
+        format!("{}-{}", thread_id.rsplit('-').next().unwrap(), *ordinal)
+    }
+
     fn cancel(&self) {
         for control in self.controls.values() {
             control.stop.cancel();
@@ -675,11 +684,9 @@ impl Threads {
             context.error(id, -32600, "turn already active")?;
             return Ok(());
         }
-        let suffix = format!(
-            "{}-{}",
-            thread_id.rsplit('-').next().unwrap(),
-            thread.borrow().turns.len() + 1
-        );
+        let thread = thread.clone();
+        let observed_turns = thread.borrow().turns.len();
+        let suffix = self.turn_suffix(thread_id, observed_turns);
         let turn_id = format!("fixture-turn-{suffix}");
         let turn = Rc::new(RefCell::new(
             json!({"id":turn_id,"status":"inProgress","items":[],"startedAt":1}),
@@ -710,7 +717,6 @@ impl Threads {
             },
         );
         let context = context.clone();
-        let thread = thread.clone();
         let input = std::mem::take(params["input"].as_array_mut().unwrap());
         let client_id = params["clientUserMessageId"].take();
         tokio::task::spawn_local(async move {
@@ -1059,5 +1065,72 @@ pub(super) fn remove_if_present(path: &std::path::Path) -> Result<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_resets_do_not_reuse_live_turn_or_item_identities() {
+        use agent_protocol::{
+            execution::TurnStatus,
+            models::{Thread as ClientThread, Turn as ClientTurn},
+            session::SessionChange,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let fixture = root.path().join("list-fixture.json");
+        let contents = serde_json::to_vec(
+            &json!([{"id":"fixture-long-history","cwd":"/fixture","name":"Long"}]),
+        )
+        .unwrap();
+        fs::write(&fixture, &contents).unwrap();
+        let mut threads = Threads::default();
+        assert!(threads.refresh(root.path()).unwrap());
+        let count = threads.by_id["fixture-long-history"].borrow().turns.len();
+        let first = threads.turn_suffix("fixture-long-history", count);
+        assert_eq!(first, "history-2");
+        fs::remove_file(&fixture).unwrap();
+        assert!(!threads.refresh(root.path()).unwrap());
+        fs::write(&fixture, &contents).unwrap();
+        assert!(threads.refresh(root.path()).unwrap());
+        let count = threads.by_id["fixture-long-history"].borrow().turns.len();
+        let second = threads.turn_suffix("fixture-long-history", count);
+        assert_eq!(second, "history-3");
+        let previous = ClientThread {
+            turns: Some(vec![Arc::new(ClientTurn {
+                id: format!("fixture-turn-{first}").into(),
+                status: TurnStatus::Completed,
+                ..Default::default()
+            })]),
+            ..Default::default()
+        };
+        let turn_id = agent_protocol::ids::TurnId::from(format!("fixture-turn-{second}"));
+        let running = SessionChange::Turn {
+            turn: ClientTurn {
+                id: turn_id.clone(),
+                status: TurnStatus::Running,
+                ..Default::default()
+            },
+            completed: false,
+        }
+        .apply(&previous)
+        .unwrap();
+        assert_eq!(running.active_turn_id(), Some(turn_id));
+        assert_eq!(running.turns.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            running.turns.as_ref().unwrap()[0].status,
+            TurnStatus::Completed
+        );
+        assert_eq!(threads.turn_suffix("other-history", 0), "history-1");
+        assert_eq!(
+            threads.turn_suffix("fixture-long-history", 100),
+            "history-101"
+        );
+        assert_eq!(
+            threads.turn_suffix("fixture-long-history", 0),
+            "history-102"
+        );
     }
 }
