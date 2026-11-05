@@ -529,7 +529,8 @@ fn convert(
     let mut fork_points = HashMap::new();
     let mut turns: Vec<Arc<Turn>> = Vec::new();
     let mut model = None;
-    let mut block_indices: HashMap<String, usize> = HashMap::new();
+    let mut block_indices: HashMap<&str, usize> = HashMap::new();
+    let mut item_positions: Option<HashMap<ItemId, usize>> = None;
     for node in chain {
         let kind = node["type"].as_str().unwrap_or_default();
         let id = node["uuid"].as_str().unwrap_or_default();
@@ -623,6 +624,7 @@ fn convert(
             }))
             || turns.is_empty()
         {
+            item_positions = None;
             turns.push(Arc::new(Turn {
                 id: initial_item
                     .as_ref()
@@ -645,6 +647,9 @@ fn convert(
         }
         let items = turn.items.as_mut().unwrap();
         if let Some(item) = initial_item {
+            if let Some(positions) = &mut item_positions {
+                positions.entry(item.id.clone()).or_insert(items.len());
+            }
             items.push(Arc::new(item));
         }
         let message_id = node["message"]["id"]
@@ -657,6 +662,7 @@ fn convert(
             .unwrap_or(*block_indices.get(message_id).unwrap_or(&0));
         let appended = append_blocks(
             std::mem::take(items),
+            item_positions,
             blocks
                 .iter()
                 .enumerate()
@@ -670,9 +676,10 @@ fn convert(
             node["message"]["stop_reason"].as_str(),
         )?;
         *items = appended.items;
+        item_positions = appended.item_positions;
         output_paths.extend(appended.output_paths);
         warnings.extend(appended.warnings);
-        block_indices.insert(message_id.into(), base + blocks.len());
+        block_indices.insert(message_id, base + blocks.len());
     }
     let page = page_turns(&turns, turns.len(), limit)?;
     let has_more = page.next_cursor.is_some();
@@ -707,12 +714,14 @@ fn convert(
 
 struct AppendedBlocks {
     items: Vec<Arc<agent_protocol::items::Item>>,
+    item_positions: Option<HashMap<ItemId, usize>>,
     output_paths: BTreeMap<agent_protocol::ids::ItemId, String>,
     warnings: Vec<&'static str>,
 }
 
 fn append_blocks<'a>(
     mut items: Vec<Arc<agent_protocol::items::Item>>,
+    mut item_positions: Option<HashMap<ItemId, usize>>,
     blocks: impl Iterator<Item = (String, &'a Value)>,
     session: &SessionRef,
     cwd: Option<&str>,
@@ -724,10 +733,24 @@ fn append_blocks<'a>(
     for (id, block) in blocks {
         let item = match block["type"].as_str() {
             Some("tool_result") => {
-                if let Some(item) = items
-                    .iter_mut()
-                    .find(|item| Some(item.id.as_str()) == block["tool_use_id"].as_str())
-                {
+                let position = block["tool_use_id"].as_str().and_then(|id| {
+                    if let Some(positions) = &item_positions {
+                        return positions.get(id).copied();
+                    }
+                    let position = items.iter().position(|item| item.id.as_str() == id);
+                    // Keep cheap early matches linear. Reuse an index across
+                    // native rows once a large turn needs a longer scan.
+                    if items.len() >= 128 && position.is_none_or(|index| index >= 64) {
+                        let mut positions = HashMap::with_capacity(items.len());
+                        for (index, item) in items.iter().enumerate() {
+                            positions.entry(item.id.clone()).or_insert(index);
+                        }
+                        item_positions = Some(positions);
+                    }
+                    position
+                });
+                if let Some(position) = position {
+                    let item = &mut items[position];
                     *item = Arc::new(native::tool_result_item(
                         item.id.clone(),
                         item.body(),
@@ -748,10 +771,14 @@ fn append_blocks<'a>(
             }
             _ => native::content_item(session, id, block, stop_reason, cwd, ItemStatus::Unknown)?,
         };
+        if let Some(positions) = &mut item_positions {
+            positions.entry(item.id.clone()).or_insert(items.len());
+        }
         items.push(Arc::new(item));
     }
     Ok(AppendedBlocks {
         items,
+        item_positions,
         output_paths,
         warnings,
     })
@@ -1081,6 +1108,160 @@ mod tests {
         assert_eq!(summary.thread.name, None);
         assert_eq!(summary.thread.preview.as_deref(), Some("question"));
         assert_eq!(fs::read_to_string(path).unwrap(), source);
+    }
+
+    #[test]
+    fn tool_results_keep_first_duplicates_and_find_calls_appended_in_later_rows() {
+        let session = SessionRef::new(ProviderKind::Claude, ID.into()).unwrap();
+        for count in [1usize, 63, 64, 127, 128, 129, 512] {
+            let mut calls: Vec<_>=(0..count).map(|index|json!({"type":"tool_use","id":format!("tool{index}"),"name":"Bash","input":{"command":format!("command {index}")}})).collect();
+            calls.push(json!({"type":"tool_use","id":"tool0","name":"Bash","input":{"command":"duplicate"}}));
+            let initial = append_blocks(
+                vec![],
+                None,
+                calls
+                    .iter()
+                    .enumerate()
+                    .map(|(index, block)| (format!("call{index}"), block)),
+                &session,
+                None,
+                &Value::Null,
+                None,
+            )
+            .unwrap();
+            let old = initial.items.clone();
+            let results = [
+                json!({"type":"tool_result","tool_use_id":format!("tool{}",count-1),"content":"last output"}),
+                json!({"type":"tool_result","tool_use_id":"tool0","content":"first output"}),
+                json!({"type":"tool_result","tool_use_id":null}),
+                json!({"type":"tool_result","tool_use_id":7}),
+                json!({"type":"tool_result","tool_use_id":"missing"}),
+                json!({"type":"tool_result","tool_use_id":""}),
+            ];
+            let updated = append_blocks(
+                initial.items,
+                initial.item_positions,
+                results
+                    .iter()
+                    .enumerate()
+                    .map(|(index, block)| (format!("result{index}"), block)),
+                &session,
+                None,
+                &json!({"persistedOutputPath":"/work/first.output"}),
+                None,
+            )
+            .unwrap();
+            assert_eq!(updated.items.len(), count + 1);
+            assert_eq!(
+                updated.warnings,
+                vec!["tool result has no available tool call"; 4]
+            );
+            assert_eq!(
+                updated.output_paths[&ItemId::from("tool0")],
+                "/work/first.output"
+            );
+            assert!(
+                matches!(updated.items[0].body(),ItemBody::CommandExecution{output,..} if output=="first output")
+            );
+            assert!(
+                matches!(updated.items[count].body(),ItemBody::CommandExecution{command,output,..} if command=="duplicate" && output.is_empty())
+            );
+            assert!(old.iter().all(|item| item.status == ItemStatus::Unknown));
+            let later = [
+                json!({"type":"tool_use","id":"later","name":"Bash","input":{"command":"later first"}}),
+                json!({"type":"tool_use","id":"later","name":"Bash","input":{"command":"later duplicate"}}),
+                json!({"type":"tool_result","tool_use_id":"later","content":"later output"}),
+            ];
+            let later = append_blocks(
+                updated.items,
+                updated.item_positions,
+                later
+                    .iter()
+                    .enumerate()
+                    .map(|(index, block)| (format!("later{index}"), block)),
+                &session,
+                None,
+                &json!({"persistedOutputPath":"/work/later.output"}),
+                None,
+            )
+            .unwrap();
+            assert!(later.warnings.is_empty());
+            assert_eq!(
+                later.output_paths[&ItemId::from("later")],
+                "/work/later.output"
+            );
+            assert!(
+                matches!(later.items[count+1].body(),ItemBody::CommandExecution{command,output,..} if command=="later first" && output=="later output")
+            );
+            assert!(
+                matches!(later.items[count+2].body(),ItemBody::CommandExecution{command,output,..} if command=="later duplicate" && output.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn transcript_item_lookups_include_attachments_and_restart_for_each_turn() {
+        let calls: Vec<_>=(0..256).map(|index|json!({"type":"tool_use","id":format!("tool{index}"),"name":"Bash","input":{"command":format!("command {index}")}})).collect();
+        let mut nodes = vec![
+            json!({"type":"user","message":{"content":"first input"}}),
+            json!({"type":"assistant","message":{"id":"first","content":calls}}),
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool255","content":"first turn output"}]}}),
+            json!({"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"notice"}}),
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"node3","content":"attachment output"}]},"toolUseResult":{"persistedOutputPath":"/work/attachment.output"}}),
+            json!({"type":"user","message":{"content":"second input"}}),
+            json!({"type":"assistant","message":{"id":"second","content":[{"type":"tool_use","id":"tool200","name":"Bash","input":{"command":"second command"}}]}}),
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool200","content":"second output"}]}}),
+            json!({"type":"assistant","apiBlockIndex":11,"message":{"id":"shared","content":[{"type":"text","text":"one"},{"type":"text","text":"two"}]}}),
+            json!({"type":"assistant","message":{"id":"shared","content":[{"type":"text","text":"three"}]}}),
+        ];
+        for (index, node) in nodes.iter_mut().enumerate() {
+            node["uuid"] = json!(format!("node{index}"));
+            node["parentUuid"] = if index == 0 {
+                Value::Null
+            } else {
+                json!(format!("node{}", index - 1))
+            };
+        }
+        let history = convert(
+            Thread {
+                id: Some(SessionRef::new(ProviderKind::Claude, ID.into()).unwrap()),
+                ..Default::default()
+            },
+            nodes,
+            usize::MAX,
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            history.output_paths[&ItemId::from("node3")],
+            "/work/attachment.output"
+        );
+        assert_eq!(
+            history.response.thread.history_read_state.unwrap().kind,
+            agent_protocol::session::HistoryReadKind::Complete
+        );
+        let turns = history.response.thread.turns.unwrap();
+        assert_eq!(turns.len(), 2);
+        let first = turns[0].items.as_ref().unwrap();
+        assert!(
+            matches!(first[201].body(),ItemBody::CommandExecution{command,output,..} if command=="command 200" && output.is_empty())
+        );
+        assert!(
+            matches!(first[256].body(),ItemBody::CommandExecution{output,..} if output=="first turn output")
+        );
+        assert_eq!(first[257].id.as_str(), "node3");
+        assert_eq!(first[257].status, ItemStatus::Completed);
+        let second = turns[1].items.as_ref().unwrap();
+        assert!(
+            matches!(second[1].body(),ItemBody::CommandExecution{command,output,..} if command=="second command" && output=="second output")
+        );
+        assert_eq!(
+            second
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["node5", "tool200", "shared:11", "shared:12", "shared:13"]
+        );
     }
 
     #[test]
