@@ -5,8 +5,19 @@ use crate::presentation::markdown::{
 use std::collections::HashSet;
 
 fn image_key(source: &str) -> String {
-    markdown_file_target(source.into(), String::new(), MarkdownFileSurface::Mobile)
-        .map_or_else(|| source.to_owned(), |file| file.path)
+    let path = markdown_file_target(source.into(), String::new(), MarkdownFileSurface::Mobile)
+        .map_or_else(|| source.to_owned(), |file| file.path);
+    image_path_key(&path)
+}
+
+fn image_path_key(path: &str) -> String {
+    if agent_protocol::paths::is_windows_absolute_host_path(path)
+        || agent_protocol::paths::is_network_host_path(path)
+    {
+        path.replace('\\', "/").to_lowercase()
+    } else {
+        path.to_owned()
+    }
 }
 
 /// A visible inline image takes over its earlier generation preview. Only
@@ -48,7 +59,7 @@ pub(super) fn without_repeated_generated_images(
                         .data
                         .image_sources
                         .iter()
-                        .all(|source| inline_images.contains(&image_key(source)));
+                        .all(|source| inline_images.contains(&image_path_key(source)));
             }
             _ => {}
         }
@@ -299,6 +310,32 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[rstest::rstest]
+    #[case::reserved("/tmp/a%20b#1.png", "![image](/tmp/a%2520b%231.png)", false)]
+    #[case::distinct_literal_percent("/tmp/a%20b.png", "![image](/tmp/a%20b.png)", true)]
+    #[case::windows(r"C:\Users\Me\image.png", "![image](c:/users/me/image.png)", false)]
+    #[case::unc(
+        r"\\HOST\Share\image.png",
+        "![image](file://host/share/image.png)",
+        false
+    )]
+    #[case::posix_case("/tmp/Image.png", "![image](/tmp/image.png)", true)]
+    fn saved_paths_remain_literal_while_markdown_destinations_are_decoded(
+        #[case] path: &str,
+        #[case] text: &str,
+        #[case] standalone: bool,
+    ) {
+        let projected = project_conversation(
+            &Snapshot::default(),
+            thread(
+                vec![image("image", path), answer(text, "final")],
+                models::TurnStatus::Completed,
+            ),
+            &None,
+        );
+        assert_eq!(response_ids(&projected).contains(&"image"), standalone);
     }
 
     #[test]
