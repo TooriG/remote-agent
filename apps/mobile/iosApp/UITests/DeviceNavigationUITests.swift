@@ -91,10 +91,15 @@ extension LaunchUITests {
         terminal.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         terminal.typeText("printf '\\033[2J\\033[HNeedle Alpha Bravo\\n'; exit 0\n")
-        XCTAssertTrue(app.staticTexts["終了 · 0"].waitForExistence(timeout: 10))
+        let status = app.staticTexts["終了 · 0"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
         waitForStableFrame(terminal)
-        terminal.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: 20, dy: 8)).press(forDuration: 1.2)
+        // SwiftTerm's accessibility frame includes the status row. Target the
+        // rendered first line below that row instead of the accessibility origin.
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: terminal.frame.minX + 20 - app.frame.minX,
+            dy: status.frame.maxY + 8 - app.frame.minY
+        )).press(forDuration: 1.2)
         let select = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Select", "選択"])).firstMatch
         XCTAssertTrue(select.waitForExistence(timeout: 5)); select.tap()
         captureScreen(app, named: "Selected terminal word exposes the Copy action")
