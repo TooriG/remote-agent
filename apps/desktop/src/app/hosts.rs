@@ -23,6 +23,7 @@ pub(super) enum HostEvent {
     Selected(Option<RemoteHost>),
     Enabled(Option<RemoteHost>, bool),
     Removed(String),
+    ListsChanged,
     Failed(String),
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,12 @@ enum Update {
     WslHost(Result<RemoteHost, String>, Option<bool>),
     Connected(Result<StoreSession, String>),
     Snapshot,
+    Background(String, Result<StoreSession, String>),
+    List(
+        String,
+        Option<Arc<agent_core::presentation::list::ThreadList>>,
+        bool,
+    ),
     Completed(Action, Result<Outcome, String>),
     SshInvitation(Result<Invitation, String>),
 }
@@ -61,6 +68,10 @@ pub(super) struct Hosts {
     connecting: bool,
     wsl_distros: Vec<String>,
     wsl_hosts: std::collections::BTreeMap<String, RemoteHost>,
+    connected: std::collections::BTreeSet<String>,
+    lists: std::collections::BTreeMap<String, Arc<agent_core::presentation::list::ThreadList>>,
+    background: std::collections::BTreeMap<String, StoreSession>,
+    opening: std::collections::BTreeSet<String>,
     error: Option<String>,
     _language: Subscription,
 }
@@ -99,6 +110,10 @@ impl Hosts {
             connecting: false,
             wsl_distros: Vec::new(),
             wsl_hosts: Default::default(),
+            lists: Default::default(),
+            connected: Default::default(),
+            background: Default::default(),
+            opening: Default::default(),
             error: None,
             _language: cx.observe_global_in::<crate::localization::Language>(
                 window,
@@ -128,7 +143,7 @@ impl Hosts {
             let _ = updates.send(Update::WslDistributions(result)).await;
         });
     }
-    fn choices(&self) -> Vec<RemoteHost> {
+    pub(super) fn choices(&self) -> Vec<RemoteHost> {
         self.wsl_distros
             .iter()
             .map(|distro| {
@@ -144,7 +159,13 @@ impl Hosts {
             .chain(self.snapshot.connection.management.remotes.iter().cloned())
             .collect()
     }
-    fn select(
+    pub(super) fn track_remote(&mut self, host: &RemoteHost) {
+        if let Some(distro) = host.id.strip_prefix("wsl:") {
+            self.wsl_hosts.insert(distro.into(), host.clone());
+            self.open_backgrounds();
+        }
+    }
+    pub(super) fn select(
         &mut self,
         remote: Option<RemoteHost>,
         enabled: Option<bool>,
@@ -188,12 +209,7 @@ impl Hosts {
         let updates = self.updates.clone();
         let runtime = self.runtime.clone();
         self.runtime.handle.spawn(async move {
-            match runtime
-                .sessions
-                .open(None, runtime.clone(), None)
-                .await
-                .and_then(|session| session.side(String::new()))
-            {
+            match runtime.sessions.management(runtime.clone()).await {
                 Ok(session) => {
                     StoreSession::observe(session, updates, Update::Connected, |_| Update::Snapshot)
                         .await
@@ -232,7 +248,40 @@ impl Hosts {
         });
     }
     fn receive(&mut self, update: Update, window: &mut Window, cx: &mut Context<Self>) {
+        if let Update::Background(host, _) | Update::List(host, _, _) = &update {
+            if host != "local" && !self.choices().iter().any(|choice| &choice.id == host) {
+                return;
+            }
+        }
+        let refresh_hosts = matches!(
+            &update,
+            Update::Connected(_)
+                | Update::Snapshot
+                | Update::Completed(_, _)
+                | Update::WslDistributions(_)
+        );
         match update {
+            Update::Background(host, result) => {
+                self.opening.remove(&host);
+                match result {
+                    Ok(session) => {
+                        self.background.insert(host, session);
+                    }
+                    Err(error) => self.error = Some(error),
+                }
+            }
+            Update::List(host, list, connected) => {
+                let changed = if connected {
+                    self.connected.insert(host.clone())
+                } else {
+                    self.connected.remove(&host)
+                };
+                if self.set_list(host, list) || changed {
+                    cx.emit(HostEvent::ListsChanged);
+                } else {
+                    return;
+                }
+            }
             Update::WslDistributions(result) => match result {
                 Ok(distros) => self.wsl_distros = distros,
                 Err(error) => {
@@ -243,9 +292,7 @@ impl Hosts {
                 self.busy = false;
                 match result {
                     Ok(host) => {
-                        if let Some(distro) = host.id.strip_prefix("wsl:") {
-                            self.wsl_hosts.insert(distro.into(), host.clone());
-                        }
+                        self.track_remote(&host);
                         cx.emit(match enabled {
                             Some(enabled) => HostEvent::Enabled(Some(host), enabled),
                             None => HostEvent::Selected(Some(host)),
@@ -290,74 +337,176 @@ impl Hosts {
                     _ => return,
                 }
             }
-            Update::Completed(action, result) => {
-                self.busy = false;
-                if let Some(next) = self
-                    .session
-                    .as_ref()
-                    .and_then(|session| session.pane.snapshot().ok())
-                {
-                    self.snapshot = next;
-                }
-                match result {
-                    Err(error) => self.error = Some(error),
-                    Ok(outcome) => match action {
-                        Action::Invite => {
-                            if let Some(invitation) =
-                                &self.snapshot.connection.management.invitation
-                            {
-                                let result = (|| -> Result<_, String> {
-                                    let text = serde_json::to_string(invitation)
-                                        .map_err(|error| error.to_string())?;
-                                    let text = qr_text::ascii_json(&text);
-                                    let code = qrcode::QrCode::with_error_correction_level(
-                                        text.as_bytes(),
-                                        qrcode::EcLevel::M,
-                                    )
-                                    .map_err(|error| error.to_string())?;
-                                    let svg = code
-                                        .render::<qrcode::render::svg::Color>()
-                                        .min_dimensions(320, 320)
-                                        .build();
-                                    let mut file = tempfile::Builder::new()
-                                        .prefix("agent-invitation-")
-                                        .suffix(".svg")
-                                        .tempfile()
-                                        .map_err(|error| error.to_string())?;
-                                    file.write_all(svg.as_bytes())
-                                        .map_err(|error| error.to_string())?;
-                                    Ok((text, file))
-                                })();
-                                match result {
-                                    Ok(invitation) => self.invitation = Some(invitation),
-                                    Err(error) => self.error = Some(error),
-                                }
-                            }
-                        }
-                        Action::Pair => {
-                            self.adding_remote = false;
-                            self.pairing
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                            if let Outcome::RemoteHostPaired { id } = outcome
-                                && let Some(host) = self
-                                    .snapshot
-                                    .connection
-                                    .management
-                                    .remotes
-                                    .iter()
-                                    .find(|host| host.id == id)
-                            {
-                                cx.emit(HostEvent::Selected(Some(host.clone())));
-                            }
-                        }
-                        Action::Remove(id) => cx.emit(HostEvent::Removed(id)),
-                        Action::None => {}
-                    },
-                }
-            }
+            Update::Completed(action, result) => self.completed(action, result, window, cx),
+        }
+        if refresh_hosts {
+            self.open_backgrounds();
+            cx.emit(HostEvent::ListsChanged);
         }
         cx.notify();
     }
+    fn completed(
+        &mut self,
+        action: Action,
+        result: Result<Outcome, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.busy = false;
+        if let Some(next) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.pane.snapshot().ok())
+        {
+            self.snapshot = next;
+        }
+        match result {
+            Err(error) => self.error = Some(error),
+            Ok(outcome) => match action {
+                Action::Invite => {
+                    if let Some(invitation) = &self.snapshot.connection.management.invitation {
+                        let result = (|| -> Result<_, String> {
+                            let text = serde_json::to_string(invitation)
+                                .map_err(|error| error.to_string())?;
+                            let text = qr_text::ascii_json(&text);
+                            let code = qrcode::QrCode::with_error_correction_level(
+                                text.as_bytes(),
+                                qrcode::EcLevel::M,
+                            )
+                            .map_err(|error| error.to_string())?;
+                            let svg = code
+                                .render::<qrcode::render::svg::Color>()
+                                .min_dimensions(320, 320)
+                                .build();
+                            let mut file = tempfile::Builder::new()
+                                .prefix("agent-invitation-")
+                                .suffix(".svg")
+                                .tempfile()
+                                .map_err(|error| error.to_string())?;
+                            file.write_all(svg.as_bytes())
+                                .map_err(|error| error.to_string())?;
+                            Ok((text, file))
+                        })();
+                        match result {
+                            Ok(invitation) => self.invitation = Some(invitation),
+                            Err(error) => self.error = Some(error),
+                        }
+                    }
+                }
+                Action::Pair => {
+                    self.adding_remote = false;
+                    self.pairing
+                        .update(cx, |input, cx| input.set_value("", window, cx));
+                    if let Outcome::RemoteHostPaired { id } = outcome
+                        && let Some(host) = self
+                            .snapshot
+                            .connection
+                            .management
+                            .remotes
+                            .iter()
+                            .find(|host| host.id == id)
+                    {
+                        cx.emit(HostEvent::Selected(Some(host.clone())));
+                    }
+                }
+                Action::Remove(id) => {
+                    self.background.remove(&id);
+                    self.lists.remove(&id);
+                    self.connected.remove(&id);
+                    self.opening.remove(&id);
+                    cx.emit(HostEvent::ListsChanged);
+                    cx.emit(HostEvent::Removed(id));
+                }
+                Action::None => {}
+            },
+        }
+    }
+
+    fn set_list(
+        &mut self,
+        host: String,
+        list: Option<Arc<agent_core::presentation::list::ThreadList>>,
+    ) -> bool {
+        if self.lists.get(&host).map(Arc::as_ptr) == list.as_ref().map(Arc::as_ptr) {
+            return false;
+        }
+        if let Some(list) = list {
+            self.lists.insert(host, list);
+        } else {
+            self.lists.remove(&host);
+        }
+        true
+    }
+
+    fn open_backgrounds(&mut self) {
+        let hosts = std::iter::once(("local".to_owned(), None)).chain(
+            self.choices()
+                .into_iter()
+                .filter(|host| !host.ticket.is_empty())
+                .map(|host| (host.id, Some(host.ticket))),
+        );
+        for (host, ticket) in hosts {
+            if self.background.contains_key(&host) || !self.opening.insert(host.clone()) {
+                continue;
+            }
+            let runtime = self.runtime.clone();
+            let updates = self.updates.clone();
+            self.runtime.handle.spawn(async move {
+                match runtime
+                    .sessions
+                    .open(ticket.as_deref(), runtime.clone(), None)
+                    .await
+                {
+                    Ok(session) => {
+                        let id = host.clone();
+                        StoreSession::observe(
+                            session,
+                            updates,
+                            move |result| Update::Background(id.clone(), result),
+                            move |view| {
+                                Update::List(
+                                    host.clone(),
+                                    view.list.clone(),
+                                    view.snapshot().connection.connected,
+                                )
+                            },
+                        )
+                        .await;
+                    }
+                    Err(error) => {
+                        let _ = updates.send(Update::Background(host, Err(error))).await;
+                    }
+                }
+            });
+        }
+    }
+
+    pub(super) fn connected_hosts(&self) -> std::collections::BTreeSet<String> {
+        self.connected.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_remotes(&mut self, remotes: Vec<RemoteHost>) {
+        Arc::make_mut(&mut Arc::make_mut(&mut self.snapshot).connection.management).remotes =
+            remotes;
+    }
+
+    pub(super) fn list_hosts(&self) -> Vec<String> {
+        self.lists.keys().cloned().collect()
+    }
+
+    pub(super) fn thread_list(
+        &self,
+        host: Option<&str>,
+    ) -> Option<agent_core::presentation::list::ThreadList> {
+        agent_core::presentation::connection_list::combine_connection_lists(
+            self.lists
+                .iter()
+                .filter(|(id, _)| host.is_none_or(|host| host == id.as_str()))
+                .map(|(id, list)| (id.clone(), list.as_ref().clone())),
+        )
+    }
+
     fn pair(&mut self, invitation: Invitation) {
         self.dispatch(
             Intent::PairRemoteHost(op::PairRemoteHost {

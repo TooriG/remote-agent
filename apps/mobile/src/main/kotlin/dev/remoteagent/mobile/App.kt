@@ -54,6 +54,7 @@ import kotlinx.serialization.SerializationException
 
 internal enum class Screen {
     Hosts,
+    Environment,
     Pairing,
     Threads,
     Conversation,
@@ -321,6 +322,11 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         if (!connections.containsKey(profile.id)) connect(profile, reconnect = true)
     }
 
+    fun openEnvironment(host: String) {
+        activateProfile(host)
+        screen = Screen.Environment
+    }
+
     fun setConnectionEnabled(host: String, enabled: Boolean) {
         val selected = sessions.session(host) ?: return
         if (!enabled) connections.remove(host)?.cancel()
@@ -569,7 +575,9 @@ internal fun RemoteAgentApp(
 ) {
     var settings by remember { mutableStateOf(false) }
     ObserveConnectionLifecycle(activity, model::lifecycle)
-    BackHandler(model.screen != Screen.Threads) { model.showThreads() }
+    BackHandler(model.screen != Screen.Threads) {
+        if (model.screen == Screen.Environment) model.showHosts() else model.showThreads()
+    }
     CompositionLocalProvider(
         LocalUiLanguage provides model.language,
         LocalFiles provides model.files,
@@ -614,13 +622,26 @@ private fun androidx.compose.foundation.layout.ColumnScope.AppScreenContent(
         Screen.Pairing -> PairingScreen(model.busy, model::pair, model::showThreads, requestQrScan)
         Screen.Hosts ->
             ProfilesScreen(
-                model.profiles,
-                model.connectionStates,
+                model.profiles.map { it to model.connectionStates[it.id] },
                 model::setConnectionEnabled,
                 model::removeProfile,
+                model::openEnvironment,
             ) {
                 model.screen = Screen.Pairing
             }
+        Screen.Environment -> {
+            model.profiles
+                .firstOrNull { it.id == model.connectionSelection.hostId }
+                ?.let { profile ->
+                    EnvironmentSettingsScreen(
+                        profile,
+                        model.snapshot,
+                        model::setConnectionEnabled,
+                        model::perform,
+                        model::showHosts,
+                    )
+                }
+        }
         Screen.Threads -> {
             ErrorNotices(model.projectNotices, model::perform)
             ThreadListScreen(

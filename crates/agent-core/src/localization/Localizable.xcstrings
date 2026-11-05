@@ -19664,6 +19664,22 @@
           }
         }
       }
+    },
+    "プロバイダー": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Providers"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロバイダー"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

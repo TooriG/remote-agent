@@ -3,17 +3,22 @@ use super::*;
 fn action(
     label: impl Into<SharedString>,
     owner: WeakEntity<Desktop>,
+    host: String,
     intent: Intent,
 ) -> PopupMenuItem {
     PopupMenuItem::new(label).on_click(move |_, _, cx| {
         let _ = owner.update(cx, |s, cx| {
-            s.dispatch(intent.clone());
+            s.dispatch_host(&host, intent.clone(), cx);
             cx.notify();
         });
     })
 }
 
-pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> impl IntoElement {
+pub(super) fn project_menu_button(
+    host: String,
+    id: String,
+    owner: WeakEntity<Desktop>,
+) -> impl IntoElement {
     Button::new("project-menu")
         .icon(IconName::Ellipsis)
         .xsmall()
@@ -25,8 +30,13 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
                 return menu;
             };
             let state = entity.read(cx);
-            let local = state.remote.is_none();
-            let Some(list) = state.snapshot.thread_list() else {
+            let local = host == "local" || (host.is_empty() && state.remote.is_none());
+            let snapshot = match state.connection_store(&host, cx) {
+                Some(store) => store.snapshot(),
+                None if host.is_empty() => state.snapshot.clone(),
+                None => return menu,
+            };
+            let Some(list) = snapshot.thread_list() else {
                 return menu;
             };
             let Some(project) = list.projects.iter().find(|p| p.id == id) else {
@@ -39,6 +49,7 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
                     "ピン留め"
                 },
                 owner.clone(),
+                host.clone(),
                 Intent::SetProjectPinned {
                     project_id: id.clone(),
                     pinned: !project.pinned,
@@ -46,10 +57,11 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
             ));
             let target = owner.clone();
             let edit_id = id.clone();
+            let edit_host = host.clone();
             menu = menu
                 .item(PopupMenuItem::new("編集").on_click(move |_, window, cx| {
                     let _ = target.update(cx, |s, cx| {
-                        s.edit_project(&edit_id, window, cx);
+                        s.edit_project(&edit_host, &edit_id, window, cx);
                         cx.notify();
                     });
                 }))
@@ -64,11 +76,13 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
             let target = owner.clone();
             let section_id = id.clone();
             let current = project.section.clone();
+            let section_host = host.clone();
             menu = menu.submenu("セクション", window, cx, move |mut menu, _, _| {
                 menu = menu.item(
                     action(
                         "未分類",
                         target.clone(),
+                        section_host.clone(),
                         Intent::SetProjectSection {
                             project_id: section_id.clone(),
                             section: String::new(),
@@ -81,6 +95,7 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
                         action(
                             section.clone(),
                             target.clone(),
+                            section_host.clone(),
                             Intent::SetProjectSection {
                                 project_id: section_id.clone(),
                                 section: section.clone(),
@@ -91,10 +106,11 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
                 }
                 let target = target.clone();
                 let edit_id = section_id.clone();
+                let edit_host = section_host.clone();
                 menu.item(
                     PopupMenuItem::new("新しいセクション…").on_click(move |_, window, cx| {
                         let _ = target.update(cx, |s, cx| {
-                            s.edit_project(&edit_id, window, cx);
+                            s.edit_project(&edit_host, &edit_id, window, cx);
                             cx.notify();
                         });
                     }),
@@ -106,6 +122,7 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
                 .map(|r| r.path.clone())
                 .collect::<Vec<_>>();
             let target = owner.clone();
+            let folder_host = host.clone();
             if roots.len() == 1 {
                 let path = roots[0].clone();
                 menu = menu.item(
@@ -117,7 +134,7 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
                     .disabled(!local)
                     .on_click(move |_, _, cx| {
                         let _ = target.update(cx, |s, cx| {
-                            s.open_project_folder(&path);
+                            s.open_project_folder(&folder_host, &path);
                             cx.notify();
                         });
                     }),
@@ -131,11 +148,12 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
                         for path in &roots {
                             let target = target.clone();
                             let path = path.clone();
+                            let folder_host = folder_host.clone();
                             menu = menu.item(
                                 PopupMenuItem::new(path.clone()).disabled(!local).on_click(
                                     move |_, _, cx| {
                                         let _ = target.update(cx, |s, cx| {
-                                            s.open_project_folder(&path);
+                                            s.open_project_folder(&folder_host, &path);
                                             cx.notify();
                                         });
                                     },
@@ -149,6 +167,7 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
             menu = menu.separator().item(action(
                 "チャットをアーカイブ",
                 owner.clone(),
+                host.clone(),
                 Intent::ArchiveProjectChats {
                     project_id: id.clone(),
                     before: chrono::Utc::now().timestamp(),
@@ -158,6 +177,7 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
                 menu = menu.item(action(
                     "アーカイブしたチャットを戻す",
                     owner.clone(),
+                    host.clone(),
                     Intent::RestoreProjectChats {
                         project_id: id.clone(),
                     },
@@ -166,6 +186,7 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
             menu.separator().item(action(
                 "プロジェクトを一覧から削除",
                 owner.clone(),
+                host.clone(),
                 Intent::SetProjectHidden {
                     project_id: id.clone(),
                     hidden: true,
@@ -175,9 +196,14 @@ pub(super) fn project_menu_button(id: String, owner: WeakEntity<Desktop>) -> imp
 }
 
 impl Desktop {
-    fn edit_project(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn edit_project(&mut self, host: &str, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let language = crate::localization::language(cx);
-        let Some(list) = self.snapshot.thread_list() else {
+        let snapshot = match self.connection_store(host, cx) {
+            Some(store) => store.snapshot(),
+            None if host.is_empty() => self.snapshot.clone(),
+            None => return,
+        };
+        let Some(list) = snapshot.thread_list() else {
             return;
         };
         let Some(project) = list.projects.iter().find(|p| p.id == id) else {
@@ -185,7 +211,8 @@ impl Desktop {
         };
         self.project_editor = Some(ProjectEditor {
             id: id.into(),
-            scope: self.snapshot.connection.storage_scope.clone(),
+            host: host.into(),
+            scope: snapshot.connection.storage_scope.clone(),
             name: cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(project.name.clone())
@@ -208,7 +235,11 @@ impl Desktop {
             .child(h_flex().gap_2()
                 .child(Button::new("save-project").label(language.text("保存")).primary().on_click(cx.listener(move |s, _, _, cx| {
                     let editor = s.project_editor.as_ref().unwrap();
-                    if editor.scope != s.snapshot.connection.storage_scope {
+                    let same_scope = match s.connection_store(&editor.host, cx) {
+                        Some(store) => editor.scope == store.snapshot().connection.storage_scope,
+                        None => editor.host.is_empty() && editor.scope == s.snapshot.connection.storage_scope,
+                    };
+                    if !same_scope {
                         s.set_error(language.text("接続先が変わりました。プロジェクトを開き直してください").into());
                         s.project_editor = None; cx.notify(); return;
                     }
@@ -217,7 +248,7 @@ impl Desktop {
                     if name.trim().is_empty() || name.trim().chars().count()>100 || section.trim().chars().count()>60 {
                         s.set_error(language.text("表示名は1〜100文字、セクションは60文字以内で入力してください").into());
                     } else {
-                        s.dispatch(Intent::EditProject { project_id: editor.id.clone(), name, section });
+                        s.dispatch_host(&editor.host, Intent::EditProject { project_id: editor.id.clone(), name, section }, cx);
                         s.project_editor = None;
                     }
                     cx.notify();
@@ -228,8 +259,8 @@ impl Desktop {
             .child(self.error_notices(ErrorScope::Projects, cx))
             .into_any_element()
     }
-    fn open_project_folder(&mut self, path: &str) {
-        if self.remote.is_some() {
+    fn open_project_folder(&mut self, host: &str, path: &str) {
+        if host != "local" && (!host.is_empty() || self.remote.is_some()) {
             self.set_error("接続先のフォルダはこの端末では開けません".into());
             return;
         }

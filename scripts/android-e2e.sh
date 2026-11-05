@@ -112,10 +112,10 @@ prepare_pairing() {
 if [[ $mode == all ]]; then
 prepare_pairing
 adb -P "$server_port" -s "$serial" shell am instrument -w -r -e cwd "$fixture/host/project" \
-    -e class dev.remoteagent.mobile.StorePersistenceTest,dev.remoteagent.mobile.ConversationRecoveryTest,dev.remoteagent.mobile.MarkdownTableTest,dev.remoteagent.mobile.ConversationNavigationTest,dev.remoteagent.mobile.ThreadListTest,dev.remoteagent.mobile.ComposerControlsTest \
+    -e class dev.remoteagent.mobile.StorePersistenceTest,dev.remoteagent.mobile.ConversationRecoveryTest,dev.remoteagent.mobile.MarkdownTableTest,dev.remoteagent.mobile.ConversationNavigationTest,dev.remoteagent.mobile.ThreadListTest,dev.remoteagent.mobile.ComposerControlsTest,dev.remoteagent.mobile.EnvironmentSettingsTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.store.log"
 adb -P "$server_port" -s "$serial" exec-out screencap -p >"$log.final.png"
-grep -qx 'OK (14 tests)' "$log.store.log"
+grep -qx 'OK (15 tests)' "$log.store.log"
 # Each paired test gets a fresh single-use invitation and isolated credentials.
 
 prepare_pairing

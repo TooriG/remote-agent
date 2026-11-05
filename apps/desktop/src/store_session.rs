@@ -52,9 +52,49 @@ type HostEntry = Arc<tokio::sync::Mutex<Option<Arc<HostSession>>>>;
 pub(crate) struct Sessions {
     hosts: Mutex<std::collections::BTreeMap<String, HostEntry>>,
     local_node: std::sync::OnceLock<agent_transport::transport::NodeId>,
+    management: tokio::sync::OnceCell<Arc<HostSession>>,
     stop: CancellationToken,
 }
 impl Sessions {
+    #[cfg(test)]
+    pub(crate) fn install_fixture(
+        &self,
+        id: &str,
+        store: Arc<Store>,
+        runtime: Runtime,
+    ) -> StoreSession {
+        let session = StoreSession::new(store, runtime);
+        self.hosts.lock().unwrap().insert(
+            id.into(),
+            Arc::new(tokio::sync::Mutex::new(Some(session.host.clone()))),
+        );
+        session
+    }
+
+    pub(crate) async fn management(&self, runtime: Runtime) -> Result<StoreSession, String> {
+        if self.stop.is_cancelled() {
+            return Err("sessions are closed".into());
+        }
+        let owner = self
+            .management
+            .get_or_try_init(|| async {
+                let store = runtime
+                    .connections
+                    .connect(None, agent_core::state::Snapshot::default())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok::<_, String>(StoreSession::new(store, runtime).host.clone())
+            })
+            .await?;
+        if self.stop.is_cancelled() {
+            if let Some(close) = owner.close() {
+                let _ = close.await;
+            }
+            return Err("sessions are closed".into());
+        }
+        Ok(StoreSession::primary(owner.clone()))
+    }
+
     pub(crate) fn remove(
         &self,
         host: &str,
@@ -145,11 +185,7 @@ impl Sessions {
             if !owner.store.snapshot().connection.connected
                 && owner.store.snapshot().connection_enabled()
             {
-                runtime
-                    .connections
-                    .resume(&owner.store, remote)
-                    .await
-                    .map_err(|error| format!("{error:#}"))?;
+                let _ = runtime.connections.resume(&owner.store, remote).await;
             }
             return Ok(StoreSession::primary(owner.clone()));
         }
@@ -184,11 +220,14 @@ impl Sessions {
             .thread_id
             .is_none()
             .then(|| snapshot.pane.navigation.cwd.clone());
-        let store = runtime
-            .connections
-            .connect(remote, snapshot)
-            .await
-            .map_err(|error| format!("{error:#}"))?;
+        let store = match runtime.connections.connect(remote, snapshot.clone()).await {
+            Ok(store) => store,
+            Err(error) => {
+                snapshot.connection.connected = false;
+                snapshot.connection.connection_failure = Some(format!("{error:#}"));
+                Arc::new(Store::offline(snapshot))
+            }
+        };
         if let Some(cwd) = cwd {
             drop(store.dispatch(agent_core::state::Intent::NewChat { cwd }));
         }
@@ -211,6 +250,11 @@ impl Sessions {
             {
                 closes.push(close);
             }
+        }
+        if let Some(owner) = self.management.get()
+            && let Some(close) = owner.close()
+        {
+            closes.push(close);
         }
         for close in closes {
             let _ = close.await;
@@ -563,6 +607,7 @@ mod tests {
         runtime.sessions.close().await;
         assert!(primary.pane.snapshot().is_err());
         assert!(side.pane.snapshot().is_err());
+        assert!(runtime.sessions.management(runtime.clone()).await.is_err());
         assert!(
             runtime
                 .sessions
