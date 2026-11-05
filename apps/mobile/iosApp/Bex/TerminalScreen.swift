@@ -136,6 +136,15 @@ private final class HostTerminalView: SwiftTerm.TerminalView {
     @TaskLocal private nonisolated static var isPasting = false
     var copyTitle = "コピー"
 
+    override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        // SwiftTerm installs its own pan gesture for selection handles. Let it
+        // receive drags while a selection is active instead of scrolling.
+        if gesture === panGestureRecognizer, hasActiveSelection {
+            return false
+        }
+        return super.gestureRecognizerShouldBegin(gesture)
+    }
+
     @objc func selectTextOnLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .ended else { return }
         // Seed the selection position through SwiftTerm's public menu API.
