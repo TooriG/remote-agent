@@ -122,8 +122,8 @@ export async function distributeBuild(request, appId, buildId, groupName, notes,
     try {
       await request('/v1/betaAppReviewSubmissions', { method: 'POST', data: { data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: buildId } } } } } });
     } catch (error) {
-      // Apple limits concurrent beta reviews and submissions per day. The
-      // hosted release reconciler retries the latest candidate after capacity returns.
+      // Apple limits concurrent beta reviews and submissions per day. App
+      // Review can proceed independently while TestFlight submission waits.
       if (error.status === 409 || error.status === 429) return 'Waiting for TestFlight review capacity';
       throw error;
     }
