@@ -499,35 +499,39 @@ impl Snapshot {
                     }
                 }
             }
-            let statuses: std::collections::BTreeMap<_, _> = state
-                .statuses
-                .iter()
-                .map(|(id, status)| (id, status))
-                .collect();
-            let changed = |page: &crate::models::ThreadList| {
-                page.data.iter().any(|thread| {
-                    thread
-                        .id
-                        .as_ref()
-                        .and_then(|id| statuses.get(id))
-                        .is_some_and(|status| thread.status != **status)
-                })
-            };
-            let update = |page: &mut Arc<crate::models::ThreadList>| {
-                if changed(page) {
-                    for thread in &mut Arc::make_mut(page).data {
-                        if let Some(status) = thread.id.as_ref().and_then(|id| statuses.get(id)) {
-                            thread.status = **status;
+            if !state.statuses.is_empty() {
+                let statuses: BTreeMap<_, _> = state
+                    .statuses
+                    .iter()
+                    .map(|(id, status)| (id, *status))
+                    .collect();
+                if let Some(page) = &mut self.threads
+                    && let Some(first) = first_status_change(&page.data, &statuses)
+                {
+                    let page = Arc::make_mut(page);
+                    page.data =
+                        updated_status_rows(std::mem::take(&mut page.data), first, &statuses);
+                }
+                let updates: Vec<_> = self
+                    .project_threads
+                    .values()
+                    .map(|page| first_status_change(&page.data, &statuses))
+                    .collect();
+                if updates.iter().any(Option::is_some) {
+                    // Cloning this BTreeMap preserves its keys and iteration order.
+                    for (page, index) in Arc::make_mut(&mut self.project_threads)
+                        .values_mut()
+                        .zip(updates)
+                    {
+                        if let Some(index) = index {
+                            let page = Arc::make_mut(page);
+                            page.data = updated_status_rows(
+                                std::mem::take(&mut page.data),
+                                index,
+                                &statuses,
+                            );
                         }
                     }
-                }
-            };
-            if let Some(page) = &mut self.threads {
-                update(page);
-            }
-            if self.project_threads.values().any(|page| changed(page)) {
-                for page in Arc::make_mut(&mut self.project_threads).values_mut() {
-                    update(page);
                 }
             }
             let previous = self
@@ -558,6 +562,33 @@ impl Snapshot {
         }
         Vec::new()
     }
+}
+
+fn first_status_change(
+    rows: &[Thread],
+    statuses: &BTreeMap<&SessionRef, crate::models::SessionStatus>,
+) -> Option<usize> {
+    rows.iter().position(|thread| {
+        thread
+            .id
+            .as_ref()
+            .and_then(|id| statuses.get(id))
+            .is_some_and(|status| thread.status != *status)
+    })
+}
+
+fn updated_status_rows(
+    mut rows: Vec<Thread>,
+    index: usize,
+    statuses: &BTreeMap<&SessionRef, crate::models::SessionStatus>,
+) -> Vec<Thread> {
+    // The prefix was already verified before the owner copied the page.
+    for thread in &mut rows[index..] {
+        if let Some(status) = thread.id.as_ref().and_then(|id| statuses.get(id)) {
+            thread.status = *status;
+        }
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -1375,6 +1406,130 @@ mod tests {
             .is_empty()
         );
     }
+    #[test]
+    fn activity_statuses_keep_page_metadata_last_duplicate_and_provider_identity() {
+        use crate::models::SessionStatus;
+        use agent_protocol::live_activity::{TaskActivityState, TaskActivitySummary};
+        let codex = SessionRef::new(ProviderKind::Codex, "same".into()).unwrap();
+        let claude = SessionRef::new(ProviderKind::Claude, "same".into()).unwrap();
+        let last = SessionRef::new(ProviderKind::Codex, "last".into()).unwrap();
+        for status in [
+            SessionStatus::Unknown,
+            SessionStatus::Preparing,
+            SessionStatus::Running,
+            SessionStatus::Idle,
+        ] {
+            let root=Arc::new(serde_json::from_value::<ThreadList>(json!({
+                "revision":99,"limit":3,"hasMore":true,"hasMoreProjects":true,
+                "projects":[{"id":"project","name":"Project","roots":[]}],"projectPages":{},
+                "data":[
+                    {"name":"No identity","status":"unknown"},
+                    {"id":codex,"name":"Kept prefix","status":"idle","preview":"prefix","cwd":"/prefix","gitBranch":"branch","updatedAt":1},
+                    {"id":claude,"name":"First change","status":"running","preview":"middle","cwd":"/middle","updatedAt":2},
+                    {"id":last,"name":"Suffix change","status":"idle","preview":"suffix","cwd":"/suffix","updatedAt":3}
+                ]
+            })).unwrap());
+            let mut unchanged = root.as_ref().clone();
+            unchanged.data.truncate(2);
+            let unchanged = Arc::new(unchanged);
+            let state = Snapshot {
+                threads: Some(root.clone()),
+                project_threads: Arc::new(
+                    [
+                        ("matching".into(), root.clone()),
+                        ("z-matching".into(), root.clone()),
+                        ("a-unchanged".into(), unchanged.clone()),
+                    ]
+                    .into(),
+                ),
+                ..Default::default()
+            };
+            let incoming = TaskActivityState {
+                revision: 1,
+                waiting: vec![],
+                display: TaskActivitySummary::default().display(),
+                unread: vec![],
+                statuses: vec![
+                    (codex.clone(), SessionStatus::Running),
+                    (claude.clone(), SessionStatus::Idle),
+                    (last.clone(), status),
+                    (codex.clone(), SessionStatus::Idle),
+                ],
+            };
+            let (next, effects) = notification(
+                &state,
+                Notification::TaskActivity {
+                    state: incoming.clone(),
+                },
+            );
+            assert!(effects.is_empty());
+            let mut expected = root.as_ref().clone();
+            expected.data[2].status = SessionStatus::Idle;
+            expected.data[3].status = status;
+            assert_eq!(next.threads.as_ref().unwrap().as_ref(), &expected);
+            assert_eq!(next.project_threads["matching"].as_ref(), &expected);
+            assert_eq!(next.project_threads["z-matching"].as_ref(), &expected);
+            assert!(Arc::ptr_eq(
+                &next.project_threads["a-unchanged"],
+                &unchanged
+            ));
+            assert_eq!(root.data[2].status, SessionStatus::Running);
+            assert!(!next.activity.active[&codex]);
+            assert!(!next.activity.active[&claude]);
+            assert_eq!(
+                next.activity.active.get(&last).copied(),
+                match status {
+                    SessionStatus::Preparing | SessionStatus::Running => Some(true),
+                    SessionStatus::Idle => Some(false),
+                    _ => None,
+                }
+            );
+            let (same, effects) = notification(
+                &next,
+                Notification::TaskActivity {
+                    state: TaskActivityState {
+                        revision: 2,
+                        ..incoming
+                    },
+                },
+            );
+            assert!(effects.is_empty());
+            assert!(Arc::ptr_eq(
+                same.threads.as_ref().unwrap(),
+                next.threads.as_ref().unwrap()
+            ));
+            assert!(Arc::ptr_eq(&same.project_threads, &next.project_threads));
+            let empty = TaskActivityState {
+                revision: 3,
+                waiting: vec![],
+                display: TaskActivitySummary {
+                    running: 2,
+                    ..Default::default()
+                }
+                .display(),
+                unread: vec![],
+                statuses: vec![],
+            };
+            let (empty, effects) = notification(&same, Notification::TaskActivity { state: empty });
+            assert!(effects.is_empty());
+            assert!(Arc::ptr_eq(
+                empty.threads.as_ref().unwrap(),
+                same.threads.as_ref().unwrap()
+            ));
+            assert!(Arc::ptr_eq(&empty.project_threads, &same.project_threads));
+            assert!(Arc::ptr_eq(&empty.activity, &same.activity));
+            assert_eq!(empty.task_activity.as_ref().unwrap().revision, 3);
+            assert_eq!(
+                empty.task_activity_display().unwrap(),
+                TaskActivitySummary {
+                    running: 2,
+                    ..Default::default()
+                }
+                .display()
+            );
+        }
+    }
+
     #[test]
     fn summary_insert_search_keeps_trimmed_unicode_matching_and_project_routes() {
         for (search, name, matches) in [
