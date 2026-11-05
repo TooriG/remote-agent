@@ -55,10 +55,11 @@ jobs:
         env:
           AGENT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.BEX_ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          nix develop . --command ./gradlew \
+          # AGP 9 creates debug unit tests by default; explicitly enable the release test component.
+          nix develop . --command ./gradlew -Pandroid.onlyEnableUnitTestForTheTestedBuildType=false \
             :apps:mobile:testReleaseUnitTest :apps:mobile:lintRelease :apps:mobile:assembleRelease \
             --no-daemon --max-workers=4 --build-cache --console=plain || {
-              cat apps/mobile/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt 2>/dev/null || true
+              cat apps/mobile/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt 2>/dev/null || true
               exit 1
             }
       - name: Retain Android verification reports
