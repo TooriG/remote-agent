@@ -5,10 +5,10 @@ import XCTest
 extension LaunchUITests {
     func testSimulatorReopensRunningLongHistoryWithoutBlankViewport() throws {
         let app = try connectedSimulatorApp()
-        try useSimulatorListFixture("long-conversation")
+        let conversationId = try useSimulatorConversationFixture("long-conversation")
         app.terminate(); app.launch()
         expandSimulatorProject(app)
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-long-history"]
+        let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
         let latest = app.descendants(matching: .any)["item.long-14-0"]
         XCTAssertTrue(latest.waitForExistence(timeout: 20))
@@ -32,11 +32,11 @@ extension LaunchUITests {
             throw XCTSkip("Simulator-only isolated scroll-position fixture")
         #endif
         let app = try connectedSimulatorApp()
-        try useSimulatorListFixture("long-conversation")
+        let conversationId = try useSimulatorConversationFixture("long-conversation")
         app.terminate(); app.launch()
         expandSimulatorProject(app)
 
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-long-history"]
+        let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
         let detail = app.descendants(matching: .any)["task.detail"]
         XCTAssertTrue(detail.waitForExistence(timeout: 30))
@@ -47,7 +47,8 @@ extension LaunchUITests {
         let send = app.buttons["task.send"]
         XCTAssertTrue(send.waitForExistence(timeout: 10)); send.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(prefixedButton(app, prefix: "turn.interrupt.").waitForExistence(timeout: 10))
+        let running = prefixedButton(app, prefix: "turn.interrupt.")
+        XCTAssertTrue(running.waitForExistence(timeout: 10))
         let initialDetailValue = detail.value as? String ?? ""
         XCTAssertFalse(initialDetailValue.isEmpty)
 
@@ -74,10 +75,16 @@ extension LaunchUITests {
 
         let updated = expectation(for: NSPredicate(format: "value != %@", initialDetailValue), evaluatedWith: detail)
         wait(for: [updated], timeout: 30)
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 20))
+        // The completed answer is below this detached viewport and is deliberately not materialized.
+        // Observe completion through the visible composer, then verify the same reading position.
+        XCTAssertTrue(running.waitForNonExistence(timeout: 20))
         captureScreen(app, named: "Small older scroll remains detached after live update")
         XCTAssertEqual(anchor.frame.minY, readingPosition, accuracy: 3,
                        "Receiving new items must preserve the visible message position")
+        if latestButton.exists {
+            latestButton.tap()
+        }
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 20))
     }
 
     func testSimulatorKeepsResponsesFromRepeatedTurnIDsWhenReopeningHistory() throws {

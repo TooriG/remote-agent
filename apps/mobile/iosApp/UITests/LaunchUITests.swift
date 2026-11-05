@@ -81,6 +81,14 @@ final class LaunchUITests: XCTestCase {
         try simulatorFixture(path)
     }
 
+    func useSimulatorConversationFixture(_ kind: String) throws -> String {
+        // The Host deliberately retains imported transcripts. Each test owns a new conversation,
+        // while reopening it within the same test must retain that test's submitted turns.
+        let id = "fixture-history-\(UUID().uuidString)"
+        try useSimulatorListFixture("\(kind)/\(id)")
+        return id
+    }
+
     func connectedSimulatorApp(expandProject: Bool = true) throws -> XCUIApplication {
         var app = XCUIApplication()
         if app.state != .notRunning {

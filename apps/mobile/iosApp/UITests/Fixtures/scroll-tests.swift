@@ -10,6 +10,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
                      didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         Task {
             await checkRecyclingAndAnchoring()
+            await checkDetachedTail()
             await checkFollowingTallRows()
             await checkWrappedRows()
             await checkShortHistory()
@@ -60,26 +61,20 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         }
         return attributes.frame.minY - view.contentOffset.y
     }
+}
 
+extension ConversationScrollTests {
     private func checkRecyclingAndAnchoring() async {
         let scroll = ConversationScrollState()
         let controller = ConversationListController(scroll: scroll)
         mount(controller)
         let ids = (0 ..< 10000).map { ConversationList.RowID.message(String($0)) }
         var built = 0
-        var heights = [String: CGFloat]()
         func update(_ rows: [ConversationList.RowID]) {
-            let sizes = heights
             controller.update(ids: rows, following: scroll.following, request: scroll.request,
                               accessibilityValue: "items=\(rows.count)") { index in
                 built += 1
-                let id = rows[index]
-                let height: CGFloat = if case let .message(key) = id {
-                    sizes[key] ?? 72
-                } else {
-                    40
-                }
-                return AnyView(Text(String(describing: id)).frame(maxWidth: .infinity).frame(height: height))
+                return AnyView(Text(String(describing: rows[index])).frame(maxWidth: .infinity).frame(height: 72))
             }
         }
         update(ids)
@@ -106,12 +101,48 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         update(prepended)
         await layout(controller)
         check(abs(position(550, in: controller) - anchor) < 1, "A prepend must preserve the same row and pixel")
-        heights["9999"] = 1200
-        update(prepended)
+        update(prepended + [.message("appended")])
         await layout(controller)
-        check(abs(position(550, in: controller) - anchor) < 1, "Detached readers must ignore tail growth")
+        check(
+            abs(position(550, in: controller) - anchor) < 1,
+            "Appending rows must preserve the detached reading point"
+        )
         check(built < 300, "Prepending must not eagerly create the history")
         check(controller.children.count < 40, "Offscreen cells must detach their child controllers")
+    }
+
+    private func checkDetachedTail() async {
+        let scroll = ConversationScrollState()
+        let controller = ConversationListController(scroll: scroll)
+        mount(controller)
+        var ids = [ConversationList.RowID.message("first"), .message("last")]
+        func update(_ height: CGFloat) {
+            controller.update(ids: ids, following: scroll.following, request: scroll.request,
+                              accessibilityValue: "") { index in
+                AnyView(Text("Message").frame(height: index == 0 ? 72 : height))
+            }
+        }
+        update(800)
+        await layout(controller)
+        let view = controller.collectionView
+        controller.scrollViewWillBeginDragging(view)
+        view.contentOffset.y -= 25
+        await layout(controller)
+        controller.scrollViewDidEndDecelerating(view)
+        let reading = position(1, in: controller)
+        check(!scroll.following && scroll.latestVisible, "A small older drag detaches within the latest marker")
+        update(1000)
+        await layout(controller)
+        check(abs(view.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))!.size.height - 1000) < 1,
+              "Detached-tail growth must actually remeasure the visible cell")
+        check(abs(position(1, in: controller) - reading) < 1, "Tail growth must preserve the detached reading point")
+        ids.append(.message("appended"))
+        update(1000)
+        await layout(controller)
+        check(
+            abs(position(1, in: controller) - reading) < 1,
+            "New rows must preserve a reader detached near the bottom"
+        )
     }
 
     private func checkFollowingTallRows() async {
@@ -152,7 +183,9 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         check(controller.scrollViewShouldScrollToTop(view) && !scroll.following,
               "Status-bar navigation must detach before UIKit scrolls")
     }
+}
 
+extension ConversationScrollTests {
     private func checkShortHistory() async {
         let scroll = ConversationScrollState()
         let controller = ConversationListController(scroll: scroll)

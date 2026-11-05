@@ -8,10 +8,10 @@ extension LaunchUITests {
             throw XCTSkip("Simulator-only isolated long-history fixture")
         #endif
         let app = try connectedSimulatorApp()
-        try useSimulatorListFixture("long-conversation")
+        let conversationId = try useSimulatorConversationFixture("long-conversation")
         app.terminate(); app.launch()
         expandSimulatorProject(app)
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-long-history"]
+        let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
         let detail = app.descendants(matching: .any)["task.detail"]
         XCTAssertTrue(detail.waitForExistence(timeout: 30))
@@ -77,10 +77,10 @@ extension LaunchUITests {
 
     func testSimulatorLoadsEarlierHistoryOnTapAtTheReadingPosition() throws {
         let app = try connectedSimulatorApp()
-        try useSimulatorListFixture("viewport-conversation")
+        let conversationId = try useSimulatorConversationFixture("viewport-conversation")
         app.terminate(); app.launch()
         expandSimulatorProject(app)
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-viewport-history"]
+        let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
         let detail = app.descendants(matching: .any)["task.detail"]
         XCTAssertTrue(detail.waitForExistence(timeout: 30))

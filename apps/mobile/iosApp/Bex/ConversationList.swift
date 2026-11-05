@@ -77,7 +77,7 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
 
     init(scroll: ConversationScrollState) {
         self.scroll = scroll
-        let layout = ConversationListLayout()
+        let layout = ConversationListLayout.make()
         self.layout = layout
         let collection = ConversationCollectionView(frame: .zero, collectionViewLayout: layout)
         collectionView = collection
@@ -213,7 +213,7 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
         publishVisibility()
     }
 
-    /// Intrinsic-content updates do not necessarily use flow layout's target-offset hook.
+    /// Intrinsic-content updates do not necessarily use the layout's target-offset hook.
     /// Follow the measured bottom after UIKit has laid out the actual cells.
     private func positionViewport() {
         guard !applying, !source.ids.isEmpty,

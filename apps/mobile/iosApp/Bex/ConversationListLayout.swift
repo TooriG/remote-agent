@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// Native layout owns pixel anchoring, including self-sizing changes above a detached reader.
-final class ConversationListLayout: UICollectionViewFlowLayout {
+final class ConversationListLayout: UICollectionViewCompositionalLayout {
     struct Anchor {
         let id: ConversationList.RowID
         /// Relative to the usable viewport, so UIKit's automatic safe-area offset adjustment preserves the anchor.
@@ -13,37 +13,22 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
     var indexPath: (ConversationList.RowID) -> IndexPath? = { _ in nil }
     private var alignment: CGFloat = 0
 
-    override init() {
-        super.init()
-        minimumLineSpacing = 12
-        minimumInteritemSpacing = 0
-        sectionInset = UIEdgeInsets(top: 6, left: 16, bottom: 6, right: 16)
-    }
-
-    @available(*, unavailable)
-    required init?(coder _: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    static func make() -> ConversationListLayout {
+        let size = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .estimated(100))
+        let item = NSCollectionLayoutItem(layoutSize: size)
+        let group = NSCollectionLayoutGroup.vertical(layoutSize: size, subitems: [item])
+        let section = NSCollectionLayoutSection(group: group)
+        section.interGroupSpacing = 12
+        section.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
+        return ConversationListLayout(section: section)
     }
 
     override func prepare() {
-        if let collectionView {
-            let insets = collectionView.adjustedContentInset
-            let width = max(1, collectionView.bounds.width - insets.left - insets.right
-                - sectionInset.left - sectionInset.right)
-            if estimatedItemSize.width != width {
-                estimatedItemSize = CGSize(width: width, height: 100)
-                // A new estimate alone retains offscreen cells' previously measured widths.
-                let context = UICollectionViewFlowLayoutInvalidationContext()
-                context.invalidateFlowLayoutDelegateMetrics = true
-                context.invalidateFlowLayoutAttributes = true
-                super.invalidateLayout(with: context)
-            }
-        }
         super.prepare()
         guard let collectionView else { return }
         let insets = collectionView.adjustedContentInset
         let viewport = collectionView.bounds.height - insets.top - insets.bottom
-        // Changing flow metrics here discards self-sizing measurements and creates a layout loop.
+        // Changing section metrics here discards self-sizing measurements and creates a layout loop.
         // Alignment translates the measured geometry without invalidating those measurements.
         alignment = max(0, viewport - super.collectionViewContentSize.height)
     }
@@ -100,10 +85,6 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
                 + collectionView.adjustedContentInset.top)
         context.contentOffsetAdjustment.y = shift + (above ? delta : 0)
         return context
-    }
-
-    override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
-        newBounds.size != collectionView?.bounds.size || super.shouldInvalidateLayout(forBoundsChange: newBounds)
     }
 
     func bottomOffset(in scroll: UIScrollView) -> CGFloat {

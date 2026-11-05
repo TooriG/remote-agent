@@ -148,6 +148,17 @@ fn route(
         set_worktree_access(&root.join(format!("{name}-worktree")), readable)?;
         return Ok((204, Vec::new()));
     }
+    if let Some((kind @ ("/long-conversation" | "/viewport-conversation"), id)) =
+        path.rsplit_once('/')
+    {
+        write_json(
+            root.join("list-fixture.json"),
+            &json!([{"id":id,"fixtureHistory":if kind == "/viewport-conversation" { "viewport" } else { "long" },
+                "cwd":root.join("project"),"name":"Long conversation",
+                "createdAt":10000,"updatedAt":10000,"status":{"type":"notLoaded"},"historyMode":"paginated"}]),
+        )?;
+        return Ok((204, Vec::new()));
+    }
     match path {
         "/uploads/unavailable" | "/uploads/restore" => {
             set_upload_storage_available(root, path == "/uploads/restore")?;
@@ -172,13 +183,6 @@ fn route(
                  "status":"completed","aggregatedOutput":crate::fixture::history::detail_output(),"exitCode":0},
                 {"id":"fixture-final-persisted","type":"agentMessage","phase":"final_answer","text":"Persisted history complete."}
             ]}]}]),
-        )?,
-        "/long-conversation" | "/viewport-conversation" => write_json(
-            root.join("list-fixture.json"),
-            &json!([{
-            "id":if path == "/viewport-conversation" { "fixture-viewport-history" } else { "fixture-long-history" },
-            "cwd":root.join("project"),"name":"Long conversation",
-            "createdAt":10000,"updatedAt":10000,"status":{"type":"notLoaded"},"historyMode":"paginated"}]),
         )?,
         "/release-inputs" => {
             OpenOptions::new()
@@ -492,9 +496,7 @@ fn write_json(path: PathBuf, value: &impl serde::Serialize) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn upload_storage_controls_fail_and_recover_without_touching_the_checkout() {
-        // File controls must work without connecting to the fixture's RPC peer.
+    fn isolated_control_peer() -> (tokio::runtime::Runtime, Ticket, Identity) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -505,6 +507,48 @@ mod tests {
                 .to_string()
                 .parse()
                 .unwrap();
+        (runtime, ticket, identity)
+    }
+
+    #[test]
+    fn history_scenarios_are_seeded_with_their_own_identity() {
+        let (runtime, ticket, identity) = isolated_control_peer();
+        let root = tempfile::tempdir().unwrap();
+        for (path, id, kind) in [
+            ("/long-conversation/scenario-a", "scenario-a", "long"),
+            ("/long-conversation/scenario-b", "scenario-b", "long"),
+            (
+                "/viewport-conversation/scenario-c",
+                "scenario-c",
+                "viewport",
+            ),
+        ] {
+            assert_eq!(
+                route(
+                    root.path(),
+                    &runtime,
+                    &ticket,
+                    &identity,
+                    &Method::Post,
+                    path
+                )
+                .unwrap()
+                .0,
+                204
+            );
+            let rows: serde_json::Value =
+                serde_json::from_slice(&fs::read(root.path().join("list-fixture.json")).unwrap())
+                    .unwrap();
+            assert_eq!(rows.as_array().unwrap().len(), 1);
+            assert_eq!(rows[0]["id"], id);
+            assert_eq!(rows[0]["fixtureHistory"], kind);
+        }
+    }
+
+    #[test]
+    fn upload_storage_controls_fail_and_recover_without_touching_the_checkout() {
+        // File controls must work without connecting to the fixture's RPC peer.
+        let (runtime, ticket, identity) = isolated_control_peer();
 
         for existing in [false, true] {
             let root = tempfile::tempdir().unwrap();

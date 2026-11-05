@@ -5,10 +5,10 @@ import XCTest
 extension LaunchUITests {
     func testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions() throws {
         let app = try connectedSimulatorApp()
-        try useSimulatorListFixture("long-conversation")
+        let conversationId = try useSimulatorConversationFixture("long-conversation")
         app.terminate(); app.launch()
         expandSimulatorProject(app)
-        let row = app.descendants(matching: .any)["tasks.row.codex:fixture-long-history"]
+        let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
         XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
         XCTAssertTrue(app.descendants(matching: .any)["item.long-14-0"].waitForExistence(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
@@ -32,7 +32,8 @@ extension LaunchUITests {
             )
             // The initial interrupted turn keeps its commentary in collapsed work.
             // Check text geometry once a rendered answer exists; always check bottom following.
-            focusComposerKeepingLatestVisible(in: app, latestResponse: answers.allElementsBoundByIndex.last)
+            let latestResponse: XCUIElement? = try (attempt > 0 ? latestFixtureAnswer(app) : nil)
+            focusComposerKeepingLatestVisible(in: app, latestResponse: latestResponse)
             message.typeText(prompt)
             XCTAssertTrue(app.keyboards.firstMatch.exists)
             app.buttons["task.send"].tap()
@@ -48,8 +49,16 @@ extension LaunchUITests {
             }, evaluatedWith: app)
             wait(for: [finished], timeout: 20)
             XCTAssertFalse(latestButton.exists, "The completed answer must remain at the bottom")
-            assertConversationTextMargins(answers.allElementsBoundByIndex.last ?? answers.firstMatch, in: app)
+            try assertConversationTextMargins(latestFixtureAnswer(app), in: app)
         }
+    }
+
+    private func latestFixtureAnswer(_ app: XCUIApplication) throws -> XCUIElement {
+        // Keyboard resizing can recycle older answers, changing the native text view's ordinal.
+        let rows = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "item.fixture-final-"))
+        let id = try XCTUnwrap(rows.allElementsBoundByIndex.last?.identifier)
+        return app.descendants(matching: .any)[id].textViews["message.assistant-text"]
     }
 
     func testSimulatorSelectsPluginAndSkillFromComposer() throws {

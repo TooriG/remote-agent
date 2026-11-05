@@ -12,7 +12,12 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
     let id = thread.metadata["id"].as_str().unwrap();
     let cwd = thread.metadata["cwd"].as_str().unwrap();
     let gallery = thread.metadata.get("gallery") == Some(&Value::Bool(true));
-    let long_history = matches!(id, "fixture-long-history" | "fixture-viewport-history");
+    let history_kind = thread
+        .metadata
+        .get("fixtureHistory")
+        .and_then(Value::as_str);
+    let long_history = matches!(history_kind, Some("long" | "viewport"));
+    let viewport = history_kind == Some("viewport");
     if !long_history
         && !cwd.ends_with("large-history")
         && !cwd.ends_with("oversized-history")
@@ -78,7 +83,7 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
         thread.turns.clone()
     };
     if long_history {
-        if id == "fixture-viewport-history" {
+        if viewport {
             // Activity-only turns before the last leave the initial window shorter
             // than the viewport, so the manual history control is initially visible.
             for turn in &turns[5..14] {
@@ -88,13 +93,13 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
             }
         }
         let mut last = turns.last().unwrap().borrow_mut();
-        if id == "fixture-viewport-history" {
+        if viewport {
             last["status"] = "completed".into();
         }
         let item = last["items"].as_array_mut().unwrap().last_mut().unwrap();
         item["id"] = "long-latest-message".into();
         item["text"] = "Latest interrupted conversation message is visible.".into();
-        if id == "fixture-viewport-history" {
+        if viewport {
             item["phase"] = "final_answer".into();
         }
         drop(last);
@@ -118,6 +123,61 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
         metadata: thread.metadata.clone(),
         turns,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_kind_is_explicit_and_reopening_retains_the_scenarios_live_turns() {
+        for (kind, status, phase) in [
+            ("long", "interrupted", "commentary"),
+            ("viewport", "completed", "final_answer"),
+        ] {
+            let live = Rc::new(RefCell::new(json!({
+                "id":"live-turn", "status":"completed", "items":[]
+            })));
+            let thread = Thread {
+                metadata: serde_json::from_value(json!({
+                    "id":"independent-scenario", "cwd":"/fixture", "fixtureHistory":kind
+                }))
+                .unwrap(),
+                turns: vec![live],
+            };
+            let history = persisted(&thread).unwrap();
+            assert_eq!(history.turns.len(), 16);
+            assert_eq!(history.turns.last().unwrap().borrow()["id"], "live-turn");
+            let last = history.turns[14].borrow();
+            assert_eq!(last["status"], status);
+            let item = last["items"].as_array().unwrap().last().unwrap();
+            assert_eq!(item["phase"], phase);
+            assert_eq!(
+                item["text"],
+                "Latest interrupted conversation message is visible."
+            );
+            if kind == "viewport" {
+                assert!(history.turns[5..14].iter().all(|turn| {
+                    let turn = turn.borrow();
+                    turn["items"].as_array().unwrap().len() == 1
+                        && turn["items"][0]["type"] == "commandExecution"
+                }));
+            }
+        }
+        for kind in [Value::Null, json!("unknown")] {
+            let thread = Thread {
+                metadata: serde_json::from_value(json!({
+                    "id":"fixture-long-history", "cwd":"/fixture", "fixtureHistory":kind
+                }))
+                .unwrap(),
+                turns: vec![],
+            };
+            assert!(
+                persisted(&thread).is_none(),
+                "A session ID does not select a fixture's history"
+            );
+        }
+    }
 }
 
 #[derive(Serialize)]
