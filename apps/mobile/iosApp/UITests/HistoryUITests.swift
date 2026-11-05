@@ -206,9 +206,9 @@ extension LaunchUITests {
         try startSimulatorConversation(app, promptText: "[long-markdown] Render the complete stream")
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
-        let completed = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "MARKDOWN_STREAM_COMPLETE"))
-            .firstMatch
-        focusComposerKeepingLatestVisible(in: app, latestResponse: completed)
+        let responses = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "MARKDOWN_STREAM_COMPLETE"))
+        let completed = responses.firstMatch
+        focusComposerKeepingLatestVisible(in: app, latestResponses: responses)
         message.typeText("Keep this draft")
         waitForDraftText(message, text: "Keep this draft")
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -240,10 +240,12 @@ extension LaunchUITests {
         assertConversationTextMargins(completed, in: app)
     }
 
-    func focusComposerKeepingLatestVisible(in app: XCUIApplication, latestResponse: XCUIElement?) {
+    func focusComposerKeepingLatestVisible(in app: XCUIApplication, latestResponses: XCUIElementQuery?) {
         app.descendants(matching: .any)["task.message"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        if let latestResponse {
+        if let latestResponses {
+            // Keyboard layout recycles rows, changing indices among matching text views.
+            let latestResponse = latestResponses.element(boundBy: max(0, latestResponses.count - 1))
             assertConversationTextMargins(latestResponse, in: app)
             XCTAssertTrue(latestResponse.isHittable, "Opening the keyboard must keep the conversation visible")
         }

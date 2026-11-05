@@ -32,7 +32,7 @@ extension LaunchUITests {
             )
             // The initial interrupted turn keeps its commentary in collapsed work.
             // Check text geometry once a rendered answer exists; always check bottom following.
-            focusComposerKeepingLatestVisible(in: app, latestResponse: answers.allElementsBoundByIndex.last)
+            focusComposerKeepingLatestVisible(in: app, latestResponses: attempt == 0 ? nil : answers)
             message.typeText(prompt)
             XCTAssertTrue(app.keyboards.firstMatch.exists)
             app.buttons["task.send"].tap()
