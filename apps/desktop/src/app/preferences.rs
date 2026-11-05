@@ -53,6 +53,7 @@ impl DisplayInputs {
 
 pub(super) struct Preferences {
     pub(super) snapshot: Arc<Snapshot>,
+    pub(super) projects: Vec<(String, String)>,
     inputs: DisplayInputs,
     pub(super) pane: Option<Arc<agent_core::store::Pane>>,
     handle: tokio::runtime::Handle,
@@ -170,6 +171,7 @@ impl Preferences {
         ];
         Self {
             snapshot: Arc::default(),
+            projects: Vec::new(),
             inputs: DisplayInputs::from_snapshot(&Snapshot::default()),
             pane: None,
             handle: cx.global::<Runtime>().handle.clone(),

@@ -357,6 +357,8 @@ impl Desktop {
                     use view::composer::ComposerAction::*;
                     match action {
                         Dispatch(intent) => view.dispatch(intent.clone()),
+                        NewChat(cwd) => view.new_chat(cwd.clone(), window, cx),
+                        PickFolder => view.pick_folder(),
                         Send => view.send(cx),
                         Attach => view.attach(),
                         StartDictation => view.start_dictation(),

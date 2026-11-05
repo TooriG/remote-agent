@@ -535,16 +535,6 @@ impl Preferences {
     /// Only cleanup varies by project; creation, copying and storage are shared.
     fn worktree_scope(&self, cx: &Context<Self>) -> Div {
         let language = crate::localization::language(cx);
-        let projects: Vec<_> = self
-            .snapshot
-            .thread_list()
-            .map(|list| {
-                list.projects
-                    .into_iter()
-                    .chain(list.hidden_projects)
-                    .collect()
-            })
-            .unwrap_or_default();
         let scope = self.worktrees.scope.as_deref();
         h_flex()
             .gap_2()
@@ -571,12 +561,12 @@ impl Preferences {
                 )
                 .selected(scope.is_none()),
             )
-            .children(projects.into_iter().enumerate().map(|(index, project)| {
-                let selected = scope == Some(project.id.as_str());
-                let id = project.id;
+            .children(self.projects.iter().enumerate().map(|(index, (id, name))| {
+                let selected = scope == Some(id.as_str());
+                let id = id.clone();
                 button(
                     format!("worktree-scope-{index}"),
-                    project.name,
+                    name.clone(),
                     cx,
                     move |view, _, cx| {
                         view.worktrees.scope = Some(id.clone());

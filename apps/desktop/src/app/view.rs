@@ -203,6 +203,43 @@ fn conversation_file_path(source: &str, cwd: &str) -> Result<PathBuf, String> {
 }
 
 impl Desktop {
+    fn publish_projects(&self, cx: &mut Context<Self>) {
+        let mut projects = Vec::new();
+        let mut folders = Vec::new();
+        let mut more = false;
+        if let Some(list) = &self.publication.list {
+            more = list.has_more_projects;
+            projects.extend(
+                list.projects
+                    .iter()
+                    .chain(&list.hidden_projects)
+                    .map(|project| (project.id.clone(), project.name.clone())),
+            );
+            for project in &list.projects {
+                for root in &project.roots {
+                    let label = if project.roots.len() == 1 {
+                        project.name.clone()
+                    } else {
+                        root.path.clone()
+                    };
+                    folders.push((root.path.clone(), label));
+                }
+            }
+        }
+        self.preferences.update(cx, |view, cx| {
+            if view.projects != projects {
+                view.projects = projects;
+                cx.notify();
+            }
+        });
+        self.composer_view
+            .read(cx)
+            .content
+            .clone()
+            .update(cx, |view, cx| {
+                view.set_folders(folders, more, cx);
+            });
+    }
     pub(in crate::app) fn publish_preferences(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.preferences.update(cx, |view, cx| {
             view.bind(
@@ -271,6 +308,7 @@ impl Desktop {
             .update(cx, |view, cx| view.set_model(header, cx));
     }
     pub(in crate::app) fn publish_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.publish_projects(cx);
         self.publish_media(cx);
         self.publish_sidebar(cx);
         self.publish_preferences(window, cx);
@@ -289,6 +327,9 @@ impl Desktop {
         // Native layout changes affect the entire window; core publications use
         // their projected subjects so tokens cannot rebuild unrelated models.
         let shared = changes.groups.connection || changes.groups.pane;
+        if shared || changes.list {
+            self.publish_projects(cx);
+        }
         self.publish_preferences(window, cx);
         if shared {
             self.publish_media(cx);
