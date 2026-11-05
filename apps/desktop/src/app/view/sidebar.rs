@@ -49,6 +49,9 @@ pub(super) enum SidebarRow {
     Project {
         id: String,
         name: String,
+        icon: Option<agent_core::presentation::list::ProjectIconImages>,
+        monogram: String,
+        color: u32,
         root: String,
         expanded: bool,
         connected: bool,
@@ -107,21 +110,43 @@ impl SidebarRow {
             Self::Project {
                 id: project_id,
                 name,
+                icon,
+                monogram,
+                color,
                 root,
                 expanded,
                 connected,
                 scope,
                 desktop,
             } => {
-                let icon = div()
-                    .debug_selector(|| "project-folder".into())
-                    .size_4()
-                    .flex_shrink_0()
-                    .child(
-                        Icon::new(IconName::Folder)
-                            .size_4()
-                            .text_color(cx.theme().muted_foreground),
-                    );
+                let icon = if let Some(icon) = icon {
+                    let png = if cx.theme().is_dark() {
+                        icon.dark_png
+                    } else {
+                        icon.light_png
+                    };
+                    img(Arc::new(Image::from_bytes(ImageFormat::Png, png)))
+                        .size_4()
+                        .flex_shrink_0()
+                        .object_fit(ObjectFit::Contain)
+                        .rounded(px(4.))
+                        .into_any_element()
+                } else {
+                    div()
+                        .debug_selector(|| "project-monogram".into())
+                        .size_4()
+                        .flex_shrink_0()
+                        .rounded(px(4.))
+                        .bg(rgb(color).opacity(0.15))
+                        .text_color(rgb(color))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(8.))
+                        .font_bold()
+                        .child(monogram)
+                        .into_any_element()
+                };
                 let target = desktop.clone();
                 let menu_id = project_id.clone();
                 let menu_owner = desktop.clone();
@@ -447,6 +472,9 @@ impl Desktop {
             projects.push(SidebarRow::Project {
                 id: id.clone(),
                 name: project.name.clone(),
+                icon: project.icon.clone(),
+                monogram: project.monogram.clone(),
+                color: project.icon_color,
                 root: new_root,
                 expanded,
                 connected: model.connected,
@@ -976,7 +1004,7 @@ mod tests {
         assert!(refresh_button.left() > settings_button.right());
         assert!(window.debug_bounds("app-update").is_none());
         let project = window.debug_bounds("project-brand").unwrap().center();
-        let icon = window.debug_bounds("project-folder").unwrap();
+        let icon = window.debug_bounds("project-monogram").unwrap();
         assert_eq!(icon.size, size(px(16.), px(16.)));
         for expanded in [true, false] {
             window.simulate_click(project, Modifiers::default());
@@ -991,7 +1019,7 @@ mod tests {
                     expanded
                 );
             });
-            assert_eq!(window.debug_bounds("project-folder").unwrap(), icon);
+            assert_eq!(window.debug_bounds("project-monogram").unwrap(), icon);
         }
         let settings = window.debug_bounds("sidebar-settings").unwrap().center();
         window.simulate_click(settings, Modifiers::default());

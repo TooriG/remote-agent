@@ -5,6 +5,13 @@ use crate::{
 };
 use proptest::prelude::*;
 
+fn project_icon(png: &str) -> crate::models::ProjectIcon {
+    crate::models::ProjectIcon {
+        light_png: png.into(),
+        dark_png: png.into(),
+    }
+}
+
 fn session(provider: ProviderKind, id: &str) -> SessionRef {
     SessionRef::new(provider, id.into()).unwrap()
 }
@@ -64,6 +71,7 @@ fn project(id: &str, name: &str) -> Project {
         roots: vec![ProjectRoot {
             path: format!("/repo/{name}"),
         }],
+        icon: Some(project_icon(&format!("icon-{name}"))),
         ..Default::default()
     }
 }
@@ -154,6 +162,71 @@ proptest! {
         let mut previous = list(Vec::new());
         previous.projects = cached;
         prop_assert_eq!(merge_received(input, Some(&previous)).projects, expected);
+    }
+}
+
+#[test]
+fn project_icons_match_ordered_roots_keep_first_values_and_reuse_unchanged_images() {
+    let entry = |id: &str, name: &str, roots: &[&str], icon: Option<&str>| Project {
+        id: id.into(),
+        name: name.into(),
+        roots: roots
+            .iter()
+            .map(|path| ProjectRoot {
+                path: (*path).into(),
+            })
+            .collect(),
+        icon: icon.map(project_icon),
+        ..Default::default()
+    };
+    for count in [16, 127, 128, 129, 512] {
+        let mut cached = vec![
+            entry("same", "first", &["/a", "/b"], Some("first")),
+            entry("same", "duplicate", &["/a", "/b"], Some("later")),
+            entry("same", "negative", &["/a"], None),
+            entry("empty", "old-empty", &[], Some("empty")),
+        ];
+        let mut received = vec![
+            entry("same", "current", &["/a", "/b"], Some("current")),
+            entry("same", "current-negative", &["/a"], Some("current")),
+            entry("same", "ordered", &["/b", "/a"], Some("keep-order")),
+            entry("other", "different", &["/a", "/b"], Some("keep-id")),
+            entry("empty", "current-empty", &[], None),
+            entry("same", "unchanged", &["/a", "/b"], Some("first")),
+        ];
+        let mut expected = received.clone();
+        expected[0].icon = Some(project_icon("first"));
+        expected[1].icon = None;
+        expected[4].icon = Some(project_icon("empty"));
+        while cached.len() < count {
+            cached.push(entry(
+                &format!("old{}", cached.len()),
+                "old",
+                &[],
+                Some("old"),
+            ));
+        }
+        while received.len() < count {
+            let row = entry(
+                &format!("new{}", received.len()),
+                "new",
+                &[],
+                Some("uncached"),
+            );
+            expected.push(row.clone());
+            received.push(row);
+        }
+        let original_image = received[5].icon.as_ref().unwrap().light_png.as_ptr();
+        let mut input = list(Vec::new());
+        input.projects = received;
+        let mut previous = list(Vec::new());
+        previous.projects = cached;
+        let result = merge_received(input, Some(&previous));
+        assert_eq!(result.projects, expected);
+        assert_eq!(
+            result.projects[5].icon.as_ref().unwrap().light_png.as_ptr(),
+            original_image
+        );
     }
 }
 

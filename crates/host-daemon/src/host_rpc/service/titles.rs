@@ -388,6 +388,18 @@ impl HostRpcService {
         &self,
         params: &op::ReadListDecorations,
     ) -> Result<op::ListDecorations, Failure> {
+        let projects = params.projects.clone();
+        let icons = tokio::task::spawn_blocking(move || {
+            projects
+                .into_iter()
+                .map(|(id, roots)| {
+                    let icon = roots.iter().find_map(|root| {
+                        crate::projects::icons::resolve(std::path::Path::new(root))
+                    });
+                    (id, icon)
+                })
+                .collect()
+        });
         let worktrees = if params.threads.is_empty() {
             Default::default()
         } else {
@@ -412,12 +424,16 @@ impl HostRpcService {
                 )
             })
             .collect();
-        let statuses = crate::worktrees::directory_statuses(
-            sources.iter().map(|(_, source)| source.clone()).collect(),
-        )
-        .await
-        .map_err(|error| Failure::new("worktree_status_failed", error))?;
+        let (icons, statuses) = tokio::join!(
+            icons,
+            crate::worktrees::directory_statuses(
+                sources.iter().map(|(_, source)| source.clone()).collect()
+            )
+        );
+        let icons = icons.map_err(|error| Failure::new("project_icons_unavailable", error))?;
+        let statuses = statuses.map_err(|error| Failure::new("worktree_status_failed", error))?;
         Ok(op::ListDecorations {
+            icons,
             statuses: sources
                 .into_iter()
                 .map(|(id, source)| (id, statuses.get(&source).copied()))
@@ -724,25 +740,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_decorations_use_captured_threads_without_reloading_project_catalogs() {
+    async fn list_decorations_use_the_listed_roots_without_reloading_project_catalogs() {
         use super::*;
         let directory = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(directory.path()).unwrap();
+        std::fs::write(
+            root.join("favicon.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><path fill="red" d="M0 0h8v8H0z"/></svg>"#,
+        )
+        .unwrap();
         let state = root.join("bex-worktrees.json");
         std::fs::write(state.with_file_name("bex-projects.json"), "{").unwrap();
         let service = HostRpcService::new(
             [crate::providers::codex::Codex::new(Err("provider is offline".into())).into()],
             ProjectStore::new(state),
         );
-        let id =
-            agent_protocol::session::SessionRef::new(ProviderKind::Codex, "listed-task".into())
-                .unwrap();
         let params = op::ReadListDecorations {
             scope: op::ListDecorationScope::Root { part: None },
-            threads: vec![(id.clone(), root.to_string_lossy().into_owned(), None)],
+            projects: vec![(
+                "listed-project".into(),
+                vec![root.to_string_lossy().into_owned()],
+            )],
+            threads: Vec::new(),
         };
         let result = service.list_decorations(&params).await.unwrap();
-        assert_eq!(result.statuses, vec![(id, None)]);
+        assert!(result.icons["listed-project"].is_some());
+        assert!(result.statuses.is_empty());
     }
 
     #[tokio::test]
@@ -880,7 +903,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_list_keeps_empty_project_headers_and_loads_project_threads() {
+    async fn task_list_refreshes_branding_for_all_project_headers() {
         use super::*;
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("remote-agent");
@@ -890,11 +913,13 @@ mod tests {
         let native = root.path().join("native");
         for workspace in &workspaces {
             std::fs::create_dir(workspace).unwrap();
+            std::fs::write(workspace.join("favicon.svg"),
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#ff0000"/></svg>"##).unwrap();
         }
         let transcript = native.join("projects/p");
         std::fs::create_dir_all(&transcript).unwrap();
         let id = "12345678-1234-4234-8234-123456789abc";
-        std::fs::write(transcript.join(format!("{id}.jsonl")),serde_json::json!({"type":"user","sessionId":id,"cwd":dunce::canonicalize(&workspace).unwrap(),"message":{"content":"Project task"}}).to_string()+"\n").unwrap();
+        std::fs::write(transcript.join(format!("{id}.jsonl")),serde_json::json!({"type":"user","sessionId":id,"cwd":dunce::canonicalize(&workspace).unwrap(),"message":{"content":"Branding task"}}).to_string()+"\n").unwrap();
         let projects = ProjectStore::new(root.path().join("bex-worktrees.json"));
         for workspace in &workspaces {
             projects.register(workspace).await.unwrap();
@@ -914,62 +939,108 @@ mod tests {
             projects,
         );
         let session = service.open_session();
-        for project_limit in [5, 15] {
-            let call = Call::ListSessions(op::ListSessions {
-                query: agent_protocol::models::ListQuery {
-                    project_limit,
-                    ..Default::default()
-                },
-            });
-            let response = service.dispatch(session.id(), &call).await.unwrap();
-            let reply = agent_protocol::protocol::decode::<
-                Response<agent_protocol::models::ThreadList>,
-            >(&response.initial)
-            .unwrap();
-            let Response::Success { result } = reply else {
-                panic!("task list failed: {reply:?}")
-            };
-            assert_eq!(result.data.len(), 1);
-            assert!(result.data[0].turns.is_none() && result.data[0].preview.is_none());
-            assert_eq!(result.projects.len(), (project_limit as usize).min(6));
-            assert_eq!(result.has_more_projects, project_limit == 5);
-            let project_id = result.projects[0].id.clone();
-            let response = service
-                .dispatch(
-                    session.id(),
-                    &Call::ListProjectSessions(op::ListProjectSessions {
-                        project_id: project_id.clone(),
-                        limit: 5,
-                        search_term: String::new(),
-                    }),
-                )
-                .await
+        for has_icon in [true, false] {
+            if !has_icon {
+                for workspace in &workspaces {
+                    std::fs::remove_file(workspace.join("favicon.svg")).unwrap();
+                }
+            }
+            for project_limit in [5, 15] {
+                let call = Call::ListSessions(op::ListSessions {
+                    query: agent_protocol::models::ListQuery {
+                        project_limit,
+                        ..Default::default()
+                    },
+                });
+                let response = service.dispatch(session.id(), &call).await.unwrap();
+                let reply = agent_protocol::protocol::decode::<
+                    Response<agent_protocol::models::ThreadList>,
+                >(&response.initial)
                 .unwrap();
-            let Response::Success { result: page } = agent_protocol::protocol::decode::<
-                Response<agent_protocol::models::ThreadList>,
-            >(&response.initial)
-            .unwrap() else {
-                panic!("project list failed")
-            };
-            let snapshot = agent_core::state::Snapshot {
-                threads: Some(Arc::new(result)),
-                expanded_projects: Arc::new([(project_id.clone(), 5)].into()),
-                project_threads: Arc::new([(project_id, Arc::new(page))].into()),
-                ..Default::default()
-            };
-            let list = snapshot.thread_list().unwrap();
-            assert_eq!(list.projects.len(), (project_limit as usize).min(6));
-            assert!(list.threads.is_empty());
-            assert_eq!(list.projects[0].threads.len(), 1);
-            assert_eq!(
-                list.projects[0].threads[0].project_id.as_ref(),
-                Some(&list.projects[0].id)
-            );
-            assert!(
-                list.projects[1..]
-                    .iter()
-                    .all(|project| project.threads.is_empty())
-            );
+                let Response::Success { result } = reply else {
+                    panic!("task list failed: {reply:?}")
+                };
+                assert_eq!(result.data.len(), 1);
+                assert!(result.data[0].turns.is_none() && result.data[0].preview.is_none());
+                let decoration = op::ReadListDecorations {
+                    scope: op::ListDecorationScope::Root { part: None },
+                    projects: result
+                        .projects
+                        .iter()
+                        .map(|project| {
+                            (
+                                project.id.clone(),
+                                project.roots.iter().map(|root| root.path.clone()).collect(),
+                            )
+                        })
+                        .collect(),
+                    threads: Vec::new(),
+                };
+                let decorated = service
+                    .dispatch(session.id(), &Call::ReadListDecorations(decoration))
+                    .await
+                    .unwrap();
+                let Response::Success { result: decorated } = agent_protocol::protocol::decode::<
+                    Response<op::ListDecorations>,
+                >(&decorated.initial)
+                .unwrap() else {
+                    panic!("decoration failed")
+                };
+                let mut result = result;
+                for project in &mut result.projects {
+                    project.icon = decorated.icons[&project.id].clone();
+                }
+                assert_eq!(result.projects.len(), (project_limit as usize).min(6));
+                assert_eq!(result.has_more_projects, project_limit == 5);
+                let project_id = result.projects[0].id.clone();
+                let response = service
+                    .dispatch(
+                        session.id(),
+                        &Call::ListProjectSessions(op::ListProjectSessions {
+                            project_id: project_id.clone(),
+                            limit: 5,
+                            search_term: String::new(),
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                let Response::Success { result: page } = agent_protocol::protocol::decode::<
+                    Response<agent_protocol::models::ThreadList>,
+                >(&response.initial)
+                .unwrap() else {
+                    panic!("project list failed")
+                };
+                let snapshot = agent_core::state::Snapshot {
+                    threads: Some(Arc::new(result)),
+                    expanded_projects: Arc::new([(project_id.clone(), 5)].into()),
+                    project_threads: Arc::new([(project_id, Arc::new(page))].into()),
+                    ..Default::default()
+                };
+                let list = snapshot.thread_list().unwrap();
+                assert_eq!(list.projects.len(), (project_limit as usize).min(6));
+                assert!(list.threads.is_empty());
+                assert_eq!(list.projects[0].threads.len(), 1);
+                assert_eq!(
+                    list.projects[0].threads[0].project_id.as_ref(),
+                    Some(&list.projects[0].id)
+                );
+                assert!(
+                    list.projects[1..]
+                        .iter()
+                        .all(|project| project.threads.is_empty())
+                );
+                assert_eq!(list.projects[0].monogram, "RA");
+                for project in &list.projects {
+                    assert_eq!(project.icon.is_some(), has_icon, "{}", project.name);
+                    if let Some(icon) = &project.icon {
+                        let image = image::load_from_memory(&icon.light_png)
+                            .unwrap()
+                            .into_rgba8();
+                        assert_eq!(image.dimensions(), (64, 64));
+                        assert_eq!(image.get_pixel(32, 32).0, [255, 0, 0, 255]);
+                    }
+                }
+            }
         }
     }
 }

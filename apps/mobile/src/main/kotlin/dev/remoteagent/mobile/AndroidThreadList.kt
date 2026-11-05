@@ -1,6 +1,8 @@
 package dev.remoteagent.mobile
 
+import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -41,19 +44,25 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListQuery
 import dev.remoteagent.core.ListSessions
+import dev.remoteagent.core.ProjectIconImages
 import dev.remoteagent.core.ProjectSummary
 import dev.remoteagent.core.ReadThread
 import dev.remoteagent.core.SessionRef
@@ -394,7 +403,7 @@ private fun ProjectRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(painterResource(R.drawable.file_browser_folder), null, Modifier.size(34.dp))
+            ProjectIcon(project.icon, project.monogram, project.iconColor)
             Column(Modifier.weight(1f)) {
                 Text(
                     project.name,
@@ -427,6 +436,22 @@ private fun ProjectRow(
                     localizedUiFormat(language, "{0}で新しいチャット", listOf(project.name)),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ProjectIcon(icon: ProjectIconImages?, monogram: String, colorRgb: UInt) {
+    val colors = MaterialTheme.colorScheme
+    val png = if (colors.background.luminance() < colors.onBackground.luminance()) icon?.darkPng else icon?.lightPng
+    val bitmap = remember(png) { png?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
+    val color = Color(colorRgb.toInt()).copy(alpha = 1f)
+    val modifier = Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).clearAndSetSemantics {}
+    if (bitmap != null) {
+        Image(bitmap, contentDescription = null, modifier = modifier)
+    } else {
+        Box(modifier.background(color.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
+            Text(monogram, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

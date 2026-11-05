@@ -32,8 +32,19 @@ pub use agent_protocol::operations::ReadListDecorations;
 
 fn decorations(
     scope: agent_protocol::operations::ListDecorationScope,
+    projects: &[crate::models::Project],
     threads: &[crate::models::Thread],
 ) -> Option<Effect> {
+    let projects: Vec<_> = projects
+        .iter()
+        .filter(|project| !project.roots.is_empty())
+        .map(|project| {
+            (
+                project.id.clone(),
+                project.roots.iter().map(|root| root.path.clone()).collect(),
+            )
+        })
+        .collect();
     let threads: Vec<_> = threads
         .iter()
         .filter_map(|thread| {
@@ -44,7 +55,13 @@ fn decorations(
             ))
         })
         .collect();
-    (!threads.is_empty()).then(|| Effect::execute(ReadListDecorations { scope, threads }))
+    (!projects.is_empty() || !threads.is_empty()).then(|| {
+        Effect::execute(ReadListDecorations {
+            scope,
+            projects,
+            threads,
+        })
+    })
 }
 
 impl Operation for ReadListDecorations {
@@ -56,6 +73,27 @@ impl Operation for ReadListDecorations {
         })
     }
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+        if let Some(list) = &mut snapshot.threads {
+            let icons: Vec<_> = list
+                .projects
+                .iter()
+                .enumerate()
+                .filter_map(|(index, project)| {
+                    output
+                        .icons
+                        .get(&project.id)
+                        .filter(|icon| **icon != project.icon)
+                        .map(|icon| (index, icon))
+                })
+                .collect();
+            if !icons.is_empty() {
+                let list = Arc::make_mut(list);
+                for (index, icon) in icons {
+                    list.projects[index].icon = icon.clone();
+                }
+            }
+        }
+
         if output.statuses.is_empty() {
             return Vec::new();
         }
@@ -309,6 +347,44 @@ fn merge_newer_projects(
     received
 }
 
+fn retained_project_icons(
+    mut received: Vec<crate::models::Project>,
+    cached: &[crate::models::Project],
+) -> Vec<crate::models::Project> {
+    let icons = (cached.len() >= 128
+        && received.len() >= 128
+        && cached.len() <= received.len().saturating_mul(4))
+    .then(|| {
+        cached
+            .iter()
+            .rev()
+            .map(|project| {
+                (
+                    (project.id.as_str(), project.roots.as_slice()),
+                    &project.icon,
+                )
+            })
+            .collect::<HashMap<_, _>>()
+    });
+    for project in &mut received {
+        let icon = match &icons {
+            Some(icons) => icons
+                .get(&(project.id.as_str(), project.roots.as_slice()))
+                .copied(),
+            None => cached
+                .iter()
+                .find(|old| old.id == project.id && old.roots == project.roots)
+                .map(|old| &old.icon),
+        };
+        if let Some(icon) = icon
+            && &project.icon != icon
+        {
+            project.icon = icon.clone();
+        }
+    }
+    received
+}
+
 fn merge_received(
     mut threads: crate::models::ThreadList,
     previous: Option<&crate::models::ThreadList>,
@@ -319,6 +395,7 @@ fn merge_received(
         threads.data = merge_newer_rows(threads.data, &previous.data, threads.revision);
         threads.projects =
             merge_newer_projects(threads.projects, &previous.projects, threads.revision);
+        threads.projects = retained_project_icons(threads.projects, &previous.projects);
         // Small or sharply reduced pages cost less to scan than to index the
         // entire previous page.
         let statuses = (previous.data.len() >= 128
@@ -431,6 +508,7 @@ impl Operation for ListProjectSessions {
             agent_protocol::operations::ListDecorationScope::Project {
                 project_id: self.project_id.clone(),
             },
+            &[],
             &output.data,
         );
         Arc::make_mut(&mut snapshot.project_threads).insert(self.project_id, Arc::new(output));
@@ -559,10 +637,22 @@ impl Operation for ListSessions {
 
         let mut threads = merge_received(threads, snapshot.threads.as_deref());
         Arc::make_mut(&mut snapshot.unconfirmed_lists).remove(&OperationKey::SessionList);
+        let projects: Vec<_> = threads
+            .projects
+            .iter()
+            .filter(|project| {
+                self.query.part != Some(crate::models::ListPart::Projects)
+                    || snapshot.threads.as_ref().is_none_or(|previous| {
+                        !previous.projects.iter().any(|old| old.id == project.id)
+                    })
+            })
+            .cloned()
+            .collect();
         let decoration = decorations(
             agent_protocol::operations::ListDecorationScope::Root {
                 part: self.query.part,
             },
+            &projects,
             &threads.data,
         );
         if let Some(previous) = snapshot.threads.as_ref() {

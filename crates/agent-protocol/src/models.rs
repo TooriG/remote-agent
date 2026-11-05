@@ -330,6 +330,14 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub roots: Vec<ProjectRoot>,
+    pub icon: Option<ProjectIcon>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Base64 PNG thumbnails; a single source image is shared across appearances.
+pub struct ProjectIcon {
+    pub light_png: String,
+    pub dark_png: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProjectRoot {

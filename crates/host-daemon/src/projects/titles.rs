@@ -445,6 +445,10 @@ mod tests {
         let projects = (1..=4)
             .map(|id| Project {
                 list_revision: id,
+                icon: Some(agent_protocol::models::ProjectIcon {
+                    light_png: format!("thumbnail-{id}"),
+                    dark_png: format!("thumbnail-{id}"),
+                }),
                 roots: vec![agent_protocol::models::ProjectRoot {
                     path: format!("/workspace/p{id}"),
                 }],

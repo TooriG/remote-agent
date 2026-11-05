@@ -33,6 +33,7 @@ pub(super) fn notification(
                 scope: agent_protocol::operations::ListDecorationScope::Task {
                     session: session.clone(),
                 },
+                projects: Vec::new(),
                 threads: vec![(session.clone(), cwd.clone(), thread.git_branch.clone())],
             }));
         }
@@ -181,8 +182,9 @@ impl Snapshot {
                     .is_none_or(|index| page.projects[index].list_revision < project.list_revision)
             {
                 let page = Arc::make_mut(page);
+                let mut project = project;
                 if let Some(index) = position {
-                    page.projects.remove(index);
+                    project.icon = page.projects.remove(index).icon;
                 }
                 page.projects.insert(0, project);
                 page.has_more_projects |=
@@ -1392,6 +1394,7 @@ mod tests {
             scope: agent_protocol::operations::ListDecorationScope::Task {
                 session: id.clone(),
             },
+            projects: vec![],
             threads: vec![(id.clone(), "/first".into(), Some("first-branch".into()))],
         })];
         assert_eq!(format!("{effects:?}"), format!("{expected:?}"));
