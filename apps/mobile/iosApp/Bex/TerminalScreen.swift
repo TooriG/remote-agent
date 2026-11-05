@@ -35,6 +35,11 @@ private struct NativeTerminalView: UIViewRepresentable {
         view.terminalDelegate = context.coordinator
         view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         view.accessibilityIdentifier = "terminal.screen"
+        // Keep SwiftTerm's gesture timing, but select text directly on long press.
+        for case let gesture as UILongPressGestureRecognizer in view.gestureRecognizers ?? [] {
+            gesture.removeTarget(nil, action: nil)
+            gesture.addTarget(view, action: #selector(HostTerminalView.selectTextOnLongPress(_:)))
+        }
         return view
     }
 
@@ -124,6 +129,16 @@ private struct NativeTerminalView: UIViewRepresentable {
 /// Emulator responses are produced by the Host; SwiftTerm still handles native user input.
 private final class HostTerminalView: SwiftTerm.TerminalView {
     @TaskLocal private nonisolated static var isPasting = false
+
+    @objc func selectTextOnLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        // Seed SwiftTerm's selection position through its public menu API.
+        // Existing selections retain their range when the menu is reopened.
+        showStandardContextMenu(at: gesture.location(in: self))
+        if !hasActiveSelection {
+            select(nil)
+        }
+    }
 
     override func paste(_ sender: Any?) {
         // SwiftTerm sends paste bytes synchronously through the emulator delegate.

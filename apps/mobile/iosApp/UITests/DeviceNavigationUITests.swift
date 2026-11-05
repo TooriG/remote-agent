@@ -81,6 +81,33 @@ extension LaunchUITests {
         closeWorkbench(app)
     }
 
+    func testSimulatorNativeTerminalCopiesTextOnLongPress() throws {
+        let app = try connectedSimulatorApp()
+        app.buttons["tasks.new.project.simulator-project"].tap()
+        app.buttons["task.tools"].tap()
+        openWorkbenchTool(app, "terminal")
+        assertTerminalReady(app)
+        let terminal = app.descendants(matching: .any)["terminal.screen"]
+        terminal.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        terminal.typeText("printf '\\033[2J\\033[HNeedle Alpha Bravo\\n'; exit 0\n")
+        XCTAssertTrue(app.staticTexts["終了 · 0"].waitForExistence(timeout: 10))
+        waitForStableFrame(terminal)
+        terminal.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 20, dy: 8)).press(forDuration: 1.2)
+        let copy = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Copy", "コピー"])).firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 5)); copy.tap()
+        closeWorkbench(app)
+        let composer = app.textFields["task.message"]
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        composer.press(forDuration: 1.2)
+        let paste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        waitForDraftText(composer, text: "Needle")
+        captureScreen(app, named: "Terminal long press copies only the selected word")
+    }
+
     func testSimulatorNativeTerminalPastesMultilineText() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.new.project.simulator-project"].tap()
