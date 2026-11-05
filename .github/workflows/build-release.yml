@@ -135,6 +135,7 @@ jobs:
   android:
     needs: release
     permissions:
+      actions: read
       contents: write
     uses: ./.github/workflows/android-download.yml
     with:

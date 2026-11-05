@@ -70,6 +70,15 @@ switches the public iPhone download from TestFlight to App Store.
 
 Retry failed build jobs through GitHub Actions. Never move a published tag. For
 an App Review rejection, inspect the rejection and create a corrected Nightly.
+If Android failed after the other packages were staged, run **Android candidate**
+on `main` with the existing draft tag. It rebuilds the same verified source with
+the current packaging workflow. After it succeeds, resume package verification
+and publication with:
+
+```sh
+GITHUB_REPOSITORY=ttizze/remote-agent scripts/dev-env.sh node scripts/release-candidate.mjs seal nightly-N
+```
+
 Android Nightly and Stable use the same distribution key and package ID. Older
 APKs signed with another key require reinstallation before entering this channel.
 
