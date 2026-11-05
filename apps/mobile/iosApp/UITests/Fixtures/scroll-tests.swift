@@ -135,7 +135,9 @@ extension ConversationScrollTests {
         await layout(controller)
         check(abs(view.layoutAttributesForItem(at: IndexPath(item: 1, section: 0))!.size.height - 1000) < 1,
               "Detached-tail growth must actually remeasure the visible cell")
-        check(abs(position(1, in: controller) - reading) < 1, "Tail growth must preserve the detached reading point")
+        check(abs(position(1, in: controller) - reading) < 1,
+              "Tail growth must preserve the detached reading point: "
+                  + "before=\(reading), after=\(position(1, in: controller)), \(geometry(view))")
         ids.append(.message("appended"))
         update(1000)
         await layout(controller)
@@ -182,6 +184,15 @@ extension ConversationScrollTests {
               "Following must reveal appended rows after a nonanimated diffable update")
         check(controller.scrollViewShouldScrollToTop(view) && !scroll.following,
               "Status-bar navigation must detach before UIKit scrolls")
+        view.setContentOffset(CGPoint(x: -view.adjustedContentInset.left, y: -view.adjustedContentInset.top),
+                              animated: false)
+        await layout(controller)
+        controller.scrollViewDidScrollToTop(view)
+        let reading = position(0, in: controller)
+        update(1800)
+        await layout(controller)
+        check(abs(position(0, in: controller) - reading) < 1,
+              "Finishing status-bar navigation must preserve the new reading point during growth")
     }
 }
 
@@ -247,7 +258,8 @@ extension ConversationScrollTests {
         check(narrow.width < wide.width && narrow.height > wide.height,
               "A width change must remeasure the SwiftUI row: wide=\(wide), narrow=\(narrow), \(geometry(view))")
         check(abs(narrow.width - (view.bounds.width - view.adjustedContentInset.left
-                - view.adjustedContentInset.right - 32)) < 1, "Native safe-area insets must be outside the row margins")
+                - view.adjustedContentInset.right - 32)) < 1,
+        "Native safe-area insets must be outside the row margins: narrow=\(narrow), \(geometry(view))")
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
                   - view.layoutAttributesForItem(at: path)!.frame.maxY - 6) < 1,
         "Following must survive width changes in a long message")
@@ -271,8 +283,6 @@ extension ConversationScrollTests {
         update(ids, header: 60)
         await layout(controller)
         let reading = position(1, in: controller)
-        let listLayout = controller.collectionView.collectionViewLayout as? ConversationListLayout
-        let originalAnchor = String(describing: listLayout?.anchor)
         // Core can publish the completed history control before the background row projection finishes.
         update(ids, header: 8)
         await layout(controller)
@@ -282,7 +292,6 @@ extension ConversationScrollTests {
         check(abs(position(51, in: controller) - reading) < 1,
               "Staged history must retain the original anchor even if its interim offset was clamped: "
                   + "before=\(reading), after=\(position(51, in: controller)), "
-                  + "original=\(originalAnchor), current=\(String(describing: listLayout?.anchor)), "
                   + geometry(controller.collectionView))
         controller.collectionView.bounds.size.width -= 40
         await layout(controller)

@@ -55,10 +55,23 @@ private final class ConversationCollectionView: UICollectionView {
     }
 }
 
-final class ConversationListController: UIViewController, UICollectionViewDelegate {
+final class ConversationListController: UIViewController {
     private struct Source {
         let ids: [ConversationList.RowID]
         let row: (Int) -> AnyView
+    }
+
+    private struct Anchor {
+        let id: ConversationList.RowID
+        /// Relative to the usable viewport, including UIKit's automatic safe-area adjustment.
+        let displacement: CGFloat
+    }
+
+    private struct Geometry: Equatable {
+        let size: CGSize
+        let insets: UIEdgeInsets
+        let contentSize: CGSize
+        let anchorFrame: CGRect?
     }
 
     private let scroll: ConversationScrollState
@@ -70,6 +83,9 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
     private var applying = false
     private var active = true
     private var following = true
+    private var anchor: Anchor?
+    private var lastLayout: (geometry: Geometry, offset: CGPoint)?
+    private var scrollingToTop = false
     private var requestedEdge: VerticalEdge?
     private var request: ConversationScrollState.Request?
     private var visibilityUpdate: Task<Void, Never>?
@@ -110,7 +126,6 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
             self?.show(cell, id: id)
             return cell
         }
-        layout.indexPath = { [weak self] id in self?.data.indexPath(for: id) }
     }
 
     func update(ids: [ConversationList.RowID], following: Bool, request: ConversationScrollState.Request?,
@@ -118,12 +133,13 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
         loadViewIfNeeded()
         self.following = following
         if following {
-            layout.anchor = nil
+            anchor = nil
         }
         if self.request != request {
             self.request = request
             requestedEdge = request?.edge
-            layout.anchor = nil
+            anchor = nil
+            scrollingToTop = false
         }
         collectionView.accessibilityValue = accessibilityValue
         pending = Source(ids: ids, row: row)
@@ -131,14 +147,13 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
     }
 
     private func captureAnchor(allowed: [ConversationList.RowID: Int]) {
-        layout.anchor = collectionView.indexPathsForVisibleItems.sorted()
-            .compactMap { path -> ConversationListLayout.Anchor? in
+        anchor = collectionView.indexPathsForVisibleItems.sorted()
+            .compactMap { path -> Anchor? in
                 guard let id = data.itemIdentifier(for: path), case .message = id,
                       allowed[id] != nil,
                       let attributes = layout.layoutAttributesForItem(at: path) else { return nil }
-                return ConversationListLayout.Anchor(id: id,
-                                                     displacement: attributes.frame.minY - collectionView.contentOffset
-                                                         .y - collectionView.adjustedContentInset.top)
+                return Anchor(id: id, displacement: attributes.frame.minY - collectionView.contentOffset.y
+                    - collectionView.adjustedContentInset.top)
             }.first
     }
 
@@ -149,7 +164,7 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
         let nextIndices = changed
             ? Dictionary(uniqueKeysWithValues: pending.ids.enumerated().map { ($0.element, $0.offset) }) : indices
         if !following, requestedEdge == nil,
-           layout.anchor.flatMap({ nextIndices[$0.id] }) == nil {
+           anchor.flatMap({ nextIndices[$0.id] }) == nil {
             captureAnchor(allowed: nextIndices)
         }
         source = pending
@@ -163,7 +178,6 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
                 guard let self, active else { return }
                 applying = false
                 refreshVisibleRows()
-                restoreReadingPosition()
                 applyPending()
             }
         } else {
@@ -179,9 +193,8 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
                 show(cell, id: id)
             }
         }
+        collectionView.setNeedsLayout()
         collectionView.layoutIfNeeded()
-        positionViewport()
-        publishVisibility()
     }
 
     private func show(_ cell: ConversationListCell, id: ConversationList.RowID) {
@@ -189,51 +202,49 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
         cell.show(AnyView(source.row(index).id(id)), parent: self)
     }
 
-    func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell,
-                        forItemAt indexPath: IndexPath) {
-        if let cell = cell as? ConversationListCell, !cell.isMounted, let id = data.itemIdentifier(for: indexPath) {
-            show(cell, id: id)
-        }
-    }
-
-    func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
-                        forItemAt _: IndexPath) {
-        (cell as? ConversationListCell)?.unmount()
-    }
-
     private func didLayoutCollectionView() {
         guard active else { return }
-        // Edge requests move the viewport before UIKit updates its visible cells.
-        // Capture only the cells from a completed layout before applying those requests.
-        if !following, requestedEdge == nil, layout.anchor == nil {
-            captureAnchor(allowed: indices)
-        }
         applyPending()
+        guard !applying else { return }
         positionViewport()
         publishVisibility()
     }
 
-    /// Intrinsic-content updates do not necessarily use the layout's target-offset hook.
-    /// Follow the measured bottom after UIKit has laid out the actual cells.
+    private var geometry: Geometry {
+        Geometry(size: collectionView.bounds.size, insets: collectionView.adjustedContentInset,
+                 contentSize: layout.collectionViewContentSize,
+                 anchorFrame: anchor.flatMap { data.indexPath(for: $0.id) }
+                     .flatMap { layout.layoutAttributesForItem(at: $0)?.frame })
+    }
+
+    /// Intrinsic sizing can move UIKit's offset without invoking its target-offset hook.
+    /// A changed offset with unchanged geometry instead belongs to native scrolling (including accessibility).
     private func positionViewport() {
-        guard !applying, !source.ids.isEmpty,
-              let edge = requestedEdge ?? (following ? .bottom : nil) else { return }
+        guard !source.ids.isEmpty else { return }
+        let moving = collectionView.isTracking || collectionView.isDragging || collectionView.isDecelerating
+        if !following, requestedEdge == nil, !scrollingToTop,
+           anchor == nil || moving || (lastLayout?.geometry == geometry
+               && lastLayout?.offset != collectionView.contentOffset) {
+            captureAnchor(allowed: indices)
+        }
+        defer { lastLayout = (geometry, collectionView.contentOffset) }
+        guard !moving, !scrollingToTop else { return }
+        let insets = collectionView.adjustedContentInset
+        let bottom = layout.bottomOffset(viewportHeight: collectionView.bounds.height, insets: insets)
+        let edge = requestedEdge ?? (following ? .bottom : nil)
+        let offset: CGFloat
+        if let edge {
+            offset = edge == .bottom ? bottom : -insets.top
+        } else if let anchor, let frame = geometry.anchorFrame {
+            offset = max(-insets.top, min(bottom, frame.minY - anchor.displacement - insets.top))
+        } else {
+            return
+        }
         requestedEdge = nil
-        let offset = edge == .bottom ? layout.bottomOffset(in: collectionView) : -collectionView.adjustedContentInset
-            .top
-        let target = CGPoint(x: -collectionView.adjustedContentInset.left, y: offset)
+        let target = CGPoint(x: -insets.left, y: offset)
         if collectionView.contentOffset != target {
             collectionView.setContentOffset(target, animated: false)
         }
-    }
-
-    private func restoreReadingPosition() {
-        guard !following, layout.anchor != nil else { return }
-        collectionView.layoutIfNeeded()
-        collectionView.setContentOffset(
-            layout.targetContentOffset(forProposedContentOffset: collectionView.contentOffset),
-            animated: false
-        )
     }
 
     private func latestIsVisible() -> Bool {
@@ -271,9 +282,23 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
             (cell as? ConversationListCell)?.unmount()
         }
     }
+}
+
+extension ConversationListController: UICollectionViewDelegate {
+    func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell,
+                        forItemAt indexPath: IndexPath) {
+        if let cell = cell as? ConversationListCell, !cell.isMounted, let id = data.itemIdentifier(for: indexPath) {
+            show(cell, id: id)
+        }
+    }
+
+    func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
+                        forItemAt _: IndexPath) {
+        (cell as? ConversationListCell)?.unmount()
+    }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if !applying, !following,
+        if !applying, !following, !scrollingToTop,
            scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
             captureAnchor(allowed: indices)
         }
@@ -281,8 +306,12 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
     }
 
     func scrollViewDidChangeAdjustedContentInset(_: UIScrollView) {
-        if following {
-            view.setNeedsLayout()
+        view.setNeedsLayout()
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate {
+            scrollViewDidEndDecelerating(scrollView)
         }
     }
 
@@ -299,6 +328,7 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
     }
 
     func scrollViewDidScrollToTop(_: UIScrollView) {
+        scrollingToTop = false
         if !following {
             captureAnchor(allowed: indices)
         }
@@ -308,7 +338,8 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
         requestedEdge = nil
         scroll.following = false
         following = false
-        layout.anchor = nil
+        anchor = nil
+        scrollingToTop = false
     }
 
     func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity _: CGPoint,
@@ -316,8 +347,9 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
         if scrollView.panGestureRecognizer.translation(in: scrollView).y < 0, latestIsVisible() {
             scroll.following = true
             following = true
-            layout.anchor = nil
-            targetContentOffset.pointee.y = layout.bottomOffset(in: scrollView)
+            anchor = nil
+            targetContentOffset.pointee.y = layout.bottomOffset(viewportHeight: scrollView.bounds.height,
+                                                                insets: scrollView.adjustedContentInset)
         }
     }
 
@@ -325,7 +357,8 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
         requestedEdge = nil
         scroll.following = false
         following = false
-        layout.anchor = nil
+        anchor = nil
+        scrollingToTop = true
         return true
     }
 }

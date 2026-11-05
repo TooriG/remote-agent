@@ -1,16 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Native layout owns pixel anchoring, including self-sizing changes above a detached reader.
+/// Native layout owns row measurement; the controller owns the reading position.
 final class ConversationListLayout: UICollectionViewCompositionalLayout {
-    struct Anchor {
-        let id: ConversationList.RowID
-        /// Relative to the usable viewport, so UIKit's automatic safe-area offset adjustment preserves the anchor.
-        let displacement: CGFloat
-    }
-
-    var anchor: Anchor?
-    var indexPath: (ConversationList.RowID) -> IndexPath? = { _ in nil }
     private var alignment: CGFloat = 0
 
     static func make() -> ConversationListLayout {
@@ -20,7 +12,9 @@ final class ConversationListLayout: UICollectionViewCompositionalLayout {
         let section = NSCollectionLayoutSection(group: group)
         section.interGroupSpacing = 12
         section.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
-        return ConversationListLayout(section: section)
+        let configuration = UICollectionViewCompositionalLayoutConfiguration()
+        configuration.contentInsetsReference = .none
+        return ConversationListLayout(section: section, configuration: configuration)
     }
 
     override func prepare() {
@@ -55,46 +49,20 @@ final class ConversationListLayout: UICollectionViewCompositionalLayout {
         return copy
     }
 
-    override func targetContentOffset(forProposedContentOffset proposedContentOffset: CGPoint) -> CGPoint {
-        guard let collectionView else { return proposedContentOffset }
-        if let anchor, let path = indexPath(anchor.id), let attributes = layoutAttributesForItem(at: path) {
-            return CGPoint(x: proposedContentOffset.x,
-                           y: clamped(attributes.frame.minY - anchor.displacement
-                               - collectionView.adjustedContentInset.top, in: collectionView))
-        }
-        return super.targetContentOffset(forProposedContentOffset: proposedContentOffset)
-    }
-
     override func invalidationContext(
         forPreferredLayoutAttributes preferredAttributes: UICollectionViewLayoutAttributes,
         withOriginalAttributes originalAttributes: UICollectionViewLayoutAttributes
     )
         -> UICollectionViewLayoutInvalidationContext {
-        let context = super.invalidationContext(
+        super.invalidationContext(
             forPreferredLayoutAttributes: translated(preferredAttributes, by: -alignment),
             withOriginalAttributes: translated(originalAttributes, by: -alignment)
         )
-        guard let collectionView, let anchor else { return context }
-        let delta = preferredAttributes.size.height - originalAttributes.size.height
-        let insets = collectionView.adjustedContentInset
-        let viewport = collectionView.bounds.height - insets.top - insets.bottom
-        let height = collectionViewContentSize.height - alignment + delta
-        let shift = max(0, viewport - height) - alignment
-        let above = indexPath(anchor.id).map { originalAttributes.indexPath < $0 }
-            ?? (originalAttributes.frame.maxY <= collectionView.contentOffset.y
-                + collectionView.adjustedContentInset.top)
-        context.contentOffsetAdjustment.y = shift + (above ? delta : 0)
-        return context
     }
 
-    func bottomOffset(in scroll: UIScrollView) -> CGFloat {
+    func bottomOffset(viewportHeight: CGFloat, insets: UIEdgeInsets) -> CGFloat {
         let height = collectionViewContentSize.height - alignment
-        return max(-scroll.adjustedContentInset.top,
-                   height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
-    }
-
-    private func clamped(_ offset: CGFloat, in scroll: UIScrollView) -> CGFloat {
-        max(-scroll.adjustedContentInset.top, min(offset, bottomOffset(in: scroll)))
+        return max(-insets.top, height - viewportHeight + insets.bottom)
     }
 }
 
