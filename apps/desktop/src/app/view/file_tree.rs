@@ -382,7 +382,7 @@ impl Desktop {
         }
         let mentions = paths
             .iter()
-            .map(|path| file_tree_mention(&key.root, &self.snapshot.navigation.cwd, path))
+            .map(|path| file_tree_mention(&key.root, &self.snapshot.pane.navigation.cwd, path))
             .collect::<Vec<_>>()
             .join(" ");
         Some(FileTreeDrag {

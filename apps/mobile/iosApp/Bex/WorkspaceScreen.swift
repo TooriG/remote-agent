@@ -11,17 +11,15 @@ struct WorkspaceDestination: Hashable, Identifiable {
     }
 }
 
-/// Keep the workbench on its conversation while side-chat operations change Store selection.
+/// The conversation and its tools retain the same pane while side chats use their own.
 struct ConversationDestination: View {
-    @ObservedObject var model: AppViewModel
+    let model: ConversationModel
+    let environment: ConversationEnvironment
     @State private var tools: WorkspaceDestination?
 
     var body: some View {
         GeometryReader { geometry in
-            ThreadScreen(model: model,
-                         conversation: model.isShowingSideChat ? model.sideChatRequest?.originalConversation : model
-                             .conversation,
-                         openTools: openTools)
+            ThreadScreen(model: model, environment: environment, conversation: model.conversation, openTools: openTools)
                 .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
                     guard value.startLocation.x >= geometry.size.width - 32,
                           value.translation.width < -60,
@@ -30,18 +28,21 @@ struct ConversationDestination: View {
                 })
         }
         .navigationDestination(item: $tools) { destination in
-            WorkspaceToolsScreen(model: model, scope: destination.scope, directory: destination.directory) {
+            WorkspaceToolsScreen(
+                model: model,
+                environment: environment,
+                scope: destination.scope,
+                directory: destination.directory
+            ) {
                 tools = nil
             }
         }
     }
 
     private func openTools(_ kind: PanelKind?) {
-        let sideChat = model.isShowingSideChat ? model.sideChatRequest : nil
-        let draft = sideChat.map { DraftKey.session(session: $0.originalThreadId) } ?? model.coreDraftKey
         let destination = WorkspaceDestination(
-            scope: model.snapshot.panelScope(host: model.selectedProfileId ?? "", draft: draft),
-            directory: sideChat?.cwd ?? model.cwd
+            scope: model.snapshot.panelScope(host: model.host, draft: model.coreDraftKey),
+            directory: model.cwd
         )
         if let kind {
             model.openWorkbench(kind, scope: destination.scope, directory: destination.directory)
@@ -64,45 +65,36 @@ extension PanelKind {
     }
 }
 
-extension AppViewModel {
+extension ConversationModel {
     func migrateWorkbench(to next: AgentCore.Snapshot) {
         guard let session = next.submittedSession(draft: coreDraftKey) else { return }
-        let host = selectedProfileId ?? ""
-        panels.rekey(before: snapshot.panelScope(host: host, draft: coreDraftKey),
-                     after: next.panelScope(host: host, draft: .session(session: session)))
+        panels = panels.rekey(before: snapshot.panelScope(host: host, draft: coreDraftKey),
+                              after: next.panelScope(host: host, draft: .session(session: session)))
     }
 
     func openWorkbench(_ kind: PanelKind, scope: PanelScope, directory: String) {
-        objectWillChange.send()
-        let id = panels.open(key: scope, kind: kind, path: nil)
+        let opened = panels.open(key: scope, kind: kind, path: nil)
+        panels = opened.panels
+        let id = opened.id
         if kind == .sideChat, case let .session(original) = scope.draft {
-            let host = scope.host
-            let parent: ConversationPresentation? = if let request = sideChatRequest,
-                                                       request.host == host, request.originalThreadId == original {
-                request.originalConversation
-            } else {
-                conversation
-            }
-            let request: SideChatRequest = if let pending = sideChatRequest, pending.threadId == nil,
-                                              pending.host == host, pending.originalThreadId == original,
+            let request: SideChatRequest = if let pending = sideChatRequest, pending.originalThreadId == original,
                                               !workbenchSideChats.values.contains(where: { $0.id == pending.id }) {
                 pending
             } else {
                 SideChatRequest(text: "", host: host, originalThreadId: original,
-                                originalConversation: parent, cwd: directory)
+                                cwd: directory, session: session,
+                                provider: snapshot.modelProviderForDraft(threadId: coreDraftKey))
             }
             workbenchSideChats[id] = request
         }
     }
 
     func activateWorkbench(_ id: UInt64, scope: PanelScope) {
-        objectWillChange.send()
-        _ = panels.activate(key: scope, id: id)
+        panels = panels.activate(key: scope, id: id).panels
     }
 
     func closeWorkbench(_ surface: PanelSurface, scope: PanelScope) {
-        objectWillChange.send()
-        panels.close(key: scope, id: surface.id)
+        panels = panels.close(key: scope, id: surface.id)
         if surface.kind == .terminal {
             perform(.closeTerminal(handle: workbenchTerminalHandle(surface.id)))
         }
@@ -115,7 +107,8 @@ extension AppViewModel {
 }
 
 private struct WorkspaceToolsScreen: View {
-    @ObservedObject var model: AppViewModel
+    let model: ConversationModel
+    let environment: ConversationEnvironment
     let scope: PanelScope
     let directory: String
     let close: () -> Void
@@ -223,7 +216,7 @@ private struct WorkspaceToolsScreen: View {
         switch surface.kind {
         case .sideChat:
             if let request = model.workbenchSideChats[surface.id] {
-                ConversationSideChat(model: model, request: request)
+                ConversationSideChat(request: request, environment: environment)
             } else {
                 Text("会話を始めるとサイドチャットを利用できます。")
                     .foregroundStyle(.secondary).padding()

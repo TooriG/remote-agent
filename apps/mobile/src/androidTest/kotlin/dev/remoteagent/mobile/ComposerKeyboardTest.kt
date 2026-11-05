@@ -37,7 +37,7 @@ class ComposerKeyboardTest {
                     Scaffold { padding ->
                         Column(Modifier.fillMaxSize().appContentInsets(padding)) {
                             Box(Modifier.weight(1f))
-                            ThreadComposer(snapshot, { _, _ -> }, {}, {})
+                            ComposerFixture(snapshot, { _, _ -> }, {}, {})
                         }
                     }
                 }

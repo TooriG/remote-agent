@@ -4,7 +4,7 @@ pub use agent_protocol::editors::{OpenInEditor, ReadFileOpenCapabilities};
 impl Operation for ReadFileOpenCapabilities {
     rpc_operation!();
     fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
-        snapshot.file_open_capabilities_requested = true;
+        snapshot.files.file_open_capabilities_requested = true;
         Ok(())
     }
     fn key(&self) -> Option<OperationKey> {
@@ -14,7 +14,7 @@ impl Operation for ReadFileOpenCapabilities {
         Scheduling::LatestHostState(OperationKey::FileOpenCapabilities)
     }
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        snapshot.file_open_capabilities = Some(Arc::new(output));
+        snapshot.files.file_open_capabilities = Some(Arc::new(output));
         Vec::new()
     }
 }
@@ -48,20 +48,23 @@ mod tests {
             reveal: false,
         };
         request.prepare(&mut snapshot).unwrap();
-        assert_eq!(snapshot.preferred_editor, Some(EditorId::Zed));
+        assert_eq!(snapshot.files.preferred_editor, Some(EditorId::Zed));
         request.editor = EditorId::FileManager;
         request.reveal = true;
         request.prepare(&mut snapshot).unwrap();
-        assert_eq!(snapshot.preferred_editor, Some(EditorId::Zed));
+        assert_eq!(snapshot.files.preferred_editor, Some(EditorId::Zed));
         request.editor = EditorId::VsCode;
         assert!(request.prepare(&mut snapshot).is_err());
-        assert_eq!(snapshot.preferred_editor, Some(EditorId::Zed));
+        assert_eq!(snapshot.files.preferred_editor, Some(EditorId::Zed));
     }
 
     #[test]
     fn discovery_is_host_state_and_does_not_replace_user_preferences() {
         let mut snapshot = Snapshot {
-            preferred_editor: Some(EditorId::Zed),
+            files: crate::state::Files {
+                preferred_editor: Some(EditorId::Zed),
+                ..Default::default()
+            },
             ..Default::default()
         };
         ReadFileOpenCapabilities {}.apply(
@@ -71,9 +74,14 @@ mod tests {
                 reveal: None,
             },
         );
-        assert_eq!(snapshot.preferred_editor, Some(EditorId::Zed));
+        assert_eq!(snapshot.files.preferred_editor, Some(EditorId::Zed));
         assert_eq!(
-            snapshot.file_open_capabilities.as_ref().unwrap().editors,
+            snapshot
+                .files
+                .file_open_capabilities
+                .as_ref()
+                .unwrap()
+                .editors,
             [EditorId::VsCode]
         );
     }

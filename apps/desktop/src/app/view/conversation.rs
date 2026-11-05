@@ -31,6 +31,7 @@ pub(in crate::app) enum ConversationAction {
     Fork(SessionRef, TurnId),
     Respond(RequestId, Answer),
     Error(String),
+    Notice(errors::NoticeAction),
     OpenLink(String, bool),
 }
 
@@ -39,7 +40,6 @@ pub(in crate::app) struct ConversationView {
     model: ConversationModel,
     pub(in crate::app) timeline: Timeline,
     selection: Entity<selection::ConversationSelection>,
-    _observation: Subscription,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
@@ -48,27 +48,12 @@ impl ConversationView {
     pub(in crate::app) fn new(
         desktop: &Entity<Desktop>,
         selection: Entity<selection::ConversationSelection>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
     ) -> Self {
         Self {
             desktop: desktop.downgrade(),
             model: ConversationModel::default(),
             timeline: Timeline::new(),
             selection,
-            _observation: cx.observe_in(desktop, window, |view, desktop, window, cx| {
-                let desktop = desktop.read(cx);
-                let model = desktop.conversation_model();
-                let rendered = desktop.snapshot.conversation_thread().map(|thread| {
-                    agent_core::presentation::conversation::project_conversation(
-                        &desktop.snapshot,
-                        thread,
-                        &view.timeline.rendered,
-                    )
-                });
-                let requests = desktop.snapshot.requests().cloned().collect();
-                view.sync(model, rendered, requests, window, cx);
-            }),
             #[cfg(test)]
             renders: 0,
         }
@@ -109,13 +94,6 @@ impl ConversationView {
         if reset {
             self.timeline.forget_rendering();
         }
-        #[cfg(test)]
-        eprintln!(
-            "SYNC reset={reset} old={:?} new={:?} top={:?}",
-            self.model.draft_key,
-            model.draft_key,
-            self.timeline.list.logical_scroll_top()
-        );
         self.timeline.sync(rendered, model.history.clone(), reset);
         self.model = model;
         cx.notify();
@@ -143,10 +121,10 @@ impl Desktop {
         ConversationModel {
             draft_key: self.draft_key().clone(),
             session: self.selected().cloned(),
-            cwd: self.snapshot.navigation.cwd.clone(),
-            home: self.snapshot.host_home_directory.clone(),
-            epoch: self.snapshot.epoch,
-            connected: self.snapshot.connected,
+            cwd: self.snapshot.pane.navigation.cwd.clone(),
+            home: self.snapshot.connection.host_home_directory.clone(),
+            epoch: self.snapshot.connection.epoch,
+            connected: self.snapshot.connection.connected,
             busy: self.busy > 0,
             input_notice: self
                 .thread()
@@ -177,12 +155,27 @@ impl Desktop {
             failures,
         }
     }
+    pub(in crate::app) fn publish_conversation(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let model = self.conversation_model();
+        let rendered = self.publication.conversation.clone();
+        let requests = rendered
+            .as_ref()
+            .into_iter()
+            .flat_map(|value| value.source.requests.values())
+            .cloned()
+            .collect();
+        self.conversation.update(cx, |view, cx| {
+            view.sync(model, rendered, requests, window, cx)
+        });
+    }
+
     #[cfg(test)]
     pub(in crate::app) fn sync_conversation(&self, window: &mut Window, cx: &mut Context<Self>) {
         let model = self.conversation_model();
         let rendered = self.snapshot.conversation_thread().map(|thread| {
             agent_core::presentation::conversation::project_conversation(
-                &self.snapshot,
+                &self.snapshot.pane.navigation.draft_key,
+                &self.snapshot.sessions.pending_submissions,
                 thread,
                 &self.conversation.read(cx).timeline.rendered,
             )
@@ -213,7 +206,7 @@ impl Desktop {
                 self.open_browser(self.panel_scope(), "https://chatgpt.com/settings/usage", cx)
             }
             ConversationAction::Fork(thread, turn) => {
-                if !self.snapshot.connected || self.busy > 0 {
+                if !self.snapshot.connection.connected || self.busy > 0 {
                     return;
                 }
                 self.busy += 1;
@@ -235,6 +228,7 @@ impl Desktop {
                 self.respond(id.clone(), answer.clone());
             }
             ConversationAction::Error(error) => self.set_error(error.clone()),
+            ConversationAction::Notice(action) => self.notice_action(action.clone(), window, cx),
             ConversationAction::OpenLink(source, control) => {
                 self.click_conversation_link(source, *control, window, cx)
             }
@@ -1811,22 +1805,17 @@ impl ConversationView {
             .flex_1()
             .min_w_0()
             .h_full()
-            .child(
-                div().w_full().max_w(px(CHAT_WIDTH)).mx_auto().px_4().child(
-                    self.desktop
-                        .update(cx, |_, cx| {
-                            Desktop::error_list(
-                                &self.model.errors,
-                                ErrorScope::Conversation {
-                                    draft_key: self.model.draft_key.clone(),
-                                },
-                                None,
-                                cx,
-                            )
-                        })
-                        .unwrap_or_else(|_| v_flex()),
+            .child(div().w_full().max_w(px(CHAT_WIDTH)).mx_auto().px_4().child(
+                errors::error_list(
+                    &self.model.errors,
+                    ErrorScope::Conversation {
+                        draft_key: self.model.draft_key.clone(),
+                    },
+                    None,
+                    cx,
+                    |_, action, _, cx| cx.emit(ConversationAction::Notice(action)),
                 ),
-            );
+            ));
         for notice in [&self.model.input_notice, &self.model.history_notice]
             .into_iter()
             .flatten()
@@ -2260,6 +2249,7 @@ mod rendering_tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -2275,12 +2265,13 @@ mod rendering_tests {
             window: &mut Window,
             cx: &mut Context<Self>,
         ) -> Self {
-            Arc::make_mut(&mut snapshot.navigation).thread_id = source.id.clone();
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+                source.id.clone();
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .insert(source.id.clone().unwrap(), Arc::new(source));
             let desktop = cx.new(|cx| {
                 let mut desktop = Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         // Reject before reading preferences or connecting to a real Host.
                         remote: Some(agent_protocol::models::RemoteHost {
                             id: "fixture".into(),
@@ -2338,7 +2329,7 @@ mod rendering_tests {
             let session = desktop.selected().unwrap().clone();
             let snapshot = Arc::make_mut(&mut desktop.snapshot);
             let thread = Arc::make_mut(
-                Arc::make_mut(&mut snapshot.conversations)
+                Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&session)
                     .unwrap(),
             );
@@ -2373,7 +2364,7 @@ mod rendering_tests {
         }))
         .unwrap();
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.navigation).cwd = "/fixture".into();
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd = "/fixture".into();
         let (view, window) =
             cx.add_window_view(|window, cx| ConversationView::new(snapshot, source, window, cx));
         window.simulate_resize(size(px(380.), px(600.)));
@@ -2460,7 +2451,7 @@ mod rendering_tests {
                     cached.wrap_code = true;
                 }
             });
-            Arc::make_mut(&mut desktop.snapshot).epoch += 2;
+            Arc::make_mut(&mut desktop.snapshot).connection.epoch += 2;
             cx.notify();
         });
         window.run_until_parked();
@@ -2515,7 +2506,8 @@ mod rendering_tests {
         }))
         .unwrap();
         let conversation = agent_core::presentation::conversation::project_conversation(
-            &Snapshot::default(),
+            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().sessions.pending_submissions,
             Arc::new(source),
             &None,
         );
@@ -2634,7 +2626,7 @@ mod rendering_tests {
                 let session = desktop.selected().unwrap().clone();
                 let snapshot = Arc::make_mut(&mut desktop.snapshot);
                 let thread = Arc::make_mut(
-                    Arc::make_mut(&mut snapshot.conversations)
+                    Arc::make_mut(&mut snapshot.sessions.conversations)
                         .get_mut(&session)
                         .unwrap(),
                 );
@@ -2703,7 +2695,7 @@ mod rendering_tests {
             let (_, window) = cx.add_window_view(|window, cx| {
                 let view = ConversationView::new(Snapshot::default(), source, window, cx);
                 view.desktop.update(cx, |desktop, _| {
-                    Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).operations).insert(
+                    Arc::make_mut(&mut desktop.snapshot).operations.insert(
                         op::OperationKey::Fork {
                             session: agent_protocol::session::SessionRef {
                                 provider: agent_protocol::session::ProviderKind::Codex,
@@ -3034,7 +3026,7 @@ mod rendering_tests {
         };
         let mut snapshot = Snapshot::default();
         if pending {
-            Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            Arc::make_mut(&mut snapshot.sessions.pending_submissions).insert(
                 "pending".into(),
                 Arc::new(agent_core::state::PendingSubmission {
                     sequence: 0,

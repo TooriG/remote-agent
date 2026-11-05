@@ -10,8 +10,8 @@ impl Desktop {
     ) -> Div {
         let language = crate::localization::language(cx);
         let login_provider = self.account_provider();
-        let login = self.snapshot.account.login.is_some();
-        let disabled = !self.snapshot.connected || self.account.busy || login;
+        let login = self.snapshot.catalog.account.login.is_some();
+        let disabled = !self.snapshot.connection.connected || self.account.busy || login;
         let mut body = v_flex().gap_2().child(
             div()
                 .text_xs()
@@ -103,7 +103,7 @@ impl Desktop {
             self.import_projects = false;
             return;
         }
-        if !self.snapshot.connected {
+        if !self.snapshot.connection.connected {
             return;
         }
         let directory = match platform::state_dir() {
@@ -133,7 +133,7 @@ impl Desktop {
         }
         let setup = self.snapshot.connection_setup();
         let current = self.remote.as_ref().map(|host| host.id.as_str());
-        let connected = self.snapshot.connected;
+        let connected = self.snapshot.connection.connected;
         let agent_controls = self.connection_agent_controls(&setup.agents, cx);
         let choices = self.hosts.as_ref().map(|hosts| {
             hosts.update(cx, |hosts, cx| {
@@ -294,7 +294,7 @@ impl Desktop {
                                             ));
                                             return;
                                         }
-                                        if view.snapshot.connected {
+                                        if view.snapshot.connection.connected {
                                             view.refresh_accounts_and_models();
                                         } else {
                                             view.connect(None);
@@ -313,7 +313,7 @@ impl Desktop {
     }
 
     pub(super) fn open_project_import(&mut self) {
-        if !self.snapshot.connected {
+        if !self.snapshot.connection.connected {
             return;
         }
         self.import_projects = true;
@@ -527,7 +527,7 @@ impl Desktop {
                 )
                 .debug_selector(|| "import-selected".into())
                 .primary()
-                .disabled(busy || state.selected.is_empty() || !self.snapshot.connected),
+                .disabled(busy || state.selected.is_empty() || !self.snapshot.connection.connected),
             );
         self.onboarding_frame(body, footer, window, cx)
     }
@@ -562,6 +562,7 @@ mod tests {
             .unwrap();
         let app_runtime = Runtime {
             handle: runtime.handle().clone(),
+            sessions: Default::default(),
             connections: Arc::default(),
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
@@ -582,7 +583,7 @@ mod tests {
             cx.set_global(app_runtime);
         });
         let (view, window) = cx.add_window_view(|window, cx| {
-            let desktop = cx.new(|cx| Desktop::new(Mode::SideChat {
+            let desktop = cx.new(|cx| Desktop::new(Mode::Fixture {
                 remote: None, cwd: "/fixture".into(),
             }, window, cx));
             desktop.update(cx, |view, cx| {
@@ -590,12 +591,12 @@ mod tests {
                 view.session = Some(session);
                 view.connecting = false;
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                snapshot.connected = true;
-                snapshot.models = Arc::new(serde_json::from_value(serde_json::json!([
+                snapshot.connection.connected = true;
+                snapshot.catalog.models = Arc::new(serde_json::from_value(serde_json::json!([
                     {"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
                     {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Sonnet", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
                 ])).unwrap());
-                Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({"accounts":[],"selected":{}})).unwrap()));
+                Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({"accounts":[],"selected":{}})).unwrap()));
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
             SetupView(desktop)
@@ -627,7 +628,7 @@ mod tests {
             view.read(cx).0.clone().update(cx, |view, cx| {
                 view.account.busy = false;
                 view.account.polling = true;
-                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).account).login =
+                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).catalog.account).login =
                     Some(Arc::new(agent_protocol::operations::AccountLogin {
                         provider: agent_protocol::session::ProviderKind::Claude,
                         login_id: "fixture-login".into(),
@@ -681,7 +682,7 @@ mod tests {
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
                 view.account.busy = false;
-                let account = Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).account);
+                let account = Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).catalog.account);
                 account.login = None;
                 account.accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({
                     "accounts":[{"id":"native","provider":"codex"}], "selected":{"codex":"native"}

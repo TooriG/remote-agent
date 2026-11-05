@@ -29,7 +29,7 @@ impl Operation for ManageCodexCli {
     }
 
     fn apply(self, snapshot: &mut Snapshot, status: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.account).codex_cli = Some(Arc::new(status));
+        Arc::make_mut(&mut snapshot.catalog.account).codex_cli = Some(Arc::new(status));
         Vec::new()
     }
 }
@@ -72,7 +72,7 @@ mod tests {
             writer.reply(&poll, json!({"result":{"running":false,"version":null,"restartRequired":false,"error":"update denied"}})).await.unwrap();
             receipt.await.unwrap();
             let snapshot = store.snapshot();
-            let status = snapshot.account.codex_cli.as_ref().unwrap();
+            let status = snapshot.catalog.account.codex_cli.as_ref().unwrap();
             assert_eq!(status.error.as_deref(), Some("update denied"));
             assert!(!status.restart_required);
             assert!(!snapshot.operation_running(OperationKey::CodexCli));

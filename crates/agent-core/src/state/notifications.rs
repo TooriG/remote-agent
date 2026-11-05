@@ -7,10 +7,10 @@ pub(super) fn notification(
 ) -> (Snapshot, Vec<Effect>) {
     use crate::protocol::Notification;
     if let Notification::Activity { session, active } = message {
-        let activity_changed = previous.activity.active.get(&session) != Some(&active);
+        let activity_changed = previous.lists.activity.active.get(&session) != Some(&active);
         let mut next = previous.clone();
         if activity_changed {
-            Arc::make_mut(&mut next.activity)
+            Arc::make_mut(&mut next.lists.activity)
                 .active
                 .insert(session.clone(), active);
         }
@@ -18,11 +18,12 @@ pub(super) fn notification(
             .listed_threads()
             .find(|thread| thread.id.as_ref() == Some(&session));
         let child = previous
+            .sessions
             .conversations
             .get(&session)
             .is_some_and(|thread| thread.parent_id.is_some());
         let mut effects = Vec::new();
-        if previous.connected
+        if previous.connection.connected
             && !child
             && activity_changed
             && !active
@@ -37,10 +38,13 @@ pub(super) fn notification(
                 threads: vec![(session.clone(), cwd.clone(), thread.git_branch.clone())],
             }));
         }
-        if activity_changed && listed.is_none() && !previous.conversations.contains_key(&session) {
+        if activity_changed
+            && listed.is_none()
+            && !previous.sessions.conversations.contains_key(&session)
+        {
             effects.extend(op::refresh_agents(
-                previous.connected,
-                previous.observed_agents.as_ref(),
+                previous.connection.connected,
+                previous.pane.observed_agents.as_ref(),
             ));
         }
         return (next, effects);
@@ -73,7 +77,10 @@ pub(super) fn notification(
             let changed = thread
                 .id
                 .as_ref()
-                .filter(|id| previous.connected && previous.subscriptions.contains_key(*id))
+                .filter(|id| {
+                    previous.connection.connected
+                        && previous.sessions.subscriptions.contains_key(*id)
+                })
                 .filter(|id| {
                     previous.thread_metadata(id).is_some_and(|old| {
                         old.active_provider.unwrap_or(id.provider)
@@ -83,7 +90,7 @@ pub(super) fn notification(
                 .cloned();
             next.receive_session_summary(*thread, project);
             if let Some(id) = &changed
-                && let Some(cached) = shared_mut(&mut next.conversations, id)
+                && let Some(cached) = shared_mut(&mut next.sessions.conversations, id)
             {
                 cached.history_cursor = None;
                 cached.history_has_more = Some(false);
@@ -100,23 +107,24 @@ pub(super) fn notification(
 
 impl Snapshot {
     fn rename_session(&mut self, session: &SessionRef, name: Option<&str>, revision: u64) {
-        if let Some(thread) = self.conversations.get(session)
+        if let Some(thread) = self.sessions.conversations.get(session)
             && thread.list_revision < revision
         {
             let thread = Arc::make_mut(
-                Arc::make_mut(&mut self.conversations)
+                Arc::make_mut(&mut self.sessions.conversations)
                     .get_mut(session)
                     .unwrap(),
             );
             thread.name = name.map(str::to_owned);
             thread.list_revision = revision;
         }
-        if let Some(page) = &mut self.threads
+        if let Some(page) = &mut self.lists.threads
             && let Some(index) = rename_index(&page.data, session, revision)
         {
             apply_rename(page, index, name, revision);
         }
         let renames: Vec<_> = self
+            .lists
             .project_threads
             .iter()
             .filter_map(|(project, page)| {
@@ -124,7 +132,7 @@ impl Snapshot {
             })
             .collect();
         if !renames.is_empty() {
-            let pages = Arc::make_mut(&mut self.project_threads);
+            let pages = Arc::make_mut(&mut self.lists.project_threads);
             for (project, index) in renames {
                 apply_rename(pages.get_mut(&project).unwrap(), index, name, revision);
             }
@@ -136,12 +144,12 @@ impl Snapshot {
         project: Option<crate::models::Project>,
     ) {
         let Some(id) = thread.id.as_ref() else { return };
-        if let Some(state) = &self.task_activity
+        if let Some(state) = &self.lists.task_activity
             && let Some((_, status)) = state.statuses.iter().find(|(session, _)| session == id)
         {
             thread.status = *status;
         }
-        if let Some(cached) = self.conversations.get(id)
+        if let Some(cached) = self.sessions.conversations.get(id)
             && cached.list_revision <= thread.list_revision
             && cached
                 .name
@@ -149,14 +157,18 @@ impl Snapshot {
                 .is_none_or(|name| name.trim().is_empty())
             && thread.name.is_some()
         {
-            let cached = Arc::make_mut(Arc::make_mut(&mut self.conversations).get_mut(id).unwrap());
+            let cached = Arc::make_mut(
+                Arc::make_mut(&mut self.sessions.conversations)
+                    .get_mut(id)
+                    .unwrap(),
+            );
             cached.name = thread.name.clone();
             cached.list_revision = thread.list_revision;
         }
         if thread.parent_id.is_some() {
             return;
         }
-        let search = self.list_query.search_term.trim();
+        let search = self.lists.list_query.search_term.trim();
         let inserting = search.is_empty()
             || thread
                 .name
@@ -165,7 +177,7 @@ impl Snapshot {
                 .to_lowercase()
                 .contains(&search.to_lowercase());
         if let Some(project) = project
-            && let Some(page) = &mut self.threads
+            && let Some(page) = &mut self.lists.threads
         {
             let position = page.projects.iter().position(|old| old.id == project.id);
             if (position.is_some() || inserting)
@@ -179,25 +191,25 @@ impl Snapshot {
                 }
                 page.projects.insert(0, project);
                 page.has_more_projects |=
-                    page.projects.len() > self.list_query.project_limit as usize;
+                    page.projects.len() > self.lists.list_query.project_limit as usize;
                 page.projects
-                    .truncate(self.list_query.project_limit as usize);
+                    .truncate(self.lists.list_query.project_limit as usize);
             }
         }
         if let Some(project) = thread.project_id.as_ref() {
-            if let Some(page) = self.project_threads.get(project)
+            if let Some(page) = self.lists.project_threads.get(project)
                 && let Some((index, row)) = updated_row(&page.data, thread, inserting)
             {
                 let project = row.project_id.as_ref().unwrap().clone();
                 apply_row_update(
-                    Arc::make_mut(&mut self.project_threads)
+                    Arc::make_mut(&mut self.lists.project_threads)
                         .get_mut(&project)
                         .unwrap(),
                     index,
                     row,
                 );
             }
-        } else if let Some(page) = &mut self.threads
+        } else if let Some(page) = &mut self.lists.threads
             && let Some((index, row)) = updated_row(&page.data, thread, inserting)
         {
             apply_row_update(page, index, row);
@@ -344,6 +356,7 @@ pub(super) fn session_update(
     update: crate::session::SessionUpdate,
 ) -> (Snapshot, Vec<Effect>) {
     let Some((id, _)) = previous
+        .sessions
         .subscriptions
         .iter()
         .find(|(_, subscription)| **subscription == update.subscription_id)
@@ -351,13 +364,13 @@ pub(super) fn session_update(
         return (previous.clone(), Vec::new());
     };
     let mut next = previous.clone();
-    let Some(current) = previous.conversations.get(id) else {
+    let Some(current) = previous.sessions.conversations.get(id) else {
         return (next, Vec::new());
     };
     let thread = match update.change.apply(current) {
         Ok(thread) => thread,
         Err(_) => {
-            Arc::make_mut(&mut next.subscriptions).remove(id);
+            Arc::make_mut(&mut next.sessions.subscriptions).remove(id);
             // Recover through a fresh snapshot/subscription. The Store reports
             // a failed read; a recoverable gap is not a persistent user error.
             return (next, vec![Effect::execute(op::ReadThread::new(id.clone()))]);
@@ -383,63 +396,83 @@ pub(super) fn session_update(
     } else {
         Vec::new()
     };
-    let workspace_changed = previous.navigation.thread_id.as_ref() == Some(id)
-        && matches!(update.change, SessionChange::Workspace { .. })
-        && thread.cwd.as_deref() != Some(previous.navigation.cwd.as_str());
-    if workspace_changed {
-        navigate(
-            &mut next,
-            Navigation {
-                cwd: thread.cwd.clone().unwrap_or_default(),
-                ..previous.navigation.as_ref().clone()
-            },
-        );
-    }
     let active = crate::models::task_active(None, thread.status);
-    let preparation_finished = current.preparation.is_some()
-        && matches!(
-            update.change,
-            SessionChange::Preparation { preparation: None }
-        );
-    let refresh_workspace =
-        (completed || preparation_finished || matches!(update.change, SessionChange::Item { .. }))
-            && current.cwd.as_deref() == Some(&next.navigation.cwd);
-    Arc::make_mut(&mut next.conversations).insert(id.clone(), Arc::new(thread));
+    Arc::make_mut(&mut next.sessions.conversations).insert(id.clone(), Arc::new(thread));
     reconcile_pending(&mut next, id);
     let mut effects = details;
-    if fleet_contains(
-        previous.observed_agents.as_ref(),
-        id,
-        &previous.conversations,
-    ) && matches!(&update.change, SessionChange::Item { item, .. }
-            if matches!(item.body(), crate::models::ItemBody::Subagent { receivers, .. }
-                if receivers.iter().any(|receiver| !previous.conversations.contains_key(receiver))))
-    {
-        effects.extend(op::refresh_agents(
-            previous.connected,
-            previous.observed_agents.as_ref(),
-        ));
+    let panes: Vec<_> = std::iter::once(next.pane_id.clone())
+        .chain(next.panes.0.keys().cloned())
+        .collect();
+    for pane in panes {
+        let mut view = next.for_pane(&pane).unwrap();
+        let view_effects = update_pane_context(&mut view, current, id, &update.change, completed);
+        effects.extend(view_effects.into_iter().map(|effect| effect.in_pane(&pane)));
+        next = view.for_pane(&previous.pane_id).unwrap();
     }
-    if next.connected
+    if next.connection.connected
         && completed
         && !active
         && next
+            .sessions
             .conversations
             .get(id)
             .is_none_or(|thread| thread.requests.is_empty())
-        && next.navigation.thread_id.as_ref() != Some(id)
+        && next.pane.navigation.thread_id.as_ref() != Some(id)
+        && !next.selected_elsewhere(id)
     {
-        Arc::make_mut(&mut next.subscriptions).remove(id);
+        Arc::make_mut(&mut next.sessions.subscriptions).remove(id);
     }
     if workspace_mutated(&update.change)
         && let Some(cwd) = &current.cwd
     {
         effects.extend(op::refresh_file_trees(&mut next, cwd));
     }
-    if refresh_workspace || workspace_changed {
-        effects.extend(op::review_workspace(&mut next));
-    }
     (next, effects)
+}
+
+fn update_pane_context(
+    view: &mut Snapshot,
+    before: &Thread,
+    id: &crate::session::SessionRef,
+    change: &crate::session::SessionChange,
+    completed: bool,
+) -> Vec<Effect> {
+    use crate::session::SessionChange;
+    let thread = view.sessions.conversations[id].clone();
+    let workspace_changed = view.pane.navigation.thread_id.as_ref() == Some(id)
+        && matches!(change, SessionChange::Workspace { .. })
+        && thread.cwd.as_deref() != Some(view.pane.navigation.cwd.as_str());
+    let refresh_workspace = (completed
+        || before.preparation.is_some()
+            && matches!(change, SessionChange::Preparation { preparation: None })
+        || matches!(change, SessionChange::Item { .. }))
+        && before.cwd.as_deref() == Some(&view.pane.navigation.cwd);
+    if workspace_changed {
+        let navigation = Navigation {
+            cwd: thread.cwd.clone().unwrap_or_default(),
+            ..view.pane.navigation.as_ref().clone()
+        };
+        Arc::make_mut(&mut view.pane).epoch += 1;
+        navigate(view, navigation);
+    }
+    let mut effects = Vec::new();
+    if fleet_contains(
+        view.pane.observed_agents.as_ref(),
+        id,
+        &view.sessions.conversations,
+    ) && matches!(change, SessionChange::Item { item, .. }
+            if matches!(item.body(), crate::models::ItemBody::Subagent { receivers, .. }
+                if receivers.iter().any(|receiver| !view.sessions.conversations.contains_key(receiver))))
+    {
+        effects.extend(op::refresh_agents(
+            view.connection.connected,
+            view.pane.observed_agents.as_ref(),
+        ));
+    }
+    if refresh_workspace || workspace_changed {
+        effects.extend(op::review_workspace(view));
+    }
+    effects
 }
 
 // Match T3 ChatView.logic.ts deriveWorkspaceMutationId: completed shell/file
@@ -470,6 +503,7 @@ impl Snapshot {
         state: agent_protocol::live_activity::TaskActivityState,
     ) -> Vec<Effect> {
         if self
+            .lists
             .task_activity
             .as_ref()
             .is_none_or(|current| current.revision < state.revision)
@@ -478,10 +512,10 @@ impl Snapshot {
                 .unread
                 .iter()
                 .map(|(id, _)| id.clone())
-                .filter(|id| self.navigation.thread_id.as_ref() != Some(id))
+                .filter(|id| self.pane.navigation.thread_id.as_ref() != Some(id))
                 .collect();
-            if self.activity.unread != unread {
-                Arc::make_mut(&mut self.activity).unread = unread;
+            if self.lists.activity.unread != unread {
+                Arc::make_mut(&mut self.lists.activity).unread = unread;
             }
             for (id, status) in &state.statuses {
                 let active = match status {
@@ -490,9 +524,9 @@ impl Snapshot {
                     crate::models::SessionStatus::Idle => Some(false),
                     _ => None,
                 };
-                let current = self.activity.active.get(id).copied();
+                let current = self.lists.activity.active.get(id).copied();
                 if current != active {
-                    let activity = Arc::make_mut(&mut self.activity);
+                    let activity = Arc::make_mut(&mut self.lists.activity);
                     match (current, active) {
                         (Some(_), Some(active)) => *activity.active.get_mut(id).unwrap() = active,
                         (None, Some(active)) => {
@@ -506,10 +540,12 @@ impl Snapshot {
             }
             if !state.statuses.is_empty()
                 && (self
+                    .lists
                     .threads
                     .as_ref()
                     .is_some_and(|page| !page.data.is_empty())
                     || self
+                        .lists
                         .project_threads
                         .values()
                         .any(|page| !page.data.is_empty()))
@@ -519,7 +555,7 @@ impl Snapshot {
                     .iter()
                     .map(|(id, status)| (id, *status))
                     .collect();
-                if let Some(page) = &mut self.threads
+                if let Some(page) = &mut self.lists.threads
                     && let Some(first) = first_status_change(&page.data, &statuses)
                 {
                     let page = Arc::make_mut(page);
@@ -527,13 +563,14 @@ impl Snapshot {
                         updated_status_rows(std::mem::take(&mut page.data), first, &statuses);
                 }
                 let updates: Vec<_> = self
+                    .lists
                     .project_threads
                     .values()
                     .map(|page| first_status_change(&page.data, &statuses))
                     .collect();
                 if updates.iter().any(Option::is_some) {
                     // Cloning this BTreeMap preserves its keys and iteration order.
-                    for (page, index) in Arc::make_mut(&mut self.project_threads)
+                    for (page, index) in Arc::make_mut(&mut self.lists.project_threads)
                         .values_mut()
                         .zip(updates)
                     {
@@ -549,15 +586,17 @@ impl Snapshot {
                 }
             }
             let previous = self
+                .lists
                 .task_activity
                 .as_ref()
                 .map(|state| state.unread.as_slice())
                 .unwrap_or_default();
             let receipt = self
+                .pane
                 .navigation
                 .thread_id
                 .as_ref()
-                .filter(|_| self.connected)
+                .filter(|_| self.connection.connected)
                 .and_then(|selected| {
                     state
                         .unread
@@ -571,7 +610,7 @@ impl Snapshot {
                             })
                         })
                 });
-            self.task_activity = Some(Arc::new(state));
+            self.lists.task_activity = Some(Arc::new(state));
             return receipt.into_iter().collect();
         }
         Vec::new()
@@ -626,34 +665,46 @@ mod tests {
             DraftKey::from("another")
         };
         let snapshot = Snapshot {
-            connected: true,
-            navigation: Arc::new(Navigation {
-                thread_id: selected.then_some(id.clone()),
-                draft_key: draft_key.clone(),
-                cwd: "/project".into(),
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
+            sessions: crate::state::Sessions {
+                conversations: Arc::new(
+                    [(
+                        id.clone(),
+                        Arc::new(Thread {
+                            id: Some(id.clone()),
+                            cwd: Some("/project".into()),
+                            ..Default::default()
+                        }),
+                    )]
+                    .into(),
+                ),
+                subscriptions: Arc::new([(id.clone(), subscription)].into()),
+                ..Default::default()
+            },
+            input: crate::state::Input {
+                drafts: Arc::new(
+                    [(
+                        draft_key.clone(),
+                        Arc::new(Draft {
+                            text: "typed while preparing".into(),
+                            ..Default::default()
+                        }),
+                    )]
+                    .into(),
+                ),
+                ..Default::default()
+            },
+            pane: std::sync::Arc::new(crate::state::PaneState {
+                navigation: Arc::new(Navigation {
+                    thread_id: selected.then_some(id.clone()),
+                    draft_key: draft_key.clone(),
+                    cwd: "/project".into(),
+                }),
+                ..Default::default()
             }),
-            conversations: Arc::new(
-                [(
-                    id.clone(),
-                    Arc::new(Thread {
-                        id: Some(id.clone()),
-                        cwd: Some("/project".into()),
-                        ..Default::default()
-                    }),
-                )]
-                .into(),
-            ),
-            subscriptions: Arc::new([(id.clone(), subscription)].into()),
-            drafts: Arc::new(
-                [(
-                    draft_key.clone(),
-                    Arc::new(Draft {
-                        text: "typed while preparing".into(),
-                        ..Default::default()
-                    }),
-                )]
-                .into(),
-            ),
             ..Default::default()
         };
         let (next, effects) = session_update(
@@ -665,12 +716,15 @@ mod tests {
                 },
             },
         );
-        assert_eq!(next.conversations[&id].cwd.as_deref(), Some("/worktree"));
         assert_eq!(
-            next.navigation.cwd,
+            next.sessions.conversations[&id].cwd.as_deref(),
+            Some("/worktree")
+        );
+        assert_eq!(
+            next.pane.navigation.cwd,
             if selected { "/worktree" } else { "/project" }
         );
-        assert_eq!(next.drafts[&draft_key].text, "typed while preparing");
+        assert_eq!(next.input.drafts[&draft_key].text, "typed while preparing");
         assert_eq!(effects.len(), usize::from(selected));
     }
 
@@ -680,36 +734,45 @@ mod tests {
         let id = SessionRef::new(ProviderKind::Codex, "admitted".into()).unwrap();
         let subscription = uuid::Uuid::new_v4();
         let snapshot = Snapshot {
-            connected: true,
-            navigation: Arc::new(Navigation {
-                thread_id: Some(id.clone()),
-                draft_key: id.clone().into(),
-                cwd: "/project".into(),
-            }),
-            conversations: Arc::new(
-                [(
-                    id.clone(),
-                    Arc::new(Thread {
-                        id: Some(id.clone()),
-                        cwd: Some("/project".into()),
-                        preparation: Some(SessionPreparation {
-                            submission: agent_protocol::operations::Submission {
-                                thread_id: id.clone(),
-                                client_user_message_id: "input".into(),
-                                input: Vec::new(),
-                                model: None,
-                                effort: None,
-                                service_tier: None,
-                            },
-                            status: PreparationStatus::Preparing,
-                            stage: agent_protocol::session::PreparationStage::Workspace,
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
+            sessions: crate::state::Sessions {
+                conversations: Arc::new(
+                    [(
+                        id.clone(),
+                        Arc::new(Thread {
+                            id: Some(id.clone()),
+                            cwd: Some("/project".into()),
+                            preparation: Some(SessionPreparation {
+                                submission: agent_protocol::operations::Submission {
+                                    thread_id: id.clone(),
+                                    client_user_message_id: "input".into(),
+                                    input: Vec::new(),
+                                    model: None,
+                                    effort: None,
+                                    service_tier: None,
+                                },
+                                status: PreparationStatus::Preparing,
+                                stage: agent_protocol::session::PreparationStage::Workspace,
+                            }),
+                            ..Default::default()
                         }),
-                        ..Default::default()
-                    }),
-                )]
-                .into(),
-            ),
-            subscriptions: Arc::new([(id.clone(), subscription)].into()),
+                    )]
+                    .into(),
+                ),
+                subscriptions: Arc::new([(id.clone(), subscription)].into()),
+                ..Default::default()
+            },
+            pane: std::sync::Arc::new(crate::state::PaneState {
+                navigation: Arc::new(Navigation {
+                    thread_id: Some(id.clone()),
+                    draft_key: id.clone().into(),
+                    cwd: "/project".into(),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let update = |snapshot: &Snapshot, change| {
@@ -733,7 +796,7 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        assert!(moved.workspace.review_cwd.is_none());
+        assert!(moved.pane.workspace.review_cwd.is_none());
         let (started, effects) = update(
             &moved,
             crate::session::SessionChange::Preparation { preparation: None },
@@ -774,24 +837,33 @@ mod tests {
         let parent = SessionRef::new(ProviderKind::Codex, "parent".into()).unwrap();
         let child = SessionRef::new(ProviderKind::Codex, "child".into()).unwrap();
         let snapshot = Snapshot {
-            connected: true,
-            observed_agents: observing.then_some(parent.clone()),
-            navigation: Arc::new(Navigation {
-                thread_id: Some(parent.clone()),
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
+            sessions: crate::state::Sessions {
+                conversations: Arc::new(
+                    [(
+                        child.clone(),
+                        Arc::new(crate::models::Thread {
+                            id: Some(child.clone()),
+                            parent_id: Some(parent.clone()),
+                            name: Some("Review".into()),
+                            ..Default::default()
+                        }),
+                    )]
+                    .into(),
+                ),
+                ..Default::default()
+            },
+            pane: std::sync::Arc::new(crate::state::PaneState {
+                observed_agents: observing.then_some(parent.clone()),
+                navigation: Arc::new(Navigation {
+                    thread_id: Some(parent.clone()),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
-            conversations: Arc::new(
-                [(
-                    child.clone(),
-                    Arc::new(crate::models::Thread {
-                        id: Some(child.clone()),
-                        parent_id: Some(parent),
-                        name: Some("Review".into()),
-                        ..Default::default()
-                    }),
-                )]
-                .into(),
-            ),
             ..Default::default()
         };
         let (next, effects) = notification(
@@ -802,9 +874,9 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        assert_eq!(next.activity.active[&child], active);
+        assert_eq!(next.lists.activity.active[&child], active);
         assert_eq!(next.agent_panel()[0].active, active);
-        assert_eq!(next.navigation, snapshot.navigation);
+        assert_eq!(next.pane.navigation, snapshot.pane.navigation);
     }
 
     #[rstest::rstest]
@@ -825,17 +897,28 @@ mod tests {
             },
         };
         let initial = Snapshot {
-            connected: true,
-            composer_catalog: Some(Arc::new(
-                agent_protocol::composer::ComposerCatalog::default(),
-            )),
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
+            catalog: crate::state::Catalog {
+                composer_catalogs: std::sync::Arc::new(
+                    (Some(Arc::new(
+                        agent_protocol::composer::ComposerCatalog::default(),
+                    )))
+                    .into_iter()
+                    .map(|catalog| (catalog.cwd.clone(), catalog))
+                    .collect(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let (phone, effects) = reduce(&initial, Event::Notification(activity(1, Some("first"))));
         assert!(effects.is_empty());
-        assert!(phone.activity.unread.contains(&id));
+        assert!(phone.lists.activity.unread.contains(&id));
         let (desktop, _) = reduce(&initial, Event::Notification(activity(1, Some("first"))));
-        assert_eq!(desktop.activity.unread, phone.activity.unread);
+        assert_eq!(desktop.lists.activity.unread, phone.lists.activity.unread);
 
         let (phone, effects) = reduce(
             &phone,
@@ -846,7 +929,7 @@ mod tests {
             2,
             "opening the conversation reads history and sends a receipt"
         );
-        assert!(phone.activity.unread.is_empty());
+        assert!(phone.lists.activity.unread.is_empty());
         let (phone, effects) = reduce(&phone, Event::Notification(activity(2, Some("first"))));
         assert!(
             effects.is_empty(),
@@ -858,14 +941,14 @@ mod tests {
             1,
             "a new visible completion needs its own receipt"
         );
-        assert!(phone.activity.unread.is_empty());
+        assert!(phone.lists.activity.unread.is_empty());
         let (phone, effects) = reduce(&phone, Event::Notification(activity(1, None)));
         assert!(effects.is_empty());
-        assert_eq!(phone.task_activity.as_ref().unwrap().revision, 3);
+        assert_eq!(phone.lists.task_activity.as_ref().unwrap().revision, 3);
 
         let (desktop, effects) = reduce(&desktop, Event::Notification(activity(4, None)));
         assert!(effects.is_empty());
-        assert!(desktop.activity.unread.is_empty());
+        assert!(desktop.lists.activity.unread.is_empty());
         let disconnected = reduce(&phone, Event::Disconnected).0;
         let reconnected = reduce(&disconnected, Event::Connected).0;
         let mut restored = reconnected;
@@ -887,6 +970,7 @@ mod tests {
         let _ = state.accept_task_activity(agent_protocol::live_activity::TaskActivityState {
             waiting: Vec::new(),
             revision: state
+                .lists
                 .task_activity
                 .as_ref()
                 .map_or(1, |state| state.revision + 1),
@@ -904,15 +988,24 @@ mod tests {
         let parent = SessionRef::new(provider, "parent".into()).unwrap();
         let subscription = uuid::Uuid::new_v4();
         Snapshot {
-            connected: true,
-            threads: Some(Arc::new(serde_json::from_value(json!({
-                "data":[{"id":parent,"name":"Task","cwd":"/fixture","status":"idle","worktreeStatus":"unmerged"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap())),
-            subscriptions: Arc::new([(parent.clone(), subscription)].into()),
-            conversations: Arc::new([(parent.clone(), Arc::new(crate::models::Thread {
-                id: Some(parent.clone()),
-                turns: Some(vec![Arc::new(crate::models::Turn { id:"turn".into(), status:crate::models::TurnStatus::Running, items:Some(vec![]), ..Default::default() })]),
+            connection: crate::state::Connection {
+                connected: true,
                 ..Default::default()
-            }))].into()),
+            },
+            lists: crate::state::Lists {
+                threads: Some(Arc::new(serde_json::from_value(json!({
+                    "data":[{"id":parent,"name":"Task","cwd":"/fixture","status":"idle","worktreeStatus":"unmerged"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap())),
+                ..Default::default()
+            },
+            sessions: crate::state::Sessions {
+                subscriptions: Arc::new([(parent.clone(), subscription)].into()),
+                conversations: Arc::new([(parent.clone(), Arc::new(crate::models::Thread {
+                    id: Some(parent.clone()),
+                    turns: Some(vec![Arc::new(crate::models::Turn { id:"turn".into(), status:crate::models::TurnStatus::Running, items:Some(vec![]), ..Default::default() })]),
+                    ..Default::default()
+                }))].into()),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -923,9 +1016,13 @@ mod tests {
         #[values(true, false)] observing: bool,
     ) {
         let mut state = snapshot(ProviderKind::Codex);
-        let parent = state.threads.as_ref().unwrap().data[0].id.clone().unwrap();
-        Arc::make_mut(&mut state.navigation).thread_id = Some(parent.clone());
-        state.observed_agents = observing.then_some(parent);
+        let parent = state.lists.threads.as_ref().unwrap().data[0]
+            .id
+            .clone()
+            .unwrap();
+        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id =
+            Some(parent.clone());
+        Arc::make_mut(&mut state.pane).observed_agents = observing.then_some(parent);
         let unknown = SessionRef::new(ProviderKind::Codex, "unseen".into()).unwrap();
         let (discovered, effects) = notification(
             &state,
@@ -943,16 +1040,22 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        assert!(Arc::ptr_eq(&discovered.activity, &repeated.activity));
-        assert_eq!(repeated.navigation, state.navigation);
+        assert!(Arc::ptr_eq(
+            &discovered.lists.activity,
+            &repeated.lists.activity
+        ));
+        assert_eq!(repeated.pane.navigation, state.pane.navigation);
     }
 
     #[test]
     fn unrelated_fleets_do_not_trigger_reads_of_the_visible_fleet() {
         let mut state = snapshot(ProviderKind::Codex);
-        let parent = state.threads.as_ref().unwrap().data[0].id.clone().unwrap();
-        state.observed_agents = Some(parent.clone());
-        Arc::make_mut(&mut state.navigation).thread_id = Some(parent);
+        let parent = state.lists.threads.as_ref().unwrap().data[0]
+            .id
+            .clone()
+            .unwrap();
+        Arc::make_mut(&mut state.pane).observed_agents = Some(parent.clone());
+        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = Some(parent);
         let session = |id: &str| SessionRef::new(ProviderKind::Codex, id.into()).unwrap();
         for (id, parent) in [
             ("child", "parent"),
@@ -962,8 +1065,9 @@ mod tests {
             ("cycle-b", "cycle-a"),
         ] {
             let id = session(id);
-            Arc::make_mut(&mut state.subscriptions).insert(id.clone(), uuid::Uuid::new_v4());
-            Arc::make_mut(&mut state.conversations).insert(
+            Arc::make_mut(&mut state.sessions.subscriptions)
+                .insert(id.clone(), uuid::Uuid::new_v4());
+            Arc::make_mut(&mut state.sessions.conversations).insert(
                 id.clone(),
                 Arc::new(Thread {
                     id: Some(id),
@@ -980,11 +1084,13 @@ mod tests {
         }
         let cross_provider =
             SessionRef::new(ProviderKind::Claude, "cross-provider".into()).unwrap();
-        Arc::make_mut(&mut state.subscriptions)
+        Arc::make_mut(&mut state.sessions.subscriptions)
             .insert(cross_provider.clone(), uuid::Uuid::new_v4());
-        let mut cross_thread = state.conversations[&session("child")].as_ref().clone();
+        let mut cross_thread = state.sessions.conversations[&session("child")]
+            .as_ref()
+            .clone();
         cross_thread.id = Some(cross_provider.clone());
-        Arc::make_mut(&mut state.conversations)
+        Arc::make_mut(&mut state.sessions.conversations)
             .insert(cross_provider.clone(), Arc::new(cross_thread));
         for (id, expected) in [
             ("child", 1),
@@ -1014,7 +1120,7 @@ mod tests {
             let (next, effects) = session_update(
                 &state,
                 crate::session::SessionUpdate {
-                    subscription_id: state.subscriptions[&id],
+                    subscription_id: state.sessions.subscriptions[&id],
                     change: crate::session::SessionChange::Item {
                         turn_id: "turn".into(),
                         item: Arc::new(item),
@@ -1022,7 +1128,7 @@ mod tests {
                 },
             );
             assert_eq!(effects.len(), expected, "spawn {id}");
-            assert_eq!(next.navigation, state.navigation);
+            assert_eq!(next.pane.navigation, state.pane.navigation);
         }
     }
 
@@ -1036,14 +1142,14 @@ mod tests {
             repetitions in 1usize..12,
         ) {
             let mut state = snapshot(if claude { ProviderKind::Claude } else { ProviderKind::Codex });
-            state.connected = connected;
-            Arc::make_mut(state.threads.as_mut().unwrap()).data[0].cwd = Some("/fixture".into());
-            let id = state.threads.as_ref().unwrap().data[0].id.clone().unwrap();
+            state.connection.connected = connected;
+            Arc::make_mut(state.lists.threads.as_mut().unwrap()).data[0].cwd = Some("/fixture".into());
+            let id = state.lists.threads.as_ref().unwrap().data[0].id.clone().unwrap();
             if selected {
-                Arc::make_mut(&mut state.navigation).thread_id = Some(id.clone());
+                Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = Some(id.clone());
             }
-            Arc::make_mut(&mut state.activity).unread.insert(id.clone());
-            let cached_list = state.threads.clone().unwrap();
+            Arc::make_mut(&mut state.lists.activity).unread.insert(id.clone());
+            let cached_list = state.lists.threads.clone().unwrap();
             for _ in 0..2 {
                 let (running, effects) = notification(&state, Notification::Activity {
                     session: id.clone(), active: true,
@@ -1059,7 +1165,7 @@ mod tests {
                         session: id.clone(), active: true,
                     });
                     prop_assert!(effects.is_empty());
-                    prop_assert!(Arc::ptr_eq(&state.activity, &repeated.activity));
+                    prop_assert!(Arc::ptr_eq(&state.lists.activity, &repeated.lists.activity));
                     state = repeated;
                 }
                 let (idle, effects) = notification(&state, Notification::Activity {
@@ -1079,15 +1185,15 @@ mod tests {
                     prop_assert_eq!(row.unread, finished && !selected);
                     prop_assert_eq!(row.title.as_str(), "Task");
                     prop_assert_eq!(row.worktree_status, Some(crate::models::WorktreeStatus::Unmerged));
-                    prop_assert_eq!(&state.navigation, &ended.navigation);
+                    prop_assert_eq!(&state.pane.navigation, &ended.pane.navigation);
                     state = ended;
                 }
-                prop_assert!(Arc::ptr_eq(state.threads.as_ref().unwrap(), &cached_list));
+                prop_assert!(Arc::ptr_eq(state.lists.threads.as_ref().unwrap(), &cached_list));
                 let (repeated, effects) = notification(&state, Notification::Activity {
                     session: id.clone(), active: false,
                 });
                 prop_assert!(effects.is_empty());
-                prop_assert!(Arc::ptr_eq(&state.activity, &repeated.activity));
+                prop_assert!(Arc::ptr_eq(&state.lists.activity, &repeated.lists.activity));
             }
         }
     }
@@ -1097,12 +1203,15 @@ mod tests {
     #[case::claude(ProviderKind::Claude)]
     fn streamed_commands_and_known_agents_do_not_reload_titles(#[case] provider: ProviderKind) {
         let mut state = snapshot(provider);
-        Arc::make_mut(state.threads.as_mut().unwrap()).data[0].cwd = Some("/fixture".into());
-        let id = state.threads.as_ref().unwrap().data[0].id.clone().unwrap();
-        let subscription = state.subscriptions[&id];
+        Arc::make_mut(state.lists.threads.as_mut().unwrap()).data[0].cwd = Some("/fixture".into());
+        let id = state.lists.threads.as_ref().unwrap().data[0]
+            .id
+            .clone()
+            .unwrap();
+        let subscription = state.sessions.subscriptions[&id];
         let child = SessionRef::new(provider, "child".into()).unwrap();
-        state.observed_agents = Some(id.clone());
-        Arc::make_mut(&mut state.conversations).insert(
+        Arc::make_mut(&mut state.pane).observed_agents = Some(id.clone());
+        Arc::make_mut(&mut state.sessions.conversations).insert(
             child.clone(),
             Arc::new(crate::models::Thread {
                 id: Some(child.clone()),
@@ -1161,7 +1270,7 @@ mod tests {
             effects.is_empty(),
             "the global Activity notice owns the completion refresh"
         );
-        assert!(!ended.subscriptions.contains_key(&id));
+        assert!(!ended.sessions.subscriptions.contains_key(&id));
         let (ended, effects) = notification(
             &ended,
             Notification::Activity {
@@ -1184,7 +1293,10 @@ mod tests {
     #[test]
     fn user_messages_and_renames_do_not_read_lists() {
         let state = snapshot(ProviderKind::Codex);
-        let id = state.threads.as_ref().unwrap().data[0].id.clone().unwrap();
+        let id = state.lists.threads.as_ref().unwrap().data[0]
+            .id
+            .clone()
+            .unwrap();
         let item = serde_json::from_value(json!({
             "id":"user","status":"completed","clientInputId":null,
             "body":{"inline":{"body":{"userMessage":{"text":"New task title","content":[]}}}}
@@ -1193,7 +1305,7 @@ mod tests {
         let (_, effects) = session_update(
             &state,
             crate::session::SessionUpdate {
-                subscription_id: state.subscriptions[&id],
+                subscription_id: state.sessions.subscriptions[&id],
                 change: crate::session::SessionChange::Item {
                     turn_id: "turn".into(),
                     item: Arc::new(item),
@@ -1210,9 +1322,12 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        assert_eq!(next.conversations[&id].name.as_deref(), Some("Renamed"));
         assert_eq!(
-            next.threads.as_ref().unwrap().data[0].name.as_deref(),
+            next.sessions.conversations[&id].name.as_deref(),
+            Some("Renamed")
+        );
+        assert_eq!(
+            next.lists.threads.as_ref().unwrap().data[0].name.as_deref(),
             Some("Renamed")
         );
         let (cleared, effects) = notification(
@@ -1224,15 +1339,19 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        assert!(cleared.conversations[&id].name.is_none());
-        assert!(cleared.threads.as_ref().unwrap().data[0].name.is_none());
+        assert!(cleared.sessions.conversations[&id].name.is_none());
+        assert!(
+            cleared.lists.threads.as_ref().unwrap().data[0]
+                .name
+                .is_none()
+        );
     }
 
     proptest! {
         #[test]
         fn metadata_notices_preserve_closed_page_quota_and_newer_names(limit in prop_oneof![Just(5u32), Just(15u32), Just(25u32)]) {
             let mut state = snapshot(ProviderKind::Codex);
-            let mut page = state.threads.as_ref().unwrap().as_ref().clone();
+            let mut page = state.lists.threads.as_ref().unwrap().as_ref().clone();
             page.limit = limit;
             page.data = (0..limit).map(|index| Thread {
                 id: Some(SessionRef::new(ProviderKind::Codex, format!("task-{index}")).unwrap()),
@@ -1241,32 +1360,32 @@ mod tests {
                 updated_at: Some(f64::from(index)),
                 ..Default::default()
             }).collect();
-            state.project_threads = Arc::new([("closed".into(), Arc::new(page))].into());
-            let id = state.project_threads["closed"].data[0].id.clone().unwrap();
+            state.lists.project_threads = Arc::new([("closed".into(), Arc::new(page))].into());
+            let id = state.lists.project_threads["closed"].data[0].id.clone().unwrap();
             let (renamed, effects) = notification(&state, Notification::SessionRenamed { session: id.clone(), name: Some("New title".into()), revision: 2 });
             prop_assert!(effects.is_empty());
             let (next, effects) = notification(&renamed, Notification::SessionUpdated {
                 thread: Thread { id: Some(id.clone()), project_id: crate::models::ProjectMembership::Assigned("closed".into()), name: Some("Old native name".into()), updated_at: Some(999.0), list_revision: 3, ..Default::default() }.into(), project: None,
             });
             prop_assert!(effects.is_empty());
-            prop_assert!(next.expanded_projects.is_empty());
-            prop_assert_eq!(next.project_threads["closed"].limit, limit);
-            prop_assert_eq!(next.project_threads["closed"].data.len(), limit as usize);
-            prop_assert!(!next.project_threads["closed"].has_more, "updating an existing row cannot invent a lookahead row");
-            prop_assert_eq!(next.project_threads["closed"].data[0].name.as_deref(), Some("New title"));
+            prop_assert!(next.lists.expanded_projects.is_empty());
+            prop_assert_eq!(next.lists.project_threads["closed"].limit, limit);
+            prop_assert_eq!(next.lists.project_threads["closed"].data.len(), limit as usize);
+            prop_assert!(!next.lists.project_threads["closed"].has_more, "updating an existing row cannot invent a lookahead row");
+            prop_assert_eq!(next.lists.project_threads["closed"].data[0].name.as_deref(), Some("New title"));
             let (stale, effects) = notification(&next, Notification::SessionRenamed { session: id, name: Some("Stale".into()), revision: 1 });
             prop_assert!(effects.is_empty());
-            prop_assert!(Arc::ptr_eq(&stale.project_threads, &next.project_threads));
-            let (stale, effects) = notification(&next, Notification::SessionUpdated { thread: state.project_threads["closed"].data[0].clone().into(), project: None });
+            prop_assert!(Arc::ptr_eq(&stale.lists.project_threads, &next.lists.project_threads));
+            let (stale, effects) = notification(&next, Notification::SessionUpdated { thread: state.lists.project_threads["closed"].data[0].clone().into(), project: None });
             prop_assert!(effects.is_empty());
-            prop_assert!(Arc::ptr_eq(&stale.project_threads, &next.project_threads));
+            prop_assert!(Arc::ptr_eq(&stale.lists.project_threads, &next.lists.project_threads));
             let (added, effects) = notification(&next, Notification::SessionUpdated {
                 thread: Thread { id: Some(SessionRef::new(ProviderKind::Codex, "new".into()).unwrap()), project_id: crate::models::ProjectMembership::Assigned("closed".into()), name: Some("Created task".into()), updated_at: Some(1000.0), list_revision: 4, ..Default::default() }.into(), project: None,
             });
             prop_assert!(effects.is_empty());
-            prop_assert_eq!(added.project_threads["closed"].data.len(), limit as usize);
-            prop_assert!(added.project_threads["closed"].has_more);
-            prop_assert_eq!(added.project_threads["closed"].data[0].name.as_deref(), Some("Created task"));
+            prop_assert_eq!(added.lists.project_threads["closed"].data.len(), limit as usize);
+            prop_assert!(added.lists.project_threads["closed"].has_more);
+            prop_assert_eq!(added.lists.project_threads["closed"].data[0].name.as_deref(), Some("Created task"));
         }
     }
 
@@ -1293,8 +1412,11 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        assert_eq!(next.threads.as_ref().unwrap().projects[0].id, "unread");
-        assert!(!next.project_threads.contains_key("unread"));
+        assert_eq!(
+            next.lists.threads.as_ref().unwrap().projects[0].id,
+            "unread"
+        );
+        assert!(!next.lists.project_threads.contains_key("unread"));
         let (_, effects) = reduce_intent(
             &next,
             Intent::SetProjectExpanded {
@@ -1312,12 +1434,12 @@ mod tests {
     #[test]
     fn running_subagents_refresh_only_the_observed_fleet_without_waiting_for_completion() {
         let mut snapshot = snapshot(ProviderKind::Codex);
-        let parent = snapshot.threads.as_ref().unwrap().data[0]
+        let parent = snapshot.lists.threads.as_ref().unwrap().data[0]
             .id
             .clone()
             .unwrap();
         let child = SessionRef::new(ProviderKind::Codex, "child".into()).unwrap();
-        let subscription = snapshot.subscriptions[&parent];
+        let subscription = snapshot.sessions.subscriptions[&parent];
         for session in [parent.clone(), child.clone()] {
             let (next, effects) = notification(
                 &snapshot,
@@ -1327,14 +1449,14 @@ mod tests {
                 },
             );
             assert!(effects.is_empty(), "activity alone must not read lists");
-            assert!(next.activity.active[&session]);
-            assert_eq!(next.navigation, snapshot.navigation);
+            assert!(next.lists.activity.active[&session]);
+            assert_eq!(next.pane.navigation, snapshot.pane.navigation);
         }
         let item = serde_json::from_value(serde_json::json!({
             "id":"spawn","status":"running","clientInputId":null,
             "body":{"inline":{"body":{"subagent":{"tool":"spawnAgent","prompt":null,"model":null,"effort":null,"sender":parent,"receivers":[child],"states":[],"agentId":null,"result":null}}}}
         })).unwrap();
-        snapshot.observed_agents = Some(parent);
+        Arc::make_mut(&mut snapshot.pane).observed_agents = Some(parent);
         let (next, effects) = session_update(
             &snapshot,
             crate::session::SessionUpdate {
@@ -1350,12 +1472,12 @@ mod tests {
             1,
             "a spawn refreshes while the parent is still running"
         );
-        assert_eq!(next.navigation, snapshot.navigation);
+        assert_eq!(next.pane.navigation, snapshot.pane.navigation);
     }
     #[test]
     fn completion_decorations_keep_the_first_listed_directory_and_skip_child_sessions() {
         let mut state = snapshot(ProviderKind::Codex);
-        let first = Arc::make_mut(state.threads.as_mut().unwrap())
+        let first = Arc::make_mut(state.lists.threads.as_mut().unwrap())
             .data
             .first_mut()
             .unwrap();
@@ -1365,12 +1487,12 @@ mod tests {
         let mut duplicate = first.clone();
         duplicate.cwd = Some("/later".into());
         duplicate.git_branch = Some("later-branch".into());
-        let root = Arc::make_mut(state.threads.as_mut().unwrap());
+        let root = Arc::make_mut(state.lists.threads.as_mut().unwrap());
         root.data.push(duplicate.clone());
         let mut project = root.clone();
         project.data = vec![duplicate];
-        Arc::make_mut(&mut state.project_threads).insert("project".into(), Arc::new(project));
-        Arc::make_mut(&mut state.activity)
+        Arc::make_mut(&mut state.lists.project_threads).insert("project".into(), Arc::new(project));
+        Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(id.clone(), true);
         let (idle, effects) = notification(
@@ -1380,7 +1502,7 @@ mod tests {
                 active: false,
             },
         );
-        assert_eq!(idle.activity.active.get(&id), Some(&false));
+        assert_eq!(idle.lists.activity.active.get(&id), Some(&false));
         let expected = vec![Effect::execute(op::ReadListDecorations {
             scope: agent_protocol::operations::ListDecorationScope::Task {
                 session: id.clone(),
@@ -1389,7 +1511,7 @@ mod tests {
             threads: vec![(id.clone(), "/first".into(), Some("first-branch".into()))],
         })];
         assert_eq!(format!("{effects:?}"), format!("{expected:?}"));
-        Arc::make_mut(state.threads.as_mut().unwrap()).data[0].cwd = None;
+        Arc::make_mut(state.lists.threads.as_mut().unwrap()).data[0].cwd = None;
         assert!(
             notification(
                 &state,
@@ -1401,9 +1523,9 @@ mod tests {
             .1
             .is_empty()
         );
-        Arc::make_mut(state.threads.as_mut().unwrap()).data[0].cwd = Some("/first".into());
+        Arc::make_mut(state.lists.threads.as_mut().unwrap()).data[0].cwd = Some("/first".into());
         Arc::make_mut(
-            Arc::make_mut(&mut state.conversations)
+            Arc::make_mut(&mut state.sessions.conversations)
                 .get_mut(&id)
                 .unwrap(),
         )
@@ -1434,7 +1556,7 @@ mod tests {
                 SessionStatus::Running,
             ] {
                 let mut state = Snapshot::default();
-                let activity = Arc::make_mut(&mut state.activity);
+                let activity = Arc::make_mut(&mut state.lists.activity);
                 activity.active.insert(other.clone(), true);
                 if let Some(current) = current {
                     activity.active.insert(id.clone(), current);
@@ -1457,21 +1579,21 @@ mod tests {
                     _ => None,
                 };
                 assert!(effects.is_empty());
-                assert_eq!(next.activity.active.get(&id).copied(), expected);
-                assert!(next.activity.active[&other]);
-                assert_eq!(state.activity.active.get(&id).copied(), current);
+                assert_eq!(next.lists.activity.active.get(&id).copied(), expected);
+                assert!(next.lists.activity.active[&other]);
+                assert_eq!(state.lists.activity.active.get(&id).copied(), current);
                 assert_eq!(
-                    Arc::ptr_eq(&state.activity, &next.activity),
+                    Arc::ptr_eq(&state.lists.activity, &next.lists.activity),
                     current == expected
                 );
                 assert_eq!(
-                    next.task_activity.as_ref().unwrap().statuses,
+                    next.lists.task_activity.as_ref().unwrap().statuses,
                     [(id.clone(), status)]
                 );
             }
         }
         let mut state = Snapshot::default();
-        Arc::make_mut(&mut state.activity)
+        Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(id.clone(), false);
         let (next, effects) = notification(
@@ -1490,8 +1612,8 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        assert_eq!(next.activity.active, state.activity.active);
-        assert!(!next.activity.active[&id]);
+        assert_eq!(next.lists.activity.active, state.lists.activity.active);
+        assert!(!next.lists.activity.active[&id]);
     }
 
     #[test]
@@ -1521,15 +1643,18 @@ mod tests {
             unchanged.data.truncate(2);
             let unchanged = Arc::new(unchanged);
             let state = Snapshot {
-                threads: Some(root.clone()),
-                project_threads: Arc::new(
-                    [
-                        ("matching".into(), root.clone()),
-                        ("z-matching".into(), root.clone()),
-                        ("a-unchanged".into(), unchanged.clone()),
-                    ]
-                    .into(),
-                ),
+                lists: crate::state::Lists {
+                    threads: Some(root.clone()),
+                    project_threads: Arc::new(
+                        [
+                            ("matching".into(), root.clone()),
+                            ("z-matching".into(), root.clone()),
+                            ("a-unchanged".into(), unchanged.clone()),
+                        ]
+                        .into(),
+                    ),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let incoming = TaskActivityState {
@@ -1554,11 +1679,11 @@ mod tests {
             let mut expected = root.as_ref().clone();
             expected.data[2].status = SessionStatus::Idle;
             expected.data[3].status = status;
-            assert_eq!(next.threads.as_ref().unwrap().as_ref(), &expected);
-            assert_eq!(next.project_threads["matching"].as_ref(), &expected);
-            assert_eq!(next.project_threads["z-matching"].as_ref(), &expected);
+            assert_eq!(next.lists.threads.as_ref().unwrap().as_ref(), &expected);
+            assert_eq!(next.lists.project_threads["matching"].as_ref(), &expected);
+            assert_eq!(next.lists.project_threads["z-matching"].as_ref(), &expected);
             let mut root_only = state.clone();
-            root_only.project_threads = Arc::default();
+            root_only.lists.project_threads = Arc::default();
             let (root_only, effects) = notification(
                 &root_only,
                 Notification::TaskActivity {
@@ -1566,10 +1691,13 @@ mod tests {
                 },
             );
             assert!(effects.is_empty());
-            assert_eq!(root_only.threads.as_ref().unwrap().as_ref(), &expected);
-            assert!(root_only.project_threads.is_empty());
+            assert_eq!(
+                root_only.lists.threads.as_ref().unwrap().as_ref(),
+                &expected
+            );
+            assert!(root_only.lists.project_threads.is_empty());
             let mut project_only = state.clone();
-            project_only.threads = None;
+            project_only.lists.threads = None;
             let (project_only, effects) = notification(
                 &project_only,
                 Notification::TaskActivity {
@@ -1577,21 +1705,24 @@ mod tests {
                 },
             );
             assert!(effects.is_empty());
-            assert!(project_only.threads.is_none());
-            assert_eq!(project_only.project_threads["matching"].as_ref(), &expected);
+            assert!(project_only.lists.threads.is_none());
             assert_eq!(
-                project_only.project_threads["z-matching"].as_ref(),
+                project_only.lists.project_threads["matching"].as_ref(),
+                &expected
+            );
+            assert_eq!(
+                project_only.lists.project_threads["z-matching"].as_ref(),
                 &expected
             );
             assert!(Arc::ptr_eq(
-                &next.project_threads["a-unchanged"],
+                &next.lists.project_threads["a-unchanged"],
                 &unchanged
             ));
             assert_eq!(root.data[2].status, SessionStatus::Running);
-            assert!(!next.activity.active[&codex]);
-            assert!(!next.activity.active[&claude]);
+            assert!(!next.lists.activity.active[&codex]);
+            assert!(!next.lists.activity.active[&claude]);
             assert_eq!(
-                next.activity.active.get(&last).copied(),
+                next.lists.activity.active.get(&last).copied(),
                 match status {
                     SessionStatus::Preparing | SessionStatus::Running => Some(true),
                     SessionStatus::Idle => Some(false),
@@ -1609,10 +1740,13 @@ mod tests {
             );
             assert!(effects.is_empty());
             assert!(Arc::ptr_eq(
-                same.threads.as_ref().unwrap(),
-                next.threads.as_ref().unwrap()
+                same.lists.threads.as_ref().unwrap(),
+                next.lists.threads.as_ref().unwrap()
             ));
-            assert!(Arc::ptr_eq(&same.project_threads, &next.project_threads));
+            assert!(Arc::ptr_eq(
+                &same.lists.project_threads,
+                &next.lists.project_threads
+            ));
             let empty = TaskActivityState {
                 revision: 3,
                 waiting: vec![],
@@ -1627,12 +1761,15 @@ mod tests {
             let (empty, effects) = notification(&same, Notification::TaskActivity { state: empty });
             assert!(effects.is_empty());
             assert!(Arc::ptr_eq(
-                empty.threads.as_ref().unwrap(),
-                same.threads.as_ref().unwrap()
+                empty.lists.threads.as_ref().unwrap(),
+                same.lists.threads.as_ref().unwrap()
             ));
-            assert!(Arc::ptr_eq(&empty.project_threads, &same.project_threads));
-            assert!(Arc::ptr_eq(&empty.activity, &same.activity));
-            assert_eq!(empty.task_activity.as_ref().unwrap().revision, 3);
+            assert!(Arc::ptr_eq(
+                &empty.lists.project_threads,
+                &same.lists.project_threads
+            ));
+            assert!(Arc::ptr_eq(&empty.lists.activity, &same.lists.activity));
+            assert_eq!(empty.lists.task_activity.as_ref().unwrap().revision, 3);
             assert_eq!(
                 empty.task_activity_display().unwrap(),
                 TaskActivitySummary {
@@ -1661,12 +1798,15 @@ mod tests {
                 for project_id in [None, Some("project")] {
                     let id = SessionRef::new(provider, "inserted".into()).unwrap();
                     let mut state = snapshot(provider);
-                    state.conversations = Arc::default();
-                    Arc::make_mut(&mut state.list_query).search_term = search.into();
-                    Arc::make_mut(state.threads.as_mut().unwrap()).data.clear();
+                    state.sessions.conversations = Arc::default();
+                    Arc::make_mut(&mut state.lists.list_query).search_term = search.into();
+                    Arc::make_mut(state.lists.threads.as_mut().unwrap())
+                        .data
+                        .clear();
                     if project_id.is_some() {
-                        state.project_threads =
-                            Arc::new([("project".into(), state.threads.clone().unwrap())].into());
+                        state.lists.project_threads = Arc::new(
+                            [("project".into(), state.lists.threads.clone().unwrap())].into(),
+                        );
                     }
                     let incoming = Thread {
                         id: Some(id.clone()),
@@ -1688,19 +1828,19 @@ mod tests {
                     );
                     assert!(effects.is_empty());
                     let page = match project_id {
-                        Some(id) => &next.project_threads[id],
-                        None => next.threads.as_ref().unwrap(),
+                        Some(id) => &next.lists.project_threads[id],
+                        None => next.lists.threads.as_ref().unwrap(),
                     };
                     assert_eq!(
                         page.data,
                         if matches { vec![incoming] } else { vec![] },
                         "search={search:?}, name={name:?}, provider={provider:?}, project={project_id:?}"
                     );
-                    assert!(state.threads.as_ref().unwrap().data.is_empty());
+                    assert!(state.lists.threads.as_ref().unwrap().data.is_empty());
                     if project_id.is_some() {
                         assert!(Arc::ptr_eq(
-                            next.threads.as_ref().unwrap(),
-                            state.threads.as_ref().unwrap(),
+                            next.lists.threads.as_ref().unwrap(),
+                            state.lists.threads.as_ref().unwrap(),
                         ));
                     }
                 }
@@ -1711,10 +1851,10 @@ mod tests {
     #[test]
     fn summary_rows_preserve_shared_snapshots_metadata_sorting_and_page_limits() {
         let mut state = snapshot(ProviderKind::Codex);
-        state.conversations = Arc::default();
+        state.sessions.conversations = Arc::default();
         let id = SessionRef::new(ProviderKind::Codex, "parent".into()).unwrap();
         let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
-        let page = Arc::make_mut(state.threads.as_mut().unwrap());
+        let page = Arc::make_mut(state.lists.threads.as_mut().unwrap());
         page.revision = 7;
         page.limit = 2;
         page.has_more = true;
@@ -1752,7 +1892,7 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        let page = next.threads.as_ref().unwrap();
+        let page = next.lists.threads.as_ref().unwrap();
         assert_eq!(
             (
                 page.revision,
@@ -1784,9 +1924,19 @@ mod tests {
                 Some(crate::models::WorktreeStatus::Merged)
             )
         );
-        assert_eq!(state.threads.as_ref().unwrap().data[0].list_revision, 1);
-        assert!(state.threads.as_ref().unwrap().data[0].preview.is_none());
-        assert!(Arc::ptr_eq(&state.project_threads, &next.project_threads));
+        assert_eq!(
+            state.lists.threads.as_ref().unwrap().data[0].list_revision,
+            1
+        );
+        assert!(
+            state.lists.threads.as_ref().unwrap().data[0]
+                .preview
+                .is_none()
+        );
+        assert!(Arc::ptr_eq(
+            &state.lists.project_threads,
+            &next.lists.project_threads
+        ));
         for revision in [2, 0] {
             incoming.list_revision = revision;
             let (same, effects) = notification(
@@ -1798,10 +1948,13 @@ mod tests {
             );
             assert!(effects.is_empty());
             assert!(Arc::ptr_eq(
-                same.threads.as_ref().unwrap(),
-                next.threads.as_ref().unwrap()
+                same.lists.threads.as_ref().unwrap(),
+                next.lists.threads.as_ref().unwrap()
             ));
-            assert!(Arc::ptr_eq(&same.project_threads, &next.project_threads));
+            assert!(Arc::ptr_eq(
+                &same.lists.project_threads,
+                &next.lists.project_threads
+            ));
         }
         let inserted = SessionRef::new(ProviderKind::Codex, "inserted".into()).unwrap();
         let (inserted_state, effects) = notification(
@@ -1818,7 +1971,7 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        let page = inserted_state.threads.as_ref().unwrap();
+        let page = inserted_state.lists.threads.as_ref().unwrap();
         assert_eq!(
             page.data
                 .iter()
@@ -1828,7 +1981,7 @@ mod tests {
         );
         assert!(page.has_more);
         assert_eq!(
-            next.threads.as_ref().unwrap().data[1].id.as_ref(),
+            next.lists.threads.as_ref().unwrap().data[1].id.as_ref(),
             Some(&id)
         );
     }
@@ -1845,14 +1998,17 @@ mod tests {
         );
         let untouched = page(json!([{"id":other,"name":"Other","listRevision":1}]));
         let state = Snapshot {
-            threads: Some(root.clone()),
-            project_threads: Arc::new(
-                [
-                    ("matching".into(), root.clone()),
-                    ("untouched".into(), untouched.clone()),
-                ]
-                .into(),
-            ),
+            lists: crate::state::Lists {
+                threads: Some(root.clone()),
+                project_threads: Arc::new(
+                    [
+                        ("matching".into(), root.clone()),
+                        ("untouched".into(), untouched.clone()),
+                    ]
+                    .into(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let (next, effects) = notification(
@@ -1865,8 +2021,8 @@ mod tests {
         );
         assert!(effects.is_empty());
         for page in [
-            next.threads.as_ref().unwrap(),
-            &next.project_threads["matching"],
+            next.lists.threads.as_ref().unwrap(),
+            &next.lists.project_threads["matching"],
         ] {
             assert_eq!(
                 (page.data[0].name.as_deref(), page.data[0].list_revision),
@@ -1887,7 +2043,10 @@ mod tests {
             );
         }
         assert_eq!(root.data[1].name.as_deref(), Some("Old"));
-        assert!(Arc::ptr_eq(&next.project_threads["untouched"], &untouched));
+        assert!(Arc::ptr_eq(
+            &next.lists.project_threads["untouched"],
+            &untouched
+        ));
         let (same, effects) = notification(
             &next,
             Notification::SessionRenamed {
@@ -1898,10 +2057,13 @@ mod tests {
         );
         assert!(effects.is_empty());
         assert!(Arc::ptr_eq(
-            same.threads.as_ref().unwrap(),
-            next.threads.as_ref().unwrap()
+            same.lists.threads.as_ref().unwrap(),
+            next.lists.threads.as_ref().unwrap()
         ));
-        assert!(Arc::ptr_eq(&same.project_threads, &next.project_threads));
+        assert!(Arc::ptr_eq(
+            &same.lists.project_threads,
+            &next.lists.project_threads
+        ));
     }
 }
 

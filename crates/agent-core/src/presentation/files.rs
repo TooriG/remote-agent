@@ -146,3 +146,26 @@ mod tests {
         assert_eq!(append_file_mentions("draft\n", "[a](a)"), "draft\n[a](a) ");
     }
 }
+
+#[cfg(feature = "bindings")]
+#[derive(Clone, uniffi::Object)]
+pub struct Files {
+    pub(crate) resources: crate::state::Files,
+    pub(crate) selection: std::sync::Arc<crate::state::WorkspaceLocation>,
+}
+#[cfg(feature = "bindings")]
+impl std::ops::Deref for Files {
+    type Target = crate::state::Files;
+    fn deref(&self) -> &Self::Target {
+        &self.resources
+    }
+}
+#[cfg(feature = "bindings")]
+impl crate::state::Snapshot {
+    pub fn files_view(&self) -> std::sync::Arc<Files> {
+        std::sync::Arc::new(Files {
+            resources: self.files.clone(),
+            selection: self.pane.workspace.clone(),
+        })
+    }
+}

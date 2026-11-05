@@ -315,7 +315,7 @@ private fun MarkdownText(
         Text(text, style = style, textAlign = style.textAlign)
     } else {
         BoxWithConstraints {
-            val home = LocalHostSnapshot.current.hostHomeDirectory()
+            val home = LocalFileLocation.current.home
             val inline = chips.mapValues { (index, file) ->
                 val link = runs[index.toInt()].link!!
                 val menu = dev.remoteagent.core.mobileFileMenu(link, cwd, home)

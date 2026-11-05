@@ -1,5 +1,6 @@
 //! Export the core snapshot and shared graph directly; only ABI getters live here.
 use super::{AgentError, error};
+use crate::presentation::files::Files;
 use crate::{
     models::{FileContent, ListQuery, Model, WorktreeSettings},
     presentation::conversation::{
@@ -14,7 +15,7 @@ use std::sync::Arc;
 #[uniffi::export]
 impl Snapshot {
     pub fn connection_generation(&self) -> u64 {
-        self.connection_generation
+        self.connection.connection_generation
     }
     pub fn conversation_source(&self) -> Option<Arc<Thread>> {
         self.conversation_thread()
@@ -40,73 +41,66 @@ impl Snapshot {
         crate::persistence::encode(self).map_err(error)
     }
     pub fn connected(&self) -> bool {
-        self.connected
+        self.connection.connected
     }
     pub fn host_name(&self) -> Option<String> {
-        self.host_name.clone()
+        self.connection.host_name.clone()
     }
     pub fn host_ticket(&self) -> Option<String> {
-        self.host_ticket.clone()
+        self.connection.host_ticket.clone()
     }
     pub fn host_home_directory(&self) -> Option<String> {
-        self.host_home_directory.clone()
+        self.connection.host_home_directory.clone()
     }
     pub fn error(&self) -> Option<crate::presentation::error::ErrorText> {
-        self.error
+        self.pane
+            .error
             .as_deref()
             .map(crate::presentation::error::error_text)
     }
+    pub fn files(&self) -> Arc<Files> {
+        self.files_view()
+    }
     pub fn navigation(&self) -> Navigation {
-        self.navigation.as_ref().clone()
+        self.pane.navigation.as_ref().clone()
     }
     pub fn draft(&self, key: crate::state::DraftKey) -> Draft {
-        self.drafts
+        self.input
+            .drafts
             .get(&key)
             .map(|draft| draft.as_ref().clone())
             .unwrap_or_default()
     }
     pub fn list_query(&self) -> ListQuery {
-        self.list_query.as_ref().clone()
+        self.lists.list_query.as_ref().clone()
     }
     pub fn models(&self) -> Vec<Model> {
-        self.models.as_ref().clone()
+        self.catalog.models.as_ref().clone()
     }
     pub fn conversation(&self, id: crate::session::SessionRef) -> Option<Arc<Thread>> {
-        self.conversations
+        self.sessions
+            .conversations
             .get(&id)
             .map(|value| Arc::new(Thread(value.clone())))
     }
-    pub fn file(&self) -> Option<FileContent> {
-        self.workspace.file.as_deref().cloned()
-    }
-    pub fn file_draft(&self, path: String) -> Option<FileDraft> {
-        self.file_drafts
-            .get(&path)
-            .map(|draft| draft.as_ref().clone())
-    }
-    pub fn review(&self) -> Option<Arc<WorkspaceReview>> {
-        self.workspace
-            .review
-            .as_ref()
-            .map(|value| Arc::new(WorkspaceReview(value.clone())))
-    }
-    pub fn worktree_settings(&self) -> Option<WorktreeSettings> {
-        self.workspace.settings.as_deref().cloned()
-    }
     pub fn accounts(&self) -> Option<Accounts> {
-        self.account.accounts.as_deref().cloned()
+        self.catalog.account.accounts.as_deref().cloned()
     }
     pub fn account_is_selected(&self, provider: ProviderKind, id: String) -> bool {
-        self.account.accounts.as_ref().is_some_and(|accounts| {
-            accounts
-                .accounts
-                .iter()
-                .find(|account| account.provider == provider && account.id == id)
-                .is_some_and(|account| accounts.is_selected(account))
-        })
+        self.catalog
+            .account
+            .accounts
+            .as_ref()
+            .is_some_and(|accounts| {
+                accounts
+                    .accounts
+                    .iter()
+                    .find(|account| account.provider == provider && account.id == id)
+                    .is_some_and(|account| accounts.is_selected(account))
+            })
     }
     pub fn account_login(&self) -> Option<AccountLogin> {
-        self.account.login.as_deref().cloned()
+        self.catalog.account.login.as_deref().cloned()
     }
 }
 #[uniffi::export]
@@ -135,6 +129,9 @@ impl Thread {
 }
 #[uniffi::export]
 impl RenderedConversation {
+    pub fn source(&self) -> Arc<Thread> {
+        Arc::new(Thread(self.source.clone()))
+    }
     pub fn unchanged(&self, other: Arc<Self>) -> bool {
         std::ptr::eq(self, other.as_ref())
     }
@@ -200,6 +197,32 @@ impl WorkspaceReview {
     }
 }
 
+#[uniffi::export]
+impl Files {
+    pub fn file_draft(&self, path: String) -> Option<FileDraft> {
+        self.file_drafts
+            .get(&path)
+            .map(|draft| draft.as_ref().clone())
+    }
+
+    pub fn file(&self) -> Option<FileContent> {
+        self.selection.file.as_deref().cloned()
+    }
+    pub fn review(&self) -> Option<Arc<WorkspaceReview>> {
+        self.selection
+            .review
+            .as_ref()
+            .map(|value| Arc::new(WorkspaceReview(value.clone())))
+    }
+    pub fn worktree_settings(&self) -> Option<WorktreeSettings> {
+        self.workspace.settings.as_deref().cloned()
+    }
+    pub fn unchanged(&self, other: Arc<Self>) -> bool {
+        crate::state::Same::same(&self.resources, &other.resources)
+            && Arc::ptr_eq(&self.selection, &other.selection)
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct Thread(Arc<crate::models::Thread>);
 #[derive(uniffi::Object)]
@@ -211,22 +234,24 @@ pub fn project_conversation(
     source: Arc<Thread>,
     previous: &Option<Arc<RenderedConversation>>,
 ) -> Arc<RenderedConversation> {
-    crate::presentation::conversation::project_conversation(snapshot, source.0.clone(), previous)
+    crate::presentation::conversation::project_conversation(
+        &(snapshot).pane.navigation.draft_key,
+        &(snapshot).sessions.pending_submissions,
+        source.0.clone(),
+        previous,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn native_clients_receive_readable_errors_without_rpc_envelopes() {
-        let snapshot = crate::state::Snapshot {
-            error: Some(r#"remote RPC error: {"code":"thread_in_use","message":"private","delivery":"notSent"}"#.into()),
-            ..Default::default()
-        };
+        let snapshot = crate::state::Snapshot {connection:crate::state::Connection {..Default::default()},pane:Arc::new(crate::state::PaneState {error:Some(r#"remote RPC error: {"code":"thread_in_use","message":"private","delivery":"notSent"}"#.into()),..Default::default()}),..Default::default()};
         assert_eq!(
             snapshot.error().map(|error| error.message).as_deref(),
             Some(agent_protocol::error::THREAD_IN_USE_MESSAGE)
         );
-        assert!(snapshot.error.as_deref().unwrap().contains("private"));
+        assert!(snapshot.pane.error.as_deref().unwrap().contains("private"));
     }
 
     use super::*;
@@ -243,9 +268,9 @@ mod tests {
         };
         store.dispatch(edit()).await.unwrap();
         let edited = store.snapshot();
-        assert!(edited.changes(before).changed);
+        assert!(edited.changes_from(&before).any);
         store.dispatch(edit()).await.unwrap();
-        assert!(!edited.changes(store.snapshot()).changed);
+        assert!(!edited.changes_from(&store.snapshot()).any);
         store.close().await.unwrap();
     }
 
@@ -258,39 +283,58 @@ mod tests {
             },
         };
         let mut initial = Snapshot {
-            connected: true,
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        initial.threads = Some(Arc::new(
+        initial.lists.threads = Some(Arc::new(
             serde_json::from_value(serde_json::json!({
                 "data":[], "projects":[{"id":"old","name":"Archive","roots":[]}], "hasMore":true,"hasMoreProjects":false,"projectPages":{},"limit":5
             }))
             .unwrap(),
         ));
-        assert!(initial.list_unchanged(&initial.clone()));
+        assert!(initial.list_source().equivalent(&initial.list_source()));
         let mut unrelated = initial.clone();
-        Arc::make_mut(&mut unrelated.operations).insert(
+        unrelated.operations.insert(
             OperationKey::TaskActivity,
             OperationState {
                 generation: 1,
                 phase: OperationPhase::Running,
             },
         );
-        assert!(unrelated.list_unchanged(&initial));
+        assert!(unrelated.list_source().equivalent(&initial.list_source()));
         let mut root_loading = initial.clone();
-        Arc::make_mut(&mut root_loading.operations).insert(
+        root_loading.operations.insert(
             OperationKey::SessionList,
             OperationState {
                 generation: 1,
                 phase: OperationPhase::Running,
             },
         );
-        assert!(!root_loading.list_unchanged(&initial));
-        assert!(root_loading.list_unchanged(&root_loading.clone()));
+        assert!(
+            !root_loading
+                .list_source()
+                .equivalent(&initial.list_source())
+        );
+        assert!(
+            root_loading
+                .list_source()
+                .equivalent(&root_loading.list_source())
+        );
         let loading = root_loading.clone();
-        Arc::make_mut(&mut root_loading.operations).clear();
-        assert!(!root_loading.list_unchanged(&loading));
-        assert!(root_loading.list_unchanged(&initial));
+        root_loading.operations = Default::default();
+        assert!(
+            !root_loading
+                .list_source()
+                .equivalent(&loading.list_source())
+        );
+        assert!(
+            root_loading
+                .list_source()
+                .equivalent(&initial.list_source())
+        );
         let (opened, _) = crate::state::reduce(
             &initial,
             Event::Intent(Intent::SetProjectExpanded {
@@ -299,20 +343,20 @@ mod tests {
             }),
         );
         assert!(opened.thread_list().unwrap().projects[0].expanded);
-        assert!(!opened.list_unchanged(&initial));
+        assert!(!opened.list_source().equivalent(&initial.list_source()));
         let mut disconnected = opened.clone();
-        disconnected.connected = false;
+        disconnected.connection.connected = false;
         assert!(
             disconnected.thread_list().unwrap().projects[0]
                 .error
                 .is_some()
         );
-        assert!(!disconnected.list_unchanged(&opened));
+        assert!(!disconnected.list_source().equivalent(&opened.list_source()));
         let key = OperationKey::ProjectList {
             project_id: "old".into(),
         };
         let mut loading = opened.clone();
-        Arc::make_mut(&mut loading.operations).insert(
+        loading.operations.insert(
             key.clone(),
             OperationState {
                 generation: 1,
@@ -320,17 +364,11 @@ mod tests {
             },
         );
         assert!(loading.thread_list().unwrap().projects[0].loading);
-        assert!(!loading.list_unchanged(&opened));
+        assert!(!loading.list_source().equivalent(&opened.list_source()));
         let mut failed = loading.clone();
-        Arc::make_mut(&mut failed.operations)
-            .get_mut(&key)
-            .unwrap()
-            .generation = 2;
-        assert!(failed.list_unchanged(&loading));
-        Arc::make_mut(&mut failed.operations)
-            .get_mut(&key)
-            .unwrap()
-            .phase = OperationPhase::Failed {
+        failed.operations.get_mut(&key).unwrap().generation = 2;
+        assert!(failed.list_source().equivalent(&loading.list_source()));
+        failed.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
             message: "unavailable".into(),
         };
         let project = &failed.thread_list().unwrap().projects[0];
@@ -342,18 +380,18 @@ mod tests {
                 .and_then(|error| error.details.as_deref()),
             Some("unavailable")
         );
-        assert!(!failed.list_unchanged(&loading));
+        assert!(!failed.list_source().equivalent(&loading.list_source()));
         let mut loaded = failed.clone();
         ListProjectSessions { project_id: "old".into(), limit: 5, search_term: String::new() }.apply(&mut loaded, serde_json::from_value(serde_json::json!({
             "data":[{"id":{"provider":"codex","id":"old-task"},"name":"Old task","projectId":"old","status":"running"}], "projects":[], "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
         })).unwrap());
-        Arc::make_mut(&mut loaded.operations).remove(&key);
+        loaded.operations.remove(&key);
         let project = &loaded.thread_list().unwrap().projects[0];
         assert_eq!(project.threads[0].title, "Old task");
         assert!(project.threads[0].active);
         assert!(!project.loading);
         assert!(project.error.is_none());
-        assert!(!loaded.list_unchanged(&failed));
+        assert!(!loaded.list_source().equivalent(&failed.list_source()));
         let (closed, _) = crate::state::reduce(
             &loaded,
             Event::Intent(Intent::SetProjectExpanded {
@@ -363,22 +401,23 @@ mod tests {
         );
         assert!(!closed.thread_list().unwrap().projects[0].expanded);
         assert!(closed.thread_list().unwrap().projects[0].threads.is_empty());
-        assert!(!closed.list_unchanged(&loaded));
+        assert!(!closed.list_source().equivalent(&loaded.list_source()));
         let mut archived = closed.clone();
-        Arc::make_mut(&mut archived.archived_scopes).insert("previous".into(), Arc::default());
+        Arc::make_mut(&mut archived.lists.archived_scopes)
+            .insert("previous".into(), Arc::default());
         assert!(archived.thread_list().unwrap().notice.is_none());
-        assert!(!archived.list_unchanged(&closed));
+        assert!(!archived.list_source().equivalent(&closed.list_source()));
     }
 
     #[test]
     fn abi_handles_preserve_conversation_projection_identity() {
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
             Some(agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "chat".into(),
             });
-        Arc::make_mut(&mut snapshot.conversations).insert(
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(
             agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "chat".into(),

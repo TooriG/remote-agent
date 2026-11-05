@@ -66,18 +66,20 @@ impl Snapshot {
     ) -> Option<ProviderKind> {
         self.draft_provider(
             &thread_id,
-            self.drafts
+            self.input
+                .drafts
                 .get(&thread_id)
                 .and_then(|draft| draft.model.as_ref()),
         )
         .or_else(|| {
             automatic_provider(
-                &self.models,
-                self.account
+                &self.catalog.models,
+                self.catalog
+                    .account
                     .accounts
                     .as_ref()
                     .map(|accounts| &accounts.selected),
-                &self.model_errors,
+                &self.catalog.model_errors,
             )
         })
     }
@@ -85,6 +87,7 @@ impl Snapshot {
     pub fn models_matching(&self, provider: Option<ProviderKind>, query: String) -> Vec<Model> {
         let query = query.trim().to_lowercase();
         let models = self
+            .catalog
             .models
             .iter()
             .filter(|model| provider.is_none_or(|provider| model.model.provider == provider));
@@ -101,7 +104,7 @@ impl Snapshot {
     }
 
     pub(crate) fn allows_custom_codex_models(&self) -> bool {
-        crate::state::allows_custom_codex_models(self.account.accounts.as_deref())
+        crate::state::allows_custom_codex_models(self.catalog.account.accounts.as_deref())
     }
 
     /// A recommended picker catalog is not an exhaustive allowlist of Codex IDs.
@@ -116,6 +119,7 @@ impl Snapshot {
             && !id.is_empty()
             && !id.chars().any(char::is_whitespace)
             && !self
+                .catalog
                 .models
                 .iter()
                 .any(|model| model.model.provider == ProviderKind::Codex && model.model.id == id))
@@ -131,10 +135,11 @@ impl Snapshot {
         provider: ProviderKind,
     ) -> Option<ModelRef> {
         let saved = self
+            .input
             .drafts
             .get(&thread_id)
             .and_then(|draft| draft.model.as_ref());
-        let remembered = self.model_preferences.selections.get(&provider);
+        let remembered = self.catalog.model_preferences.selections.get(&provider);
         let preferred = saved
             .filter(|model| model.provider == provider)
             .or_else(|| remembered.map(|settings| &settings.model));
@@ -143,8 +148,8 @@ impl Snapshot {
             None,
             None,
             Some(provider),
-            &self.models,
-            &self.model_errors,
+            &self.catalog.models,
+            &self.catalog.model_errors,
             self.allows_custom_codex_models(),
         );
         model.cloned()
@@ -153,7 +158,8 @@ impl Snapshot {
     /// Keep every weekly bucket (including model-specific limits); never turn
     /// an unavailable quota into a full or empty bar. Labels are Host-normalized.
     pub fn account_weekly_usage(&self, provider: ProviderKind, id: String) -> Vec<UsageWindow> {
-        self.account
+        self.catalog
+            .account
             .accounts
             .as_ref()
             .and_then(|accounts| {
@@ -176,11 +182,12 @@ impl Snapshot {
     }
 
     pub fn model_quick_controls(&self, thread_id: crate::state::DraftKey) -> ModelQuickControls {
-        let Some(draft) = self.drafts.get(&thread_id) else {
+        let Some(draft) = self.input.drafts.get(&thread_id) else {
             return ModelQuickControls::default();
         };
         quick_controls(
-            self.models
+            self.catalog
+                .models
                 .iter()
                 .find(|model| Some(&model.model) == draft.model.as_ref()),
             draft.effort.as_deref(),
@@ -354,21 +361,24 @@ mod tests {
             let errors = if failed { serde_json::Map::from_iter([(other.key().into(), json!({"message":"offline"}))]) } else { serde_json::Map::new() };
             proptest::prop_assert_eq!(automatic_provider(&models, Some(&selected), &errors), Some(provider));
             let snapshot = Snapshot {
-                models: Arc::new(models),
-                model_errors: Arc::new(errors),
-                account: Arc::new(crate::state::AccountState {
-                    accounts: Some(Arc::new(agent_protocol::operations::Accounts {
-                        accounts: Vec::new(), selected, errors: Default::default(),
-                    })),
+                catalog: crate::state::Catalog {
+                    models: Arc::new(models),
+                    model_errors: Arc::new(errors),
+                    account: Arc::new(crate::state::AccountState {
+                        accounts: Some(Arc::new(agent_protocol::operations::Accounts {
+                            accounts: Vec::new(), selected, errors: Default::default(),
+                        })),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
+                },
                 ..Default::default()
             };
             let (next, _) = reduce(&snapshot, Event::Intent(Intent::NewChat { cwd: "/project".into() }));
             let key = crate::state::DraftKey::from("new:/project");
             proptest::prop_assert_eq!(next.model_provider_for_draft(key.clone()), Some(provider));
-            proptest::prop_assert_eq!(next.drafts[&key].model.as_ref().unwrap().provider, provider);
-            proptest::prop_assert!(snapshot.drafts.is_empty());
+            proptest::prop_assert_eq!(next.input.drafts[&key].model.as_ref().unwrap().provider, provider);
+            proptest::prop_assert!(snapshot.input.drafts.is_empty());
         }
     }
 
@@ -381,11 +391,14 @@ mod tests {
             json!([{"id":"failed","model":{"provider":"claude","id":"failed"},"displayName":"Failed", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}]),
         ] {
             let snapshot = Snapshot {
-                models: Arc::new(serde_json::from_value(catalog).unwrap()),
-                model_errors: Arc::new(serde_json::Map::from_iter([(
-                    "claude".into(),
-                    json!({"message":"offline"}),
-                )])),
+                catalog: crate::state::Catalog {
+                    models: Arc::new(serde_json::from_value(catalog).unwrap()),
+                    model_errors: Arc::new(serde_json::Map::from_iter([(
+                        "claude".into(),
+                        json!({"message":"offline"}),
+                    )])),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let (snapshot, _) = reduce(
@@ -394,7 +407,7 @@ mod tests {
                     cwd: "/project".into(),
                 }),
             );
-            let key = snapshot.navigation.draft_key.clone();
+            let key = snapshot.pane.navigation.draft_key.clone();
             let (snapshot, _) = reduce(
                 &snapshot,
                 Event::Intent(Intent::SetDraftText {
@@ -412,9 +425,9 @@ mod tests {
                 }),
             );
             assert!(effects.is_empty());
-            assert!(next.pending_submissions.is_empty());
-            assert_eq!(next.drafts[&key].text, "keep this input");
-            assert!(next.error.is_none());
+            assert!(next.sessions.pending_submissions.is_empty());
+            assert_eq!(next.input.drafts[&key].text, "keep this input");
+            assert!(next.pane.error.is_none());
             assert!(
                 next.operation_error(crate::state::operations::OperationKey::Submission {
                     draft_key: key
@@ -429,18 +442,21 @@ mod tests {
         fn identical_native_model_ids_keep_provider_choices_and_controls_separate(suffix in "[a-zA-Z0-9:_-]{1,40}") {
             let id = format!("claude:{suffix}");
             let mut snapshot = Snapshot {
-                models: Arc::new(serde_json::from_value(serde_json::json!([
-                    {"id":id,"model":{"provider":"codex","id":id},"displayName":"Codex","isDefault":true, "settings": {
-                     "defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}},
-                    {"id":id,"model":{"provider":"claude","id":id},"displayName":"Claude","isDefault":true, "settings": {
-                     "defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}]}}
-                ])).unwrap()),
+                catalog: crate::state::Catalog {
+                    models: Arc::new(serde_json::from_value(serde_json::json!([
+                        {"id":id,"model":{"provider":"codex","id":id},"displayName":"Codex","isDefault":true, "settings": {
+                         "defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}},
+                        {"id":id,"model":{"provider":"claude","id":id},"displayName":"Claude","isDefault":true, "settings": {
+                         "defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}]}}
+                    ])).unwrap()),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             for (provider, effort) in [(ProviderKind::Codex, "high"), (ProviderKind::Claude, "low")] {
                 let selected = ModelRef { provider, id: id.clone() };
                 for key in [crate::state::DraftKey::from("local"), crate::session::SessionRef { provider, id: "session".into() }.into()] {
-                    Arc::make_mut(&mut snapshot.drafts).insert(key.clone(), Arc::new(Draft {model:Some(selected.clone()),..Default::default()}));
+                    Arc::make_mut(&mut snapshot.input.drafts).insert(key.clone(), Arc::new(Draft {model:Some(selected.clone()),..Default::default()}));
                     proptest::prop_assert_eq!(snapshot.model_provider_for_draft(key.clone()), Some(provider));
                     proptest::prop_assert_eq!(snapshot.model_for_provider(key.clone(), provider), Some(selected.clone()));
                     proptest::prop_assert_eq!(snapshot.model_quick_controls(key).effort, effort);
@@ -456,11 +472,14 @@ mod tests {
     #[test]
     fn model_search_matches_display_names_ids_and_empty_queries_in_catalog_order() {
         let snapshot = Snapshot {
-            models: Arc::new(serde_json::from_value(serde_json::json!([
-                {"id":"codex-first","model":{"provider":"codex","id":"MX-ID"},"displayName":"Visible 🦀", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
-                {"id":"claude","model":{"provider":"claude","id":"MX-ID"},"displayName":"İSTANBUL", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
-                {"id":"codex-last","model":{"provider":"codex","id":"other"},"displayName":"Visible Other", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
-            ])).unwrap()),
+            catalog: crate::state::Catalog {
+                models: Arc::new(serde_json::from_value(serde_json::json!([
+                    {"id":"codex-first","model":{"provider":"codex","id":"MX-ID"},"displayName":"Visible 🦀", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                    {"id":"claude","model":{"provider":"claude","id":"MX-ID"},"displayName":"İSTANBUL", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                    {"id":"codex-last","model":{"provider":"codex","id":"other"},"displayName":"Visible Other", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
+                ])).unwrap()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         for (provider, query, indices) in [
@@ -477,7 +496,7 @@ mod tests {
         ] {
             let expected: Vec<_> = indices
                 .into_iter()
-                .map(|index| snapshot.models[index].clone())
+                .map(|index| snapshot.catalog.models[index].clone())
                 .collect();
             assert_eq!(
                 snapshot.models_matching(provider, query.into()),
@@ -490,13 +509,16 @@ mod tests {
     #[test]
     fn model_failures_are_shown_only_for_the_requested_provider() {
         let snapshot = Snapshot {
-            model_errors: Arc::new(
-                serde_json::from_value(serde_json::json!({
-                    "codex": {"message": "Codex catalog failed"},
-                    "claude": {"message": "Claude catalog failed"}
-                }))
-                .unwrap(),
-            ),
+            catalog: crate::state::Catalog {
+                model_errors: Arc::new(
+                    serde_json::from_value(serde_json::json!({
+                        "codex": {"message": "Codex catalog failed"},
+                        "claude": {"message": "Claude catalog failed"}
+                    }))
+                    .unwrap(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert_eq!(
@@ -512,13 +534,19 @@ mod tests {
 
     #[test]
     fn quick_controls_use_capabilities_and_saved_values_without_inventing_quotas() {
-        let mut snapshot = Snapshot { models: Arc::new(serde_json::from_value(serde_json::json!([
-            {"id":"gpt","model":{"provider": "codex", "id": "gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"medium",
-             "supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],
-             "serviceTiers":[{"id":"priority","fast":true}]}},
-            {"id":"claude:haiku","model":{"provider": "claude", "id": "haiku"},"displayName":"Haiku", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
-        ])).unwrap()), ..Default::default() };
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        let mut snapshot = Snapshot {
+            catalog: crate::state::Catalog {
+                models: Arc::new(serde_json::from_value(serde_json::json!([
+                {"id":"gpt","model":{"provider": "codex", "id": "gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"medium",
+                 "supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],
+                 "serviceTiers":[{"id":"priority","fast":true}]}},
+                {"id":"claude:haiku","model":{"provider": "claude", "id": "haiku"},"displayName":"Haiku", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
+            ])).unwrap()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             "draft".into(),
             Arc::new(Draft {
                 model: Some(agent_protocol::models::ModelRef {
@@ -532,7 +560,7 @@ mod tests {
         assert_eq!(controls.effort_level, 2);
         assert_eq!(controls.toggle_fast_to.as_deref(), Some("priority"));
         Arc::make_mut(
-            Arc::make_mut(&mut snapshot.drafts)
+            Arc::make_mut(&mut snapshot.input.drafts)
                 .get_mut(&crate::state::DraftKey::from("draft"))
                 .unwrap(),
         )
@@ -545,7 +573,7 @@ mod tests {
             Some("default")
         );
         Arc::make_mut(
-            Arc::make_mut(&mut snapshot.drafts)
+            Arc::make_mut(&mut snapshot.input.drafts)
                 .get_mut(&crate::state::DraftKey::from("draft"))
                 .unwrap(),
         )
@@ -561,7 +589,7 @@ mod tests {
                 .models_matching(Some(ProviderKind::Codex), "haiku".into())
                 .is_empty()
         );
-        Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(
+        Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(
             serde_json::from_value(serde_json::json!({"accounts":[
             {"id":"a","provider":"codex","usage":{"fetchedAt":1,"windows":[
                 {"label":"5時間枠","remainingPercent":72},{"label":"週間枠","remainingPercent":42},
@@ -576,7 +604,7 @@ mod tests {
             2
         );
         let accounts = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.account)
+            Arc::make_mut(&mut snapshot.catalog.account)
                 .accounts
                 .as_mut()
                 .unwrap(),
@@ -607,6 +635,7 @@ impl Snapshot {
             .into_iter()
             .map(|provider| {
                 let route = self
+                    .catalog
                     .account
                     .dsh_credentials
                     .as_ref()
@@ -645,7 +674,7 @@ mod credential_control_tests {
     #[test]
     fn credential_controls_only_offer_removal_for_managed_keys() {
         let mut snapshot = Snapshot::default();
-        std::sync::Arc::make_mut(&mut snapshot.account).dsh_credentials =
+        std::sync::Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials =
             Some(std::sync::Arc::new(Credentials {
                 routes: vec![
                     CredentialRoute {

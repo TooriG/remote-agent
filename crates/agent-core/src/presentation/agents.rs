@@ -24,15 +24,15 @@ type AgentEntries = BTreeMap<String, (SessionRef, Option<SessionRef>, AgentSumma
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     pub fn agent_panel(&self) -> Vec<AgentSummary> {
-        let Some(root) = self.navigation.thread_id.as_ref() else {
+        let Some(root) = self.pane.navigation.thread_id.as_ref() else {
             return Vec::new();
         };
         let mut entries = AgentEntries::new();
-        for thread in self.conversations.values() {
+        for thread in self.sessions.conversations.values() {
             let (Some(id), Some(parent)) = (&thread.id, &thread.parent_id) else {
                 continue;
             };
-            let observed = self.activity.active.get(id).copied();
+            let observed = self.lists.activity.active.get(id).copied();
             let row = session_agent(
                 id,
                 task_title(thread.name.as_deref(), thread.preview.as_deref()),
@@ -41,7 +41,7 @@ impl Snapshot {
                     _ => TurnStatus::Unknown,
                 },
                 observed.or_else(|| (thread.status == SessionStatus::Idle).then_some(false)),
-                self.activity.unread.contains(id),
+                self.lists.activity.unread.contains(id),
             );
             entries.insert(row.key.clone(), (parent.clone(), Some(id.clone()), row));
         }
@@ -90,8 +90,8 @@ impl Snapshot {
                             receiver,
                             &receiver.id,
                             TurnStatus::Unknown,
-                            self.activity.active.get(receiver).copied(),
-                            self.activity.unread.contains(receiver),
+                            self.lists.activity.active.get(receiver).copied(),
+                            self.lists.activity.unread.contains(receiver),
                         );
                         (owner.clone(), Some(receiver.clone()), row)
                     });
@@ -102,8 +102,10 @@ impl Snapshot {
                         entry.2.model = model.clone();
                     }
                     if let Some(state) = states.iter().find(|state| &state.session == receiver) {
-                        let (status, active) =
-                            agent_status(state.status, self.activity.active.get(receiver).copied());
+                        let (status, active) = agent_status(
+                            state.status,
+                            self.lists.activity.active.get(receiver).copied(),
+                        );
                         entry.2.status = status.into();
                         entry.2.active = active;
                         entry.2.detail = state.message.clone().or_else(|| detail.clone());
@@ -119,17 +121,20 @@ impl Snapshot {
 
 impl Snapshot {
     fn conversation_items(&self) -> impl Iterator<Item = (&SessionRef, &Item, ProviderKind)> {
-        self.conversations.iter().flat_map(|(owner, thread)| {
-            thread.turns.iter().flatten().flat_map(move |turn| {
-                turn.items.iter().flatten().map(move |item| {
-                    (
-                        owner,
-                        item.as_ref(),
-                        turn.provider.unwrap_or(owner.provider),
-                    )
+        self.sessions
+            .conversations
+            .iter()
+            .flat_map(|(owner, thread)| {
+                thread.turns.iter().flatten().flat_map(move |turn| {
+                    turn.items.iter().flatten().map(move |item| {
+                        (
+                            owner,
+                            item.as_ref(),
+                            turn.provider.unwrap_or(owner.provider),
+                        )
+                    })
                 })
             })
-        })
     }
 }
 
@@ -260,14 +265,15 @@ mod tests {
 
     fn snapshot(data: serde_json::Value) -> Snapshot {
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session("root"));
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+            Some(session("root"));
         let data: Vec<Thread> = serde_json::from_value(data).unwrap();
-        snapshot.conversations = Arc::new(
+        snapshot.sessions.conversations = Arc::new(
             data.iter()
                 .filter_map(|thread| Some((thread.id.clone()?, Arc::new(thread.clone()))))
                 .collect(),
         );
-        snapshot.threads = Some(Arc::new(
+        snapshot.lists.threads = Some(Arc::new(
             serde_json::from_value(serde_json::json!({
             "data":data.into_iter().filter(|thread| thread.parent_id.is_none()).collect::<Vec<_>>(),
             "projects":[],  "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5, }))
@@ -298,11 +304,11 @@ mod tests {
         );
         assert!(before[0].active);
         assert_eq!(before[1].status, "未確認");
-        assert_eq!(state.navigation.thread_id, Some(session("root")));
-        for thread in Arc::make_mut(&mut state.conversations).values_mut() {
+        assert_eq!(state.pane.navigation.thread_id, Some(session("root")));
+        for thread in Arc::make_mut(&mut state.sessions.conversations).values_mut() {
             Arc::make_mut(thread).updated_at = Some(999.);
         }
-        Arc::make_mut(&mut state.activity)
+        Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), false);
         let after = state.agent_panel();
@@ -312,9 +318,10 @@ mod tests {
         );
         assert!(!after[0].active);
         assert_eq!(after[0].status, "待機");
-        Arc::make_mut(&mut state.navigation).thread_id = Some(session("fork"));
+        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id =
+            Some(session("fork"));
         assert!(state.agent_panel().is_empty());
-        Arc::make_mut(&mut state.navigation).thread_id = None;
+        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = None;
         assert!(state.agent_panel().is_empty());
     }
 
@@ -346,7 +353,7 @@ mod tests {
     }
 
     fn put_items(state: &mut Snapshot, owner: SessionRef, items: Vec<Arc<Item>>) {
-        Arc::make_mut(&mut state.conversations).insert(
+        Arc::make_mut(&mut state.sessions.conversations).insert(
             owner,
             Arc::new(Thread {
                 turns: Some(vec![Arc::new(Turn {
@@ -390,7 +397,7 @@ mod tests {
                 vec![],
             )],
         );
-        Arc::make_mut(&mut state.activity)
+        Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), true);
         let agents = state.agent_panel();
@@ -399,11 +406,12 @@ mod tests {
         assert_eq!(agents[0].model.as_deref(), Some("review-model"));
         assert_eq!(agents[0].detail.as_deref(), Some("Finished review"));
         assert_eq!(agents[0].status, "実行中");
-        Arc::make_mut(&mut state.activity)
+        Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), false);
         assert_eq!(state.agent_panel()[0].status, "完了");
-        Arc::make_mut(&mut state.navigation).thread_id = Some(session("unrelated"));
+        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id =
+            Some(session("unrelated"));
         assert!(state.agent_panel().is_empty());
     }
 
@@ -441,7 +449,7 @@ mod tests {
                 ),
             ],
         );
-        Arc::make_mut(&mut state.activity)
+        Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), true);
         let agents = state.agent_panel();
@@ -456,7 +464,8 @@ mod tests {
             id: "root".into(),
         };
         let mut state = snapshot(serde_json::json!([]));
-        Arc::make_mut(&mut state.navigation).thread_id = Some(owner.clone());
+        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id =
+            Some(owner.clone());
         put_items(
             &mut state,
             owner.clone(),
@@ -508,7 +517,7 @@ mod tests {
         #[case] active: bool,
     ) {
         let mut state = snapshot(serde_json::json!([]));
-        Arc::make_mut(&mut state.conversations).insert(
+        Arc::make_mut(&mut state.sessions.conversations).insert(
             session("child"),
             Arc::new(Thread {
                 id: Some(session("child")),
@@ -527,8 +536,8 @@ mod tests {
         #[test]
         fn arbitrary_native_graphs_show_only_unique_reachable_agents(parents in prop::collection::vec(0usize..25, 1..25)) {
             let mut state = snapshot(serde_json::json!([]));
-            Arc::make_mut(&mut state.navigation).thread_id = Some(session("0"));
-            state.conversations = Arc::new(parents.iter().enumerate().map(|(index,parent)| {
+            Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = Some(session("0"));
+            state.sessions.conversations = Arc::new(parents.iter().enumerate().map(|(index,parent)| {
                 let id = session(&index.to_string());
                 (id.clone(), Arc::new(Thread {
                     id:Some(id), parent_id:Some(session(&parent.to_string())), ..Default::default()

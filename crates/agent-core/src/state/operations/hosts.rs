@@ -46,23 +46,23 @@ mod task_activity_tests {
                 writer.reply(&request, json!({"result":result})).await.unwrap();
             }
             let mut updates = store.subscribe();
-            while store.snapshot().threads.is_none() || store.snapshot().account.accounts.is_none() {
+            while store.snapshot().lists.threads.is_none() || store.snapshot().catalog.account.accounts.is_none() {
                 updates.changed().await.unwrap();
             }
             store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
             let display = agent_protocol::live_activity::TaskActivitySummary { running: 1, ..Default::default() }.display();
             writer.reply(&activity.unwrap(), json!({"result":{"revision":1,"statuses":[],"waiting":[],"unread":[],"display":display}})).await.unwrap();
-            while store.snapshot().task_activity.is_none() { updates.changed().await.unwrap(); }
-            assert_eq!(store.snapshot().task_activity.as_ref().unwrap().display.current.total, 1);
+            while store.snapshot().lists.task_activity.is_none() { updates.changed().await.unwrap(); }
+            assert_eq!(store.snapshot().lists.task_activity.as_ref().unwrap().display.current.total, 1);
             tokio::time::timeout(std::time::Duration::from_secs(5), store.dispatch(Intent::ReadTaskActivity(ReadTaskActivity {})))
                 .await.expect("activity receipt waits for the provider").unwrap();
             let request = reader.read_request().await.unwrap().unwrap();
             assert_eq!(request["method"], "host/taskActivity/read");
             writer.reply(&request, json!({"error":{"code":"provider_failed","message":"fixture unavailable","delivery":"notSent"}})).await.unwrap();
             while store.snapshot().operation_running(OperationKey::TaskActivity) { updates.changed().await.unwrap(); }
-            assert!(store.snapshot().error.is_none());
-            assert_eq!(store.snapshot().task_activity.as_ref().unwrap().display.current.total, 1);
-            assert!(store.snapshot().threads.is_some());
+            assert!(store.snapshot().pane.error.is_none());
+            assert_eq!(store.snapshot().lists.task_activity.as_ref().unwrap().display.current.total, 1);
+            assert!(store.snapshot().lists.threads.is_some());
             store.close().await.unwrap();
         }).await.expect("activity lifecycle deadline");
     }
@@ -102,7 +102,7 @@ impl Operation for LoadHostName {
     rpc_operation!();
     const STALE_POLICY: StalePolicy = StalePolicy::Apply;
     fn apply(self, snapshot: &mut Snapshot, name: Self::Output) -> Vec<Effect> {
-        snapshot.host_name = Some(name);
+        snapshot.connection.host_name = Some(name);
         Vec::new()
     }
 }
@@ -110,7 +110,7 @@ impl Operation for LoadHostName {
 pub use agent_protocol::operations::CreateInvitation;
 
 impl Operation for CreateInvitation {
-    rpc_operation!(management.invitation);
+    rpc_operation!(connection.management.invitation);
 }
 
 pub use agent_protocol::operations::RemoveRemoteHost;
@@ -119,7 +119,7 @@ impl Operation for RemoveRemoteHost {
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
         let Self { id } = self;
-        Arc::make_mut(&mut snapshot.management)
+        Arc::make_mut(&mut snapshot.connection.management)
             .remotes
             .retain(|host| host.id != id);
         Vec::new()
@@ -132,7 +132,10 @@ impl Operation for RevokeDevice {
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
         let Self { id } = self;
-        if let Some(status) = Arc::make_mut(&mut snapshot.management).status.as_mut() {
+        if let Some(status) = Arc::make_mut(&mut snapshot.connection.management)
+            .status
+            .as_mut()
+        {
             Arc::make_mut(status)
                 .devices
                 .retain(|device| device.id != id);
@@ -152,7 +155,7 @@ mod device_tests {
             name: Some("My device".into()),
         });
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.management).status = Some(Arc::new(HostStatus {
+        Arc::make_mut(&mut snapshot.connection.management).status = Some(Arc::new(HostStatus {
             node_id: "host".into(),
             name: "My PC".into(),
             devices: devices.to_vec(),
@@ -160,7 +163,13 @@ mod device_tests {
         }));
         RevokeDevice { id: "phone".into() }.apply(&mut snapshot, crate::models::Empty {});
         assert_eq!(
-            snapshot.management.status.as_ref().unwrap().devices,
+            snapshot
+                .connection
+                .management
+                .status
+                .as_ref()
+                .unwrap()
+                .devices,
             [devices[1].clone()]
         );
     }
@@ -185,7 +194,7 @@ impl Operation for LoadHostManagement {
         Ok((status, remotes))
     }
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        let management = Arc::make_mut(&mut snapshot.management);
+        let management = Arc::make_mut(&mut snapshot.connection.management);
         management.status = Some(Arc::new(output.0));
         management.remotes = output.1;
         Vec::new()
@@ -249,7 +258,7 @@ impl Operation for PairRemoteHost {
             .await
     }
     fn apply(self, snapshot: &mut Snapshot, host: Self::Output) -> Vec<Effect> {
-        let management = Arc::make_mut(&mut snapshot.management);
+        let management = Arc::make_mut(&mut snapshot.connection.management);
         if let Some(current) = management
             .remotes
             .iter_mut()

@@ -10,7 +10,8 @@ pub fn task_activity_dismiss_seconds() -> u32 {
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     pub fn task_activity_display(&self) -> Option<TaskActivityDisplay> {
-        self.task_activity
+        self.lists
+            .task_activity
             .as_ref()
             .map(|state| state.display.clone())
     }
@@ -50,7 +51,7 @@ mod tests {
             project_pages: Default::default(),
             provider_errors: None,
         };
-        state.project_threads = Arc::new([("closed".into(), Arc::new(page))].into());
+        state.lists.project_threads = Arc::new([("closed".into(), Arc::new(page))].into());
         let _ = state.accept_task_activity(TaskActivityState {
             revision: 2,
             waiting: Vec::new(),
@@ -58,14 +59,14 @@ mod tests {
             unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Idle)],
         });
-        assert!(!state.activity.active[&id]);
+        assert!(!state.lists.activity.active[&id]);
         assert_eq!(
-            state.project_threads["closed"].data[0].status,
+            state.lists.project_threads["closed"].data[0].status,
             crate::models::SessionStatus::Idle
         );
-        assert_eq!(state.project_threads["closed"].limit, 15);
-        let received = state.project_threads.clone();
-        let activity = state.activity.clone();
+        assert_eq!(state.lists.project_threads["closed"].limit, 15);
+        let received = state.lists.project_threads.clone();
+        let activity = state.lists.activity.clone();
         let _ = state.accept_task_activity(TaskActivityState {
             revision: 3,
             waiting: Vec::new(),
@@ -73,8 +74,8 @@ mod tests {
             unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Idle)],
         });
-        assert!(Arc::ptr_eq(&state.project_threads, &received));
-        assert!(Arc::ptr_eq(&state.activity, &activity));
+        assert!(Arc::ptr_eq(&state.lists.project_threads, &received));
+        assert!(Arc::ptr_eq(&state.lists.activity, &activity));
         let _ = state.accept_task_activity(TaskActivityState {
             revision: 1,
             waiting: Vec::new(),
@@ -86,8 +87,8 @@ mod tests {
             unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Running)],
         });
-        assert!(!state.activity.active[&id]);
-        assert!(state.expanded_projects.is_empty() && state.operations.is_empty());
+        assert!(!state.lists.activity.active[&id]);
+        assert!(state.lists.expanded_projects.is_empty() && state.operations.is_empty());
     }
     #[test]
     fn delayed_read_cannot_replace_a_newer_completion_or_depend_on_visible_rows() {
@@ -121,8 +122,8 @@ mod tests {
         .0;
         ReadTaskActivity {}.apply(&mut state, running);
         assert_eq!(state.task_activity_display(), Some(completed.display));
-        assert!(state.threads.is_none());
-        assert!(state.conversations.is_empty());
+        assert!(state.lists.threads.is_none());
+        assert!(state.sessions.conversations.is_empty());
         let disconnected = reduce(&state, Event::Disconnected).0;
         assert_eq!(
             disconnected.task_activity_display(),

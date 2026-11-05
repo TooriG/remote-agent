@@ -72,12 +72,7 @@ impl ClientSessions {
             .collect();
         crate::presentation::connection_list::combine_connection_lists(
             sessions.into_iter().filter_map(|(id, session)| {
-                let snapshot = session.snapshot();
-                let list = if self.recent_chats {
-                    snapshot.recent_thread_list()
-                } else {
-                    snapshot.thread_list()
-                };
+                let list = session.presentation().thread_list();
                 list.map(|list| (id, list))
             }),
         )

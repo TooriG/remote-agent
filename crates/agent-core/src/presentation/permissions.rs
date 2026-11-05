@@ -35,17 +35,14 @@ pub struct PermissionControl<'a> {
 impl Snapshot {
     pub fn permission_control(&self, draft_key: &crate::state::DraftKey) -> PermissionControl<'_> {
         let provider = self.model_provider_for_draft(draft_key.clone());
-        let state = self
-            .permission_settings
-            .as_ref()
-            .filter(|state| Some(state.provider) == provider);
+        let state = provider.and_then(|provider| self.catalog.permission_settings.get(&provider));
         let result = state.and_then(|state| state.result.as_ref());
         let settings = result.and_then(|result| result.as_ref().ok());
         let mode = settings.and_then(|settings| settings.mode);
         PermissionControl {
             provider,
             load_request: provider
-                .filter(|_| self.connected && state.is_none())
+                .filter(|_| self.connection.connected && state.is_none())
                 .map(|provider| ReadPermissionSettings { provider }),
             label: match mode {
                 Some(mode) => {
@@ -84,14 +81,14 @@ mod tests {
                 .load_request
                 .is_none()
         );
-        snapshot.connected = true;
+        snapshot.connection.connected = true;
         assert!(
             snapshot
                 .permission_control(&"draft".into())
                 .load_request
                 .is_none()
         );
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             "draft".into(),
             Arc::new(Draft {
                 model: Some(agent_protocol::models::ModelRef {
@@ -109,18 +106,25 @@ mod tests {
                 .provider,
             ProviderKind::Codex
         );
-        snapshot.permission_settings = Some(Arc::new(PermissionSettingsState {
-            provider: ProviderKind::Codex,
-            result: None,
-        }));
+        snapshot.catalog.permission_settings = Arc::new(
+            [(
+                ProviderKind::Codex,
+                Arc::new(PermissionSettingsState { result: None }),
+            )]
+            .into(),
+        );
         assert!(
             snapshot
                 .permission_control(&crate::state::DraftKey::from("draft"))
                 .load_request
                 .is_none()
         );
-        Arc::make_mut(snapshot.permission_settings.as_mut().unwrap()).result =
-            Some(Err("offline".into()));
+        Arc::make_mut(
+            Arc::make_mut(&mut snapshot.catalog.permission_settings)
+                .get_mut(&ProviderKind::Codex)
+                .unwrap(),
+        )
+        .result = Some(Err("offline".into()));
         assert!(
             snapshot
                 .permission_control(&crate::state::DraftKey::from("draft"))
@@ -133,7 +137,7 @@ mod tests {
                 .label,
             "取得できません"
         );
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             "draft".into(),
             Arc::new(Draft {
                 model: Some(agent_protocol::models::ModelRef {
@@ -156,16 +160,24 @@ mod tests {
     #[test]
     fn permission_cache_is_provider_specific_and_never_persisted() {
         let mut snapshot = Snapshot {
-            permission_settings: Some(Arc::new(PermissionSettingsState {
-                provider: ProviderKind::Codex,
-                result: Some(Ok(PermissionSettings {
-                    mode: Some(PermissionMode::FullAccess),
-                    version: "native-version".into(),
-                })),
-            })),
+            catalog: crate::state::Catalog {
+                permission_settings: Arc::new(
+                    [(
+                        ProviderKind::Codex,
+                        Arc::new(PermissionSettingsState {
+                            result: Some(Ok(PermissionSettings {
+                                mode: Some(PermissionMode::FullAccess),
+                                version: "native-version".into(),
+                            })),
+                        }),
+                    )]
+                    .into(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             "draft".into(),
             Arc::new(Draft {
                 model: Some(agent_protocol::models::ModelRef {
@@ -181,7 +193,7 @@ mod tests {
                 .label,
             "フルアクセス"
         );
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             "draft".into(),
             Arc::new(Draft {
                 model: Some(agent_protocol::models::ModelRef {
@@ -204,7 +216,7 @@ mod tests {
             snapshot.permission_control(&key).provider,
             Some(ProviderKind::Claude)
         );
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             key.clone(),
             Arc::new(Draft {
                 model: Some(agent_protocol::models::ModelRef {
@@ -222,6 +234,6 @@ mod tests {
         let bytes = crate::persistence::encode(&snapshot).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("native-version"));
         let restored = crate::persistence::decode(&bytes).unwrap();
-        assert!(restored.permission_settings.is_none());
+        assert!(restored.catalog.permission_settings.is_empty());
     }
 }

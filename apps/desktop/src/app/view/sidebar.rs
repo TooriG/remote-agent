@@ -30,15 +30,25 @@ impl Render for SidebarDrag {
 }
 
 #[derive(Clone)]
-pub(super) struct SidebarSection {
-    pub(super) label: &'static str,
-    pub(super) menu: Vec<SidebarRow>,
-    pub(super) collapsed: bool,
-    pub(super) add_project: Option<(WeakEntity<Desktop>, bool)>,
+pub(super) struct SidebarEntry {
+    row: SidebarRow,
+    collapsed: bool,
+}
+impl From<SidebarRow> for SidebarEntry {
+    fn from(row: SidebarRow) -> Self {
+        Self {
+            row,
+            collapsed: false,
+        }
+    }
 }
 
 #[derive(Clone)]
 pub(super) enum SidebarRow {
+    Section {
+        label: &'static str,
+        add_project: Option<(WeakEntity<Desktop>, bool)>,
+    },
     Item(Box<SidebarMenuItem>),
     Chat {
         item: Box<SidebarMenuItem>,
@@ -70,6 +80,33 @@ impl SidebarRow {
     fn render(self, id: String, collapsed: bool, window: &mut Window, cx: &mut App) -> AnyElement {
         let language = crate::localization::language(cx);
         match self {
+            Self::Section { label, add_project } => h_flex()
+                .h_8()
+                .mt_2()
+                .flex_shrink_0()
+                .pl_2()
+                .text_xs()
+                .text_color(cx.theme().sidebar_foreground)
+                .child(div().flex_1().child(language.text(label)))
+                .when_some(add_project, |header, (desktop, enabled)| {
+                    header.child(
+                        Button::new("choose-project")
+                            .icon(Icon::default().path("icons/folder-plus.svg"))
+                            .small()
+                            .ghost()
+                            .tooltip(language.text("プロジェクトを追加"))
+                            .accessibility_label(language.text("プロジェクトを追加"))
+                            .disabled(!enabled)
+                            .on_click(move |_, _, cx| {
+                                let _ = desktop.update(cx, |desktop, cx| {
+                                    desktop.pick_folder();
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                })
+                .when(collapsed, |header| header.hidden())
+                .into_any_element(),
             Self::Error(error) => error_view(&error, language)
                 .px_3()
                 .text_xs()
@@ -186,7 +223,7 @@ impl SidebarRow {
                         cx.stop_propagation();
                         let after = bounds.get().is_some_and(|bounds| window.mouse_position().y > bounds.center().y);
                         let _ = drop_owner.update(cx, |desktop, cx| {
-                            if desktop.snapshot.storage_scope != drag.scope { return; }
+                            if desktop.snapshot.connection.storage_scope != drag.scope { return; }
                             let intent = match &drag.kind {
                                 SidebarDragKind::Project(id) => Intent::ReorderProject { project_id: id.clone(), target_id: drop_target.clone(), after },
                                 SidebarDragKind::Chat(id) => Intent::MoveChatToProject { thread_id: id.clone(), project_id: drop_target.clone() },
@@ -268,62 +305,24 @@ impl SidebarRow {
     }
 }
 
-impl Collapsible for SidebarSection {
+impl Collapsible for SidebarEntry {
     fn is_collapsed(&self) -> bool {
         self.collapsed
     }
-
     fn collapsed(mut self, collapsed: bool) -> Self {
         self.collapsed = collapsed;
         self
     }
 }
-
-impl SidebarItem for SidebarSection {
+impl SidebarItem for SidebarEntry {
     fn render(
         self,
         id: impl Into<ElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
-        let language = crate::localization::language(cx);
-        let id = id.into();
-        v_flex()
-            .when(!self.is_collapsed(), |section| {
-                section.child(
-                    h_flex()
-                        .h_8()
-                        .flex_shrink_0()
-                        .pl_2()
-                        .text_xs()
-                        .text_color(cx.theme().sidebar_foreground)
-                        .child(div().flex_1().child(language.text(self.label)))
-                        .when_some(self.add_project, |header, (desktop, enabled)| {
-                            header.child(
-                                Button::new("choose-project")
-                                    .icon(Icon::default().path("icons/folder-plus.svg"))
-                                    .small()
-                                    .ghost()
-                                    .tooltip(language.text("プロジェクトを追加"))
-                                    .accessibility_label(language.text("プロジェクトを追加"))
-                                    .disabled(!enabled)
-                                    .on_click(move |_, _, cx| {
-                                        let _ = desktop.update(cx, |desktop, cx| {
-                                            desktop.pick_folder();
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                        }),
-                )
-            })
-            .child(
-                v_flex()
-                    .gap_1()
-                    .children(self.menu.into_iter().enumerate().map(|(index, row)| {
-                        row.render(format!("{id}-{index}"), self.collapsed, window, cx)
-                    })),
-            )
+        self.row
+            .render(format!("{}", id.into()), self.collapsed, window, cx)
     }
 }
 
@@ -335,9 +334,8 @@ pub(in crate::app) enum SidebarModel {
     Settings(SettingsPage),
 }
 
-#[derive(PartialEq)]
 pub(in crate::app) struct Conversations {
-    list: Option<agent_core::presentation::list::ThreadList>,
+    list: Option<Arc<agent_core::presentation::list::ThreadList>>,
     selected: Option<SessionRef>,
     storage_scope: String,
     connected: bool,
@@ -347,15 +345,27 @@ pub(in crate::app) struct Conversations {
     errors: Vec<super::errors::ErrorRow>,
 }
 
+impl PartialEq for Conversations {
+    fn eq(&self, other: &Self) -> bool {
+        self.list.as_ref().map(Arc::as_ptr) == other.list.as_ref().map(Arc::as_ptr)
+            && self.selected == other.selected
+            && self.storage_scope == other.storage_scope
+            && self.connected == other.connected
+            && self.local == other.local
+            && self.loading_session_list == other.loading_session_list
+            && self.errors == other.errors
+    }
+}
+
 impl Desktop {
     pub(in crate::app) fn sidebar_model(&self) -> SidebarModel {
         match self.tab {
             Tab::Settings => SidebarModel::Settings(self.settings_page),
             Tab::Chat => SidebarModel::Conversations(Conversations {
-                list: self.snapshot.thread_list(),
+                list: self.publication.list.clone(),
                 selected: self.selected().cloned(),
-                storage_scope: self.snapshot.storage_scope.clone(),
-                connected: self.snapshot.connected,
+                storage_scope: self.snapshot.connection.storage_scope.clone(),
+                connected: self.snapshot.connection.connected,
                 local: self.remote.is_none(),
                 loading_session_list: self
                     .snapshot
@@ -373,17 +383,13 @@ pub(in crate::app) struct SidebarView {
     model: SidebarModel,
     search: Entity<InputState>,
     app_updates: Option<Entity<crate::updates::Updates>>,
-    _observation: Subscription,
+    pane: Option<Arc<agent_core::store::Pane>>,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
 
 impl SidebarView {
-    pub(in crate::app) fn new(
-        desktop: &Entity<Desktop>,
-        state: &Desktop,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub(in crate::app) fn new(desktop: &Entity<Desktop>, state: &Desktop) -> Self {
         Self {
             desktop: desktop.downgrade(),
             model: state.sidebar_model(),
@@ -391,59 +397,91 @@ impl SidebarView {
             app_updates: state.app_updates.clone(),
             #[cfg(test)]
             renders: 0,
-            _observation: cx.observe(desktop, |sidebar, desktop, cx| {
-                let model = desktop.read(cx).sidebar_model();
-                if model != sidebar.model {
-                    sidebar.model = model;
-                    cx.notify();
-                }
-            }),
+            pane: state.session.as_ref().map(|session| session.pane.clone()),
         }
     }
 }
 
+pub(in crate::app) enum SidebarAction {
+    NewChat(String),
+    Settings(SettingsPage),
+    Refresh,
+    Conversations,
+    DismissLocal(op::ErrorId),
+}
+impl EventEmitter<SidebarAction> for SidebarView {}
+impl SidebarView {
+    pub(in crate::app) fn sync(
+        &mut self,
+        model: SidebarModel,
+        pane: Option<Arc<agent_core::store::Pane>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.pane = pane;
+        if self.model != model {
+            self.model = model;
+            cx.notify();
+        }
+    }
+    fn dispatch(&self, intent: Intent) {
+        if let Some(pane) = &self.pane {
+            drop(pane.dispatch(intent));
+        }
+    }
+    fn new_chat(&self, cwd: String, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(SidebarAction::NewChat(cwd));
+    }
+    fn open_chat(&self, id: SessionRef, _: &mut Window, _: &mut Context<Self>) {
+        self.dispatch(Intent::ReadThread(op::ReadThread::open(id)));
+    }
+    pub(in crate::app::view) fn open_settings(&self, page: SettingsPage, cx: &mut Context<Self>) {
+        cx.emit(SidebarAction::Settings(page));
+    }
+    fn refresh_threads(&self, cx: &mut Context<Self>) {
+        cx.emit(SidebarAction::Refresh);
+    }
+}
 impl Render for SidebarView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         {
             self.renders += 1;
         }
-        // The Desktop's context only creates its listeners; the model is the
-        // sole source of what is shown.
-        self.desktop
-            .update(cx, |_, cx| {
-                let sidebar = match &self.model {
-                    SidebarModel::Conversations(model) => Desktop::conversation_sidebar(
-                        model,
-                        &self.search,
-                        self.app_updates.clone(),
-                        cx,
-                    ),
-                    SidebarModel::Settings(page) => Desktop::settings_sidebar(*page, cx),
-                };
-                v_flex()
-                    .debug_selector(|| "desktop-sidebar-shell".into())
-                    .size_full()
-                    .bg(rgb(appearance::SIDEBAR))
-                    .border_r_1()
-                    .border_color(cx.theme().sidebar_border)
-                    .child(sidebar_header(true, cx))
-                    .child(
-                        sidebar
-                            .w_full()
-                            .h_auto()
-                            .flex_1()
-                            .min_h_0()
-                            .border_r_0()
-                            .bg(rgb(appearance::SIDEBAR)),
-                    )
-            })
-            .unwrap_or_else(|_| v_flex())
+        let sidebar = match &self.model {
+            SidebarModel::Conversations(model) => Self::conversation_sidebar(
+                model,
+                &self.search,
+                self.app_updates.clone(),
+                &self.desktop,
+                cx,
+            ),
+            SidebarModel::Settings(page) => Self::settings_sidebar(*page, cx),
+        };
+        v_flex()
+            .debug_selector(|| "desktop-sidebar-shell".into())
+            .size_full()
+            .bg(rgb(appearance::SIDEBAR))
+            .border_r_1()
+            .border_color(cx.theme().sidebar_border)
+            .child(sidebar_header(true, &self.desktop, cx))
+            .child(
+                sidebar
+                    .w_full()
+                    .h_auto()
+                    .flex_1()
+                    .min_h_0()
+                    .border_r_0()
+                    .bg(rgb(appearance::SIDEBAR)),
+            )
     }
 }
 
-impl Desktop {
-    fn project_sidebar_rows(model: &Conversations, cx: &Context<Self>) -> Vec<SidebarRow> {
+impl SidebarView {
+    fn project_sidebar_rows(
+        model: &Conversations,
+        desktop: &WeakEntity<Desktop>,
+        cx: &Context<Self>,
+    ) -> Vec<SidebarRow> {
         let language = crate::localization::language(cx);
         let list = &model.list;
         let loading_session_list = model.loading_session_list;
@@ -488,7 +526,7 @@ impl Desktop {
                 expanded,
                 connected: model.connected,
                 scope: model.storage_scope.clone(),
-                desktop: cx.weak_entity(),
+                desktop: desktop.clone(),
             });
             if expanded {
                 for thread in &project.threads {
@@ -575,12 +613,13 @@ impl Desktop {
         model: &Conversations,
         search: &Entity<InputState>,
         app_updates: Option<Entity<crate::updates::Updates>>,
+        desktop: &WeakEntity<Desktop>,
         cx: &Context<Self>,
-    ) -> Sidebar<SidebarSection> {
+    ) -> Sidebar<SidebarEntry> {
         let language = crate::localization::language(cx);
         let list = &model.list;
         let loading_session_list = model.loading_session_list;
-        let projects = Self::project_sidebar_rows(model, cx);
+        let projects = Self::project_sidebar_rows(model, desktop, cx);
         let mut chats: Vec<SidebarRow> = list
             .as_ref()
             .map(|page| {
@@ -619,12 +658,7 @@ impl Desktop {
                 v_flex()
                     .w_full()
                     .gap_3()
-                    .child(Self::error_list(
-                        &model.errors,
-                        ErrorScope::Projects,
-                        None,
-                        cx,
-                    ))
+                    .child(Self::project_errors(&model.errors, cx))
                     .when_some(
                         list.as_ref().and_then(|list| list.notice.clone()),
                         |this, notice| this.child(div().px_3().py_2().text_sm().child(notice)),
@@ -654,18 +688,16 @@ impl Desktop {
                             ),
                     ),
             )
-            .child(SidebarSection {
+            .child(SidebarEntry::from(SidebarRow::Section {
                 label: language.text("プロジェクト"),
-                menu: projects,
-                collapsed: false,
-                add_project: Some((cx.weak_entity(), model.connected && model.local)),
-            })
-            .child(SidebarSection {
+                add_project: Some((desktop.clone(), model.connected && model.local)),
+            }))
+            .children(projects.into_iter().map(SidebarEntry::from))
+            .child(SidebarEntry::from(SidebarRow::Section {
                 label: language.text("チャット"),
-                menu: chats,
-                collapsed: false,
                 add_project: None,
-            })
+            }))
+            .children(chats.into_iter().map(SidebarEntry::from))
             .footer(
                 h_flex()
                     .w_full()
@@ -678,8 +710,8 @@ impl Desktop {
                             IconName::Settings,
                             language.text("設定を開く"),
                             cx,
-                            |s, _, _| {
-                                s.open_settings(SettingsPage::General);
+                            |s, _, cx| {
+                                s.open_settings(SettingsPage::General, cx);
                             },
                         )
                         .debug_selector(|| "sidebar-settings".into()),
@@ -692,13 +724,29 @@ impl Desktop {
                             IconName::RotateCw,
                             language.text("会話を更新"),
                             cx,
-                            |s, _, _| s.refresh_threads(),
+                            |s, _, cx| s.refresh_threads(cx),
                         )
                         .debug_selector(|| "refresh-threads".into())
                         .into_any_element()
                     }),
             )
     }
+    fn project_errors(rows: &[super::errors::ErrorRow], cx: &Context<Self>) -> Div {
+        errors::error_list(
+            rows,
+            ErrorScope::Projects,
+            None,
+            cx,
+            |view, action, _, cx| match action {
+                errors::NoticeAction::Dispatch(intent) => view.dispatch(intent),
+                errors::NoticeAction::DismissLocal(_, id) => {
+                    cx.emit(SidebarAction::DismissLocal(id))
+                }
+                errors::NoticeAction::Reconnect => cx.emit(SidebarAction::Refresh),
+            },
+        )
+    }
+
     fn draggable_chat(
         scope: &str,
         thread: &agent_core::presentation::list::ThreadSummary,
@@ -778,27 +826,20 @@ mod tests {
     use agent_core::store::Store;
     use gpui_kit as gpui;
     use gpui_kit::{
-        AppContext, Context, Entity, InteractiveElement, IntoElement, Modifiers, ParentElement,
-        Render, Styled, TestAppContext, Window,
-        component::{sidebar::SidebarItem, v_flex},
-        div, px, size,
+        AppContext, Context, Entity, IntoElement, Modifiers, Render, TestAppContext, Window, px,
+        size,
     };
 
     struct TaskNavigation(Entity<Desktop>);
     impl Render for TaskNavigation {
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let sidebar = self.0.read(cx).sidebar_view.clone().unwrap();
             self.0.update(cx, |desktop, cx| {
-                let page = desktop.snapshot.thread_list().unwrap();
-                v_flex()
-                    .w(px(272.))
-                    .children(page.threads.iter().enumerate().map(|(index, thread)| {
-                        let selected = desktop.selected() == Some(&thread.id);
-                        let button = Desktop::thread_button(thread, selected, cx);
-                        div()
-                            .debug_selector(move || format!("task-{index}"))
-                            .child(button.render(format!("task-button-{index}"), window, cx))
-                    }))
-            })
+                let model = desktop.sidebar_model();
+                let pane = desktop.session.as_ref().map(|session| session.pane.clone());
+                sidebar.update(cx, |view, cx| view.sync(model, pane, cx));
+            });
+            sidebar
         }
     }
 
@@ -817,17 +858,25 @@ mod tests {
             .unwrap();
         let app_runtime = Runtime {
             handle: runtime.handle().clone(),
+            sessions: Default::default(),
             connections: Arc::default(),
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
         };
         let snapshot = Snapshot {
-            storage_scope: "drag-host".into(),
-            threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
-                "data":[{"id":{"provider":"codex","id":"moving"},"name":"Move this chat","projectId":null}],
-                "projects":[{"id":"a","name":"Alpha","roots":[]},{"id":"b","name":"Beta","roots":[]}],
-                "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
-            })).unwrap())), ..Default::default()
+            connection: agent_core::state::Connection {
+                storage_scope: "drag-host".into(),
+                ..Default::default()
+            },
+            lists: agent_core::state::Lists {
+                threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
+                    "data":[{"id":{"provider":"codex","id":"moving"},"name":"Move this chat","projectId":null}],
+                    "projects":[{"id":"a","name":"Alpha","roots":[]},{"id":"b","name":"Beta","roots":[]}],
+                    "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
+                })).unwrap())),
+                ..Default::default()
+            },
+            ..Default::default()
         };
         let session = runtime.block_on(async {
             let (updates, receive) = async_channel::unbounded();
@@ -840,7 +889,7 @@ mod tests {
             ));
             receive.recv().await.unwrap().unwrap().unwrap()
         });
-        let store = session.store.clone();
+        let store = session.host.store.clone();
         cx.update(|cx| {
             crate::appearance::init(cx);
             cx.set_global(app_runtime);
@@ -848,7 +897,7 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -864,7 +913,7 @@ mod tests {
                 desktop.snapshot = store.snapshot();
                 desktop.session = Some(session);
                 let entity = cx.entity();
-                cx.new(|cx| super::SidebarView::new(&entity, desktop, cx))
+                cx.new(|_| super::SidebarView::new(&entity, desktop))
             });
             ProjectNavigation(desktop, sidebar)
         });
@@ -939,7 +988,7 @@ mod tests {
             }
         }
         assert!(
-            store.snapshot().navigation.thread_id.is_none(),
+            store.snapshot().pane.navigation.thread_id.is_none(),
             "dragging must not open the chat"
         );
     }
@@ -954,6 +1003,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::default(),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -962,21 +1012,26 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let mut desktop = Desktop::new(Mode::Main, window, cx);
             desktop.onboarding = false;
-            desktop.panels.set_open(desktop.panel_scope(), false);
+            desktop.panels = desktop
+                .panels
+                .clone()
+                .set_open(desktop.panel_scope(), false);
             let session = agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "fixture".into(),
             };
             let snapshot = Arc::make_mut(&mut desktop.snapshot);
-            snapshot.threads = Some(Arc::new(
+            snapshot.lists.threads = Some(Arc::new(
                 serde_json::from_value(serde_json::json!({
                     "data":[], "projects":[{"id":"brand", "name":"remote-agent", "roots":[]}],
                      "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5, }))
                 .unwrap(),
             ));
-            Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session.clone());
-            Arc::make_mut(&mut snapshot.navigation).draft_key = session.clone().into();
-            Arc::make_mut(&mut snapshot.drafts).insert(
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+                Some(session.clone());
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+                session.clone().into();
+            Arc::make_mut(&mut snapshot.input.drafts).insert(
                 session.into(),
                 Arc::new(Draft {
                     text: "Keep my draft".into(),
@@ -1016,13 +1071,13 @@ mod tests {
         for expanded in [true, false] {
             window.simulate_click(project, Modifiers::default());
             view.update(window, |view, cx| {
-                view.snapshot = view.session.as_ref().unwrap().store.snapshot();
+                view.snapshot = view.session.as_ref().unwrap().host.store.snapshot();
                 cx.notify();
             });
             window.run_until_parked();
             view.update(window, |view, _| {
                 assert_eq!(
-                    view.snapshot.expanded_projects.contains_key("brand"),
+                    view.snapshot.lists.expanded_projects.contains_key("brand"),
                     expanded
                 );
             });
@@ -1096,6 +1151,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::default(),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -1108,7 +1164,7 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let mut desktop = Desktop::new(Mode::Main, window, cx);
             desktop.onboarding = false;
-            Arc::make_mut(&mut desktop.snapshot).threads = Some(Arc::new(
+            Arc::make_mut(&mut desktop.snapshot).lists.threads = Some(Arc::new(
                 serde_json::from_value(serde_json::json!({
                     "data":[{"id":{"provider":"codex","id":"listed"},"name":"Listed task"}],
                     "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
@@ -1127,8 +1183,8 @@ mod tests {
         });
         view.update(window, |view, cx| {
             let snapshot = Arc::make_mut(&mut view.snapshot);
-            let draft = snapshot.navigation.draft_key.clone();
-            Arc::make_mut(&mut snapshot.drafts).insert(
+            let draft = snapshot.pane.navigation.draft_key.clone();
+            Arc::make_mut(&mut snapshot.input.drafts).insert(
                 draft,
                 Arc::new(Draft {
                     text: "typing".into(),
@@ -1141,7 +1197,8 @@ mod tests {
         assert_eq!(renders.get(), 0, "typing must not rebuild the sidebar");
         view.update(window, |view, cx| {
             let snapshot = Arc::make_mut(&mut view.snapshot);
-            Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session);
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+                Some(session);
             cx.notify();
         });
         window.run_until_parked();
@@ -1165,6 +1222,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::default(),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -1175,7 +1233,7 @@ mod tests {
             let desktop = cx.new(|cx| {
                 let mut desktop = Desktop::new(Mode::Main, window, cx);
                 desktop.onboarding = false;
-                Arc::make_mut(&mut desktop.snapshot).threads = Some(Arc::new(
+                Arc::make_mut(&mut desktop.snapshot).lists.threads = Some(Arc::new(
                     serde_json::from_value(serde_json::json!({
                         "data":[{"id":{"provider":"codex","id":"running"},"name":"Running task","status":"running"}],
                         "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
@@ -1211,19 +1269,23 @@ mod tests {
             .unwrap();
         let app_runtime = Runtime {
             handle: runtime.handle().clone(),
+            sessions: Default::default(),
             connections: Arc::default(),
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
         };
         let snapshot = Snapshot {
-            threads: Some(Arc::new(
-                serde_json::from_value(serde_json::json!({
-                    "data":[{"id":{"provider":"codex","id":"child"},"parentId":{"provider":"codex","id":"first"},"name":"Child task","status":"running"},
-                            {"id":{"provider":"codex","id":"first"},"name":"First task","worktreeStatus":"unmerged"},
-                            {"id":{"provider":"codex","id":"second"},"name":"Second task","worktreeStatus":"merged"}],
-                    "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
-                .unwrap(),
-            )),
+            lists: agent_core::state::Lists {
+                threads: Some(Arc::new(
+                    serde_json::from_value(serde_json::json!({
+                        "data":[{"id":{"provider":"codex","id":"child"},"parentId":{"provider":"codex","id":"first"},"name":"Child task","status":"running"},
+                                {"id":{"provider":"codex","id":"first"},"name":"First task","worktreeStatus":"unmerged"},
+                                {"id":{"provider":"codex","id":"second"},"name":"Second task","worktreeStatus":"merged"}],
+                        "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
+                    .unwrap(),
+                )),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let session = runtime.block_on(async {
@@ -1238,7 +1300,7 @@ mod tests {
             ));
             receive.recv().await.unwrap().unwrap().unwrap()
         });
-        let store = session.store.clone();
+        let store = session.host.store.clone();
         cx.update(|cx| {
             crate::appearance::init(cx);
             cx.set_global(app_runtime);
@@ -1246,7 +1308,7 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -1269,13 +1331,20 @@ mod tests {
         // Leave the Tokio executor parked so both task reads remain pending.
         assert!(window.debug_bounds("icons/diff.svg").is_some());
         assert!(window.debug_bounds("icons/merge.svg").is_some());
-        for (id, selector) in [("first", "task-0"), ("second", "task-1")] {
+        for (id, selector) in [("first", "drag-chat-first"), ("second", "drag-chat-second")] {
             let bounds = window.debug_bounds(selector).unwrap();
             let button = gpui::point(bounds.left() + gpui::px(70.), bounds.top() + gpui::px(14.));
             window.simulate_click(button, Modifiers::default());
             window.run_until_parked();
             assert_eq!(
-                store.snapshot().navigation.thread_id.as_ref().unwrap().id,
+                store
+                    .snapshot()
+                    .pane
+                    .navigation
+                    .thread_id
+                    .as_ref()
+                    .unwrap()
+                    .id,
                 id
             );
             view.update(window, |view, cx| {

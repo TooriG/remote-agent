@@ -173,6 +173,33 @@ impl Connections {
         Ok(store)
     }
 
+    pub(crate) async fn resume(&self, store: &Store, remote: Option<&str>) -> anyhow::Result<()> {
+        let device_name = tokio::task::spawn_blocking(agent_local_host::machine_name).await?;
+        if let Some(remote) = remote {
+            let ticket = remote.parse::<Ticket>()?;
+            if let Some(distro) = self.wsl_target(&ticket).await {
+                let remote = self.wsl_host(&distro).await?;
+                let endpoint = self.wsl.lock().await.get(&distro).unwrap().endpoint.clone();
+                store
+                    .resume(&endpoint, &remote.ticket.parse()?, &device_name)
+                    .await?;
+            } else {
+                let endpoint = self
+                    .endpoint_for(&discover_local_host().await?.directory, false)
+                    .await?;
+                store.resume(endpoint, &ticket, &device_name).await?;
+            }
+        } else {
+            let location = discover_local_host().await?;
+            let LocalHostState::Ready(ticket) = &location.state else {
+                anyhow::bail!("Local Host is not ready");
+            };
+            let endpoint = self.endpoint_for(&location.directory, true).await?;
+            store.resume(endpoint, ticket, &device_name).await?;
+        }
+        Ok(())
+    }
+
     async fn endpoint_for(
         &self,
         directory: &std::path::Path,
@@ -263,7 +290,7 @@ impl Connections {
             let mut snapshots = store.subscribe();
             let mut delay = Duration::from_millis(250);
             while snapshots
-                .wait_for(|snapshot| !snapshot.connected)
+                .wait_for(|snapshot| !snapshot.connection.connected)
                 .await
                 .is_ok()
             {
@@ -271,7 +298,7 @@ impl Connections {
                 if snapshots.has_changed().is_err() {
                     break;
                 }
-                if snapshots.borrow().connected {
+                if snapshots.borrow().connection.connected {
                     delay = Duration::from_millis(250);
                     continue;
                 }

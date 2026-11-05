@@ -4,7 +4,9 @@ import SwiftUI
 struct AgentSettingsScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.locale) private var locale
-    @ObservedObject var model: AppViewModel
+    let model: ConversationModel
+    var profiles: [HostProfile] = []
+    var selectProfile: ((String) -> Void)?
     @State var provider: ProviderKind?
     let close: () -> Void
     @State private var changingAccount = false
@@ -54,8 +56,12 @@ struct AgentSettingsScreen: View {
     var body: some View {
         List {
             Section("適用範囲") {
-                SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
-                                    disabled: changingAccount || loginInProgress, select: model.selectProfile)
+                if let selectProfile {
+                    SettingsScopeFields(profiles: profiles, selectedProfileId: model.host,
+                                        disabled: changingAccount || loginInProgress, select: selectProfile)
+                } else {
+                    Text(model.snapshot.hostName() ?? model.host)
+                }
             }
             if let login {
                 AccountLoginSection(
@@ -138,7 +144,7 @@ struct AgentSettingsScreen: View {
             }
         }
         .onChange(of: provider) { _ in loginError = nil; loginCode = ""; refresh() }
-        .onChange(of: model.selectedProfileId) { _ in
+        .onChange(of: model.host) { _ in
             loginError = nil
             loginCode = ""
             signOutId = nil

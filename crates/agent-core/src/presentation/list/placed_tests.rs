@@ -12,12 +12,18 @@ fn session(id: &str) -> SessionRef {
 
 fn fixture() -> Snapshot {
     let mut snapshot = Snapshot {
-        connected: true,
-        storage_scope: "active".into(),
-        threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
-            "data":[],"projects":[{"id":"destination","name":"Destination","roots":[]},{"id":"source","name":"Source","roots":[]}],
-            "limit":5,"hasMore":false,"hasMoreProjects":false,"projectPages":{}
-        })).unwrap())),
+        connection: crate::state::Connection {
+            connected: true,
+            storage_scope: "active".into(),
+            ..Default::default()
+        },
+        lists: crate::state::Lists {
+            threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
+                "data":[],"projects":[{"id":"destination","name":"Destination","roots":[]},{"id":"source","name":"Source","roots":[]}],
+                "limit":5,"hasMore":false,"hasMoreProjects":false,"projectPages":{}
+            })).unwrap())),
+            ..Default::default()
+        },
         ..Default::default()
     };
     for (key, name) in [
@@ -45,7 +51,7 @@ fn fixture() -> Snapshot {
             "child" => thread.parent_id = Some(session("parent")),
             _ => {}
         }
-        Arc::make_mut(&mut snapshot.conversations).insert(session(key), Arc::new(thread));
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(session(key), Arc::new(thread));
     }
     let preferences = ProjectPreferences {
         placed_chats: [
@@ -70,7 +76,7 @@ fn fixture() -> Snapshot {
         archived_ids: [session("archived"), session("active-archived")].into(),
         ..Default::default()
     };
-    snapshot.project_preferences = Arc::new(
+    snapshot.lists.project_preferences = Arc::new(
         [
             (
                 "active".into(),
@@ -93,18 +99,19 @@ fn fixture() -> Snapshot {
         ]
         .into(),
     );
-    snapshot.expanded_projects = Arc::new([("destination".into(), 5)].into());
-    let activity = Arc::make_mut(&mut snapshot.activity);
+    snapshot.lists.expanded_projects = Arc::new([("destination".into(), 5)].into());
+    let activity = Arc::make_mut(&mut snapshot.lists.activity);
     activity.active.insert(session("live"), true);
     activity.active.insert(session("active-archived"), true);
     activity.unread.insert(session("missing"));
-    snapshot.task_activity = Some(Arc::new(agent_protocol::live_activity::TaskActivityState {
-        revision: 1,
-        statuses: vec![],
-        waiting: vec![session("live")],
-        unread: vec![],
-        display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
-    }));
+    snapshot.lists.task_activity =
+        Some(Arc::new(agent_protocol::live_activity::TaskActivityState {
+            revision: 1,
+            statuses: vec![],
+            waiting: vec![session("live")],
+            unread: vec![],
+            display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
+        }));
     snapshot
 }
 
@@ -145,7 +152,7 @@ fn placed_rows_keep_live_metadata_saved_fallbacks_and_activity_in_the_destinatio
     assert!(!rows[2].active);
     assert!(rows[3].active);
     assert_eq!(
-        snapshot.conversations[&session("live")]
+        snapshot.sessions.conversations[&session("live")]
             .project_id
             .as_deref(),
         Some("source")
@@ -161,7 +168,7 @@ fn placed_search_uses_plain_live_or_saved_titles_and_the_active_storage_scope() 
         ("Old saved", vec![]),
         ("MISSING", vec![session("missing")]),
     ] {
-        snapshot.list_query = Arc::new(ListQuery {
+        snapshot.lists.list_query = Arc::new(ListQuery {
             search_term: search.into(),
             ..Default::default()
         });
@@ -173,8 +180,8 @@ fn placed_search_uses_plain_live_or_saved_titles_and_the_active_storage_scope() 
             ids
         );
     }
-    snapshot.list_query = Arc::default();
-    snapshot.storage_scope = "other".into();
+    snapshot.lists.list_query = Arc::default();
+    snapshot.connection.storage_scope = "other".into();
     let rows = placed(&snapshot);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, session("other"));
@@ -210,12 +217,15 @@ fn project_preferences_keep_pinned_section_order_ties_and_hidden_labels() {
         provider_errors: None,
     };
     let mut snapshot = Snapshot {
-        threads: Some(Arc::new(input)),
+        lists: crate::state::Lists {
+            threads: Some(Arc::new(input)),
+            ..Default::default()
+        },
         ..Default::default()
     };
-    snapshot.project_preferences = Arc::new(
+    snapshot.lists.project_preferences = Arc::new(
         [(
-            snapshot.storage_scope.clone(),
+            snapshot.connection.storage_scope.clone(),
             [
                 (
                     "hidden".into(),
@@ -343,8 +353,8 @@ fn project_override_keeps_catalogue_membership_and_does_not_create_row_ids() {
 #[test]
 fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_view() {
     let mut snapshot = fixture();
-    Arc::make_mut(&mut snapshot.list_query).limit = 256;
-    snapshot.conversations = Arc::new(
+    Arc::make_mut(&mut snapshot.lists.list_query).limit = 256;
+    snapshot.sessions.conversations = Arc::new(
         [
             (
                 session("chat-2"),
@@ -365,7 +375,7 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
         ]
         .into(),
     );
-    let list = Arc::make_mut(snapshot.threads.as_mut().unwrap());
+    let list = Arc::make_mut(snapshot.lists.threads.as_mut().unwrap());
     list.data = (0..140)
         .map(|index| Thread {
             id: Some(session(&format!("chat-{index}"))),
@@ -389,8 +399,8 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
             ..Default::default()
         })
         .into();
-    snapshot.project_threads = Arc::new([("source".into(), Arc::new(page))].into());
-    snapshot.expanded_projects =
+    snapshot.lists.project_threads = Arc::new([("source".into(), Arc::new(page))].into());
+    snapshot.lists.expanded_projects =
         Arc::new([("source".into(), 256), ("destination".into(), 256)].into());
     let mut preferences = BTreeMap::<String, ProjectPreferences>::new();
     for (index, project) in (0..128).map(|index| {
@@ -429,7 +439,7 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
             id: session("missing-row"),
             title: "Saved missing row".into(),
         });
-    snapshot.project_preferences = Arc::new([("active".into(), preferences)].into());
+    snapshot.lists.project_preferences = Arc::new([("active".into(), preferences)].into());
     let list = snapshot.thread_list().unwrap();
     assert_eq!(
         list.threads
@@ -507,7 +517,7 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
             project
         );
     }
-    snapshot.storage_scope = "other".into();
+    snapshot.connection.storage_scope = "other".into();
     let list = snapshot.thread_list().unwrap();
     assert_eq!(list.threads.len(), 140);
     assert!(list.hidden_projects.is_empty());
@@ -535,7 +545,7 @@ fn large_placement_lists_keep_scope_hidden_and_dangling_destinations_in_every_vi
 fn large_archived_projects_keep_actual_metadata_membership_and_active_overrides() {
     let mut snapshot = fixture();
     let count = 512;
-    snapshot.conversations = Arc::default();
+    snapshot.sessions.conversations = Arc::default();
     let shortcuts: Vec<_> = (0..count)
         .map(|index| PlacedChat {
             id: session(&format!("saved{index}")),
@@ -557,9 +567,10 @@ fn large_archived_projects_keep_actual_metadata_membership_and_active_overrides(
             12 => thread.parent_id = Some(session("parent")),
             _ => {}
         }
-        Arc::make_mut(&mut snapshot.conversations).insert(chat.id.clone(), Arc::new(thread));
+        Arc::make_mut(&mut snapshot.sessions.conversations)
+            .insert(chat.id.clone(), Arc::new(thread));
     }
-    let mut page = snapshot.threads.as_deref().unwrap().clone();
+    let mut page = snapshot.lists.threads.as_deref().unwrap().clone();
     page.data = (0..count)
         .map(|index| Thread {
             id: Some(session(&format!("native{index}"))),
@@ -576,9 +587,9 @@ fn large_archived_projects_keep_actual_metadata_membership_and_active_overrides(
             ..Default::default()
         })
         .collect();
-    snapshot.project_threads = Arc::new([("destination".into(), Arc::new(page))].into());
-    snapshot.expanded_projects = Arc::new([("destination".into(), count as u32)].into());
-    snapshot.project_preferences = Arc::new(
+    snapshot.lists.project_threads = Arc::new([("destination".into(), Arc::new(page))].into());
+    snapshot.lists.expanded_projects = Arc::new([("destination".into(), count as u32)].into());
+    snapshot.lists.project_preferences = Arc::new(
         [(
             "active".into(),
             [(
@@ -594,7 +605,7 @@ fn large_archived_projects_keep_actual_metadata_membership_and_active_overrides(
         )]
         .into(),
     );
-    Arc::make_mut(&mut snapshot.activity)
+    Arc::make_mut(&mut snapshot.lists.activity)
         .active
         .extend([(session("native0"), true), (session("saved5"), true)]);
     let mut expected: Vec<_> = (2..count)
@@ -646,7 +657,7 @@ fn archive_filters_apply_with_only_a_timestamp_or_only_explicit_ids() {
         (None, vec![], vec!["old", "new", "undated"]),
     ] {
         let mut snapshot = fixture();
-        let mut page = snapshot.threads.as_deref().unwrap().clone();
+        let mut page = snapshot.lists.threads.as_deref().unwrap().clone();
         page.data = [("old", Some(1.)), ("new", Some(101.)), ("undated", None)]
             .map(|(id, updated_at)| Thread {
                 id: Some(session(id)),
@@ -656,8 +667,8 @@ fn archive_filters_apply_with_only_a_timestamp_or_only_explicit_ids() {
                 ..Default::default()
             })
             .into();
-        snapshot.project_threads = Arc::new([("destination".into(), Arc::new(page))].into());
-        snapshot.project_preferences = Arc::new(
+        snapshot.lists.project_threads = Arc::new([("destination".into(), Arc::new(page))].into());
+        snapshot.lists.project_preferences = Arc::new(
             [(
                 "active".into(),
                 [(
@@ -704,16 +715,16 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
         for cached in [false, true] {
             for expanded in [false, true] {
                 let mut snapshot = fixture();
-                snapshot.connected = connected;
-                snapshot.expanded_projects = Arc::new(if expanded {
+                snapshot.connection.connected = connected;
+                snapshot.lists.expanded_projects = Arc::new(if expanded {
                     [("destination".into(), 5)].into()
                 } else {
                     BTreeMap::new()
                 });
-                snapshot.project_threads = Arc::new(if cached {
+                snapshot.lists.project_threads = Arc::new(if cached {
                     [(
                         "destination".into(),
-                        snapshot.threads.as_ref().unwrap().clone(),
+                        snapshot.lists.threads.as_ref().unwrap().clone(),
                     )]
                     .into()
                 } else {
@@ -736,7 +747,7 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
                 let key = OperationKey::ProjectList {
                     project_id: "destination".into(),
                 };
-                Arc::make_mut(&mut snapshot.operations).insert(
+                snapshot.operations.insert(
                     key.clone(),
                     OperationState {
                         generation: 1,
@@ -755,10 +766,7 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
                     project.error.as_ref().map(|error| error.message.as_str()),
                     expected
                 );
-                Arc::make_mut(&mut snapshot.operations)
-                    .get_mut(&key)
-                    .unwrap()
-                    .phase = OperationPhase::Failed {
+                snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
                     message: "read failed".into(),
                 };
                 let project = snapshot

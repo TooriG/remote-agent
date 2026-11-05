@@ -255,7 +255,7 @@ impl Connections {
         tokio::spawn(async move {
             let mut snapshots = store.subscribe();
             while snapshots
-                .wait_for(|snapshot| !snapshot.connected)
+                .wait_for(|snapshot| !snapshot.connection.connected)
                 .await
                 .is_ok()
             {
@@ -263,7 +263,7 @@ impl Connections {
                 if snapshots.has_changed().is_err() {
                     break;
                 }
-                if snapshots.borrow().connected {
+                if snapshots.borrow().connection.connected {
                     continue;
                 }
                 let result = async {

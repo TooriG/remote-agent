@@ -36,7 +36,7 @@ extension AppViewModel {
                 let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1_000_000
                 owner.recordConnectionEvent(phase: .uiConnectReady, value: UInt64(elapsed))
                 if selectedProfileId == profile.id {
-                    publish(owner.snapshot())
+                    publish(owner.presentation())
                     notice = nil
                 } else {
                     liveActivities.resendTokens(hostID: profile.id)
@@ -62,12 +62,11 @@ extension AppViewModel {
             do {
                 let owner = try await session.ready()
                 guard !Task.isCancelled else { return }
-                var previous = owner.snapshot()
+                var previous = owner.presentation()
                 self?.receiveHost(previous, host: host, listChanged: true)
                 while !Task.isCancelled {
-                    _ = try await owner.nextSnapshot(previous: previous)
+                    let latest = try await owner.nextPresentation(previous: previous)
                     guard let self, !Task.isCancelled else { return }
-                    let latest = owner.snapshot()
                     let changes = latest.changes(previous: previous)
                     receiveHost(latest, host: host, listChanged: changes.list)
                     if changes.reconnected {
@@ -87,11 +86,11 @@ extension AppViewModel {
         }
     }
 
-    private func receiveHost(_ next: AgentCore.Snapshot, host: String, listChanged: Bool) {
+    private func receiveHost(_ next: Presentation, host: String, listChanged: Bool) {
         if selectedProfileId == host {
             publish(next)
         } else {
-            updateProfile(next, host: host)
+            updateProfile(next.snapshot(), host: host)
             if allProfiles, listChanged {
                 updateTaskList()
             }

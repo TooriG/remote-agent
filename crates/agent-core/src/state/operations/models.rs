@@ -24,10 +24,10 @@ impl Operation for LoadModels {
             .as_ref()
             .cloned()
             .unwrap_or_default();
-        snapshot.models = Arc::new(models);
-        snapshot.model_errors = Arc::new(errors);
+        snapshot.catalog.models = Arc::new(models);
+        snapshot.catalog.model_errors = Arc::new(errors);
         snapshot.normalize_model_drafts();
-        Arc::make_mut(&mut snapshot.operations).retain(|key, state| {
+        snapshot.operations.retain(|key, state| {
             !matches!(key, OperationKey::ModelSettings { .. })
                 || state.phase == OperationPhase::Running
         });
@@ -67,7 +67,7 @@ impl Operation for ReadModelSettings {
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, settings: Self::Output) -> Vec<Effect> {
-        if let Some(model) = Arc::make_mut(&mut snapshot.models)
+        if let Some(model) = Arc::make_mut(&mut snapshot.catalog.models)
             .iter_mut()
             .find(|model| model.model == self.model)
         {
@@ -94,9 +94,9 @@ mod tests {
             id: "other-route".into(),
         };
         let mut snapshot = Snapshot::default();
-        let key = snapshot.navigation.draft_key.clone();
+        let key = snapshot.pane.navigation.draft_key.clone();
         let other_key = DraftKey::from("other");
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             key.clone(),
             Arc::new(Draft {
                 model: Some(model.clone()),
@@ -104,7 +104,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             other_key.clone(),
             Arc::new(Draft {
                 model: Some(other.clone()),
@@ -117,22 +117,26 @@ mod tests {
             {"id":"other","model":other,"displayName":"Other","settings":null,"settingsDiscovery":true}
         ],"nextCursor":null}))
         .unwrap();
-        snapshot.connected = true;
+        snapshot.connection.connected = true;
         LoadModels {}.apply(&mut snapshot, page);
         assert!(
             prefetch_model_settings(
-                snapshot.connected,
+                snapshot.connection.connected,
                 snapshot
+                    .input
                     .drafts
                     .get(&key)
                     .and_then(|draft| draft.model.as_ref()),
-                &snapshot.models,
+                &snapshot.catalog.models,
                 snapshot.operations.keys(),
             )
             .is_some()
         );
-        assert_eq!(snapshot.drafts[&key].effort.as_deref(), Some("high"));
-        assert_eq!(snapshot.drafts[&other_key].effort.as_deref(), Some("max"));
+        assert_eq!(snapshot.input.drafts[&key].effort.as_deref(), Some("high"));
+        assert_eq!(
+            snapshot.input.drafts[&other_key].effort.as_deref(),
+            Some("max")
+        );
         let (mut switched, _) = reduce_intent(
             &snapshot,
             Intent::SelectModel {
@@ -145,10 +149,14 @@ mod tests {
             model: model.clone(),
         }
         .apply(&mut switched, settings);
-        assert_eq!(switched.drafts[&key].model.as_ref(), Some(&other));
-        assert_eq!(switched.drafts[&other_key].effort.as_deref(), Some("max"));
+        assert_eq!(switched.input.drafts[&key].model.as_ref(), Some(&other));
+        assert_eq!(
+            switched.input.drafts[&other_key].effort.as_deref(),
+            Some("max")
+        );
         assert!(
             switched
+                .catalog
                 .models
                 .iter()
                 .find(|entry| entry.model == model)
@@ -158,6 +166,7 @@ mod tests {
         );
         assert!(
             switched
+                .catalog
                 .models
                 .iter()
                 .find(|entry| entry.model == other)

@@ -85,7 +85,15 @@ impl Operation for ReadFile {
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::File)
     }
-    rpc_operation!(workspace.file);
+    no_input!();
+    type Output = <Self as rpc::RpcMethod>::Output;
+    async fn run(&self, _: (), context: &mut Execution<'_>) -> Result<Self::Output, PeerError> {
+        context.call(self).await
+    }
+    fn apply(self, snapshot: &mut Snapshot, file: Self::Output) -> Vec<Effect> {
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).file = Some(Arc::new(file));
+        Vec::new()
+    }
     fn outcome(output: &mut Self::Output) -> Outcome {
         Outcome::FileRead {
             file: output.clone(),
@@ -93,7 +101,7 @@ impl Operation for ReadFile {
     }
     fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
         if self.discard_draft {
-            Arc::make_mut(&mut snapshot.file_drafts).remove(&self.path);
+            Arc::make_mut(&mut snapshot.files.file_drafts).remove(&self.path);
         }
         Ok(())
     }
@@ -105,6 +113,9 @@ pub struct SaveFile {
     pub path: String,
 }
 impl Operation for SaveFile {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::SaveFile {
             path: self.path.clone(),
@@ -113,6 +124,7 @@ impl Operation for SaveFile {
     type Input = Arc<FileDraft>;
     fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
         if snapshot
+            .pane
             .workspace
             .file
             .as_ref()
@@ -123,6 +135,7 @@ impl Operation for SaveFile {
             ));
         }
         snapshot
+            .files
             .file_drafts
             .get(&self.path)
             .cloned()
@@ -147,12 +160,14 @@ impl Operation for SaveFile {
         Self::rebase_draft(snapshot, &submitted, &file);
         let effects = super::file_tree::refresh_file_trees(snapshot, &file.path);
         if snapshot
+            .pane
             .workspace
             .file
             .as_ref()
             .is_some_and(|current| current.path == file.path)
         {
-            Arc::make_mut(&mut snapshot.workspace).file = Some(Arc::new(file));
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).file =
+                Some(Arc::new(file));
         }
         effects
     }
@@ -163,10 +178,10 @@ impl Operation for SaveFile {
 }
 impl SaveFile {
     fn rebase_draft(snapshot: &mut Snapshot, submitted: &FileDraft, file: &FileContent) {
-        Arc::make_mut(&mut snapshot.workspace)
+        Arc::make_mut(&mut snapshot.files.workspace)
             .file_metadata
             .invalidate(&file.path);
-        let drafts = Arc::make_mut(&mut snapshot.file_drafts);
+        let drafts = Arc::make_mut(&mut snapshot.files.file_drafts);
         if let Some(current) = drafts.get_mut(&file.path) {
             if current.as_ref() == submitted {
                 drafts.remove(&file.path);
@@ -185,24 +200,26 @@ pub(in crate::state) fn review_workspace(snapshot: &mut Snapshot) -> Option<Effe
     // A preparing task still sits in its source checkout until the Host moves
     // it to a worktree; those changes are not the task's. T3 Code shows none.
     let preparing = snapshot
+        .pane
         .navigation
         .thread_id
         .as_ref()
-        .and_then(|id| snapshot.conversations.get(id))
+        .and_then(|id| snapshot.sessions.conversations.get(id))
         .is_some_and(|thread| thread.preparation.is_some());
     if preparing || snapshot.selected_directory().is_empty() {
-        if snapshot.workspace.review.is_some() || snapshot.workspace.review_cwd.is_some() {
-            let workspace = Arc::make_mut(&mut snapshot.workspace);
+        if snapshot.pane.workspace.review.is_some() || snapshot.pane.workspace.review_cwd.is_some()
+        {
+            let workspace = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace);
             workspace.review = None;
             workspace.review_cwd = None;
         }
         return None;
     }
-    if !snapshot.connected {
+    if !snapshot.connection.connected {
         return None;
     }
     let mut operation = ReviewWorkspace {
-        cwd: snapshot.navigation.cwd.clone(),
+        cwd: snapshot.pane.navigation.cwd.clone(),
     };
     operation
         .prepare(snapshot)
@@ -219,7 +236,7 @@ impl Operation for ReviewWorkspace {
     }
     rpc_operation!();
     fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
-        let workspace = Arc::make_mut(&mut snapshot.workspace);
+        let workspace = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace);
         if workspace.review_cwd.as_ref() != Some(&self.cwd) {
             workspace.review = None;
         }
@@ -227,7 +244,8 @@ impl Operation for ReviewWorkspace {
         Ok(())
     }
     fn apply(self, snapshot: &mut Snapshot, review: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.workspace).review = Some(Arc::new(review));
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).review =
+            Some(Arc::new(review));
         Vec::new()
     }
 }
@@ -240,10 +258,13 @@ rpc::rpc_method!(ReadWorktreeSettings, ReadWorktreeSettings, |self| {
 });
 
 impl Operation for ReadWorktreeSettings {
+    fn scheduling(&self) -> Scheduling {
+        Scheduling::LatestHostState(OperationKey::WorktreeSettings)
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::WorktreeSettings)
     }
-    rpc_operation!(workspace.settings);
+    rpc_operation!(files.workspace.settings);
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -257,10 +278,13 @@ rpc::rpc_method!(UpdateWorktreeSettings, UpdateWorktreeSettings, |self| self
     .clone());
 
 impl Operation for UpdateWorktreeSettings {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::WorktreeSettings)
     }
-    rpc_operation!(workspace.settings);
+    rpc_operation!(files.workspace.settings);
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -323,12 +347,15 @@ impl Operation for LoadSessionImages {
 pub struct ListWorktrees {}
 rpc::rpc_method!(ListWorktrees, ListWorktrees, |self| crate::models::Empty {});
 impl Operation for ListWorktrees {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Worktrees)
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, worktrees: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.workspace).worktrees = Some(Arc::new(worktrees));
+        Arc::make_mut(&mut snapshot.files.workspace).worktrees = Some(Arc::new(worktrees));
         Vec::new()
     }
 }
@@ -336,6 +363,9 @@ impl Operation for ListWorktrees {
 pub use agent_protocol::operations::RemoveWorktree;
 
 impl Operation for RemoveWorktree {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn apply(self, _: &mut Snapshot, _: Self::Output) -> Vec<Effect> {
         vec![Effect::execute(ListWorktrees {})]
@@ -371,7 +401,7 @@ mod read_result_tests {
             text: "unsaved work".into(),
         });
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.file_drafts).insert(path.clone(), original.clone());
+        Arc::make_mut(&mut snapshot.files.file_drafts).insert(path.clone(), original.clone());
         ReadFile {
             path: loaded_path.into(),
             discard_draft: false,
@@ -386,7 +416,7 @@ mod read_result_tests {
                 truncated,
             },
         );
-        assert_eq!(snapshot.file_drafts[&path], original);
+        assert_eq!(snapshot.files.file_drafts[&path], original);
         assert_eq!(
             SaveFile { path: path.clone() }.capture(&snapshot).is_err(),
             read_only
@@ -399,16 +429,16 @@ mod read_result_tests {
             }),
         );
         assert!(effects.is_empty());
-        assert_eq!(edited.error.is_some(), read_only);
+        assert_eq!(edited.pane.error.is_some(), read_only);
         assert_eq!(
-            edited.file_drafts[&path].text,
+            edited.files.file_drafts[&path].text,
             if read_only {
                 "unsaved work"
             } else {
                 "new user text"
             }
         );
-        assert_eq!(edited.workspace.file.as_ref().unwrap().text, "preview");
+        assert_eq!(edited.pane.workspace.file.as_ref().unwrap().text, "preview");
     }
     #[test]
     fn each_read_receipt_keeps_its_content_when_another_file_replaces_the_editor_snapshot() {
@@ -433,7 +463,7 @@ mod read_result_tests {
         }
         .apply(&mut snapshot, file("/repo/child.md", "child content"));
         assert_eq!(
-            snapshot.workspace.file.as_ref().unwrap().path,
+            snapshot.pane.workspace.file.as_ref().unwrap().path,
             "/repo/child.md"
         );
         let Outcome::FileRead { file } = receipt else {

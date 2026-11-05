@@ -5,7 +5,7 @@ import SwiftUI
 struct IOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasBackgrounded = false
-    @StateObject private var model = AppViewModel()
+    @State private var model = AppViewModel()
     @AppStorage("bex.language") private var language = "ja"
 
     var body: some Scene {

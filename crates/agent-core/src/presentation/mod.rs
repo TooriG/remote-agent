@@ -25,6 +25,8 @@ use crate::models::{
 use serde::Serialize;
 pub mod body;
 
+pub mod composer;
+pub mod context;
 pub mod conversation;
 pub mod list;
 pub mod markdown;
@@ -115,7 +117,10 @@ fn assert_work_starts_collapsed(turn: &Turn) {
     use conversation::{ConversationRowContent, activity_is_expanded, project_conversation};
     use std::sync::Arc;
     let rendered = project_conversation(
-        &crate::state::Snapshot::default(),
+        &crate::state::Snapshot::default().pane.navigation.draft_key,
+        &crate::state::Snapshot::default()
+            .sessions
+            .pending_submissions,
         Arc::new(crate::models::Thread {
             turns: Some(vec![Arc::new(turn.clone())]),
             ..Default::default()
@@ -811,4 +816,7 @@ mod deferred_item_tests {
     }
 }
 
-pub mod publication;
+#[cfg(test)]
+#[path = "view/publication_tests.rs"]
+mod publication_tests;
+pub mod view;

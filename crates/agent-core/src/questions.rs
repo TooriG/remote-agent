@@ -116,12 +116,14 @@ pub(crate) fn act(
     request_id: RequestId,
     action: QuestionAction,
 ) -> Option<Answer> {
-    let (session, request) = snapshot
-        .conversations
-        .iter()
-        .find_map(|(session, thread)| {
-            Some((session.clone(), thread.requests.get(&request_id)?.clone()))
-        })?;
+    let (session, request) =
+        snapshot
+            .sessions
+            .conversations
+            .iter()
+            .find_map(|(session, thread)| {
+                Some((session.clone(), thread.requests.get(&request_id)?.clone()))
+            })?;
     let RequestBody::Question { questions } = &request.body else {
         return None;
     };
@@ -129,6 +131,7 @@ pub(crate) fn act(
         return None;
     }
     let saved = snapshot
+        .input
         .question_drafts
         .get(&request_id)
         .cloned()
@@ -159,10 +162,11 @@ pub(crate) fn act(
         }
     };
     if draft != saved {
-        let drafts = std::sync::Arc::make_mut(&mut snapshot.question_drafts);
+        let drafts = std::sync::Arc::make_mut(&mut snapshot.input.question_drafts);
         // Answered, withdrawn and cleared requests no longer need their drafts.
         drafts.retain(|id, _| {
             snapshot
+                .sessions
                 .conversations
                 .values()
                 .any(|thread| thread.requests.contains_key(id))
@@ -171,6 +175,7 @@ pub(crate) fn act(
     }
     let key = DraftKey::from(session);
     let text = snapshot
+        .input
         .drafts
         .get(&key)
         .map_or("", |draft| draft.text.as_str());
@@ -205,14 +210,18 @@ pub struct QuestionPrompt {
 impl Snapshot {
     pub fn question_prompt(&self, thread_id: crate::session::SessionRef) -> Option<QuestionPrompt> {
         let request = crate::presentation::conversation::docked_request(
-            self.conversations.get(&thread_id)?,
+            self.sessions.conversations.get(&thread_id)?,
             true,
         )?;
         let RequestBody::Question { questions } = &request.body else {
             return None;
         };
         let unanswered = QuestionDraft::default();
-        let draft = self.question_drafts.get(&request.id).unwrap_or(&unanswered);
+        let draft = self
+            .input
+            .question_drafts
+            .get(&request.id)
+            .unwrap_or(&unanswered);
         let index = draft.index(questions);
         let question = questions.get(index)?.clone();
         let answer = draft.answers.get(&question.id).cloned().unwrap_or_default();
@@ -299,7 +308,7 @@ mod tests {
                 body: RequestBody::Question { questions },
             }),
         );
-        Arc::make_mut(&mut snapshot.conversations).insert(session(), Arc::new(thread));
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(session(), Arc::new(thread));
         crate::state::set_draft_text(&mut snapshot, session().into(), draft.into());
         snapshot
     }
@@ -370,7 +379,7 @@ mod tests {
                 )]),
                 "choosing the only question's option sends it"
             );
-            assert_eq!(chosen.drafts[&session().into()].text, expected);
+            assert_eq!(chosen.input.drafts[&session().into()].text, expected);
             assert_eq!(chosen.question_prompt(session()).unwrap().text, "");
         }
     }
@@ -464,7 +473,7 @@ mod tests {
         assert_eq!(act_on(&mut snapshot, edit("text")), None);
         assert_eq!(act_on(&mut snapshot, choose("other/a")), None);
         assert_eq!(act_on(&mut snapshot, QuestionAction::Back), None);
-        assert!(snapshot.question_drafts.is_empty(), "nothing changed");
+        assert!(snapshot.input.question_drafts.is_empty(), "nothing changed");
         let prompt = snapshot.question_prompt(session()).unwrap();
         assert_eq!(prompt.text, "");
         assert!(prompt.chosen_choice_ids.is_empty() && !prompt.can_advance);
@@ -480,7 +489,7 @@ mod tests {
         );
         assert_eq!(act_on(&mut snapshot, edit("text")), None);
         assert_eq!(act_on(&mut snapshot, choose("q/a")), None);
-        assert!(snapshot.question_drafts.is_empty());
+        assert!(snapshot.input.question_drafts.is_empty());
         let prompt = snapshot.question_prompt(session()).unwrap();
         assert_eq!(prompt.status.as_deref(), Some("回答を送信中"));
         assert!(!prompt.can_respond && !prompt.can_advance);
@@ -496,7 +505,7 @@ mod tests {
         );
         act_on(&mut snapshot, edit("text"));
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&session())
                 .unwrap(),
         );
@@ -523,11 +532,13 @@ mod tests {
                 ..request.as_ref().clone()
             }),
         );
-        Arc::make_mut(&mut snapshot.conversations).insert(other.clone(), Arc::new(other_thread));
+        Arc::make_mut(&mut snapshot.sessions.conversations)
+            .insert(other.clone(), Arc::new(other_thread));
         act(&mut snapshot, "other".into(), edit("kept"));
         act(&mut snapshot, "next".into(), edit("next"));
         assert_eq!(
             snapshot
+                .input
                 .question_drafts
                 .keys()
                 .map(|id| id.as_str())

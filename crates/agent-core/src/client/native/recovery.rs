@@ -35,7 +35,7 @@ impl Recovery {
             let mut unauthorized = false;
             let work = async {
                 loop {
-                    let connected = snapshots.borrow_and_update().connected;
+                    let connected = snapshots.borrow_and_update().connection.connected;
                     if connected {
                         connected_since.get_or_insert_with(Instant::now);
                     } else if connected_since
@@ -61,7 +61,7 @@ impl Recovery {
                         result = lifecycle.changed() => { if result.is_err() { return; } continue; },
                     }
                     let _attempt = attempt.lock().await;
-                    if store.snapshot().connected || !*lifecycle.borrow() {
+                    if store.snapshot().connection.connected || !*lifecycle.borrow() {
                         continue;
                     }
                     match store.resume(&endpoint, &ticket, &device_name).await {

@@ -71,7 +71,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let mut snapshot = Snapshot::default();
     match &args.command {
         Command::List { limit, search } => {
-            snapshot.list_query = Arc::new(ListQuery {
+            snapshot.lists.list_query = Arc::new(ListQuery {
                 limit: *limit,
                 project_limit: ListQuery::default().project_limit,
                 search_term: search.clone(),
@@ -79,7 +79,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             })
         }
         Command::Send { thread_id, .. } => {
-            snapshot.navigation = Arc::new(Navigation {
+            Arc::make_mut(&mut snapshot.pane).navigation = Arc::new(Navigation {
                 thread_id: Some(thread_id.clone()),
                 draft_key: thread_id.clone().into(),
                 ..Default::default()
@@ -116,16 +116,16 @@ async fn run(args: Args) -> anyhow::Result<()> {
             {
                 let snapshot = updates.borrow_and_update();
                 let ready = match &args.command {
-                    Command::List { .. } => snapshot.threads.is_some(),
+                    Command::List { .. } => snapshot.lists.threads.is_some(),
                     Command::Send { thread_id, .. } => {
-                        snapshot.conversations.contains_key(thread_id)
+                        snapshot.sessions.conversations.contains_key(thread_id)
                     }
                     Command::Approve { .. } => true,
                 };
                 if ready {
                     return Ok::<_, anyhow::Error>(());
                 }
-                if let Some(error) = &snapshot.error {
+                if let Some(error) = &snapshot.pane.error {
                     return Err(anyhow::Error::msg(error.clone()));
                 }
             }
@@ -137,7 +137,10 @@ async fn run(args: Args) -> anyhow::Result<()> {
     .context("cannot load initial Host state")?;
     match args.command {
         Command::List { .. } => {
-            println!("{}", serde_json::to_string(&store.snapshot().threads)?);
+            println!(
+                "{}",
+                serde_json::to_string(&store.snapshot().lists.threads)?
+            );
         }
         Command::Send {
             thread_id,

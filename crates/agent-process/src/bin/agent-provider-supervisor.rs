@@ -28,6 +28,8 @@ async fn main() {
 }
 
 async fn run() -> std::io::Result<i32> {
+    #[cfg(unix)]
+    provider_file_limit()?;
     let mut args = std::env::args_os().skip(1);
     let program = args
         .next()
@@ -70,6 +72,38 @@ async fn run() -> std::io::Result<i32> {
     // Also terminate remaining tool descendants after the main CLI exits.
     let _ = std::pin::Pin::from(child.kill()).await;
     result
+}
+
+#[cfg(unix)]
+fn provider_file_limit() -> std::io::Result<()> {
+    // macOS GUI launches inherit a soft limit of 256. One shared Codex server
+    // owns the MCP pipes, history files and tool processes for several chats,
+    // so it can exhaust that budget before spawning a command. Like Node's
+    // initialization (also used by T3 Code), raise the soft limit within the
+    // inherited hard limit, searching up to 2^20 when it is unlimited.
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut lower = limit.rlim_cur;
+    let mut upper = if limit.rlim_max == libc::RLIM_INFINITY {
+        1 << 20
+    } else {
+        limit.rlim_max
+    };
+    while lower < upper {
+        let candidate = lower + (upper - lower).div_ceil(2);
+        limit.rlim_cur = candidate;
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } == 0 {
+            lower = candidate;
+        } else {
+            upper = candidate - 1;
+        }
+    }
+    Ok(())
 }
 
 fn suppressed_browser_request(enabled: bool, args: &[std::ffi::OsString]) -> bool {

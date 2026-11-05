@@ -1,112 +1,32 @@
 use crate::Runtime;
 use agent_core::client::persistence::Persistence;
-use agent_core::{state::Snapshot, store::Store};
+use agent_core::store::{Pane, Store};
 use gpui_kit::Context;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// Owns a view's connection, snapshot subscription and final persistence flush.
-/// Dropping a replaced or undelivered session also closes its Store.
-pub(crate) struct StoreSession {
+/// One Host owns its connection and save loop, independently of its panes.
+pub(crate) struct HostSession {
     pub(crate) store: Arc<Store>,
-    runtime: Runtime,
-    closed: bool,
-    persistence: Option<Arc<Persistence>>,
-    persistence_stop: CancellationToken,
+    handle: tokio::runtime::Handle,
+    closing: tokio_util::task::TaskTracker,
+    persistence: Mutex<Option<Arc<Persistence>>>,
+    stop: CancellationToken,
 }
-impl StoreSession {
-    pub(crate) fn on_app_quit<V: 'static>(
-        cx: &mut Context<V>,
-        session: fn(&mut V) -> &mut Option<Self>,
-    ) {
-        cx.on_app_quit(move |view, _| {
-            if let Some(mut session) = session(view).take()
-                && let Some(close) = session.close()
-            {
-                // GPUI's asynchronous quit deadline is only 200 ms. Complete
-                // the tracked Store close and final disk flush synchronously.
-                let _ = session.runtime.handle.block_on(close);
-            }
-            async {}
-        })
-        .detach();
+impl HostSession {
+    pub(crate) fn persistence(&self) -> Option<Arc<Persistence>> {
+        self.persistence.lock().unwrap().clone()
     }
-
-    pub(crate) async fn publish<E: Send>(
-        result: anyhow::Result<Arc<Store>>,
-        runtime: Runtime,
-        updates: async_channel::Sender<E>,
-        connected: impl FnOnce(Result<Self, String>) -> E,
-        snapshot: impl Fn(Arc<Snapshot>) -> E,
-    ) {
-        let store = match result {
-            Ok(store) => store,
-            Err(error) => {
-                let _ = updates.send(connected(Err(format!("{error:#}")))).await;
-                return;
-            }
-        };
-        let mut snapshots = store.subscribe();
-        let session = Self {
-            store,
-            runtime,
-            closed: false,
-            persistence: None,
-            persistence_stop: CancellationToken::new(),
-        };
-        if updates.send(connected(Ok(session))).await.is_err() {
-            return;
-        }
-        loop {
-            let current = snapshots.borrow_and_update().clone();
-            if updates.send(snapshot(current)).await.is_err() || snapshots.changed().await.is_err()
-            {
-                break;
-            }
-        }
-    }
-
-    pub(crate) fn persist<E: Send + 'static>(
-        &mut self,
-        persistence: Arc<Persistence>,
-        updates: async_channel::Sender<E>,
-        failure: impl Fn(String) -> E + Send + 'static,
-    ) {
-        if let Some(task) = persistence.start(self.store.subscribe()) {
-            self.runtime.handle.spawn(task);
-        }
-        let mut failures = persistence.failures();
-        let stop = self.persistence_stop.clone();
-        self.runtime.handle.spawn(
-            persistence
-                .clone()
-                .observe(self.store.subscribe(), stop.clone()),
-        );
-        self.runtime.handle.spawn(async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = stop.cancelled() => break,
-                    result = failures.changed() => if result.is_err() { break; },
-                }
-                let error = failures.borrow_and_update().clone();
-                if let Some(error) = error {
-                    let _ = updates.send(failure(error)).await;
-                }
-            }
-        });
-        self.persistence = Some(persistence);
-    }
-
-    pub(crate) fn close(&mut self) -> Option<JoinHandle<()>> {
-        if std::mem::replace(&mut self.closed, true) {
+    fn close(&self) -> Option<JoinHandle<()>> {
+        let mut persistence = self.persistence.lock().unwrap();
+        if self.stop.is_cancelled() {
             return None;
         }
+        self.stop.cancel();
         let store = self.store.clone();
-        let persistence = self.persistence.take();
-        self.persistence_stop.cancel();
-        Some(self.runtime.closing.spawn_on(
+        let persistence = persistence.take();
+        Some(self.closing.spawn_on(
             async move {
                 let _ = store.close().await;
                 if let Some(persistence) = persistence
@@ -115,8 +35,279 @@ impl StoreSession {
                     let _ = saved.await;
                 }
             },
-            &self.runtime.handle,
+            &self.handle,
         ))
+    }
+}
+impl Drop for HostSession {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+type HostEntry = Arc<tokio::sync::Mutex<Option<Arc<HostSession>>>>;
+
+/// Open Hosts outlive navigation and are shut down once when the app exits.
+#[derive(Default)]
+pub(crate) struct Sessions {
+    hosts: tokio::sync::Mutex<std::collections::BTreeMap<String, HostEntry>>,
+    stop: CancellationToken,
+}
+impl Sessions {
+    pub(crate) async fn open(
+        &self,
+        remote: Option<&str>,
+        runtime: Runtime,
+    ) -> Result<StoreSession, String> {
+        let host = match remote {
+            Some(ticket) => {
+                let ticket = ticket
+                    .parse::<agent_transport::transport::Ticket>()
+                    .map_err(|error| error.to_string())?;
+                if matches!(crate::platform::discover_local_host().await,
+                    Ok(agent_local_host::LocalHost { state: agent_local_host::LocalHostState::Ready(local), .. })
+                        if local.node_id() == ticket.node_id())
+                {
+                    "local".into()
+                } else {
+                    ticket.node_id().to_string()
+                }
+            }
+            None => "local".into(),
+        };
+        let entry = {
+            let mut hosts = self.hosts.lock().await;
+            if self.stop.is_cancelled() {
+                return Err("sessions are closed".into());
+            }
+            hosts.entry(host.clone()).or_default().clone()
+        };
+        let mut entry = entry.lock().await;
+        if self.stop.is_cancelled() {
+            return Err("sessions are closed".into());
+        }
+        if let Some(owner) = entry.as_ref() {
+            if !owner.store.snapshot().connection.connected {
+                runtime
+                    .connections
+                    .resume(&owner.store, remote)
+                    .await
+                    .map_err(|error| format!("{error:#}"))?;
+            }
+            return Ok(StoreSession::primary(owner.clone()));
+        }
+        let path = crate::platform::state_dir()?.join(format!("desktop-main-{host}.json"));
+        let persistence = Persistence::new(
+            Arc::new(crate::platform::SessionStorage { path }),
+            runtime.connections.preferences.clone(),
+        );
+        let snapshot = persistence
+            .restore(false, Some(crate::platform::conversation_copies(&host)?))
+            .await
+            .map_err(|error| match error {
+                agent_core::client::persistence::RestoreError::InvalidState(reason) => {
+                    format!("保存した入力状態を読み込めません: {reason}")
+                }
+                agent_core::client::persistence::RestoreError::Storage(reason) => {
+                    reason.to_string()
+                }
+            })?;
+        let cwd = snapshot
+            .pane
+            .navigation
+            .thread_id
+            .is_none()
+            .then(|| snapshot.pane.navigation.cwd.clone());
+        let store = runtime
+            .connections
+            .connect(remote, snapshot)
+            .await
+            .map_err(|error| format!("{error:#}"))?;
+        if let Some(cwd) = cwd {
+            drop(store.dispatch(agent_core::state::Intent::NewChat { cwd }));
+        }
+        let session = StoreSession::new(store, runtime);
+        session.start_persistence(persistence.clone());
+        *entry = Some(session.host.clone());
+        Ok(session)
+    }
+
+    pub(crate) async fn close(&self) {
+        let hosts = {
+            let mut hosts = self.hosts.lock().await;
+            self.stop.cancel();
+            std::mem::take(&mut *hosts)
+        };
+        let mut closes = Vec::new();
+        for entry in hosts.values() {
+            if let Some(host) = entry.lock().await.take()
+                && let Some(close) = host.close()
+            {
+                closes.push(close);
+            }
+        }
+        for close in closes {
+            let _ = close.await;
+        }
+    }
+}
+
+/// A view owns only its pane and observation; another pane keeps the Host alive.
+pub(crate) struct StoreSession {
+    pub(crate) host: Arc<HostSession>,
+    pub(crate) pane: Arc<Pane>,
+    stop: CancellationToken,
+}
+impl StoreSession {
+    pub(crate) fn new(store: Arc<Store>, runtime: Runtime) -> Self {
+        let pane = store.primary_pane();
+        Self {
+            host: Arc::new(HostSession {
+                store,
+                handle: runtime.handle,
+                closing: runtime.closing,
+                persistence: Mutex::new(None),
+                stop: CancellationToken::new(),
+            }),
+            pane,
+            stop: CancellationToken::new(),
+        }
+    }
+
+    pub(crate) fn primary(host: Arc<HostSession>) -> Self {
+        Self {
+            pane: host.store.primary_pane(),
+            host,
+            stop: CancellationToken::new(),
+        }
+    }
+
+    pub(crate) fn side(&self, cwd: String) -> Result<Self, String> {
+        let _entered = self.host.handle.enter();
+        Ok(Self {
+            pane: self
+                .host
+                .store
+                .open_pane(cwd)
+                .map_err(|error| error.to_string())?,
+            host: self.host.clone(),
+            stop: CancellationToken::new(),
+        })
+    }
+
+    pub(crate) fn on_app_quit<V: 'static>(
+        cx: &mut Context<V>,
+        session: fn(&mut V) -> &mut Option<Self>,
+    ) {
+        cx.on_app_quit(move |view, _| {
+            if let Some(mut session) = session(view).take()
+                && let Some(close) = session.close()
+            {
+                let _ = session.host.handle.block_on(close);
+            }
+            async {}
+        })
+        .detach();
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn publish<E: Send>(
+        result: anyhow::Result<Arc<Store>>,
+        runtime: Runtime,
+        updates: async_channel::Sender<E>,
+        connected: impl FnOnce(Result<Self, String>) -> E,
+        snapshot: impl Fn(Arc<agent_core::presentation::view::Presentation>) -> E,
+    ) {
+        match result {
+            Ok(store) => {
+                Self::observe(Self::new(store, runtime), updates, connected, snapshot).await
+            }
+            Err(error) => {
+                let _ = updates.send(connected(Err(format!("{error:#}")))).await;
+            }
+        }
+    }
+
+    pub(crate) async fn observe<E: Send>(
+        session: Self,
+        updates: async_channel::Sender<E>,
+        connected: impl FnOnce(Result<Self, String>) -> E,
+        snapshot: impl Fn(Arc<agent_core::presentation::view::Presentation>) -> E,
+    ) {
+        let mut snapshots = session.pane.subscribe();
+        let stop = session.stop.clone();
+        if updates.send(connected(Ok(session))).await.is_err() {
+            return;
+        }
+        loop {
+            let current = snapshots.borrow_and_update().clone();
+            if updates.send(snapshot(current)).await.is_err() {
+                break;
+            }
+            tokio::select! {
+                biased;
+                _ = stop.cancelled() => break,
+                result = snapshots.changed() => if result.is_err() { break; },
+            }
+        }
+    }
+
+    pub(crate) fn persist<E: Send + 'static>(
+        &self,
+        persistence: Arc<Persistence>,
+        updates: async_channel::Sender<E>,
+        failure: impl Fn(String) -> E + Send + 'static,
+    ) {
+        self.start_persistence(persistence);
+        let persistence = self
+            .host
+            .persistence
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone();
+        let handle = &self.host.handle;
+        let mut failures = persistence.failures();
+        let stop = self.stop.clone();
+        handle.spawn(async move {
+            loop {
+                let error = failures.borrow_and_update().clone();
+                if let Some(error) = error {
+                    let _ = updates.send(failure(error)).await;
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.cancelled() => break,
+                    result = failures.changed() => if result.is_err() { break; },
+                }
+            }
+        });
+    }
+
+    fn start_persistence(&self, persistence: Arc<Persistence>) {
+        let mut owner = self.host.persistence.lock().unwrap();
+        if owner.is_some() {
+            return;
+        }
+        if let Some(task) = persistence.start(self.host.store.subscribe()) {
+            self.host.handle.spawn(task);
+        }
+        self.host.handle.spawn(
+            persistence
+                .clone()
+                .observe(self.host.store.subscribe(), self.host.stop.clone()),
+        );
+        *owner = Some(persistence);
+    }
+
+    pub(crate) fn close(&mut self) -> Option<JoinHandle<()>> {
+        if self.stop.is_cancelled() {
+            return None;
+        }
+        self.stop.cancel();
+        self.pane.close();
+        Arc::get_mut(&mut self.host).and_then(|host| host.close())
     }
 }
 impl Drop for StoreSession {
@@ -128,7 +319,7 @@ impl Drop for StoreSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_core::state::Intent;
+    use agent_core::state::{Intent, Snapshot};
     use std::{path::PathBuf, time::Duration};
 
     enum Update {
@@ -140,6 +331,7 @@ mod tests {
         Runtime {
             handle: tokio::runtime::Handle::current(),
             connections: Arc::default(),
+            sessions: Arc::default(),
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
         }
@@ -167,7 +359,7 @@ mod tests {
             Update::Connected,
             |_| Update::Snapshot,
         ));
-        let Update::Connected(Ok(mut session)) = executor.block_on(incoming.recv()).unwrap() else {
+        let Update::Connected(Ok(session)) = executor.block_on(incoming.recv()).unwrap() else {
             panic!("missing session")
         };
         // GPUI delivers Connected on its main thread, without a Tokio context.
@@ -192,9 +384,80 @@ mod tests {
         });
         let restored = agent_core::persistence::decode(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(
-            restored.drafts[&"draft".into()].text,
+            restored.input.drafts[&"draft".into()].text,
             "saved from the UI thread"
         );
+    }
+
+    #[tokio::test]
+    async fn application_shutdown_closes_registered_hosts_and_prevents_reopening() {
+        let runtime = runtime();
+        let store = Arc::new(Store::offline(Snapshot::default()));
+        let primary = StoreSession::new(store.clone(), runtime.clone());
+        let side = primary.side("/side".into()).unwrap();
+        runtime.sessions.hosts.lock().await.insert(
+            "local".into(),
+            Arc::new(tokio::sync::Mutex::new(Some(primary.host.clone()))),
+        );
+        runtime.sessions.close().await;
+        assert!(primary.pane.snapshot().is_err());
+        assert!(side.pane.snapshot().is_err());
+        assert!(runtime.sessions.open(None, runtime.clone()).await.is_err());
+        assert!(store.dispatch(Intent::ShowThreadList).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn side_panes_share_one_host_and_survive_primary_view_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("snapshot.json");
+        let runtime = runtime();
+        let store = Arc::new(Store::offline(Snapshot::default()));
+        let mut primary = StoreSession::new(store.clone(), runtime.clone());
+        primary.start_persistence(persistence(path.clone()));
+        let mut side = primary.side("/side".into()).unwrap();
+        assert!(Arc::ptr_eq(&primary.host, &side.host));
+        let key = side
+            .pane
+            .snapshot()
+            .unwrap()
+            .pane
+            .navigation
+            .draft_key
+            .clone();
+        side.pane
+            .dispatch(Intent::SetDraftText {
+                thread_id: key.clone(),
+                text: "independent side input".into(),
+            })
+            .await
+            .unwrap();
+        assert_ne!(store.snapshot().pane.navigation.draft_key, key);
+        assert!(primary.close().is_none());
+        side.pane
+            .dispatch(Intent::NewChat {
+                cwd: "/other".into(),
+            })
+            .await
+            .unwrap();
+        let mut replacement = StoreSession::primary(side.host.clone());
+        replacement
+            .pane
+            .dispatch(Intent::NewChat {
+                cwd: "/primary".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(side.pane.snapshot().unwrap().pane.navigation.cwd, "/other");
+        assert!(side.close().is_none());
+        drop(side);
+        drop(primary);
+        let closed = replacement
+            .close()
+            .expect("last view closes its unregistered Host");
+        closed.await.unwrap();
+        assert!(store.dispatch(Intent::ShowThreadList).await.is_err());
+        let restored = agent_core::persistence::decode(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(restored.input.drafts[&key].text, "independent side input");
     }
 
     #[tokio::test]
@@ -212,7 +475,7 @@ mod tests {
                 Update::Connected,
                 |_| Update::Snapshot,
             ));
-            let Update::Connected(Ok(mut session)) = incoming.recv().await.unwrap() else {
+            let Update::Connected(Ok(session)) = incoming.recv().await.unwrap() else {
                 panic!("missing session")
             };
             session.persist(persistence(path.clone()), updates, |_| Update::Error);
@@ -241,7 +504,7 @@ mod tests {
             let restored: Snapshot =
                 agent_core::persistence::decode(&std::fs::read(path).unwrap()).unwrap();
             assert_eq!(
-                restored.drafts[&agent_core::state::DraftKey::from("draft")].text,
+                restored.input.drafts[&agent_core::state::DraftKey::from("draft")].text,
                 "last edit before close"
             );
             assert!(store.dispatch(Intent::ShowThreadList).await.is_err());
@@ -250,7 +513,7 @@ mod tests {
             assert_eq!(
                 serde_json::from_slice::<agent_core::state::ModelPreferences>(&preferences)
                     .unwrap(),
-                store.snapshot().model_preferences
+                store.snapshot().catalog.model_preferences
             );
         })
         .await
@@ -273,7 +536,7 @@ mod tests {
                 Update::Connected,
                 |_| Update::Snapshot,
             ));
-            let Update::Connected(Ok(mut session)) = incoming.recv().await.unwrap() else {
+            let Update::Connected(Ok(session)) = incoming.recv().await.unwrap() else {
                 panic!("missing session")
             };
             session.persist(persistence(path.clone()), updates, |_| Update::Error);
@@ -293,7 +556,7 @@ mod tests {
             let restored: Snapshot =
                 agent_core::persistence::decode(&std::fs::read(path).unwrap()).unwrap();
             assert_eq!(
-                restored.drafts[&agent_core::state::DraftKey::from("draft")].text,
+                restored.input.drafts[&agent_core::state::DraftKey::from("draft")].text,
                 "recovered"
             );
         })

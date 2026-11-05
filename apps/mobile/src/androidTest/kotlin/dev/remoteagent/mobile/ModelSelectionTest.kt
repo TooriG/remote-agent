@@ -88,7 +88,7 @@ class ModelSelectionTest {
             try {
                 compose.setContent {
                     MaterialTheme {
-                        ModelPickerButton(
+                        ModelPickerFixture(
                             selected,
                             { intent, complete ->
                                 complete(runBlocking { runCatching { store.dispatch(intent).wait() } })
@@ -127,7 +127,7 @@ class ModelSelectionTest {
             try {
                 compose.setContent {
                     MaterialTheme {
-                        ModelPickerButton(
+                        ModelPickerFixture(
                             selected,
                             { intent, complete ->
                                 complete(runBlocking { runCatching { store.dispatch(intent).wait() } })

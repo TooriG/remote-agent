@@ -1,23 +1,23 @@
 import AgentCore
-import PhotosUI
 import SwiftUI
 import SwiftUIIntrospect
-import UniformTypeIdentifiers
+import UIKit
+
+struct ConversationEnvironment {
+    let profiles: [HostProfile]
+    let hostName: String?
+    let list: ThreadList?
+    let connecting: Bool
+    var selectHost: ((String) -> Void)?
+}
 
 struct ThreadScreen: View {
     @Environment(\.locale) private var locale
-    @ObservedObject var model: AppViewModel
+    let model: ConversationModel
+    let environment: ConversationEnvironment
     let conversation: ConversationPresentation?
     var isSideChat = false
     var openTools: ((PanelKind?) -> Void)?
-    @StateObject var dictation = DictationRecorder()
-    @State var sendRecordedText = false
-    @State var importing = false
-    @State var showingPhotos = false
-    @State var selectedPhotos: [PhotosPickerItem] = []
-    @State var showingCamera = false
-    @State var preparingMedia = false
-    @State var showingModelSettings = false
     @State var openedDirectory: WorkspaceDestination?
     @State var isFollowingLatest = true
     @State var scrollController = ConversationScrollObserver()
@@ -25,7 +25,6 @@ struct ThreadScreen: View {
     @State var visibleLatest: LatestBoundary?
     @State var expandedItemIds = Set<String>()
     @State var activityExpansionOverrides = [String: String]()
-    @FocusState var composerFocused: Bool
 
     var body: some View {
         chatContent
@@ -34,7 +33,6 @@ struct ThreadScreen: View {
                 scrollController.cancelHistoryRestoration()
                 scrollController.detach()
                 visibleLatest = nil
-                dictation.cancel()
             }
             .onChange(of: conversation?.id) {
                 expandedItemIds.removeAll()
@@ -44,59 +42,9 @@ struct ThreadScreen: View {
                 isFollowingLatest = true
                 scrollPosition.scrollTo(edge: .bottom)
             }
-            .onChange(of: model.composerFocusRequest) { _ in
-                if model.isShowingSideChat == isSideChat {
-                    composerFocused = true
-                }
-            }
-            .onChange(of: model.draftKey) { dictation.cancel(); openedDirectory = nil }
-            .onChange(of: model.selectedProfileId) { openedDirectory = nil }
-            .onChange(of: model.isConnected) {
-                if !$0 {
-                    dictation.cancel()
-                }
-            }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
-                Task {
-                    do { try await model.attach(result.get()) } catch {
-                        model.transferError = error.localizedDescription
-                    }
-                }
-            }
-            .photosPicker(isPresented: $showingPhotos, selection: $selectedPhotos,
-                          selectionBehavior: .ordered, matching: .any(of: [.images, .videos]),
-                          preferredItemEncoding: .compatible)
-            .onChange(of: selectedPhotos) { _, items in
-                guard !items.isEmpty else { return }
-                selectedPhotos = []
-                preparingMedia = true
-                model.transferError = nil
-                let draftKey = model.draftKey
-                Task { await importPhotos(items, draftKey: draftKey) }
-            }
-            .fullScreenCover(isPresented: $showingCamera) {
-                ChatCameraPicker { result in
-                    showingCamera = false
-                    Task {
-                        do {
-                            if let url = try result.get() {
-                                try await model.attach(url, temporaryDirectory: url.deletingLastPathComponent())
-                            }
-                        } catch { model.transferError = error.localizedDescription }
-                    }
-                }.ignoresSafeArea()
-            }
-            .sheet(isPresented: $showingModelSettings) { ModelSettingsSheet(model: model) }
-            .sheet(item: $openedDirectory, content: conversationDirectorySheet)
-            .onAppear {
-                if model.isNewThread {
-                    composerFocused = true
-                }
-            }
-            .onChange(of: model.isNewThread) {
-                if $0 {
-                    composerFocused = true
-                }
+            .onChange(of: model.draftKey) { openedDirectory = nil }
+            .sheet(item: $openedDirectory) { destination in
+                ConversationDirectorySheet(model: model, destination: destination) { openedDirectory = nil }
             }
             .navigationTitle(isSideChat ? Text("サイドチャット") : conversationTitleText(
                 conversation?.title, fallback: model.isNewThread ? "新しいタスク" : "タスク"
@@ -119,7 +67,15 @@ struct ThreadScreen: View {
                         }
                     }
                     ToolbarItemGroup(placement: .navigationBarTrailing) {
-                        Button { composerFocused = false; openTools?(nil) } label: {
+                        Button {
+                            UIApplication.shared.sendAction(
+                                #selector(UIResponder.resignFirstResponder),
+                                to: nil,
+                                from: nil,
+                                for: nil
+                            )
+                            openTools?(nil)
+                        } label: {
                             Image(systemName: "square.grid.2x2")
                         }
                         .accessibilityLabel("ツールを開く")
@@ -133,10 +89,10 @@ struct ThreadScreen: View {
     }
 
     private var chatContent: some View {
-        let history = model.selectedThreadId.flatMap { model.snapshot.historyControl(session: $0) }
+        let history = model.history
         let followLatest = $isFollowingLatest
         return VStack(spacing: 0) {
-            ErrorNotices(model: model, scope: .conversation(draftKey: model.coreDraftKey))
+            ErrorNotices(notices: model.conversationContext.notices(), perform: { model.perform($0) })
                 .padding(.horizontal)
             if let notice = model.notice, notice != history?.error?.plainText {
                 AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
@@ -148,7 +104,7 @@ struct ThreadScreen: View {
                 let turnCount = thread.source.turnCount()
                 let hasMoreHistory = history?.hasMore ?? false
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
                         if let session = thread.id, let history {
                             historyControl(history, session: session)
                         }
@@ -156,6 +112,15 @@ struct ThreadScreen: View {
                             conversationRow(row)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .id(row.id)
+                                .background(GeometryReader { geometry in
+                                    Color.clear.preference(
+                                        key: ConversationRowFrames.self,
+                                        value: ConversationRowLayout(
+                                            turns: turnCount, more: hasMoreHistory,
+                                            frames: [row.id: geometry.frame(in: .named("conversation-viewport"))]
+                                        )
+                                    )
+                                })
                                 .overlay(alignment: .bottom) {
                                     if row.id == lastRowId, let latestBoundary {
                                         latestBoundaryMarker(latestBoundary)
@@ -167,6 +132,13 @@ struct ThreadScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
                 }
+                .coordinateSpace(name: "conversation-viewport")
+                .onPreferenceChange(ConversationRowFrames.self) { layout in
+                    restoreReadingPosition(scrollController.historyDidLayout(
+                        turnCount: layout.turns, hasMoreHistory: layout.more,
+                        rows: layout.frames, viewport: scrollController.viewport
+                    ))
+                }
                 // Keep the scroll view's identity off introspection's marker views.
                 .accessibilityIdentifier("task.detail")
                 .accessibilityValue(threadAccessibilityValue(thread))
@@ -174,24 +146,14 @@ struct ThreadScreen: View {
                     scrollController.onScrollToTop = { followLatest.wrappedValue = false }
                     scrollController.attach(to: scroll)
                 }
-                // Measure loaded rows; native text views draw only within the viewport.
+                // Stable row identities preserve native text state while history is realized lazily.
                 .scrollPosition($scrollPosition, anchor: .bottom)
                 .onScrollGeometryChange(for: ConversationScrollLayout.self) { geometry in
                     ConversationScrollLayout(contentHeight: geometry.contentSize.height,
                                              containerHeight: geometry.containerSize.height,
                                              insets: geometry.contentInsets,
-                                             offset: geometry.contentOffset,
-                                             turnCount: turnCount,
-                                             hasMoreHistory: hasMoreHistory)
+                                             offset: geometry.contentOffset)
                 } action: { previous, layout in
-                    if let point = scrollController.historyDidLayout(turnCount: layout.turnCount,
-                                                                     hasMoreHistory: layout.hasMoreHistory,
-                                                                     contentHeight: layout.contentHeight,
-                                                                     contentOffset: layout.offset,
-                                                                     scrollOrigin: CGPoint(x: layout.insets.leading,
-                                                                                           y: layout.insets.top)) {
-                        scrollPosition.scrollTo(point: point)
-                    }
                     if isFollowingLatest,
                        previous.contentHeight != layout.contentHeight ||
                        previous.containerHeight != layout.containerHeight || previous.insets != layout.insets {
@@ -257,7 +219,10 @@ struct ThreadScreen: View {
             }
         }
         .background(Color(UIColor.systemBackground))
-        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            ConversationComposer(model: model, hasConversation: conversation != nil,
+                                 isSideChat: isSideChat, openTools: openTools)
+        }
     }
 }
 
@@ -267,15 +232,13 @@ private struct ConversationScrollLayout: Equatable {
     let containerHeight: CGFloat
     let insets: EdgeInsets
     let offset: CGPoint
-    let turnCount: UInt64
-    let hasMoreHistory: Bool
 }
 
 /// Conversation navigation
 extension ThreadScreen {
     private var project: ProjectSummary? {
         let directory = model.selectedDirectory
-        return model.list?.projects.first { $0.roots.contains { $0.path == directory } }
+        return environment.list?.projects.first { $0.roots.contains { $0.path == directory } }
     }
 
     var conversationTitle: some View {
@@ -284,7 +247,7 @@ extension ThreadScreen {
             HStack(spacing: 6) {
                 conversationTitleText(conversation?.title, fallback: model.isNewThread ? "チャット" : "タスク")
                     .font(.headline).lineLimit(1)
-                if model.isConnecting {
+                if environment.connecting {
                     ProgressView().controlSize(.small)
                         .tint(.red)
                         .accessibilityLabel("接続中")
@@ -293,7 +256,7 @@ extension ThreadScreen {
             }
             Text([
                 project?.name ?? (directory.isEmpty ? "" : URL(fileURLWithPath: directory).lastPathComponent),
-                model.selectedProfileName ?? "Mac"
+                environment.hostName ?? "Mac"
             ].filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
@@ -334,7 +297,7 @@ extension ThreadScreen {
                     Button { model.openNewThread(cwd: "") } label: {
                         Label("チャット", systemImage: "bubble.left.and.bubble.right")
                     }
-                    ForEach(model.list?.projects ?? [], id: \.id) { project in
+                    ForEach(environment.list?.projects ?? [], id: \.id) { project in
                         ForEach(project.roots, id: \.path) { root in
                             Button { model.openNewThread(cwd: root.path) } label: {
                                 Label(project.roots.count == 1 ? project.name : root.path,
@@ -342,7 +305,7 @@ extension ThreadScreen {
                             }
                         }
                     }
-                    if model.list?.hasMoreProjects == true {
+                    if environment.list?.hasMoreProjects == true {
                         Button("さらにプロジェクトを読み込む") { model.perform(.expandProjects) }
                     }
                 } label: {
@@ -360,9 +323,9 @@ extension ThreadScreen {
             }
             .font(.title2)
             Menu {
-                ForEach(model.profiles, id: \.id) { profile in
-                    Button { model.openNewThread(on: profile.id) } label: {
-                        if profile.id == model.selectedProfileId {
+                ForEach(environment.profiles, id: \.id) { profile in
+                    Button { environment.selectHost?(profile.id) } label: {
+                        if profile.id == model.host {
                             Label(profile.name, systemImage: "checkmark")
                         } else {
                             Text(profile.name)
@@ -372,9 +335,9 @@ extension ThreadScreen {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "laptopcomputer")
-                    Text(model.selectedProfileName ?? localizedUiText(language: locale.appLanguage, source: "環境を選択"))
+                    Text(environment.hostName ?? localizedUiText(language: locale.appLanguage, source: "環境を選択"))
                         .lineLimit(1).truncationMode(.middle)
-                    if model.isConnecting {
+                    if environment.connecting {
                         ProgressView().controlSize(.small).tint(.red)
                     }
                 }
@@ -383,18 +346,39 @@ extension ThreadScreen {
             .font(.subheadline)
             .foregroundColor(.secondary)
             .accessibilityLabel(
-                "環境: \(model.selectedProfileName ?? localizedUiText(language: locale.appLanguage, source: "未選択"))"
+                "環境: \(environment.hostName ?? localizedUiText(language: locale.appLanguage, source: "未選択"))"
             )
             .accessibilityIdentifier("task.environment")
         }
         .multilineTextAlignment(.center)
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
-        .disabled(model.transferring || preparingMedia || model.sending || dictation.isRecording || dictation
-            .requestingPermission || model.transcribing)
+        .disabled(model.transferring || model.sending || model.transcribing)
     }
 }
 
 private func conversationTitleText(_ title: String?, fallback: LocalizedStringKey) -> Text {
     title.map { Text(verbatim: $0) } ?? Text(fallback)
+}
+
+struct ConversationRowLayout: Equatable {
+    var turns: UInt64 = 0
+    var more = false
+    var frames: [String: CGRect] = [:]
+}
+
+private struct ConversationRowFrames: PreferenceKey {
+    static var defaultValue: ConversationRowLayout {
+        ConversationRowLayout()
+    }
+
+    static func reduce(value: inout ConversationRowLayout, nextValue: () -> ConversationRowLayout) {
+        let next = nextValue()
+        guard !next.frames.isEmpty else { return }
+        if value.turns != next.turns || value.more != next.more {
+            value = next
+        } else {
+            value.frames.merge(next.frames) { _, next in next }
+        }
+    }
 }

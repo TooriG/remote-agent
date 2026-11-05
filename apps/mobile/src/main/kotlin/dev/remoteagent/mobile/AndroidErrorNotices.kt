@@ -24,11 +24,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import dev.remoteagent.core.ErrorScope
+import dev.remoteagent.core.ErrorNotice
 import dev.remoteagent.core.ErrorText
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
-import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.TurnErrorPresentation
 
 private const val ERROR_SUMMARY_LINES = 3
@@ -56,14 +55,13 @@ internal val ErrorText.plainText: String
 
 @Composable
 internal fun ErrorNotices(
-    snapshot: Snapshot,
-    scope: ErrorScope,
+    notices: List<ErrorNotice>,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     reconnect: (() -> Unit)? = null,
 ) {
     val language = LocalUiLanguage.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        snapshot.errorNotices(scope).forEach { notice ->
+        notices.forEach { notice ->
             var expanded by remember(notice) { mutableStateOf(false) }
             val details = notice.text.details.orEmpty()
             val hasDetails = details.length > ERROR_SUMMARY_LENGTH || details.lines().size > ERROR_SUMMARY_LINES
@@ -103,12 +101,12 @@ internal fun ErrorNotices(
                             Text(if (expanded) language.text("詳細を閉じる") else language.text("詳細を表示"))
                         }
                     }
-                    snapshot.errorRecovery(notice.id)?.let { recovery ->
-                        TextButton(onClick = { perform(recovery.intent) {} }) {
-                            Text(LocalUiLanguage.current.text(recovery.label))
+                    notice.recoveryLabel?.let { label ->
+                        TextButton(onClick = { perform(Intent.RecoverError(notice.id)) {} }) {
+                            Text(LocalUiLanguage.current.text(label))
                         }
                     }
-                    if (scope == ErrorScope.Application && !snapshot.connected() && reconnect != null) {
+                    if (reconnect != null) {
                         TextButton(onClick = reconnect) { Text(language.text("再接続")) }
                     }
                     ErrorNoticeButtons(notice.title, notice.text.plainText) {

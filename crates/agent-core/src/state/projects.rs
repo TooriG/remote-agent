@@ -91,7 +91,10 @@ pub(crate) fn project_chat_visible(
 
 impl Snapshot {
     pub(crate) fn project_preference(&self, id: &str) -> Option<&ProjectPreferences> {
-        self.project_preferences.get(&self.storage_scope)?.get(id)
+        self.lists
+            .project_preferences
+            .get(&self.connection.storage_scope)?
+            .get(id)
     }
 }
 pub(super) fn reorder(snapshot: &mut Snapshot, id: &str, target: &str, after: bool) {
@@ -127,6 +130,7 @@ pub(super) fn reorder(snapshot: &mut Snapshot, id: &str, target: &str, after: bo
 
 pub(super) fn move_chat(snapshot: &mut Snapshot, id: &crate::session::SessionRef, project: &str) {
     if !snapshot
+        .lists
         .threads
         .as_ref()
         .is_some_and(|list| list.projects.iter().any(|p| p.id == project))
@@ -139,8 +143,9 @@ pub(super) fn move_chat(snapshot: &mut Snapshot, id: &crate::session::SessionRef
         }
         crate::models::task_title(thread.name.as_deref(), thread.preview.as_deref()).to_owned()
     } else if let Some(chat) = snapshot
+        .lists
         .project_preferences
-        .get(&snapshot.storage_scope)
+        .get(&snapshot.connection.storage_scope)
         .into_iter()
         .flat_map(|p| p.values())
         .flat_map(|p| &p.placed_chats)
@@ -150,8 +155,8 @@ pub(super) fn move_chat(snapshot: &mut Snapshot, id: &crate::session::SessionRef
     } else {
         return;
     };
-    let preferences = Arc::make_mut(&mut snapshot.project_preferences)
-        .entry(snapshot.storage_scope.clone())
+    let preferences = Arc::make_mut(&mut snapshot.lists.project_preferences)
+        .entry(snapshot.connection.storage_scope.clone())
         .or_default();
     for p in preferences.values_mut() {
         p.placed_chats.retain(|chat| &chat.id != id);
@@ -163,7 +168,7 @@ pub(super) fn move_chat(snapshot: &mut Snapshot, id: &crate::session::SessionRef
         title,
     });
     // Make the result visible even when the destination has never been opened.
-    Arc::make_mut(&mut snapshot.expanded_projects)
+    Arc::make_mut(&mut snapshot.lists.expanded_projects)
         .entry(project.into())
         .or_insert(5);
 }
@@ -173,14 +178,15 @@ pub(super) fn update(
     change: impl FnOnce(&mut ProjectPreferences),
 ) {
     if !snapshot
+        .lists
         .threads
         .as_ref()
         .is_some_and(|list| list.projects.iter().any(|p| p.id == id))
     {
         return;
     }
-    let preferences = Arc::make_mut(&mut snapshot.project_preferences)
-        .entry(snapshot.storage_scope.clone())
+    let preferences = Arc::make_mut(&mut snapshot.lists.project_preferences)
+        .entry(snapshot.connection.storage_scope.clone())
         .or_default()
         .entry(id.into())
         .or_default();
@@ -191,12 +197,14 @@ pub(super) fn archive(snapshot: &mut Snapshot, project: &str, before: i64) {
         return;
     }
     let ids = snapshot
+        .lists
         .project_threads
         .get(project)
         .into_iter()
         .flat_map(|page| &page.data)
         .chain(
             snapshot
+                .lists
                 .threads
                 .iter()
                 .flat_map(|page| &page.data)
@@ -207,7 +215,7 @@ pub(super) fn archive(snapshot: &mut Snapshot, project: &str, before: i64) {
                 thread
                     .id
                     .as_ref()
-                    .and_then(|id| snapshot.activity.active.get(id).copied()),
+                    .and_then(|id| snapshot.lists.activity.active.get(id).copied()),
                 thread.status,
             )
         })
@@ -219,7 +227,7 @@ pub(super) fn archive(snapshot: &mut Snapshot, project: &str, before: i64) {
                 .flat_map(|p| &p.placed_chats)
                 .filter(|chat| {
                     !crate::models::task_active(
-                        snapshot.activity.active.get(&chat.id).copied(),
+                        snapshot.lists.activity.active.get(&chat.id).copied(),
                         snapshot
                             .thread_metadata(&chat.id)
                             .map_or_default(|t| t.status),
@@ -243,8 +251,14 @@ mod tests {
             "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
         })).unwrap();
         Snapshot {
-            storage_scope: "host-one".into(),
-            threads: Some(Arc::new(list)),
+            connection: crate::state::Connection {
+                storage_scope: "host-one".into(),
+                ..Default::default()
+            },
+            lists: crate::state::Lists {
+                threads: Some(Arc::new(list)),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -313,9 +327,9 @@ mod tests {
         assert_eq!(list.projects[0].section.as_deref(), Some("Work"));
         let mut restored =
             crate::persistence::decode(&crate::persistence::encode(&s).unwrap()).unwrap();
-        restored.threads = s.threads.clone();
+        restored.lists.threads = s.lists.threads.clone();
         assert_eq!(restored.thread_list().unwrap().projects[0].id, "a");
-        restored.storage_scope = "host-two".into();
+        restored.connection.storage_scope = "host-two".into();
         assert!(
             restored
                 .thread_list()
@@ -334,8 +348,9 @@ mod tests {
                         after: true
                     }
                 )
+                .lists
                 .project_preferences,
-                s.project_preferences
+                s.lists.project_preferences
             );
         }
     }
@@ -343,16 +358,18 @@ mod tests {
     #[test]
     fn moved_chats_survive_refresh_restart_and_reassignment_without_changing_native_history() {
         let mut s = fixture();
-        let mut page = s.threads.as_ref().unwrap().as_ref().clone();
+        let mut page = s.lists.threads.as_ref().unwrap().as_ref().clone();
         let mut thread = task("moving", Some(10.), "running");
         thread.name = Some("Moving chat".into());
         thread.cwd = Some("C:/alpha".into());
         let id = thread.id.clone().unwrap();
         page.data = vec![thread.clone()];
-        Arc::make_mut(&mut s.project_threads).insert("a".into(), Arc::new(page));
-        Arc::make_mut(&mut s.expanded_projects).insert("a".into(), 5);
-        Arc::make_mut(&mut s.activity).unread.insert(id.clone());
-        let native = s.project_threads.clone();
+        Arc::make_mut(&mut s.lists.project_threads).insert("a".into(), Arc::new(page));
+        Arc::make_mut(&mut s.lists.expanded_projects).insert("a".into(), 5);
+        Arc::make_mut(&mut s.lists.activity)
+            .unread
+            .insert(id.clone());
+        let native = s.lists.project_threads.clone();
         let s = dispatch(
             &s,
             Intent::MoveChatToProject {
@@ -366,16 +383,16 @@ mod tests {
         let moved = &list.projects[1].threads[0];
         assert_eq!(moved.project_id.as_deref(), Some("b"));
         assert!(moved.active && moved.unread);
-        assert!(Arc::ptr_eq(&s.project_threads, &native));
+        assert!(Arc::ptr_eq(&s.lists.project_threads, &native));
         assert_eq!(
             s.thread_metadata(&id).unwrap().cwd.as_deref(),
             Some("C:/alpha")
         );
         let mut restored =
             crate::persistence::decode(&crate::persistence::encode(&s).unwrap()).unwrap();
-        restored.threads = s.threads.clone();
-        Arc::make_mut(&mut restored.expanded_projects).insert("b".into(), 5);
-        assert!(restored.project_threads.is_empty());
+        restored.lists.threads = s.lists.threads.clone();
+        Arc::make_mut(&mut restored.lists.expanded_projects).insert("b".into(), 5);
+        assert!(restored.lists.project_threads.is_empty());
         let list = restored.thread_list().unwrap();
         assert_eq!(list.projects[1].threads[0].title, "Moving chat");
         assert!(
@@ -394,14 +411,14 @@ mod tests {
         assert!(list.projects[1].threads.is_empty());
         assert_eq!(list.projects[0].threads[0].id, id);
         let mut refreshed = restored.clone();
-        refreshed.project_threads = native;
+        refreshed.lists.project_threads = native;
         assert_eq!(
             refreshed.thread_list().unwrap().projects[0].threads.len(),
             1,
             "refresh must not duplicate a moved chat"
         );
         let mut other = s.clone();
-        other.storage_scope = "host-two".into();
+        other.connection.storage_scope = "host-two".into();
         assert_eq!(
             other.thread_list().unwrap().projects[0].threads[0]
                 .project_id
@@ -416,8 +433,9 @@ mod tests {
                     project_id: "missing".into()
                 }
             )
+            .lists
             .project_preferences,
-            s.project_preferences
+            s.lists.project_preferences
         );
     }
     #[test]
@@ -429,7 +447,7 @@ mod tests {
         let mut codex = claude.clone();
         codex.id.as_mut().unwrap().provider = crate::session::ProviderKind::Codex;
         let id = claude.id.clone().unwrap();
-        Arc::make_mut(s.threads.as_mut().unwrap()).data = vec![claude, codex];
+        Arc::make_mut(s.lists.threads.as_mut().unwrap()).data = vec![claude, codex];
         let s = dispatch(
             &s,
             Intent::ArchiveProjectChats {
@@ -455,9 +473,9 @@ mod tests {
             "a new drop must be visible even after an earlier archive"
         );
         let mut search = s.clone();
-        Arc::make_mut(&mut search.list_query).search_term = "SEARCHABLE".into();
+        Arc::make_mut(&mut search.lists.list_query).search_term = "SEARCHABLE".into();
         assert_eq!(search.thread_list().unwrap().projects[1].threads.len(), 1);
-        Arc::make_mut(&mut search.list_query).search_term = "not matching".into();
+        Arc::make_mut(&mut search.lists.list_query).search_term = "not matching".into();
         assert!(search.thread_list().unwrap().projects[1].threads.is_empty());
         let archived = dispatch(
             &s,
@@ -488,15 +506,16 @@ mod tests {
                     project_id: "b".into()
                 }
             )
+            .lists
             .project_preferences,
-            s.project_preferences
+            s.lists.project_preferences
         );
     }
 
     #[test]
     fn project_organization_is_reversible_persistent_and_host_scoped() {
         let s = fixture();
-        let native = s.threads.clone();
+        let native = s.lists.threads.clone();
         let s = dispatch(
             &s,
             Intent::EditProject {
@@ -527,12 +546,15 @@ mod tests {
         assert_eq!(list.projects.len(), 1);
         assert_eq!(list.hidden_projects[0].name, "Team");
         assert!(Arc::ptr_eq(
-            s.threads.as_ref().unwrap(),
+            s.lists.threads.as_ref().unwrap(),
             native.as_ref().unwrap()
         ));
         let restored =
             crate::persistence::decode(&crate::persistence::encode(&s).unwrap()).unwrap();
-        assert_eq!(restored.project_preferences, s.project_preferences);
+        assert_eq!(
+            restored.lists.project_preferences,
+            s.lists.project_preferences
+        );
         let s = dispatch(
             &s,
             Intent::SetProjectHidden {
@@ -542,7 +564,7 @@ mod tests {
         );
         assert_eq!(s.thread_list().unwrap().projects[0].name, "Team");
         let mut other = s.clone();
-        other.storage_scope = "host-two".into();
+        other.connection.storage_scope = "host-two".into();
         assert_eq!(other.thread_list().unwrap().projects[1].name, "Beta");
         let invalid = dispatch(
             &s,
@@ -552,8 +574,11 @@ mod tests {
                 section: String::new(),
             },
         );
-        assert!(invalid.error.is_some());
-        assert_eq!(invalid.project_preferences, s.project_preferences);
+        assert!(invalid.pane.error.is_some());
+        assert_eq!(
+            invalid.lists.project_preferences,
+            s.lists.project_preferences
+        );
         let unknown = dispatch(
             &s,
             Intent::SetProjectPinned {
@@ -561,20 +586,23 @@ mod tests {
                 pinned: true,
             },
         );
-        assert_eq!(unknown.project_preferences, s.project_preferences);
+        assert_eq!(
+            unknown.lists.project_preferences,
+            s.lists.project_preferences
+        );
     }
     #[test]
     fn archive_covers_later_pages_keeps_running_tasks_and_can_restore_every_chat() {
         let mut s = fixture();
-        let mut page = s.threads.as_ref().unwrap().as_ref().clone();
+        let mut page = s.lists.threads.as_ref().unwrap().as_ref().clone();
         page.data = vec![
             task("old", Some(50.), "idle"),
             task("no-date", None, "idle"),
             task("running", Some(30.), "running"),
         ];
-        Arc::make_mut(&mut s.project_threads).insert("a".into(), Arc::new(page));
-        Arc::make_mut(&mut s.expanded_projects).insert("a".into(), 5);
-        let native = s.project_threads.clone();
+        Arc::make_mut(&mut s.lists.project_threads).insert("a".into(), Arc::new(page));
+        Arc::make_mut(&mut s.lists.expanded_projects).insert("a".into(), 5);
+        let native = s.lists.project_threads.clone();
         let s = dispatch(
             &s,
             Intent::ArchiveProjectChats {
@@ -587,9 +615,13 @@ mod tests {
             rows.iter().map(|t| t.id.id.as_str()).collect::<Vec<_>>(),
             ["running"]
         );
-        assert!(Arc::ptr_eq(&s.project_threads, &native));
+        assert!(Arc::ptr_eq(&s.lists.project_threads, &native));
         let mut s = s;
-        let page = Arc::make_mut(Arc::make_mut(&mut s.project_threads).get_mut("a").unwrap());
+        let page = Arc::make_mut(
+            Arc::make_mut(&mut s.lists.project_threads)
+                .get_mut("a")
+                .unwrap(),
+        );
         page.data.extend([
             task("later-page", Some(70.), "idle"),
             task("new", Some(101.), "idle"),
@@ -612,16 +644,16 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn visibility_round_trips_without_mutating_host_projects(steps in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY),0..30)) {
-            let mut s=fixture(); let native=s.threads.clone();
+            let mut s=fixture(); let native=s.lists.threads.clone();
             for (pinned,hidden) in steps {
                 s=dispatch(&s,Intent::SetProjectPinned {project_id:"a".into(),pinned});
                 s=dispatch(&s,Intent::SetProjectHidden {project_id:"a".into(),hidden});
                 let list=s.thread_list().unwrap();
                 proptest::prop_assert_eq!(list.projects.iter().any(|p| p.id=="a"), !hidden);
                 proptest::prop_assert_eq!(list.hidden_projects.iter().any(|p| p.id=="a"), hidden);
-                proptest::prop_assert!(Arc::ptr_eq(s.threads.as_ref().unwrap(),native.as_ref().unwrap()));
+                proptest::prop_assert!(Arc::ptr_eq(s.lists.threads.as_ref().unwrap(),native.as_ref().unwrap()));
                 let decoded=crate::persistence::decode(&crate::persistence::encode(&s).unwrap()).unwrap();
-                proptest::prop_assert_eq!(&decoded.project_preferences,&s.project_preferences);
+                proptest::prop_assert_eq!(&decoded.lists.project_preferences,&s.lists.project_preferences);
             }
         }
     }

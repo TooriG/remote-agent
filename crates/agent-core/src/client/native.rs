@@ -1,4 +1,6 @@
 //! Native connection ownership and transport recovery shared by mobile clients.
+mod pane;
+pub use pane::AgentPane;
 mod recovery;
 
 use super::{AgentError, error};
@@ -329,6 +331,31 @@ impl AgentStore {
         self.store.snapshot()
     }
 
+    pub async fn open_pane(&self, cwd: String) -> Result<Arc<AgentPane>, AgentError> {
+        Ok(Arc::new(AgentPane {
+            pane: self.store.open_pane(cwd).map_err(error)?,
+        }))
+    }
+
+    pub fn presentation(&self) -> Arc<crate::presentation::view::Presentation> {
+        self.store.presentation()
+    }
+
+    pub async fn next_presentation(
+        &self,
+        previous: Arc<crate::presentation::view::Presentation>,
+    ) -> Result<Arc<crate::presentation::view::Presentation>, AgentError> {
+        let mut updates = self.store.subscribe_presentation();
+        loop {
+            updates.borrow_and_update();
+            let current = self.store.presentation();
+            if current.changes(previous.clone()).changed {
+                return Ok(current);
+            }
+            updates.changed().await.map_err(error)?;
+        }
+    }
+
     /// Subscribe before comparing to avoid losing an update between read and wait.
     pub async fn next_snapshot(
         &self,
@@ -543,7 +570,7 @@ mod tests {
             store.set_connection_active(false);
             first.close();
             let mut snapshots = store.store.subscribe();
-            while snapshots.borrow_and_update().connected {
+            while snapshots.borrow_and_update().connection.connected {
                 snapshots.changed().await.unwrap();
             }
             assert!(
@@ -554,7 +581,7 @@ mod tests {
             );
             store.set_connection_active(true);
             let (second, _reader, _writer) = scoped_incoming(&host, &trust).await;
-            while !snapshots.borrow_and_update().connected {
+            while !snapshots.borrow_and_update().connection.connected {
                 snapshots.changed().await.unwrap();
             }
             assert!(
@@ -608,15 +635,18 @@ mod tests {
                 device_name: "Fixture device".into(),
             };
             let cached = crate::state::Snapshot {
-                list_query: Arc::new(crate::models::ListQuery { limit: 60, project_limit: 5, search_term: "retained search".into(), ..Default::default() }),
-                navigation: Arc::new(crate::state::Navigation { thread_id: Some(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }),
+                lists: crate::state::Lists {
+                    list_query: Arc::new(crate::models::ListQuery { limit: 60, project_limit: 5, search_term: "retained search".into(), ..Default::default() }),
+                    ..Default::default()
+                },
+ pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: Some(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() }),
                 ..Default::default()
             };
             let mut saved: serde_json::Value = serde_json::from_slice(&cached.serialize_local_state().unwrap()).unwrap();
             assert!(saved.get("list_query").is_none());
-            saved["list_query"] = serde_json::to_value(&cached.list_query).unwrap();
+            saved["list_query"] = serde_json::to_value(&cached.lists.list_query).unwrap();
             let restored = AgentStore::offline(serde_json::to_vec(&saved).unwrap(), None, "test-revision".into()).await.unwrap();
-            assert_eq!(*restored.snapshot().list_query, crate::models::ListQuery::default());
+            assert_eq!(*restored.snapshot().lists.list_query, crate::models::ListQuery::default());
             restored.shutdown().await.unwrap();
             let store = Arc::new(AgentStore { store: Arc::new(crate::store::Store::offline(cached)), recovery: Mutex::new(None), connection_active: tokio::sync::watch::channel(true).0, connection_work: Default::default(), endpoint: Default::default(), trace: Trace::new("development".into()) });
             let (connected, (session, reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
@@ -669,22 +699,22 @@ mod tests {
                 loop {
                     let ready = {
                         let snapshot = updates.borrow_and_update();
-                        snapshot.threads.is_some() && !snapshot.models.is_empty() && snapshot.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })
+                        snapshot.lists.threads.is_some() && !snapshot.catalog.models.is_empty() && snapshot.sessions.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })
                     };
                     if ready { break; }
                     updates.changed().await.unwrap();
                 }
                 let snapshot = store.store.snapshot();
                 assert!(snapshot.connected());
-                assert!(snapshot.error.is_none());
-                assert_eq!(snapshot.navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("thread"));
-                assert!(snapshot.threads.as_ref().unwrap().data.iter().any(|thread| thread.id.as_ref().map(|session| session.id.as_str()) == Some("thread")));
-                assert_eq!(item_text(&(snapshot.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])), Some("after reconnect"));
-                assert_eq!(snapshot.models[0].model, agent_protocol::models::ModelRef {provider:agent_protocol::session::ProviderKind::Codex,id:"fresh-model".into()});
-                assert_eq!(snapshot.drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "preserved");
-                assert!(snapshot.account.accounts.is_none(), "account discovery must not gate connection, history or catalogs");
+                assert!(snapshot.pane.error.is_none());
+                assert_eq!(snapshot.pane.navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("thread"));
+                assert!(snapshot.lists.threads.as_ref().unwrap().data.iter().any(|thread| thread.id.as_ref().map(|session| session.id.as_str()) == Some("thread")));
+                assert_eq!(item_text(&(snapshot.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])), Some("after reconnect"));
+                assert_eq!(snapshot.catalog.models[0].model, agent_protocol::models::ModelRef {provider:agent_protocol::session::ProviderKind::Codex,id:"fresh-model".into()});
+                assert_eq!(snapshot.input.drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "preserved");
+                assert!(snapshot.catalog.account.accounts.is_none(), "account discovery must not gate connection, history or catalogs");
                 release_accounts.send(()).unwrap();
-                while store.snapshot().account.accounts.is_none() {
+                while store.snapshot().catalog.account.accounts.is_none() {
                     updates.changed().await.unwrap();
                 }
                 store.shutdown().await.unwrap();
@@ -720,10 +750,10 @@ mod tests {
                         device_name: "Fixture device".into(),
                     };
                     let snapshot = Snapshot {
-                        navigation: Arc::new(crate::state::Navigation {
+ pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation {
                             thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(),
                             ..Default::default()
-                        }), ..Default::default()
+                        }), ..Default::default() }), ..Default::default()
                     };
                     let store = AgentStore::offline(crate::persistence::encode(&snapshot).unwrap(), None, "test-revision".into()).await.unwrap();
                     let (connected, (first, mut reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
@@ -788,7 +818,7 @@ mod tests {
                     let client = async {
                         let mut updates = store.store.subscribe();
                         loop {
-                            let ready = { let snapshot = updates.borrow_and_update(); snapshot.account.accounts.is_some() && snapshot.threads.is_some() && (!selected || snapshot.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })) };
+                            let ready = { let snapshot = updates.borrow_and_update(); snapshot.catalog.account.accounts.is_some() && snapshot.lists.threads.is_some() && (!selected || snapshot.sessions.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })) };
                             if ready { break; }
                             updates.changed().await.unwrap();
                         }
@@ -803,14 +833,14 @@ mod tests {
                         if mode != "error" { loop {
                             let ready = {
                                 let snapshot = updates.borrow_and_update();
-                                snapshot.task_activity.as_ref().is_some_and(|state| state.revision == 1)
-                                    && (!silent || !selected || item_text(&(snapshot.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])) == Some("after"))
+                                snapshot.lists.task_activity.as_ref().is_some_and(|state| state.revision == 1)
+                                    && (!silent || !selected || item_text(&(snapshot.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])) == Some("after"))
                             };
                             if ready { break; }
                             updates.changed().await.unwrap();
                         } }
                         assert!(store.snapshot().connected());
-                        assert_eq!(store.snapshot().drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "keep draft");
+                        assert_eq!(store.snapshot().input.drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "keep draft");
                         assert_eq!(store.endpoint.lock().await.as_ref().unwrap().endpoint.node_id(), old_identity, "recovery retains the endpoint identity; discovered addresses can change");
                         store.shutdown().await.unwrap();
                     };
@@ -1032,7 +1062,7 @@ mod tests {
                 .unwrap()
                 .is_err()
         );
-        assert!(!store.snapshot().connected);
+        assert!(!store.snapshot().connection.connected);
         assert!(
             !matches!(
                 tokio::time::timeout(Duration::from_millis(500), candidate_reader.read_request())
@@ -1104,7 +1134,7 @@ mod tests {
             ),
             "unexpected setup result: {result:?}"
         );
-        assert!(!store.snapshot().connected);
+        assert!(!store.snapshot().connection.connected);
         assert!(
             !matches!(reader.read_request().await, Ok(Some(_))),
             "deadline closes the pending session"
@@ -1119,7 +1149,7 @@ mod tests {
             .await
             .unwrap();
         retried.unwrap();
-        assert!(store.snapshot().connected);
+        assert!(store.snapshot().connection.connected);
         store.close().await.unwrap();
         drop((next_reader, next_writer));
         next.close();
@@ -1139,7 +1169,7 @@ mod tests {
                 let host = Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap();
                 let connection = || Connection { ticket: host.ticket().to_string(), identity: identity.to_bytes().to_vec(), invitation: None, use_relays: false, device_name: "Fixture device".into() };
                 let cached = Snapshot {
-                    navigation: Arc::new(crate::state::Navigation { thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }),
+ pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() }),
                     ..Default::default()
                 };
                 let store = AgentStore::offline(crate::persistence::encode(&cached).unwrap(), None, "test-revision".into()).await.unwrap();
@@ -1177,7 +1207,7 @@ mod tests {
                 let client = async {
                     let mut updates = store.store.subscribe();
                     loop {
-                        let ready = { let snapshot = updates.borrow_and_update(); snapshot.account.accounts.is_some() && snapshot.threads.is_some() && (!selected || snapshot.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })) };
+                        let ready = { let snapshot = updates.borrow_and_update(); snapshot.catalog.account.accounts.is_some() && snapshot.lists.threads.is_some() && (!selected || snapshot.sessions.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })) };
                         if ready { break; }
                         updates.changed().await.unwrap();
                     }
@@ -1185,7 +1215,7 @@ mod tests {
                     let refresh = || async {
                         use crate::state::operations as op;
                         let list = store.store.dispatch(Intent::ListSessions(op::ListSessions::new(
-                            (*store.snapshot().list_query).clone(),
+                            (*store.snapshot().lists.list_query).clone(),
                         )));
                         let history = async {
                             if selected {
@@ -1199,7 +1229,7 @@ mod tests {
                     let before = store.snapshot();
                     assert!(refresh().await.is_err());
                     assert!(store.snapshot().connected());
-                    assert!(store.snapshot().error.is_none());
+                    assert!(store.snapshot().pane.error.is_none());
                     assert!(store.snapshot().operations.values().any(|state| matches!(&state.phase,
                         crate::state::operations::OperationPhase::Failed { message } if message.contains("temporary read error"))));
                     if selected {
@@ -1210,7 +1240,7 @@ mod tests {
                             result = waiting => result.unwrap(),
                         }
                         // The list reply is adopted and only the withheld history read remains.
-                        while store.snapshot().threads.as_ref().unwrap().data[0].name.as_deref() != Some("round 2") {
+                        while store.snapshot().lists.threads.as_ref().unwrap().data[0].name.as_deref() != Some("round 2") {
                             updates.changed().await.unwrap();
                         }
                         tokio::time::pause();
@@ -1222,11 +1252,11 @@ mod tests {
                     refresh().await.unwrap();
                     let after = store.snapshot();
                     assert!(after.connected());
-                    assert!(after.error.is_none());
-                    assert_eq!(after.epoch, before.epoch);
-                    assert_eq!(after.navigation, before.navigation);
-                    assert_eq!(after.drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "preserved");
-                    assert_eq!(after.threads.as_ref().unwrap().data[0].name.as_deref(), Some(if selected { "round 3" } else { "round 2" }));
+                    assert!(after.pane.error.is_none());
+                    assert_eq!(after.connection.epoch, before.connection.epoch);
+                    assert_eq!(after.pane.navigation, before.pane.navigation);
+                    assert_eq!(after.input.drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "preserved");
+                    assert_eq!(after.lists.threads.as_ref().unwrap().data[0].name.as_deref(), Some(if selected { "round 3" } else { "round 2" }));
                     store.shutdown().await.unwrap();
                 };
                 tokio::join!(server, client);

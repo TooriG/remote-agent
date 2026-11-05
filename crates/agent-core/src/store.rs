@@ -15,6 +15,9 @@ use std::{
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+mod pane;
+pub use pane::Pane;
+
 const MAX_COMMANDS: usize = 256;
 const MAX_RPC_JOBS: usize = 32;
 const CONTROL_RESERVE: usize = 16;
@@ -273,13 +276,15 @@ struct Scheduled {
     complete: Option<Receipt>,
 }
 struct Scope {
-    navigation: u64,
+    pane: String,
+    connection: u64,
+    navigation: Option<u64>,
     operation: Option<(op::OperationKey, u64)>,
     report_error: bool,
 }
 fn generation_current(
     operation: Option<&(op::OperationKey, u64)>,
-    operations: &BTreeMap<op::OperationKey, op::OperationState>,
+    operations: &op::OperationStates,
 ) -> bool {
     operation.is_none_or(|(key, generation)| {
         operations
@@ -288,18 +293,12 @@ fn generation_current(
     })
 }
 impl Scope {
-    fn current(
-        &self,
-        navigation: u64,
-        operations: &BTreeMap<op::OperationKey, op::OperationState>,
-    ) -> bool {
-        self.navigation == navigation && generation_current(self.operation.as_ref(), operations)
+    fn current(&self, connection: u64, navigation: u64, operations: &op::OperationStates) -> bool {
+        self.connection == connection
+            && self.navigation.is_none_or(|owner| owner == navigation)
+            && generation_current(self.operation.as_ref(), operations)
     }
-    fn finish(
-        &self,
-        operations: &mut Arc<BTreeMap<op::OperationKey, op::OperationState>>,
-        error: Option<&PeerError>,
-    ) {
+    fn finish(&self, operations: &mut op::OperationStates, error: Option<&PeerError>) {
         if let Some((key, generation)) = &self.operation
             && operations
                 .get(key)
@@ -307,13 +306,12 @@ impl Scope {
         {
             match error {
                 None => {
-                    Arc::make_mut(operations).remove(key);
+                    operations.remove(key);
                 }
                 Some(error) => {
-                    Arc::make_mut(operations).get_mut(key).unwrap().phase =
-                        op::OperationPhase::Failed {
-                            message: error.to_string(),
-                        };
+                    operations.get_mut(key).unwrap().phase = op::OperationPhase::Failed {
+                        message: error.to_string(),
+                    };
                 }
             }
         }
@@ -321,10 +319,15 @@ impl Scope {
 }
 impl Scheduled {
     fn new(mut effect: Effect, snapshot: &mut Snapshot, continuation: Option<&Scope>) -> Self {
+        let owner = snapshot.pane_id.clone();
+        if let Some(pane) = effect.pane.take() {
+            *snapshot = snapshot.for_pane(&pane).expect("effect pane must be open");
+        }
         // Stamp the input being sent before publication, including dictation.
         // Restoring cached input never schedules a send or invents a send time.
         if let Some(id) = effect.operation.submission_id()
             && snapshot
+                .sessions
                 .pending_submissions
                 .get(id)
                 .is_some_and(|pending| pending.submitted_at_ms.is_none())
@@ -333,7 +336,7 @@ impl Scheduled {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            let inputs = Arc::make_mut(&mut snapshot.pending_submissions);
+            let inputs = Arc::make_mut(&mut snapshot.sessions.pending_submissions);
             Arc::make_mut(inputs.get_mut(id).unwrap()).submitted_at_ms = Some(now);
         }
         let operation = effect.operation.key().map(|key| {
@@ -360,24 +363,32 @@ impl Scheduled {
                 phase: op::OperationPhase::Running,
             };
             if snapshot.operations.get(&key) != Some(&state) {
-                Arc::make_mut(&mut snapshot.operations).insert(key.clone(), state);
+                snapshot.operations.insert(key.clone(), state);
             }
             (key, generation)
         });
         effect.operation.capture(snapshot);
-        Self {
+        let scheduled = Self {
             scope: Scope {
-                navigation: snapshot.epoch,
+                pane: snapshot.pane_id.clone(),
+                connection: snapshot.connection.epoch,
+                navigation: effect
+                    .operation
+                    .navigation_bound()
+                    .then_some(snapshot.pane.epoch),
                 operation,
                 report_error: effect.operation.report_error(),
             },
             effect,
             complete: None,
-        }
+        };
+        *snapshot = snapshot.for_pane(&owner).unwrap();
+        scheduled
     }
 }
 pub struct Store {
     updates: watch::Receiver<Arc<Snapshot>>,
+    presentations: watch::Receiver<Arc<crate::presentation::view::Presentation>>,
     publications: Mutex<Option<watch::Sender<Arc<Snapshot>>>>,
     commands: mpsc::Sender<Command>,
     connection_attempt: Mutex<CancellationToken>,
@@ -408,6 +419,8 @@ impl Store {
         });
         let (commands, mut incoming) = mpsc::channel(MAX_COMMANDS);
         let stop = CancellationToken::new();
+        let presentations =
+            crate::presentation::view::observe(updates.clone(), String::new(), stop.child_token());
         let (finished_tx, finished) = watch::channel(false);
         let publications = writer.clone();
         let shutdown = stop.clone();
@@ -435,6 +448,7 @@ impl Store {
         });
         Self {
             updates,
+            presentations,
             publications: Mutex::new(Some(writer)),
             commands,
             connection_attempt: Mutex::new(stop.child_token()),
@@ -448,7 +462,10 @@ impl Store {
         let mut store = Self::start(
             None,
             Snapshot {
-                connected: true,
+                connection: crate::state::Connection {
+                    connected: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         );
@@ -509,7 +526,7 @@ impl Store {
             let cached_scope = if reusable.is_some() {
                 String::new()
             } else {
-                self.snapshot().storage_scope.clone()
+                self.snapshot().connection.storage_scope.clone()
             };
             let replacement = async {
                 let (connection, scope, performance) =
@@ -519,7 +536,7 @@ impl Store {
             let (prepared, performance) = if let Some(peer) = reusable {
                 // Recovery and the liveness read start together. A dead old path
                 // cannot add its probe deadline to a working replacement's latency.
-                let scope = self.snapshot().storage_scope.clone();
+                let scope = self.snapshot().connection.storage_scope.clone();
                 let probe = async {
                     let started = std::time::Instant::now();
                     match tokio::time::timeout(
@@ -565,8 +582,8 @@ impl Store {
             };
             let Some((connection, storage_scope)) = prepared else {
                 let snapshot = self.snapshot();
-                if let Some(id) = &snapshot.navigation.thread_id
-                    && !snapshot.subscriptions.contains_key(id)
+                if let Some(id) = &snapshot.pane.navigation.thread_id
+                    && !snapshot.sessions.subscriptions.contains_key(id)
                 {
                     drop(self.dispatch(Intent::ReadThread(op::ReadThread::open(id.clone()))));
                 }
@@ -626,7 +643,7 @@ impl Store {
                 ticket,
                 invitation,
                 device_name,
-                &self.snapshot().storage_scope,
+                &self.snapshot().connection.storage_scope,
             )
             .await?;
             self.attach_connection(connection, scope, attempt.clone())
@@ -710,6 +727,17 @@ impl Store {
     pub fn subscribe(&self) -> watch::Receiver<Arc<Snapshot>> {
         self.updates.clone()
     }
+    pub fn presentation(&self) -> Arc<crate::presentation::view::Presentation> {
+        crate::presentation::view::Presentation::current(
+            self.snapshot(),
+            &self.presentations.borrow(),
+        )
+    }
+    pub fn subscribe_presentation(
+        &self,
+    ) -> watch::Receiver<Arc<crate::presentation::view::Presentation>> {
+        self.presentations.clone()
+    }
     pub fn prepare_dictation(&self) -> crate::client::DictationPreparation {
         let id = uuid::Uuid::new_v4().to_string();
         let cancel = self.stop.child_token();
@@ -725,7 +753,7 @@ impl Store {
     /// Best-effort diagnostics use the owned connection without delaying recovery.
     pub fn record_connection_performance(&self, performance: ConnectionPerformance) {
         let _ = self.commands.try_send(Command::ConnectionPerformance {
-            epoch: self.snapshot().epoch,
+            epoch: self.snapshot().connection.epoch,
             performance,
         });
     }
@@ -735,6 +763,13 @@ impl Store {
     /// Only effects wait for the executor; dropping a receipt does not cancel them.
     pub fn dispatch(
         &self,
+        intent: Intent,
+    ) -> impl Future<Output = Result<Outcome, PeerError>> + Send + use<> {
+        self.dispatch_pane("", intent)
+    }
+    pub fn dispatch_pane(
+        &self,
+        pane: &str,
         intent: Intent,
     ) -> impl Future<Output = Result<Outcome, PeerError>> + Send + use<> {
         let mut receipt = Err(PeerError::ConnectionClosed("store is closed".into()));
@@ -747,7 +782,12 @@ impl Store {
                     return false;
                 }
                 let mut candidate = current.clone();
-                let (effects, changed) = apply_locked(&mut candidate, Event::Intent(intent));
+                if current.for_pane(pane).is_none() {
+                    receipt = Err(PeerError::InvalidMessage("pane is closed".into()));
+                    return false;
+                }
+                let (effects, changed) =
+                    apply_pane_locked(&mut candidate, Event::Intent(intent), pane);
                 if !effects.is_empty() {
                     let permit = match self.commands.try_reserve() {
                         Ok(permit) => permit,
@@ -772,6 +812,40 @@ impl Store {
                     .map_err(|_| PeerError::ConnectionClosed("store is closed".into()))?,
             }
         }
+    }
+    fn create_pane(&self, cwd: String) -> Result<String, PeerError> {
+        if self.stop.is_cancelled() {
+            return Err(PeerError::ConnectionClosed("store is closed".into()));
+        }
+        let publications = self
+            .publications
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| PeerError::ConnectionClosed("store is closed".into()))?;
+        let id = uuid::Uuid::new_v4().to_string();
+        publications.send_if_modified(|current| {
+            let mut next = current.as_ref().clone();
+            next.open_pane(id.clone(), cwd);
+            publish_locked(current, next)
+        });
+        Ok(id)
+    }
+    fn close_pane(&self, pane: &str) {
+        if let Some(publications) = self.publications.lock().unwrap().clone() {
+            publications.send_if_modified(|current| {
+                let mut next = current.as_ref().clone();
+                next.close_pane(pane);
+                publish_locked(current, next)
+            });
+        }
+    }
+    fn subscribe_pane(
+        &self,
+        pane: String,
+        stop: CancellationToken,
+    ) -> watch::Receiver<Arc<crate::presentation::view::Presentation>> {
+        crate::presentation::view::observe(self.updates.clone(), pane, stop)
     }
     /// Ephemeral frames never enter persisted conversation snapshots.
     pub async fn browser(
@@ -810,17 +884,25 @@ fn apply(updates: &watch::Sender<Arc<Snapshot>>, event: Event) -> Vec<Scheduled>
     effects
 }
 fn apply_locked(current: &mut Arc<Snapshot>, event: Event) -> (Vec<Scheduled>, bool) {
-    let (mut next, effects) = reduce(current, event);
-    if next.epoch != current.epoch {
-        Arc::make_mut(&mut next.operations).retain(|key, _| {
+    apply_pane_locked(current, event, "")
+}
+fn apply_pane_locked(
+    current: &mut Arc<Snapshot>,
+    event: Event,
+    pane: &str,
+) -> (Vec<Scheduled>, bool) {
+    let owner = current.pane_id.clone();
+    let source = current
+        .for_pane(pane)
+        .expect("pane must exist before reducing");
+    let (mut next, effects) = reduce(&source, event);
+    if next.pane.epoch != source.pane.epoch {
+        next.operations.retain(|key, _| {
             !matches!(
                 key,
                 op::OperationKey::Directory
                     | op::OperationKey::File
                     | op::OperationKey::WorkspaceReview
-                    | op::OperationKey::WorktreeSettings
-                    | op::OperationKey::Worktrees
-                    | op::OperationKey::Permissions { .. }
             )
         });
     }
@@ -828,140 +910,25 @@ fn apply_locked(current: &mut Arc<Snapshot>, event: Event) -> (Vec<Scheduled>, b
         .into_iter()
         .map(|effect| Scheduled::new(effect, &mut next, None))
         .collect();
-    let changed = publish_locked(current, next);
+    let changed = publish_locked(current, next.for_pane(&owner).unwrap());
     (scheduled, changed)
 }
-struct SharedIdentity<'a, T>(&'a Arc<T>);
-
-impl<T> PartialEq for SharedIdentity<'_, T> {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(self.0, other.0)
-    }
-}
-
-fn publication_key(snapshot: &Snapshot) -> impl PartialEq + '_ {
-    // No `..`: adding a Snapshot field must update the publication contract.
-    let Snapshot {
-        preferred_editor,
-        file_open_capabilities,
-        file_open_capabilities_requested,
-        project_import,
-        recent_chats,
-        operations,
-        operation_sequence,
-        model_preferences,
-        project_preferences,
-        permission_settings,
-        composer_catalog,
-        host_name,
-        host_ticket,
-        host_home_directory,
-        task_activity,
-        storage_scope,
-        archived_scopes,
-        account,
-        terminals,
-        conversations,
-        threads,
-        expanded_projects,
-        project_threads,
-        unconfirmed_lists,
-        observed_agents,
-        models,
-        model_errors,
-        drafts,
-        question_drafts,
-        draft_sessions,
-        pending_submissions,
-        file_drafts,
-        workspace,
-        workspaces,
-        navigation,
-        activity,
-        management,
-        list_query,
-        epoch,
-        connected,
-        connection_generation,
-        connection_failure,
-        subscriptions,
-        error,
-    } = snapshot;
-    // Nest tuples because std implements tuple equality only up to 12 elements.
-    // Equality short-circuits; shared caches compare allocation identity.
-    (
-        (
-            recent_chats,
-            model_preferences,
-            preferred_editor,
-            file_open_capabilities_requested,
-            file_open_capabilities.as_ref().map(SharedIdentity),
-            SharedIdentity(project_preferences),
-        ),
-        (
-            host_name,
-            host_ticket,
-            host_home_directory,
-            task_activity,
-            permission_settings,
-            composer_catalog,
-            SharedIdentity(account),
-            SharedIdentity(models),
-            SharedIdentity(model_errors),
-        ),
-        (
-            SharedIdentity(operations),
-            operation_sequence,
-            SharedIdentity(conversations),
-            threads.as_ref().map(SharedIdentity),
-            SharedIdentity(subscriptions),
-            observed_agents,
-            SharedIdentity(activity),
-        ),
-        (
-            SharedIdentity(drafts),
-            SharedIdentity(question_drafts),
-            SharedIdentity(draft_sessions),
-            SharedIdentity(pending_submissions),
-            SharedIdentity(file_drafts),
-        ),
-        (
-            SharedIdentity(project_import),
-            SharedIdentity(terminals),
-            SharedIdentity(expanded_projects),
-            SharedIdentity(project_threads),
-            SharedIdentity(unconfirmed_lists),
-            SharedIdentity(workspace),
-            SharedIdentity(workspaces),
-            SharedIdentity(navigation),
-            SharedIdentity(management),
-            SharedIdentity(list_query),
-        ),
-        (
-            storage_scope,
-            SharedIdentity(archived_scopes),
-            epoch,
-            connected,
-            connection_generation,
-            connection_failure,
-            error,
-        ),
-    )
-}
-
+/// Publish one consistent transition when any state group changed.
 fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
-    if publication_key(current) == publication_key(&next) {
-        return false;
+    let changed = next.changes_from(current).any;
+    if changed {
+        *current = Arc::new(next);
     }
-    *current = Arc::new(next);
-    true
+    changed
 }
 
 fn finish_unobserved(updates: &watch::Sender<Arc<Snapshot>>, scheduled: Scheduled) {
     updates.send_if_modified(|snapshot| {
-        let mut next = snapshot.as_ref().clone();
+        let Some(mut next) = snapshot.for_pane(&scheduled.scope.pane) else {
+            return false;
+        };
         scheduled.scope.finish(&mut next.operations, None);
-        publish_locked(snapshot, next)
+        publish_locked(snapshot, next.for_pane(&snapshot.pane_id).unwrap())
     });
     if let Some(complete) = scheduled.complete {
         complete.send(Ok(Outcome::Applied));
@@ -972,21 +939,23 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
     let mut effects = Vec::new();
     let mut scheduled = Vec::new();
     let mut result = Ok(Outcome::Applied);
-    updates.send_if_modified(|snapshot| {
+    updates.send_if_modified(|root| {
+        let owner = root.pane_id.clone();
+        let source = root.for_pane(&completed.scope.pane);
+        let open = source.is_some();
+        let held = Arc::new(source.unwrap_or_else(|| root.as_ref().clone()));
+        let snapshot = &held;
         // Dispatch and completion share this lock. List results and failures
         // belong to their query, Host state to the connection, and view work
         // to the navigation epoch.
-        let current = match &completed.scheduling {
-            op::Scheduling::LatestList(_)
-            | op::Scheduling::LatestProject(_)
-            | op::Scheduling::LatestHostState(_) => {
-                generation_current(completed.scope.operation.as_ref(), &snapshot.operations)
-            }
-            _ => completed
-                .scope
-                .current(snapshot.epoch, &snapshot.operations),
-        };
+        let current = (open || completed.scope.navigation.is_none())
+            && completed.scope.current(
+                snapshot.connection.epoch,
+                snapshot.pane.epoch,
+                &snapshot.operations,
+            );
         let global_error = current
+            && open
             && completed.scope.report_error
             && completed.scope.operation.is_none()
             && !matches!(
@@ -1002,7 +971,7 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                 }
                 Err(error) => {
                     if global_error {
-                        next.error = Some(error.to_string());
+                        Arc::make_mut(&mut next.pane).error = Some(error.to_string());
                     }
                     Err(error)
                 }
@@ -1059,18 +1028,28 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                     .0;
                 }
                 if global_error {
-                    next.error = Some(error.to_string());
+                    Arc::make_mut(&mut next.pane).error = Some(error.to_string());
                 }
                 Err(error)
             }
         };
-        effects.extend(op::prefetch_composer_catalog(&mut next));
+        effects.extend(op::prefetch_composer_catalog(
+            next.connection.connected,
+            &mut next.catalog.composer_catalogs,
+            std::iter::once((next.pane_id.as_str(), next.pane.navigation.as_ref())).chain(
+                next.panes
+                    .0
+                    .iter()
+                    .map(|(id, pane)| (id.as_str(), pane.navigation.as_ref())),
+            ),
+        ));
         effects.extend(op::prefetch_model_settings(
-            next.connected,
-            next.drafts
-                .get(&next.navigation.draft_key)
+            next.connection.connected,
+            next.input
+                .drafts
+                .get(&next.pane.navigation.draft_key)
                 .and_then(|draft| draft.model.as_ref()),
-            &next.models,
+            &next.catalog.models,
             next.operations.keys(),
         ));
         let continues = completed.scope.operation.as_ref().is_some_and(|(key, _)| {
@@ -1101,7 +1080,7 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
             })
             .map(|effect| Scheduled::new(effect, &mut next, Some(&completed.scope)))
             .collect();
-        publish_locked(snapshot, next)
+        publish_locked(root, next.for_pane(&owner).unwrap())
     });
     let continuation = scheduled.iter().position(|scheduled| {
         scheduled.effect.receipt == ReceiptPolicy::Continue
@@ -1178,7 +1157,7 @@ impl ItemReads {
 }
 #[derive(Default)]
 struct Scheduler {
-    latest_reads: BTreeMap<op::OperationKey, Option<Scheduled>>,
+    latest_reads: BTreeMap<(String, op::OperationKey), Option<Scheduled>>,
     terminal_commands: VecDeque<Scheduled>,
     terminal_running: BTreeSet<String>,
     item_reads: ItemReads,
@@ -1198,17 +1177,23 @@ impl Scheduler {
         snapshot: &Snapshot,
         running_jobs: usize,
     ) -> Admission {
+        let selected = snapshot
+            .for_pane(&scheduled.scope.pane)
+            .unwrap_or_else(|| snapshot.clone());
+        let snapshot = &selected;
         // Dispatch publishes before enqueueing. Newer notifications can arrive
         // first; older work must not replace the latest pending read.
         let unobserved = (scheduled.effect.scheduling.latest_key().is_some()
             && !generation_current(scheduled.scope.operation.as_ref(), &snapshot.operations))
             || matches!(&scheduled.effect.scheduling, op::Scheduling::LatestAgents(session)
-                if snapshot.observed_agents.as_ref() != Some(session));
+                if snapshot.pane.observed_agents.as_ref() != Some(session) && !snapshot.panes.0.values().any(|pane| pane.observed_agents.as_ref() == Some(session)));
         if unobserved {
             return Admission::Unobserved(scheduled);
         }
         if let Some(key) = scheduled.effect.scheduling.latest_key()
-            && let Some(pending) = self.latest_reads.get_mut(&key)
+            && let Some(pending) = self
+                .latest_reads
+                .get_mut(&key.address(&scheduled.scope.pane))
         {
             if let Some(previous) = pending.take()
                 && let Some(complete) = previous.complete
@@ -1239,7 +1224,8 @@ impl Scheduler {
             return Admission::Rejected(Box::new((scheduled, busy_error())));
         }
         if let Some(key) = scheduled.effect.scheduling.latest_key() {
-            self.latest_reads.insert(key, None);
+            self.latest_reads
+                .insert(key.address(&scheduled.scope.pane), None);
         }
         Admission::Run(scheduled)
     }
@@ -1265,13 +1251,18 @@ impl Scheduler {
         Some(scheduled)
     }
 
-    fn complete(&mut self, scheduling: &op::Scheduling, followups: &[Scheduled]) -> Vec<Scheduled> {
+    fn complete(
+        &mut self,
+        pane: &str,
+        scheduling: &op::Scheduling,
+        followups: &[Scheduled],
+    ) -> Vec<Scheduled> {
         if let Some(handle) = scheduling.terminal() {
             self.terminal_running.remove(handle);
         }
         let pending = scheduling
             .latest_key()
-            .and_then(|key| self.latest_reads.remove(&key))
+            .and_then(|key| self.latest_reads.remove(&key.address(pane)))
             .flatten();
         if let Some(key) = scheduling.item()
             && !followups.iter().any(|scheduled| {
@@ -1310,6 +1301,7 @@ async fn run(
             .filter(|id| {
                 !updates
                     .borrow()
+                    .sessions
                     .subscriptions
                     .values()
                     .any(|current| current == *id)
@@ -1350,7 +1342,7 @@ async fn run(
                         continue;
                     }
                     Command::ConnectionPerformance { epoch, performance } => {
-                        if epoch == updates.borrow().epoch && performance.connection_id == peer.diagnostic_id {
+                        if epoch == updates.borrow().connection.epoch && performance.connection_id == peer.diagnostic_id {
                             diagnostic_jobs.clear();
                             let peer = peer.clone();
                             diagnostic_jobs.push(async move {
@@ -1402,7 +1394,7 @@ async fn run(
                         break;
                     }
                 };
-                if introduced.storage_scope == updates.borrow().storage_scope {
+                if introduced.storage_scope == updates.borrow().connection.storage_scope {
                     effects.append(&mut held);
                 } else {
                     // Work started against the cached storage must not reach the Host's new one.
@@ -1428,8 +1420,9 @@ async fn run(
                     Err(std::io::Error::other("subscription ended"))
                 })).boxed()); }
                 let scheduling = result.scheduling.clone();
+                let pane = result.scope.pane.clone();
                 let followups = finish(&updates, result);
-                effects.extend(scheduler.complete(&scheduling, &followups));
+                effects.extend(scheduler.complete(&pane, &scheduling, &followups));
                 effects.extend(followups);
             }
             Some(()) = preparation_jobs.next(), if !preparation_jobs.is_empty() => {},
@@ -1627,6 +1620,7 @@ impl<O: op::Operation> Application for Completion<O> {
 // the same allocation carries its output until its result is applied.
 #[derive(Debug)]
 pub struct Effect {
+    pane: Option<String>,
     operation: Box<dyn Pending>,
     scheduling: op::Scheduling,
     receipt: ReceiptPolicy,
@@ -1638,6 +1632,10 @@ enum ReceiptPolicy {
     Background,
 }
 impl Effect {
+    pub(crate) fn in_pane(mut self, pane: &str) -> Self {
+        self.pane = Some(pane.into());
+        self
+    }
     /// Continue the dispatch receipt after this step is applied.
     pub(crate) fn continuation<O: op::Operation>(operation: O) -> Self {
         let mut effect = Self::execute(operation);
@@ -1646,6 +1644,7 @@ impl Effect {
     }
     pub fn execute<O: op::Operation>(operation: O) -> Self {
         Self {
+            pane: None,
             scheduling: operation.scheduling(),
             operation: Box::new(Completion {
                 operation,
@@ -1661,6 +1660,7 @@ impl Effect {
     }
 }
 trait Pending: Application {
+    fn navigation_bound(&self) -> bool;
     fn key(&self) -> Option<op::OperationKey>;
     fn report_error(&self) -> bool;
     fn capture(&mut self, snapshot: &Snapshot);
@@ -1672,6 +1672,9 @@ trait Pending: Application {
     ) -> futures_util::future::BoxFuture<'a, Result<Applied, PeerError>>;
 }
 impl<O: op::Operation> Pending for Completion<O> {
+    fn navigation_bound(&self) -> bool {
+        self.operation.navigation_bound()
+    }
     fn key(&self) -> Option<op::OperationKey> {
         self.operation.key()
     }
@@ -1735,7 +1738,13 @@ mod tests {
     #[tokio::test]
     async fn rejected_downloads_return_errors_without_overwriting_application_notices() {
         let mut snapshot = Snapshot {
-            error: Some("unrelated failure".into()),
+            connection: crate::state::Connection {
+                ..Default::default()
+            },
+            pane: Arc::new(crate::state::PaneState {
+                error: Some("unrelated failure".into()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let mut download = Scheduled::new(
@@ -1765,7 +1774,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(store.snapshot().error.is_none());
+        assert!(store.snapshot().pane.error.is_none());
         let error = store
             .dispatch(Intent::RemoveWorktree(op::RemoveWorktree {
                 path: "/worktree".into(),
@@ -1773,7 +1782,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(
-            store.snapshot().error.as_deref(),
+            store.snapshot().pane.error.as_deref(),
             Some(error.to_string().as_str())
         );
         store.close().await.unwrap();
@@ -1785,7 +1794,9 @@ mod tests {
         Scheduled {
             effect,
             scope: Scope {
-                navigation: 0,
+                pane: String::new(),
+                connection: 0,
+                navigation: Some(0),
                 operation: None,
                 report_error: true,
             },
@@ -1828,7 +1839,7 @@ mod tests {
             Some("b")
         );
         assert!(queue.next(2).is_none());
-        assert!(queue.complete(&first.effect.scheduling, &[]).is_empty());
+        assert!(queue.complete("", &first.effect.scheduling, &[]).is_empty());
         assert_eq!(
             queue.next(1).unwrap().effect.scheduling.terminal(),
             Some("a")
@@ -1876,7 +1887,7 @@ mod tests {
             running.push(queue.next(index).unwrap());
         }
         assert!(queue.next(MAX_TERMINAL_JOBS).is_none());
-        queue.complete(&running.pop().unwrap().effect.scheduling, &[]);
+        queue.complete("", &running.pop().unwrap().effect.scheduling, &[]);
         assert!(queue.next(MAX_TERMINAL_JOBS - 1).is_some());
     }
 
@@ -1892,15 +1903,15 @@ mod tests {
             Admission::Queued
         ));
         let mut newest = latest();
-        newest.scope.navigation = 9;
+        newest.scope.navigation = Some(9);
         assert!(matches!(
             queue.admit(newest, &Snapshot::default(), 1),
             Admission::Queued
         ));
         assert!(queue.next(1).is_none());
-        let mut followups = queue.complete(&first.effect.scheduling, &[]);
+        let mut followups = queue.complete("", &first.effect.scheduling, &[]);
         assert_eq!(followups.len(), 1);
-        assert_eq!(followups[0].scope.navigation, 9);
+        assert_eq!(followups[0].scope.navigation, Some(9));
         assert!(matches!(
             queue.admit(followups.pop().unwrap(), &Snapshot::default(), 0),
             Admission::Run(_)
@@ -1934,11 +1945,11 @@ mod tests {
                     .is_some()
             );
         }
-        queue.complete(&first.effect.scheduling, &[]);
+        queue.complete("", &first.effect.scheduling, &[]);
         enqueue(&mut queue, op::Scheduling::Item(item("new")));
         let replacement = queue.next(0).unwrap();
         assert_eq!(replacement.effect.scheduling.item(), Some(&item("new")));
-        queue.complete(&replacement.effect.scheduling, &[]);
+        queue.complete("", &replacement.effect.scheduling, &[]);
         enqueue(&mut queue, op::Scheduling::Item(item("0")));
         assert_eq!(
             queue.next(0).unwrap().effect.scheduling.item(),
@@ -1965,6 +1976,7 @@ mod tests {
         continuation.effect.receipt = ReceiptPolicy::Continue;
         continuation.complete = reading.complete;
         queue.complete(
+            "",
             &reading.effect.scheduling,
             std::slice::from_ref(&continuation),
         );
@@ -1986,7 +1998,7 @@ mod tests {
         assert!(second_receipt.try_recv().unwrap().is_ok());
         let mut unrelated = queued(op::Scheduling::Item(item("other")));
         unrelated.effect.receipt = ReceiptPolicy::Continue;
-        queue.complete(&continued.effect.scheduling, &[unrelated]);
+        queue.complete("", &continued.effect.scheduling, &[unrelated]);
         enqueue(&mut queue, op::Scheduling::Item(item("one")));
         assert_eq!(
             queue.next(0).unwrap().effect.scheduling.item(),
@@ -2080,7 +2092,7 @@ mod tests {
         };
         let (opened, ()) = tokio::join!(operation.run((), &mut context), reply);
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+        Arc::make_mut(&mut snapshot.sessions.pending_submissions).insert(
             "initial-input".into(),
             Arc::new(crate::state::PendingSubmission {
                 sequence: 0,
@@ -2094,8 +2106,8 @@ mod tests {
             }),
         );
         let effects = operation.apply(&mut snapshot, opened.unwrap());
-        assert!(snapshot.pending_submissions["initial-input"].accepted);
-        let thread = snapshot.conversations.values().next().unwrap();
+        assert!(snapshot.sessions.pending_submissions["initial-input"].accepted);
+        let thread = snapshot.sessions.conversations.values().next().unwrap();
         assert_eq!(
             thread
                 .preparation
@@ -2107,7 +2119,8 @@ mod tests {
             Some("fast")
         );
         let rendered = crate::presentation::conversation::project_conversation(
-            &snapshot,
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
             thread.clone(),
             &None,
         );
@@ -2119,7 +2132,8 @@ mod tests {
         let mut accepted = thread.as_ref().clone();
         accepted.preparation = None;
         let rendered = crate::presentation::conversation::project_conversation(
-            &snapshot,
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
             Arc::new(accepted),
             &Some(rendered),
         );
@@ -2168,10 +2182,10 @@ mod tests {
             let mut initial = Snapshot::default();
             if outcome == "rejected" {
                 // A cached scope attaches before the Host answers the introduction.
-                initial.storage_scope = format!("{}:cached", host.node_id());
+                initial.connection.storage_scope = format!("{}:cached", host.node_id());
             }
-            let draft_key = initial.navigation.draft_key.clone();
-            Arc::make_mut(&mut initial.drafts).insert(
+            let draft_key = initial.pane.navigation.draft_key.clone();
+            Arc::make_mut(&mut initial.input.drafts).insert(
                 draft_key.clone(),
                 Arc::new(crate::state::Draft {
                     text: "unsent draft".into(),
@@ -2183,7 +2197,7 @@ mod tests {
             let mut snapshots = store.subscribe();
             drop(old_writer);
             snapshots
-                .wait_for(|snapshot| !snapshot.connected)
+                .wait_for(|snapshot| !snapshot.connection.connected)
                 .await
                 .unwrap();
             let notices = || store.snapshot().error_notices(ErrorScope::Application);
@@ -2218,7 +2232,7 @@ mod tests {
                         .await
                         .unwrap();
                     recovering.await.unwrap().unwrap();
-                    assert!(store.snapshot().connected);
+                    assert!(store.snapshot().connection.connected);
                     assert!(notices().is_empty());
                 }
                 "failed" => {
@@ -2248,7 +2262,7 @@ mod tests {
                         .await
                         .unwrap();
                     snapshots
-                        .wait_for(|snapshot| !snapshot.connected)
+                        .wait_for(|snapshot| !snapshot.connection.connected)
                         .await
                         .unwrap();
                     let notices = notices();
@@ -2271,7 +2285,10 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            assert_eq!(store.snapshot().drafts[&draft_key].text, "unsent draft");
+            assert_eq!(
+                store.snapshot().input.drafts[&draft_key].text,
+                "unsent draft"
+            );
             store.close().await.unwrap();
             session.close();
             client.close().await;
@@ -2285,12 +2302,18 @@ mod tests {
     async fn restoring_offline_does_not_report_a_connection_failure() {
         use crate::presentation::error::ErrorScope;
         let initial = Snapshot {
-            connected: true,
-            error: Some("previous runtime error".into()),
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
+            pane: Arc::new(crate::state::PaneState {
+                error: Some("previous runtime error".into()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let store = Store::offline(initial);
-        assert!(!store.snapshot().connected);
+        assert!(!store.snapshot().connection.connected);
         assert!(
             store
                 .snapshot()
@@ -2325,7 +2348,7 @@ mod tests {
         }
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            snapshots.wait_for(|snapshot| !snapshot.connected),
+            snapshots.wait_for(|snapshot| !snapshot.connection.connected),
         )
         .await
         .expect("the disconnection must be published")
@@ -2400,13 +2423,14 @@ mod tests {
             let mut updates = store.subscribe();
             updates
                 .wait_for(|snapshot| {
-                    snapshot.threads.as_ref().is_some_and(|page| {
+                    snapshot.lists.threads.as_ref().is_some_and(|page| {
                         page.data
                             .iter()
                             .any(|thread| thread.id.as_ref().is_some_and(|id| id.id == "latest"))
-                    }) && !snapshot
+                    }) && snapshot
                         .operations
-                        .contains_key(&op::OperationKey::SessionList)
+                        .get(&op::OperationKey::SessionList)
+                        .is_none()
                 })
                 .await
                 .unwrap();
@@ -2422,8 +2446,8 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn a_full_command_queue_keeps_the_draft_and_all_submission_state() {
         let mut initial = Snapshot::default();
-        Arc::make_mut(&mut initial.drafts).insert(
-            initial.navigation.draft_key.clone(),
+        Arc::make_mut(&mut initial.input.drafts).insert(
+            initial.pane.navigation.draft_key.clone(),
             Arc::new(crate::state::Draft {
                 model: Some(agent_protocol::models::ModelRef {
                     provider: agent_protocol::session::ProviderKind::Claude,
@@ -2433,7 +2457,7 @@ mod tests {
             }),
         );
         let store = Store::offline(initial);
-        let draft_key = store.snapshot().navigation.draft_key.clone();
+        let draft_key = store.snapshot().pane.navigation.draft_key.clone();
         store
             .dispatch(Intent::SetDraftText {
                 thread_id: draft_key,
@@ -2477,14 +2501,17 @@ mod tests {
             })
         };
         let mut current = Snapshot {
-            pending_submissions: Arc::new(
-                [
-                    ("unknown-time".into(), pending(None)),
-                    ("known-time".into(), pending(Some(12_000))),
-                    ("new".into(), pending(None)),
-                ]
-                .into(),
-            ),
+            sessions: crate::state::Sessions {
+                pending_submissions: Arc::new(
+                    [
+                        ("unknown-time".into(), pending(None)),
+                        ("known-time".into(), pending(Some(12_000))),
+                        ("new".into(), pending(None)),
+                    ]
+                    .into(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let send = |id: &str| {
@@ -2505,15 +2532,17 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let submitted_at = current.pending_submissions["new"].submitted_at_ms.unwrap();
+        let submitted_at = current.sessions.pending_submissions["new"]
+            .submitted_at_ms
+            .unwrap();
         assert!((before..=after).contains(&submitted_at));
         assert_eq!(
-            current.pending_submissions["unknown-time"].submitted_at_ms,
+            current.sessions.pending_submissions["unknown-time"].submitted_at_ms,
             None
         );
         Scheduled::new(send("known-time"), &mut current, None);
         assert_eq!(
-            current.pending_submissions["known-time"].submitted_at_ms,
+            current.sessions.pending_submissions["known-time"].submitted_at_ms,
             Some(12_000)
         );
     }
@@ -2528,29 +2557,35 @@ mod tests {
                 snapshot.project_import = Arc::default()
             }),
             ("operations", |snapshot| {
-                snapshot.operations = Arc::default()
+                snapshot.operations = Default::default()
             }),
             ("operation_sequence", |snapshot| {
                 snapshot.operation_sequence += 1
             }),
             ("model_preferences", |snapshot| {
-                snapshot.model_preferences.provider = Some(crate::session::ProviderKind::Claude);
+                snapshot.catalog.model_preferences.provider =
+                    Some(crate::session::ProviderKind::Claude);
             }),
             ("permission_settings", |snapshot| {
-                snapshot.permission_settings = Some(Arc::new(
-                    crate::state::operations::PermissionSettingsState {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        result: None,
-                    },
-                ));
+                snapshot.catalog.permission_settings = Arc::new(
+                    [(
+                        agent_protocol::session::ProviderKind::Codex,
+                        Arc::new(crate::state::operations::PermissionSettingsState {
+                            result: None,
+                        }),
+                    )]
+                    .into(),
+                );
             }),
-            ("account", |snapshot| snapshot.account = Arc::default()),
+            ("account", |snapshot| {
+                snapshot.catalog.account = Arc::default()
+            }),
             ("terminals", |snapshot| snapshot.terminals = Arc::default()),
             ("conversations", |snapshot| {
-                snapshot.conversations = Arc::default()
+                snapshot.sessions.conversations = Arc::default()
             }),
             ("task_activity", |snapshot| {
-                snapshot.task_activity =
+                snapshot.lists.task_activity =
                     Some(Arc::new(agent_protocol::live_activity::TaskActivityState {
                         waiting: Vec::new(),
                         unread: Vec::new(),
@@ -2564,10 +2599,10 @@ mod tests {
                     }));
             }),
             ("expanded_projects", |snapshot| {
-                snapshot.expanded_projects = Arc::new([("p".into(), 5)].into());
+                snapshot.lists.expanded_projects = Arc::new([("p".into(), 5)].into());
             }),
             ("project_threads", |snapshot| {
-                snapshot.project_threads = Arc::new(
+                snapshot.lists.project_threads = Arc::new(
                     [(
                         "p".into(),
                         Arc::new(crate::models::ThreadList {
@@ -2585,32 +2620,39 @@ mod tests {
                 );
             }),
             ("observed_agents", |snapshot| {
-                snapshot.observed_agents = Some(crate::session::SessionRef {
-                    provider: crate::session::ProviderKind::Codex,
-                    id: "parent".into(),
-                });
+                Arc::make_mut(&mut snapshot.pane).observed_agents =
+                    Some(crate::session::SessionRef {
+                        provider: crate::session::ProviderKind::Codex,
+                        id: "parent".into(),
+                    });
             }),
-            ("models", |snapshot| snapshot.models = Arc::default()),
-            ("drafts", |snapshot| snapshot.drafts = Arc::default()),
+            ("models", |snapshot| {
+                snapshot.catalog.models = Arc::default()
+            }),
+            ("drafts", |snapshot| snapshot.input.drafts = Arc::default()),
             ("pending_submissions", |snapshot| {
-                snapshot.pending_submissions = Arc::default()
+                snapshot.sessions.pending_submissions = Arc::default()
             }),
             ("file_drafts", |snapshot| {
-                snapshot.file_drafts = Arc::default()
+                snapshot.files.file_drafts = Arc::default()
             }),
-            ("workspace", |snapshot| snapshot.workspace = Arc::default()),
+            ("workspace", |snapshot| {
+                snapshot.files.workspace = Arc::default()
+            }),
             ("navigation", |snapshot| {
-                snapshot.navigation = Arc::default()
+                Arc::make_mut(&mut snapshot.pane).navigation = Arc::default()
             }),
-            ("activity", |snapshot| snapshot.activity = Arc::default()),
+            ("activity", |snapshot| {
+                snapshot.lists.activity = Arc::default()
+            }),
             ("management", |snapshot| {
-                snapshot.management = Arc::default()
+                snapshot.connection.management = Arc::default()
             }),
             ("list_query", |snapshot| {
-                snapshot.list_query = Arc::default()
+                snapshot.lists.list_query = Arc::default()
             }),
             ("threads", |snapshot| {
-                snapshot.threads = Some(Arc::new(crate::models::ThreadList {
+                snapshot.lists.threads = Some(Arc::new(crate::models::ThreadList {
                     revision: 0,
                     data: Vec::new(),
                     projects: Vec::new(),
@@ -2622,13 +2664,13 @@ mod tests {
                     provider_errors: None,
                 }))
             }),
-            ("epoch", |snapshot| snapshot.epoch += 1),
-            ("connected", |snapshot| snapshot.connected = true),
+            ("epoch", |snapshot| snapshot.connection.epoch += 1),
+            ("connected", |snapshot| snapshot.connection.connected = true),
             ("connection_failure", |snapshot| {
-                snapshot.connection_failure = Some("fixture failure".into())
+                snapshot.connection.connection_failure = Some("fixture failure".into())
             }),
             ("error", |snapshot| {
-                snapshot.error = Some("fixture failure".into())
+                Arc::make_mut(&mut snapshot.pane).error = Some("fixture failure".into())
             }),
         ];
         for (name, change) in changes {
@@ -2668,21 +2710,24 @@ mod model_reconnection_tests {
             provider_errors: None,
         });
         let previous = Snapshot {
-            threads: Some(page.clone()),
-            project_threads: Arc::new([("p".into(), page)].into()),
-            unconfirmed_lists: Arc::new(
-                [
-                    op::OperationKey::SessionList,
-                    op::OperationKey::ProjectList {
-                        project_id: "p".into(),
-                    },
-                ]
-                .into(),
-            ),
+            lists: crate::state::Lists {
+                threads: Some(page.clone()),
+                project_threads: Arc::new([("p".into(), page)].into()),
+                unconfirmed_lists: Arc::new(
+                    [
+                        op::OperationKey::SessionList,
+                        op::OperationKey::ProjectList {
+                            project_id: "p".into(),
+                        },
+                    ]
+                    .into(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let (connected, effects) = reduce(&previous, Event::Connected);
-        assert!(connected.threads.is_some());
+        assert!(connected.lists.threads.is_some());
         assert_eq!(
             effects
                 .iter()
@@ -2697,7 +2742,7 @@ mod model_reconnection_tests {
                 expanded: true,
             }),
         );
-        assert!(opened.project_threads.contains_key("p"));
+        assert!(opened.lists.project_threads.contains_key("p"));
         assert_eq!(
             effects
                 .iter()
@@ -2719,11 +2764,14 @@ mod model_reconnection_tests {
         ]))
         .unwrap();
         let previous = Snapshot {
-            models: Arc::new(models),
+            catalog: crate::state::Catalog {
+                models: Arc::new(models),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let (mut next, effects) = reduce(&previous, Event::Connected);
-        assert_eq!(next.models, previous.models);
+        assert_eq!(next.catalog.models, previous.catalog.models);
         assert_eq!(
             effects
                 .iter()

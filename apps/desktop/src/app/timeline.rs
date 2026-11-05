@@ -440,7 +440,12 @@ mod tests {
                 }),
             );
         }
-        let rendered = Some(project_conversation(&Snapshot::default(), source, &None));
+        let rendered = Some(project_conversation(
+            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().sessions.pending_submissions,
+            source,
+            &None,
+        ));
         let requests: Vec<_> = conversation_rows(&rendered, &Default::default())
             .iter()
             .filter_map(|row| match row {
@@ -474,11 +479,21 @@ mod tests {
                 .unwrap(),
             last: false,
         };
-        let live = project_conversation(&snapshot, source.clone(), &None);
+        let live = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            source.clone(),
+            &None,
+        );
         let before = response_row(&live.turns[0]);
         Arc::make_mut(&mut Arc::make_mut(&mut source).turns.as_mut().unwrap()[0]).status =
             agent_protocol::execution::TurnStatus::Completed;
-        let completed = project_conversation(&snapshot, source, &Some(live));
+        let completed = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            source,
+            &Some(live),
+        );
         let after = response_row(&completed.turns[0]);
         assert!(
             !before.unchanged(&after),
@@ -490,7 +505,7 @@ mod tests {
     fn row_projection_keeps_repeated_turns_and_leaves_requests_to_the_composer() {
         let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"selected"},"turns":[{"id":"repeated","items":[{"id":"first","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"first answer","phase":"unknown"}}}}}],"status":"unknown"},{"id":"repeated","items":[{"id":"second","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"second answer","phase":"unknown"}}}}}],"status":"unknown"}]})).unwrap());
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
             Some(agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "selected".into(),
@@ -518,12 +533,13 @@ mod tests {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "other".into(),
         });
-        Arc::make_mut(&mut snapshot.conversations)
+        Arc::make_mut(&mut snapshot.sessions.conversations)
             .insert(other.id.clone().unwrap(), Arc::new(other));
         let before = snapshot.clone();
         let rendered = Some(
             agent_core::presentation::conversation::project_conversation(
-                &snapshot,
+                &snapshot.pane.navigation.draft_key,
+                &snapshot.sessions.pending_submissions,
                 source.clone(),
                 &None,
             ),

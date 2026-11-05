@@ -102,7 +102,7 @@ impl Operation for ImportProjects {
         }
         state.result = Some(output);
         vec![Effect::execute(ListSessions::new(
-            (*snapshot.list_query).clone(),
+            (*snapshot.lists.list_query).clone(),
         ))]
     }
 }
@@ -213,7 +213,7 @@ mod tests {
         );
         assert_eq!(ImportProjects {}.capture(&snapshot).unwrap(), ["/false"]);
         for key in [OperationKey::ProjectScan, OperationKey::ProjectImport] {
-            Arc::make_mut(&mut snapshot.operations).insert(
+            snapshot.operations.insert(
                 key.clone(),
                 OperationState {
                     generation: 1,
@@ -241,7 +241,7 @@ mod tests {
             );
             assert!(ScanProjects {}.prepare(&mut snapshot).is_err());
             assert!(ImportProjects {}.prepare(&mut snapshot).is_err());
-            Arc::make_mut(&mut snapshot.operations).remove(&key);
+            snapshot.operations.remove(&key);
         }
         let (other, _) = reduce_event(&snapshot, Event::StorageScope("another-host".into()));
         assert_eq!(*other.project_import, Default::default());
@@ -272,8 +272,8 @@ mod tests {
         Arc::make_mut(&mut snapshot.project_import)
             .selected
             .insert("/b".into());
-        let navigation = snapshot.navigation.clone();
-        let drafts = snapshot.drafts.clone();
+        let navigation = snapshot.pane.navigation.clone();
+        let drafts = snapshot.input.drafts.clone();
         let result = ProjectImportResult {
             imported: vec!["/a".into()],
             errors: [("/b".into(), "permission denied".into())].into(),
@@ -282,8 +282,8 @@ mod tests {
         assert_eq!(snapshot.project_import.result, Some(result));
         assert!(snapshot.project_import.scan.as_ref().unwrap().projects[0].registered);
         assert_eq!(ImportProjects {}.capture(&snapshot).unwrap(), ["/b"]);
-        assert_eq!(snapshot.navigation, navigation);
-        assert_eq!(snapshot.drafts, drafts);
+        assert_eq!(snapshot.pane.navigation, navigation);
+        assert_eq!(snapshot.input.drafts, drafts);
         assert_eq!(effects.len(), 1, "refresh the registered project list");
     }
 }

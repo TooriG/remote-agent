@@ -106,7 +106,7 @@ impl Desktop {
             .into_any_element()
     }
     pub(super) fn start_dictation(&mut self) {
-        if self.dictation.is_some() || !self.snapshot.connected || self.busy > 0 {
+        if self.dictation.is_some() || !self.snapshot.connection.connected || self.busy > 0 {
             return;
         }
         let (events, incoming) = async_channel::unbounded();
@@ -129,7 +129,7 @@ impl Desktop {
                 self.dictation = Some(Dictation {
                     id,
                     key: self.draft_key().clone(),
-                    generation: self.snapshot.epoch,
+                    generation: self.snapshot.connection.epoch,
                     phase: Phase::Preparing,
                     send: false,
                     control: Some(control),
@@ -180,7 +180,7 @@ impl Desktop {
                 state.preparation = self
                     .session
                     .as_ref()
-                    .map(|session| session.store.prepare_dictation());
+                    .map(|session| session.host.store.prepare_dictation());
             }
             platform::RecordingEvent::Level(level) => {
                 if state.phase == Phase::Recording && level.is_finite() {
@@ -201,7 +201,7 @@ impl Desktop {
                         .as_ref()
                         .map(|preparation| preparation.id()),
                     audio,
-                    send: state.send && state.generation == self.snapshot.epoch,
+                    send: state.send && state.generation == self.snapshot.connection.epoch,
                     client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
                 });
                 self.perform(intent, OperationCompletion::Dictation(id));
@@ -228,6 +228,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::default(),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -237,12 +238,12 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let mut view = Desktop::new(Mode::Main, window, cx);
             view.onboarding = false;
-            Arc::make_mut(&mut view.snapshot).connected = true;
-            view.panels.open(view.panel_scope(), Panel::Files, None);
+            Arc::make_mut(&mut view.snapshot).connection.connected = true;
+            view.open_surface(view.panel_scope(), Panel::Files, None);
             view.dictation = Some(Dictation {
                 id,
                 key: view.draft_key().clone(),
-                generation: view.snapshot.epoch,
+                generation: view.snapshot.connection.epoch,
                 phase: Phase::Recording,
                 send: false,
                 control: None,

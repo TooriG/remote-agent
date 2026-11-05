@@ -79,6 +79,13 @@ impl ClientSession {
             .map_or_else(|| self.empty.clone(), |store| store.snapshot())
     }
 
+    pub fn presentation(&self) -> Arc<crate::presentation::view::Presentation> {
+        self.store().map_or_else(
+            || crate::presentation::view::Presentation::pending(self.empty.clone()),
+            |store| store.presentation(),
+        )
+    }
+
     pub fn persistence_error(&self) -> Option<String> {
         self.persistence.failure()
     }
@@ -179,7 +186,7 @@ impl ClientSession {
             _ = self.stop.cancelled() => return Err(error("session closed")),
             result = async { store.resume(self.connection(ticket, None).await?).await } => result?,
         };
-        if store.snapshot().host_name.is_none() {
+        if store.snapshot().connection.host_name.is_none() {
             self.dispatch(Intent::LoadHostName(
                 crate::state::operations::LoadHostName {},
             ))?;
@@ -423,7 +430,7 @@ mod tests {
                     *this.observed.lock().unwrap() = Some(("session lock held".into(), false));
                     return;
                 }
-                let cwd = this.session.snapshot().navigation.cwd.clone();
+                let cwd = this.session.snapshot().pane.navigation.cwd.clone();
                 let flush_pending = this.session.clone().flush().now_or_never().is_none();
                 *this.observed.lock().unwrap() = Some((cwd, flush_pending));
             }
@@ -550,7 +557,7 @@ mod tests {
         }
     }
     fn text(bytes: &[u8]) -> String {
-        crate::persistence::decode(bytes).unwrap().drafts[&"draft".into()]
+        crate::persistence::decode(bytes).unwrap().input.drafts[&"draft".into()]
             .text
             .clone()
     }
@@ -625,7 +632,7 @@ mod tests {
 
     async fn connected(store: &AgentStore, expected: bool) {
         let mut previous = store.snapshot();
-        while previous.connected != expected {
+        while previous.connection.connected != expected {
             previous = store.next_snapshot(previous).await.unwrap();
         }
     }
@@ -659,7 +666,10 @@ mod tests {
             }
         }
         receipt.wait().await.unwrap();
-        assert_eq!(session.snapshot().host_name.as_deref(), Some(name));
+        assert_eq!(
+            session.snapshot().connection.host_name.as_deref(),
+            Some(name)
+        );
     }
 
     #[tokio::test]
@@ -709,8 +719,8 @@ mod tests {
                     windows_storage.clone(),
                 );
                 read_name(&selected, &mut windows_reader, &windows_writer, "Windows").await;
-                assert!(mac.snapshot().connected);
-                assert!(windows.snapshot().connected);
+                assert!(mac.snapshot().connection.connected);
+                assert!(windows.snapshot().connection.connected);
             }
             mac_peer.close();
             windows_peer.close();
@@ -896,7 +906,10 @@ mod tests {
             assert!(session.store().is_none());
             session.clone().ready().await.unwrap();
             assert!(session.store().is_some());
-            assert_eq!(session.snapshot().drafts[&"draft".into()].text, "last edit");
+            assert_eq!(
+                session.snapshot().input.drafts[&"draft".into()].text,
+                "last edit"
+            );
             session.clone().flush().await.unwrap();
             assert_eq!(text(&storage.bytes.lock().unwrap()), "last edit");
             first.wait().await.unwrap();
@@ -907,7 +920,7 @@ mod tests {
             // Once ready, dispatch remains synchronous even on a native UI thread.
             session.dispatch(edit("synchronous edit")).unwrap();
             assert_eq!(
-                session.snapshot().drafts[&"draft".into()].text,
+                session.snapshot().input.drafts[&"draft".into()].text,
                 "synchronous edit"
             );
             store.record_connection_event(ConnectionPhase::AppScene, 1);
@@ -1041,18 +1054,25 @@ mod tests {
             let storage = Arc::new(Storage::default());
             let session = clients.open(host.into(), storage.clone(), storage);
             let snapshot = Snapshot {
-                threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
-                    "data":[{"id":{"provider":"codex","id":"same-session"},"name":host,"projectId":null}],
-                    "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":10
-                })).unwrap())),
+                lists: crate::state::Lists {
+                    threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
+                        "data":[{"id":{"provider":"codex","id":"same-session"},"name":host,"projectId":null}],
+                        "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":10
+                    })).unwrap())),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
-            session
-                .install(
-                    AgentStore::restored(snapshot, None, "fixture".into()).unwrap(),
-                    false,
-                )
-                .unwrap();
+            let store = AgentStore::restored(snapshot, None, "fixture".into()).unwrap();
+            let mut presentations = store.store.subscribe_presentation();
+            session.install(store, false).unwrap();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                presentations.wait_for(|value| value.list.is_some()),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         }
         let all = clients.thread_list(None).unwrap();
         assert_eq!(
@@ -1114,11 +1134,11 @@ mod tests {
             }
             mac.dispatch(edit("Mac keeps working")).unwrap();
             assert_eq!(
-                mac.snapshot().drafts[&"draft".into()].text,
+                mac.snapshot().input.drafts[&"draft".into()].text,
                 "Mac keeps working"
             );
             assert_eq!(
-                windows.snapshot().drafts[&"draft".into()].text,
+                windows.snapshot().input.drafts[&"draft".into()].text,
                 "Windows draft"
             );
             assert_eq!(mac_storage.loads.load(Ordering::SeqCst), 1);

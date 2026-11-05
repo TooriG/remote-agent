@@ -1011,9 +1011,12 @@ mod tests {
                     panic!("project list failed")
                 };
                 let snapshot = agent_core::state::Snapshot {
-                    threads: Some(Arc::new(result)),
-                    expanded_projects: Arc::new([(project_id.clone(), 5)].into()),
-                    project_threads: Arc::new([(project_id, Arc::new(page))].into()),
+                    lists: agent_core::state::Lists {
+                        threads: Some(Arc::new(result)),
+                        expanded_projects: Arc::new([(project_id.clone(), 5)].into()),
+                        project_threads: Arc::new([(project_id, Arc::new(page))].into()),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 let list = snapshot.thread_list().unwrap();

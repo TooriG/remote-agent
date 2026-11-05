@@ -96,7 +96,7 @@ class ComposerStopTest {
     @Test
     fun runningTurnKeepsStopAvailableWhileADraftIsBeingEdited() {
         fixture("running", "keep this draft").use { snapshot ->
-            compose.setContent { MaterialTheme { ThreadComposer(snapshot, { _, _ -> }, {}) {} } }
+            compose.setContent { MaterialTheme { ComposerFixture(snapshot, { _, _ -> }, {}) {} } }
             compose.onNodeWithTag("composer.stop").assertIsDisplayed().assertIsEnabled()
             compose.runOnIdle { assertEquals("keep this draft", snapshot.draft(snapshot.navigation().draftKey).text) }
         }
@@ -105,7 +105,7 @@ class ComposerStopTest {
     @Test
     fun finishedTurnReturnsToSendControl() {
         fixture("interrupted").use { snapshot ->
-            compose.setContent { MaterialTheme { ThreadComposer(snapshot, { _, _ -> }, {}) {} } }
+            compose.setContent { MaterialTheme { ComposerFixture(snapshot, { _, _ -> }, {}) {} } }
             compose.onNodeWithTag("composer.stop").assertDoesNotExist()
             compose.onNodeWithContentDescription("送信", useUnmergedTree = true).assertIsDisplayed()
             compose.runOnIdle { assertTrue(snapshot.draft(snapshot.navigation().draftKey).text.isEmpty()) }

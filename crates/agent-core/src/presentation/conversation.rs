@@ -16,16 +16,18 @@ impl Snapshot {
     /// Display pending input before a new conversation has a server ID.
     pub fn conversation_thread(&self) -> Option<Arc<models::Thread>> {
         if let Some(source) = self
+            .pane
             .navigation
             .thread_id
             .as_ref()
-            .and_then(|id| self.conversations.get(id))
+            .and_then(|id| self.sessions.conversations.get(id))
         {
             return Some(source.clone());
         }
-        self.pending_submissions
+        self.sessions
+            .pending_submissions
             .values()
-            .any(|pending| pending.draft_key == self.navigation.draft_key)
+            .any(|pending| pending.draft_key == self.pane.navigation.draft_key)
             .then(|| {
                 Arc::new(models::Thread {
                     ..Default::default()
@@ -41,6 +43,7 @@ pub struct RenderedConversation {
     pub turns: Vec<Arc<RenderedTurn>>,
     pub queued: Vec<Arc<RenderedItem>>,
     pub session_rows: Vec<ConversationRow>,
+    pub source_paths: Arc<Vec<String>>,
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
@@ -299,7 +302,11 @@ impl RenderedItem {
 
 /// Pass the previous projection to retain native render identities across deltas.
 pub fn project_conversation(
-    snapshot: &Snapshot,
+    draft_key: &crate::state::DraftKey,
+    pending_submissions: &std::collections::BTreeMap<
+        agent_protocol::ids::ClientInputId,
+        Arc<PendingSubmission>,
+    >,
     source: Arc<models::Thread>,
     previous: &Option<Arc<RenderedConversation>>,
 ) -> Arc<RenderedConversation> {
@@ -307,10 +314,9 @@ pub fn project_conversation(
         .id
         .as_ref()
         .map(crate::state::DraftKey::from)
-        .unwrap_or_else(|| snapshot.navigation.draft_key.clone());
+        .unwrap_or_else(|| draft_key.clone());
     let preparation = source.preparation.as_ref();
-    let mut pending: PendingItems = snapshot
-        .pending_submissions
+    let mut pending: PendingItems = pending_submissions
         .iter()
         .filter(|(_, pending)| pending.draft_key == draft_key)
         .filter(|(id, _)| {
@@ -323,6 +329,19 @@ pub fn project_conversation(
     let requests = &source.requests;
     if let Some(previous) = previous
         && Arc::ptr_eq(&source, &previous.source)
+        && preparation.is_none_or(|preparation| {
+            let id = &preparation.submission.client_user_message_id;
+            previous
+                .queued
+                .iter()
+                .find(|item| item.data.id == id.as_str())
+                .is_none_or(|item| {
+                    item.data.timestamp_ms
+                        == pending_submissions
+                            .get(id)
+                            .and_then(|pending| pending.submitted_at_ms)
+                })
+        })
         && pending
             .iter()
             .map(|(id, pending)| (id, Arc::as_ptr(pending)))
@@ -475,8 +494,7 @@ pub fn project_conversation(
                     &item,
                     source.active_provider,
                     false,
-                    snapshot
-                        .pending_submissions
+                    pending_submissions
                         .get(id)
                         .and_then(|pending| pending.submitted_at_ms),
                     previous
@@ -517,12 +535,38 @@ pub fn project_conversation(
             },
         });
     }
+    let paths: std::collections::BTreeSet<_> = source
+        .turns
+        .iter()
+        .flatten()
+        .flat_map(|turn| turn.items.iter().flatten())
+        .filter_map(|item| match item.body() {
+            agent_protocol::items::ItemBody::UserMessage { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|part| match part {
+            agent_protocol::items::MessagePart::Image { source }
+                if !source.starts_with("data:") =>
+            {
+                Some(source.to_owned())
+            }
+            agent_protocol::items::MessagePart::Attachment { path, .. }
+            | agent_protocol::items::MessagePart::Invocation { path, .. } => Some(path.to_owned()),
+            _ => None,
+        })
+        .collect();
+    let source_paths: Vec<_> = paths.into_iter().collect();
+    let source_paths = previous
+        .filter(|old| old.source_paths.as_ref() == &source_paths)
+        .map_or_else(|| Arc::new(source_paths), |old| old.source_paths.clone());
     Arc::new(RenderedConversation {
         source,
         pending,
         turns,
         queued,
         session_rows,
+        source_paths,
     })
 }
 
@@ -560,6 +604,68 @@ fn preparation_presentation(
         retry: retry.then(|| RetryPreparation {
             thread_id: preparation.submission.thread_id.clone(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+
+    #[test]
+    fn user_file_sources_are_deduplicated_and_reused_when_other_content_changes() {
+        use agent_protocol::{
+            execution::ItemStatus,
+            items::{ItemBody, MessagePart},
+        };
+        let item = Arc::new(models::Item::new(
+            "input".into(),
+            ItemStatus::Completed,
+            ItemBody::UserMessage {
+                text: None,
+                content: vec![
+                    MessagePart::Attachment {
+                        name: "a".into(),
+                        path: "/project/a".into(),
+                    },
+                    MessagePart::Image {
+                        source: "/project/a".into(),
+                    },
+                    MessagePart::Image {
+                        source: "data:image/png;base64,a".into(),
+                    },
+                    MessagePart::Invocation {
+                        name: "skill".into(),
+                        path: "/project/skill".into(),
+                    },
+                ],
+            },
+        ));
+        let source = Arc::new(models::Thread {
+            turns: Some(vec![Arc::new(models::Turn {
+                items: Some(vec![item]),
+                ..Default::default()
+            })]),
+            ..Default::default()
+        });
+        let graph = project_conversation(
+            &Default::default(),
+            &Default::default(),
+            source.clone(),
+            &None,
+        );
+        assert_eq!(
+            graph.source_paths.as_slice(),
+            ["/project/a", "/project/skill"]
+        );
+        let mut changed = source.as_ref().clone();
+        changed.name = Some("A new title".into());
+        let next = project_conversation(
+            &Default::default(),
+            &Default::default(),
+            Arc::new(changed),
+            &Some(graph.clone()),
+        );
+        assert!(Arc::ptr_eq(&graph.source_paths, &next.source_paths));
     }
 }
 
@@ -637,7 +743,7 @@ mod preparation_tests {
             ..Default::default()
         };
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+        Arc::make_mut(&mut snapshot.sessions.pending_submissions).insert(
             "input".into(),
             Arc::new(PendingSubmission {
                 sequence: 0,
@@ -653,7 +759,27 @@ mod preparation_tests {
                 delivery_unknown: false,
             }),
         );
-        let prepared = project_conversation(&snapshot, Arc::new(thread.clone()), &None);
+        let prepared = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            Arc::new(thread.clone()),
+            &None,
+        );
+        let mut timed = snapshot.clone();
+        Arc::make_mut(
+            Arc::make_mut(&mut timed.sessions.pending_submissions)
+                .get_mut(&agent_protocol::ids::ClientInputId::from("input"))
+                .unwrap(),
+        )
+        .submitted_at_ms = Some(13_000);
+        let retimed = project_conversation(
+            &timed.pane.navigation.draft_key,
+            &timed.sessions.pending_submissions,
+            prepared.source.clone(),
+            &Some(prepared.clone()),
+        );
+        assert_eq!(retimed.queued[0].data.timestamp_ms, Some(13_000));
+        assert_eq!(prepared.queued[0].data.timestamp_ms, Some(12_000));
         assert_eq!(prepared.queued.len(), 1);
         assert_eq!(prepared.queued[0].data.timestamp_ms, Some(12_000));
         assert_eq!(
@@ -671,8 +797,12 @@ mod preparation_tests {
             status: models::TurnStatus::Running,
             ..Default::default()
         })]);
-        let starting =
-            project_conversation(&snapshot, Arc::new(thread.clone()), &Some(prepared.clone()));
+        let starting = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            Arc::new(thread.clone()),
+            &Some(prepared.clone()),
+        );
         assert_eq!(starting.queued.len(), 1);
         // The running provider turn's own working row replaces the startup row.
         assert!(starting.session_rows.is_empty());
@@ -692,8 +822,12 @@ mod preparation_tests {
         thread.preparation.as_mut().unwrap().status = PreparationStatus::Failed {
             error: Default::default(),
         };
-        let failed =
-            project_conversation(&snapshot, Arc::new(thread.clone()), &Some(prepared.clone()));
+        let failed = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            Arc::new(thread.clone()),
+            &Some(prepared.clone()),
+        );
         assert!(Arc::ptr_eq(&prepared.queued[0], &failed.queued[0]));
         let ConversationRowContent::Preparation { preparation } = &failed.session_rows[0].content
         else {
@@ -715,11 +849,21 @@ mod preparation_tests {
             items: Some(vec![Arc::new(user)]),
             ..Default::default()
         })]);
-        let echoed = project_conversation(&snapshot, Arc::new(thread.clone()), &Some(failed));
+        let echoed = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            Arc::new(thread.clone()),
+            &Some(failed),
+        );
         assert!(echoed.queued.is_empty());
         assert!(echoed.session_rows.is_empty());
         thread.preparation = None;
-        let complete = project_conversation(&snapshot, Arc::new(thread), &Some(echoed));
+        let complete = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            Arc::new(thread),
+            &Some(echoed),
+        );
         assert!(complete.session_rows.is_empty());
         assert_eq!(
             complete.turns[0]
@@ -1045,7 +1189,7 @@ pub(crate) fn docked_request(thread: &models::Thread, question: bool) -> Option<
 impl Snapshot {
     /// The requests shown above the composer: the other request, then the question.
     pub fn docked_requests(&self, session: crate::session::SessionRef) -> Vec<Request> {
-        let Some(thread) = self.conversations.get(&session) else {
+        let Some(thread) = self.sessions.conversations.get(&session) else {
             return Vec::new();
         };
         [false, true]
@@ -1255,25 +1399,34 @@ mod tests {
     fn fixture() -> Snapshot {
         let thread = serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"turns":[{"id":"done","status":"completed","items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"earlier","phase":"unknown"}}}}}]},{"id":"live","status":"running","items":[{"id":"user","status":"unknown","clientInputId":"accepted","body":{"inline":{"body":{"userMessage":{"text":"question","content":[]}}}}},{"id":"command","status":"completed","clientInputId":null,"body":{"inline":{"body":{"commandExecution":{"command":"pwd","cwd":null,"output":"/fixture","exitCode":null}}}}},{"id":"stream","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"hello","phase":"unknown"}}}}}]}]})).unwrap();
         Snapshot {
-            conversations: Arc::new(
-                [(
-                    agent_protocol::session::SessionRef {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        id: "thread".into(),
-                    },
-                    Arc::new(thread),
-                )]
-                .into(),
-            ),
+            sessions: crate::state::Sessions {
+                conversations: Arc::new(
+                    [(
+                        agent_protocol::session::SessionRef {
+                            provider: agent_protocol::session::ProviderKind::Codex,
+                            id: "thread".into(),
+                        },
+                        Arc::new(thread),
+                    )]
+                    .into(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
     #[test]
     fn older_history_reveals_a_provider_boundary_without_stale_cached_rows() {
         let mut snapshot = fixture();
-        let session = snapshot.conversations.keys().next().unwrap().clone();
+        let session = snapshot
+            .sessions
+            .conversations
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&session)
                 .unwrap(),
         );
@@ -1289,7 +1442,7 @@ mod tests {
                 .any(|row| matches!(row.content, ConversationRowContent::ProviderHandoff { .. }))
         );
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&session)
                 .unwrap(),
         );
@@ -1300,7 +1453,7 @@ mod tests {
         );
         assert!(!Arc::ptr_eq(&initial.turns[0], &loaded.turns[1]));
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&session)
                 .unwrap(),
         );
@@ -1320,7 +1473,7 @@ mod tests {
             id: "thread".into(),
         };
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&session)
                 .unwrap(),
         );
@@ -1336,7 +1489,7 @@ mod tests {
         items.insert(index, Arc::new(deferred));
         let projection = project_snapshot(snapshot.clone(), None);
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&session)
                 .unwrap(),
         );
@@ -1385,8 +1538,9 @@ mod tests {
         previous: Option<&Arc<RenderedConversation>>,
     ) -> Arc<RenderedConversation> {
         project_conversation(
-            &snapshot,
-            snapshot.conversations[&agent_protocol::session::SessionRef {
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            snapshot.sessions.conversations[&agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "thread".into(),
             }]
@@ -1452,7 +1606,8 @@ mod tests {
             .collect(),
             ..Default::default()
         };
-        Arc::make_mut(&mut snapshot.conversations).insert(session.clone(), Arc::new(thread));
+        Arc::make_mut(&mut snapshot.sessions.conversations)
+            .insert(session.clone(), Arc::new(thread));
         let docked: Vec<_> = snapshot
             .docked_requests(session.clone())
             .into_iter()
@@ -1510,7 +1665,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            Arc::make_mut(&mut snapshot.sessions.pending_submissions).insert(
                 id.into(),
                 Arc::new(PendingSubmission {
                     sequence: sequence as u64,
@@ -1550,7 +1705,12 @@ mod tests {
                 .requests
                 .insert(request.id.clone(), Arc::new(request));
         }
-        let projected = project_conversation(&snapshot, Arc::new(source), &None);
+        let projected = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            Arc::new(source),
+            &None,
+        );
         assert_eq!(
             projected.turns[0]
                 .items()
@@ -1616,8 +1776,12 @@ mod tests {
                 ..Default::default()
             })
         };
-        let awaiting =
-            project_conversation(&Snapshot::default(), make(RequestDelivery::Awaiting), &None);
+        let awaiting = project_conversation(
+            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().sessions.pending_submissions,
+            make(RequestDelivery::Awaiting),
+            &None,
+        );
         assert!(awaiting.turns.is_empty());
         assert_eq!(awaiting.session_rows.len(), 1);
         let ConversationRowContent::PendingRequest { request } = &awaiting.session_rows[0].content
@@ -1626,7 +1790,8 @@ mod tests {
         };
         assert!(request.can_respond);
         let sent = project_conversation(
-            &Snapshot::default(),
+            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().sessions.pending_submissions,
             make(RequestDelivery::Sent),
             &Some(awaiting.clone()),
         );
@@ -1714,7 +1879,7 @@ mod tests {
     fn flat_rows_preserve_history_order_and_only_offer_fork_on_last_completed_response() {
         let mut snapshot = fixture();
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),
@@ -1746,7 +1911,7 @@ mod tests {
             ConversationRowContent::InProgress { .. }
         ));
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),
@@ -1797,7 +1962,12 @@ mod tests {
                 {"id": "answer", "status": "completed", "body": {"inline": {"body": {"assistantText": {"text": "Done", "phase": answer_phase}}}}}
             ]}]
         })).unwrap());
-        let live = project_conversation(&snapshot, thread.clone(), &None);
+        let live = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            thread.clone(),
+            &None,
+        );
         let responses: Vec<_> = live.turns[0]
             .rows
             .iter()
@@ -1822,7 +1992,12 @@ mod tests {
 
         Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).status =
             models::TurnStatus::Completed;
-        let completed = project_conversation(&snapshot, thread, &Some(live.clone()));
+        let completed = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            thread,
+            &Some(live.clone()),
+        );
         let actions: Vec<_> = completed.turns[0]
             .rows
             .iter()
@@ -1841,7 +2016,12 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].data.native_id.as_deref(), Some("answer"));
         assert!(Arc::ptr_eq(live_answer, actions[0]));
-        let reopened = project_conversation(&snapshot, completed.source.clone(), &None);
+        let reopened = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            completed.source.clone(),
+            &None,
+        );
         assert_eq!(
             reopened.turns[0]
                 .rows
@@ -1872,26 +2052,45 @@ mod tests {
             }))
             .unwrap(),
         );
-        let initial = project_conversation(&snapshot, thread.clone(), &None);
+        let initial = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            thread.clone(),
+            &None,
+        );
         let before = initial.turns[0].items().next().unwrap();
         assert_eq!(before.data.title.as_deref(), Some("Codex"));
         Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).provider =
             Some(crate::session::ProviderKind::Codex);
-        let attributed = project_conversation(&snapshot, thread.clone(), &Some(initial.clone()));
+        let attributed = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            thread.clone(),
+            &Some(initial.clone()),
+        );
         assert!(Arc::ptr_eq(
             before,
             attributed.turns[0].items().next().unwrap()
         ));
         Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).provider =
             Some(crate::session::ProviderKind::Claude);
-        let updated = project_conversation(&snapshot, thread, &Some(attributed));
+        let updated = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            thread,
+            &Some(attributed),
+        );
         let after = updated.turns[0].items().next().unwrap();
         assert_eq!(after.data.title.as_deref(), Some("Claude"));
         assert_eq!(after.data.body.as_deref(), Some("Done"));
         assert!(matches!((&before.source, &after.source),
             (ItemSource::Native(before), ItemSource::Native(after)) if Arc::ptr_eq(before, after)));
-        let unchanged =
-            project_conversation(&snapshot, updated.source.clone(), &Some(updated.clone()));
+        let unchanged = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            updated.source.clone(),
+            &Some(updated.clone()),
+        );
         assert!(Arc::ptr_eq(&updated.turns[0], &unchanged.turns[0]));
     }
 
@@ -1917,7 +2116,12 @@ mod tests {
                 fork: enabled,
                 ..Default::default()
             });
-            let projected = project_conversation(&snapshot, thread.clone(), &previous);
+            let projected = project_conversation(
+                &snapshot.pane.navigation.draft_key,
+                &snapshot.sessions.pending_submissions,
+                thread.clone(),
+                &previous,
+            );
             let actions: Vec<_> = projected.turns[0]
                 .rows
                 .iter()
@@ -1953,7 +2157,12 @@ mod tests {
             serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"turns":[{"id":"first","status":"completed","items":[{"id":"same","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"old","phase":"unknown"}}}}},{"id":"same","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"new","phase":"final"}}}}}]},{"id":"second","status":"completed","items":[{"id":"same","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"another turn","phase":"unknown"}}}}}]}]}))
             .unwrap(),
         );
-        let rendered = project_conversation(&Snapshot::default(), source, &None);
+        let rendered = project_conversation(
+            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().sessions.pending_submissions,
+            source,
+            &None,
+        );
         let rows: Vec<_> = rendered
             .turns
             .iter()
@@ -1985,7 +2194,12 @@ mod tests {
         let mut changed = rendered.source.clone();
         Arc::make_mut(&mut Arc::make_mut(&mut changed).turns.as_mut().unwrap()[0]).status =
             models::TurnStatus::Interrupted;
-        let updated = project_conversation(&Snapshot::default(), changed, &Some(rendered.clone()));
+        let updated = project_conversation(
+            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().sessions.pending_submissions,
+            changed,
+            &Some(rendered.clone()),
+        );
         assert_eq!(updated.turns[0].items().count(), 2);
         for (before, after) in rendered.turns[0].items().zip(updated.turns[0].items()) {
             assert!(
@@ -2005,7 +2219,12 @@ mod tests {
                 ]
             }]
         })).unwrap());
-        let rendered = project_conversation(&Snapshot::default(), source, &None);
+        let rendered = project_conversation(
+            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().sessions.pending_submissions,
+            source,
+            &None,
+        );
         let rows = &rendered.turns[0].rows;
         assert!(matches!(
             &rows[0].content,
@@ -2032,22 +2251,25 @@ mod tests {
         use crate::state::{Event, Intent, reduce};
         for status in ["completed", "running"] {
             let mut snapshot = Snapshot {
-                conversations: Arc::new(
-                    [(
-                        agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() },
-                        Arc::new(
-                            serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"capabilities":{"additionalInput":true,"fork":false,"rename":false,"modelChange":false},"turns":[{"id":"before","status":status,"items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"before","phase":"unknown"}}}}}]}]}))
-                            .unwrap(),
-                        ),
-                    )]
-                    .into(),
-                ),
+                sessions: crate::state::Sessions {
+                    conversations: Arc::new(
+                        [(
+                            agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() },
+                            Arc::new(
+                                serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"capabilities":{"additionalInput":true,"fork":false,"rename":false,"modelChange":false},"turns":[{"id":"before","status":status,"items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"before","phase":"unknown"}}}}}]}]}))
+                                .unwrap(),
+                            ),
+                        )]
+                        .into(),
+                    ),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             // IDs deliberately disagree with submission order.
             let mut activity_ids = HashSet::new();
             for id in ["z-first", "a-second", "m-third"] {
-                Arc::make_mut(&mut snapshot.drafts).insert(
+                Arc::make_mut(&mut snapshot.input.drafts).insert(
                     agent_protocol::session::SessionRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
                         id: "thread".into(),
@@ -2102,7 +2324,7 @@ mod tests {
                 &project_snapshot(snapshot.clone(), Some(&first))
             ));
             let thread = Arc::make_mut(
-                Arc::make_mut(&mut snapshot.conversations)
+                Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&agent_protocol::session::SessionRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
                         id: "thread".into(),
@@ -2128,22 +2350,25 @@ mod tests {
     fn queued_submissions_keep_send_order_without_history() {
         use crate::state::{Event, Intent, reduce};
         let mut snapshot = Snapshot {
-            conversations: Arc::new(
-                [(
-                    agent_protocol::session::SessionRef {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        id: "thread".into(),
-                    },
-                    Arc::new(models::Thread {
-                        id: Some(agent_protocol::session::SessionRef {
+            sessions: crate::state::Sessions {
+                conversations: Arc::new(
+                    [(
+                        agent_protocol::session::SessionRef {
                             provider: agent_protocol::session::ProviderKind::Codex,
                             id: "thread".into(),
+                        },
+                        Arc::new(models::Thread {
+                            id: Some(agent_protocol::session::SessionRef {
+                                provider: agent_protocol::session::ProviderKind::Codex,
+                                id: "thread".into(),
+                            }),
+                            ..Default::default()
                         }),
-                        ..Default::default()
-                    }),
-                )]
-                .into(),
-            ),
+                    )]
+                    .into(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         };
         for id in ["z-first", "a-second", "m-third"] {
@@ -2170,7 +2395,7 @@ mod tests {
             ["z-first", "a-second", "m-third"]
         );
         Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),
@@ -2196,7 +2421,7 @@ mod tests {
     fn pending_echoes_render_once_and_keep_remaining_input_order() {
         let mut snapshot = fixture();
         for (sequence, id) in ["a", "b", "a", "c"].into_iter().enumerate() {
-            Arc::make_mut(&mut snapshot.pending_submissions).insert(
+            Arc::make_mut(&mut snapshot.sessions.pending_submissions).insert(
                 id.into(),
                 Arc::new(PendingSubmission {
                     sequence: sequence as u64,
@@ -2217,7 +2442,7 @@ mod tests {
                 }),
             );
         }
-        Arc::make_mut(Arc::make_mut(&mut snapshot.conversations).get_mut(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }).unwrap())
+        Arc::make_mut(Arc::make_mut(&mut snapshot.sessions.conversations).get_mut(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }).unwrap())
             .turns.as_mut().unwrap().push(Arc::new(serde_json::from_value(json!({"id":"echo-turn","items":[{"id":"echo","status":"unknown","clientInputId":"b","body":{"inline":{"body":{"userMessage":{"text":"native b","content":[]}}}}}],"status":"unknown"})).unwrap()));
         let rendered = project_snapshot(snapshot.clone(), None);
         let items: Vec<_> = rendered.turns.last().unwrap().items().collect();
@@ -2230,7 +2455,7 @@ mod tests {
         );
         assert!(matches!(&items[0].source, ItemSource::Native(_)));
         assert!(rendered.queued.is_empty());
-        assert_eq!(snapshot.pending_submissions.len(), 3);
+        assert_eq!(snapshot.sessions.pending_submissions.len(), 3);
         assert!(Arc::ptr_eq(
             &rendered,
             &project_snapshot(snapshot, Some(&rendered))
@@ -2249,16 +2474,22 @@ mod tests {
         #[values(false, true)] history_loaded: bool,
     ) {
         let mut snapshot = fixture();
-        let session = snapshot.conversations.keys().next().unwrap().clone();
+        let session = snapshot
+            .sessions
+            .conversations
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
         if !history_loaded {
             Arc::make_mut(
-                Arc::make_mut(&mut snapshot.conversations)
+                Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&session)
                     .unwrap(),
             )
             .turns = None;
         }
-        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+        Arc::make_mut(&mut snapshot.sessions.pending_submissions).insert(
             "pending".into(),
             Arc::new(PendingSubmission {
                 sequence: 0,
@@ -2296,7 +2527,7 @@ mod tests {
     #[test]
     fn local_input_keeps_its_footer_while_acceptance_and_history_are_pending() {
         let mut snapshot = fixture();
-        Arc::make_mut(&mut snapshot.pending_submissions).insert(
+        Arc::make_mut(&mut snapshot.sessions.pending_submissions).insert(
             "pending".into(),
             Arc::new(PendingSubmission {
                 sequence: 0,
@@ -2320,7 +2551,7 @@ mod tests {
         assert!(sending.queued[0].data.title.is_none());
         assert_eq!(sending.queued[0].data.timestamp_ms, Some(12_000));
         Arc::make_mut(
-            Arc::make_mut(&mut snapshot.pending_submissions)
+            Arc::make_mut(&mut snapshot.sessions.pending_submissions)
                 .get_mut("pending")
                 .unwrap(),
         )
@@ -2334,7 +2565,7 @@ mod tests {
             Some("waiting for history")
         );
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.conversations)
+            Arc::make_mut(&mut snapshot.sessions.conversations)
                 .get_mut(&agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),
@@ -2364,13 +2595,13 @@ mod tests {
             delta: " world".into(),
         }
         .apply(
-            &snapshot.conversations[&agent_protocol::session::SessionRef {
+            &snapshot.sessions.conversations[&agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "thread".into(),
             }],
         )
         .unwrap();
-        Arc::make_mut(&mut updated.conversations).insert(
+        Arc::make_mut(&mut updated.sessions.conversations).insert(
             agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "thread".into(),
@@ -2396,7 +2627,7 @@ mod tests {
         );
         let mut deferred = updated;
         let thread = Arc::make_mut(
-            Arc::make_mut(&mut deferred.conversations)
+            Arc::make_mut(&mut deferred.sessions.conversations)
                 .get_mut(&agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "thread".into(),
@@ -2441,7 +2672,7 @@ mod tests {
                 .into(),
             };
             let thread = Arc::make_mut(
-                Arc::make_mut(&mut snapshot.conversations)
+                Arc::make_mut(&mut snapshot.sessions.conversations)
                     .entry(session.clone())
                     .or_insert_with(|| {
                         Arc::new(models::Thread {
@@ -2471,9 +2702,10 @@ mod tests {
                 delivery_unknown: false,
             })
         };
-        Arc::make_mut(&mut snapshot.pending_submissions)
+        Arc::make_mut(&mut snapshot.sessions.pending_submissions)
             .insert("accepted".into(), pending(Some("live".into())));
-        Arc::make_mut(&mut snapshot.pending_submissions).insert("queued".into(), pending(None));
+        Arc::make_mut(&mut snapshot.sessions.pending_submissions)
+            .insert("queued".into(), pending(None));
         let rendered = project_snapshot(snapshot, None);
         let done: Vec<_> = rendered.turns[0]
             .rows
@@ -2611,7 +2843,12 @@ mod progress_tests {
                 {"id":"second", "status":"running", "body":{"inline":{"body":{"webSearch":{"query":"latest action"}}}}}
             ]}]
         })).unwrap());
-        let conversation = project_conversation(&Snapshot::default(), source, &None);
+        let conversation = project_conversation(
+            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().sessions.pending_submissions,
+            source,
+            &None,
+        );
         let turn = &conversation.turns[0];
         assert_eq!(
             turn.work_progress(true).label(108.5),
@@ -2640,6 +2877,7 @@ pub struct HistoryControl {
 impl Snapshot {
     pub fn history_control(&self, session: crate::session::SessionRef) -> Option<HistoryControl> {
         let has_more = self
+            .sessions
             .conversations
             .get(&session)
             .is_some_and(|thread| thread.history_has_more == Some(true));
@@ -2677,7 +2915,7 @@ mod history_control_tests {
         let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
         let mut snapshot = Snapshot::default();
         assert_eq!(snapshot.history_control(session.clone()), None);
-        Arc::make_mut(&mut snapshot.conversations).insert(
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(
             session.clone(),
             Arc::new(models::Thread {
                 history_has_more: Some(true),
@@ -2718,14 +2956,14 @@ mod history_control_tests {
                 ..idle.clone()
             }),
         ] {
-            Arc::make_mut(&mut snapshot.operations).insert(key.clone(), OperationState {
+            snapshot.operations.insert(key.clone(), OperationState {
                 generation: 1,
                 phase,
             });
             assert_eq!(snapshot.history_control(session.clone()), Some(expected));
             assert_eq!(snapshot.history_control(other.clone()), None);
         }
-        Arc::make_mut(&mut snapshot.operations).clear();
+        snapshot.operations = Default::default();
         assert_eq!(snapshot.history_control(session), Some(idle));
     }
 
@@ -2735,7 +2973,7 @@ mod history_control_tests {
     fn no_continuation_hides_the_button_but_preserves_a_read_failure(#[case] more: Option<bool>) {
         let session = SessionRef::new(ProviderKind::Codex, "history".into()).unwrap();
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.conversations).insert(
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(
             session.clone(),
             Arc::new(models::Thread {
                 history_has_more: more,
@@ -2743,7 +2981,7 @@ mod history_control_tests {
             }),
         );
         assert_eq!(snapshot.history_control(session.clone()), None);
-        Arc::make_mut(&mut snapshot.operations).insert(
+        snapshot.operations.insert(
             OperationKey::History {
                 session: session.clone(),
             },

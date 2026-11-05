@@ -618,10 +618,10 @@ struct ComposerModel {
 }
 impl Desktop {
     pub(super) fn model_controls_enabled(&self) -> bool {
-        self.snapshot.connected
+        self.snapshot.connection.connected
             && !self.account.busy
             && self.busy == 0
-            && self.snapshot.account.login.is_none()
+            && self.snapshot.catalog.account.login.is_none()
     }
     fn composer_model(&self, cx: &App) -> ComposerModel {
         let language = crate::localization::language(cx);
@@ -632,7 +632,7 @@ impl Desktop {
             running: self.thread().and_then(|thread| thread.active_turn_id()),
             empty: self.composer.input.read(cx).value().trim().is_empty()
                 && self.draft().attachments.is_empty(),
-            connected: self.snapshot.connected,
+            connected: self.snapshot.connection.connected,
             busy: self.busy > 0,
             provider_available: permission.provider.is_some(),
             input_unavailable: self
@@ -647,10 +647,10 @@ impl Desktop {
                 .unwrap_or_default(),
             remote: self.remote.clone(),
             hosts: self.hosts.clone(),
-            cwd: self.snapshot.navigation.cwd.clone(),
+            cwd: self.snapshot.pane.navigation.cwd.clone(),
             selected_directory: self.snapshot.selected_directory(),
             has_session: self.selected().is_some(),
-            review: self.snapshot.workspace.review.clone(),
+            review: self.snapshot.pane.workspace.review.clone(),
             review_expanded: self.review_expanded,
             model_label: self
                 .selected_model()
@@ -679,7 +679,6 @@ pub(in crate::app) struct ComposerContent {
     desktop: WeakEntity<Desktop>,
     input: Entity<TextareaState>,
     model: Option<ComposerModel>,
-    _observations: Vec<Subscription>,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
@@ -691,27 +690,12 @@ impl ComposerView {
         input: Entity<TextareaState>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let content = cx.new(|cx| {
-            let owner = desktop.downgrade();
-            ComposerContent {
-                desktop: owner.clone(),
-                input: input.clone(),
-                model: None,
-                _observations: vec![
-                    cx.observe(desktop, |view: &mut ComposerContent, desktop, cx| {
-                        let model = desktop.read(cx).composer_model(cx);
-                        view.set_model(model, cx);
-                    }),
-                    cx.observe(&input, move |view: &mut ComposerContent, _, cx| {
-                        if let Some(desktop) = owner.upgrade() {
-                            let model = desktop.read(cx).composer_model(cx);
-                            view.set_model(model, cx);
-                        }
-                    }),
-                ],
-                #[cfg(test)]
-                renders: 0,
-            }
+        let content = cx.new(|_cx| ComposerContent {
+            desktop: desktop.downgrade(),
+            input: input.clone(),
+            model: None,
+            #[cfg(test)]
+            renders: 0,
         });
         Self {
             _measurement: cx.subscribe(&content, |view, _, height: &ComposerHeight, cx| {
@@ -813,6 +797,7 @@ mod composer_tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -848,7 +833,7 @@ mod composer_tests {
         let (_, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -862,10 +847,10 @@ mod composer_tests {
             });
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                let navigation = Arc::make_mut(&mut snapshot.navigation);
+                let navigation = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation);
                 navigation.thread_id = Some(session.clone());
                 navigation.draft_key = session.clone().into();
-                Arc::make_mut(&mut snapshot.conversations).insert(
+                Arc::make_mut(&mut snapshot.sessions.conversations).insert(
                     session.clone(),
                     Arc::new(Thread {
                         id: Some(session.clone()),
@@ -910,7 +895,7 @@ mod composer_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let thread = Arc::make_mut(
-                    Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).conversations)
+                    Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).sessions.conversations)
                         .get_mut(&session)
                         .unwrap(),
                 );
@@ -1020,9 +1005,9 @@ mod composer_tests {
             desktop.update(cx, |view, cx| {
                 view.session.take();
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut snapshot.operations).remove(&key);
+                snapshot.operations.remove(&key);
                 let thread = Arc::make_mut(
-                    Arc::make_mut(&mut snapshot.conversations)
+                    Arc::make_mut(&mut snapshot.sessions.conversations)
                         .get_mut(&session)
                         .unwrap(),
                 );
@@ -1048,6 +1033,7 @@ mod composer_tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -1076,7 +1062,7 @@ mod composer_tests {
         let (_, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -1090,7 +1076,7 @@ mod composer_tests {
             });
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                let navigation = Arc::make_mut(&mut snapshot.navigation);
+                let navigation = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation);
                 navigation.thread_id = Some(session.clone());
                 navigation.draft_key = session.clone().into();
                 let mut thread = Thread {
@@ -1109,9 +1095,9 @@ mod composer_tests {
                         },
                     }),
                 );
-                Arc::make_mut(&mut snapshot.conversations)
+                Arc::make_mut(&mut snapshot.sessions.conversations)
                     .insert(session.clone(), Arc::new(thread));
-                Arc::make_mut(&mut snapshot.drafts).insert(
+                Arc::make_mut(&mut snapshot.input.drafts).insert(
                     session.clone().into(),
                     Arc::new(Draft {
                         text: "Keep draft".into(),
@@ -1220,7 +1206,7 @@ mod composer_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut snapshot.conversations)
+                Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&session)
                     .map(Arc::make_mut)
                     .unwrap()
@@ -1238,7 +1224,7 @@ mod composer_tests {
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut snapshot.conversations)
+                Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&session)
                     .map(Arc::make_mut)
                     .unwrap()
@@ -1275,6 +1261,7 @@ mod composer_tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -1292,7 +1279,7 @@ mod composer_tests {
         let (_, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -1307,7 +1294,7 @@ mod composer_tests {
             desktop.update(cx, |view, _| {
                 let key = view.draft_key().clone();
                 draft_key = Some(key.clone());
-                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).drafts).insert(
+                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).input.drafts).insert(
                     key,
                     Arc::new(Draft {
                         text: "Keep this draft".into(),
@@ -1404,7 +1391,7 @@ mod composer_tests {
         window.simulate_click(remove, Modifiers::default());
         window.update(|_, cx| desktop.update(cx, |view, _| assert!(view.media.gallery.is_none())));
         let snapshot = store_handle.unwrap().snapshot();
-        let draft = &snapshot.drafts[&draft_key.unwrap()];
+        let draft = &snapshot.input.drafts[&draft_key.unwrap()];
         assert!(draft.attachments.is_empty());
         assert_eq!(draft.text, "Keep this draft");
     }

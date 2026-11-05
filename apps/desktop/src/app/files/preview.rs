@@ -70,7 +70,11 @@ impl Desktop {
             cx.notify();
             return;
         }
-        let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
+        let Some(store) = self
+            .session
+            .as_ref()
+            .map(|session| session.host.store.clone())
+        else {
             self.set_error("ホストに接続していません".into());
             cx.notify();
             return;
@@ -128,6 +132,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -137,7 +142,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: None,
                         cwd: root.path().to_str().unwrap().into(),
                     },

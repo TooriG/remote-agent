@@ -94,9 +94,9 @@ fn empty_project_pages_keep_unassigned_root_rows_without_grouping() {
     );
     let mut snapshot = Snapshot::default();
     ListSessions::new(Default::default()).apply(&mut snapshot, input);
-    assert_eq!(snapshot.threads.as_ref().unwrap().data, expected);
-    assert!(snapshot.project_threads["empty"].data.is_empty());
-    assert!(snapshot.project_threads["empty"].has_more);
+    assert_eq!(snapshot.lists.threads.as_ref().unwrap().data, expected);
+    assert!(snapshot.lists.project_threads["empty"].data.is_empty());
+    assert!(snapshot.lists.project_threads["empty"].has_more);
 }
 
 #[test]
@@ -138,36 +138,39 @@ fn root_refresh_groups_pages_without_replacing_larger_or_omitted_cached_pages() 
     let larger = Arc::new(list(vec![row("cached-larger", assigned("larger"))], 15));
     let omitted = Arc::new(list(vec![row("cached-omitted", assigned("omitted"))], 5));
     let mut snapshot = Snapshot {
-        list_query: Arc::new(ListQuery {
-            limit: 10,
+        lists: crate::state::Lists {
+            list_query: Arc::new(ListQuery {
+                limit: 10,
+                ..Default::default()
+            }),
+            project_threads: Arc::new(
+                [
+                    ("larger".into(), larger.clone()),
+                    ("omitted".into(), omitted.clone()),
+                ]
+                .into(),
+            ),
+            unconfirmed_lists: Arc::new(
+                [
+                    OperationKey::ProjectList {
+                        project_id: "larger".into(),
+                    },
+                    OperationKey::ProjectList {
+                        project_id: "loaded".into(),
+                    },
+                ]
+                .into(),
+            ),
             ..Default::default()
-        }),
-        project_threads: Arc::new(
-            [
-                ("larger".into(), larger.clone()),
-                ("omitted".into(), omitted.clone()),
-            ]
-            .into(),
-        ),
-        unconfirmed_lists: Arc::new(
-            [
-                OperationKey::ProjectList {
-                    project_id: "larger".into(),
-                },
-                OperationKey::ProjectList {
-                    project_id: "loaded".into(),
-                },
-            ]
-            .into(),
-        ),
+        },
         ..Default::default()
     };
-    ListSessions::new((*snapshot.list_query).clone()).apply(&mut snapshot, input);
+    ListSessions::new((*snapshot.lists.list_query).clone()).apply(&mut snapshot, input);
     assert_eq!(
-        snapshot.threads.as_ref().unwrap().data,
+        snapshot.lists.threads.as_ref().unwrap().data,
         [root, hidden.clone(), other]
     );
-    let loaded = &snapshot.project_threads["loaded"];
+    let loaded = &snapshot.lists.project_threads["loaded"];
     assert_eq!(
         loaded
             .data
@@ -178,13 +181,19 @@ fn root_refresh_groups_pages_without_replacing_larger_or_omitted_cached_pages() 
     );
     assert!(loaded.has_more);
     assert_eq!(loaded.data[0].name.as_ref().unwrap().as_ptr(), first_name);
-    assert!(Arc::ptr_eq(&larger, &snapshot.project_threads["larger"]));
-    assert!(Arc::ptr_eq(&omitted, &snapshot.project_threads["omitted"]));
-    assert_eq!(snapshot.project_threads["hidden"].data, [hidden]);
-    assert!(snapshot.project_threads["empty"].data.is_empty());
-    assert!(snapshot.project_threads["empty"].has_more);
+    assert!(Arc::ptr_eq(
+        &larger,
+        &snapshot.lists.project_threads["larger"]
+    ));
+    assert!(Arc::ptr_eq(
+        &omitted,
+        &snapshot.lists.project_threads["omitted"]
+    ));
+    assert_eq!(snapshot.lists.project_threads["hidden"].data, [hidden]);
+    assert!(snapshot.lists.project_threads["empty"].data.is_empty());
+    assert!(snapshot.lists.project_threads["empty"].has_more);
     assert_eq!(
-        *snapshot.unconfirmed_lists,
+        *snapshot.lists.unconfirmed_lists,
         [
             OperationKey::ProjectList {
                 project_id: "larger".into()

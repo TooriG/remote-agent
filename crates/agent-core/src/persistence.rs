@@ -40,7 +40,7 @@ pub struct EditorPreferences {
 impl EditorPreferences {
     pub fn capture(snapshot: &Snapshot) -> Self {
         Self {
-            preferred: snapshot.preferred_editor,
+            preferred: snapshot.files.preferred_editor,
         }
     }
 }
@@ -53,12 +53,13 @@ mod tests {
     #[test]
     fn host_state_excludes_device_model_preferences() {
         let mut snapshot = Snapshot::default();
-        snapshot.model_preferences.provider = Some(agent_protocol::session::ProviderKind::Claude);
+        snapshot.catalog.model_preferences.provider =
+            Some(agent_protocol::session::ProviderKind::Claude);
         let bytes = encode(&snapshot).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(saved.get("model_preferences").is_none());
         assert_eq!(
-            decode(&bytes).unwrap().model_preferences,
+            decode(&bytes).unwrap().catalog.model_preferences,
             ModelPreferences::default()
         );
     }
@@ -66,11 +67,16 @@ mod tests {
     #[test]
     fn editor_preferences_are_device_owned_and_never_serialize_host_discovery() {
         let snapshot = Snapshot {
-            preferred_editor: Some(EditorId::Cursor),
-            file_open_capabilities: Some(Arc::new(agent_protocol::editors::FileOpenCapabilities {
-                editors: vec![EditorId::Cursor, EditorId::FileManager],
-                reveal: None,
-            })),
+            files: crate::state::Files {
+                preferred_editor: Some(EditorId::Cursor),
+                file_open_capabilities: Some(Arc::new(
+                    agent_protocol::editors::FileOpenCapabilities {
+                        editors: vec![EditorId::Cursor, EditorId::FileManager],
+                        reveal: None,
+                    },
+                )),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let bytes = serde_json::to_vec(&EditorPreferences::capture(&snapshot)).unwrap();
@@ -87,6 +93,7 @@ mod tests {
         assert!(
             decode(&encode(&snapshot).unwrap())
                 .unwrap()
+                .files
                 .file_open_capabilities
                 .is_none()
         );
@@ -111,13 +118,13 @@ pub struct PersistedState {
 impl PersistedState {
     pub fn capture(snapshot: &Snapshot) -> Self {
         Self {
-            project_preferences: snapshot.project_preferences.clone(),
-            storage_scope: snapshot.storage_scope.clone(),
-            archived_scopes: snapshot.archived_scopes.clone(),
-            drafts: snapshot.drafts.clone(),
-            pending_submissions: snapshot.pending_submissions.clone(),
-            file_drafts: snapshot.file_drafts.clone(),
-            navigation: snapshot.navigation.clone(),
+            project_preferences: snapshot.lists.project_preferences.clone(),
+            storage_scope: snapshot.connection.storage_scope.clone(),
+            archived_scopes: snapshot.lists.archived_scopes.clone(),
+            drafts: snapshot.input.drafts.clone(),
+            pending_submissions: snapshot.sessions.pending_submissions.clone(),
+            file_drafts: snapshot.files.file_drafts.clone(),
+            navigation: snapshot.pane.navigation.clone(),
         }
     }
 }
@@ -197,13 +204,31 @@ pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {
     }
     let saved: PersistedState = serde_json::from_slice(bytes)?;
     Ok(Snapshot {
-        project_preferences: saved.project_preferences,
-        storage_scope: saved.storage_scope,
-        archived_scopes: saved.archived_scopes,
-        drafts: saved.drafts,
-        pending_submissions: saved.pending_submissions,
-        file_drafts: saved.file_drafts,
-        navigation: saved.navigation,
+        files: crate::state::Files {
+            file_drafts: saved.file_drafts,
+            ..Default::default()
+        },
+        lists: crate::state::Lists {
+            project_preferences: saved.project_preferences,
+            archived_scopes: saved.archived_scopes,
+            ..Default::default()
+        },
+        connection: crate::state::Connection {
+            storage_scope: saved.storage_scope,
+            ..Default::default()
+        },
+        input: crate::state::Input {
+            drafts: saved.drafts,
+            ..Default::default()
+        },
+        sessions: crate::state::Sessions {
+            pending_submissions: saved.pending_submissions,
+            ..Default::default()
+        },
+        pane: std::sync::Arc::new(crate::state::PaneState {
+            navigation: saved.navigation,
+            ..Default::default()
+        }),
         ..Default::default()
     })
 }

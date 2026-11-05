@@ -24,7 +24,7 @@ impl Desktop {
         };
         let busy = self.snapshot.operation_running(key.clone());
         Some(ComposerQuestion {
-            can_advance: prompt.can_advance && self.snapshot.connected && !busy,
+            can_advance: prompt.can_advance && self.snapshot.connection.connected && !busy,
             error: self.snapshot.operation_error(key),
             collapsed: self
                 .question

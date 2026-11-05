@@ -27,7 +27,7 @@ use gpui_kit::component::{
     sidebar::{Sidebar, SidebarItem, SidebarMenuItem},
 };
 pub(super) use header::HeaderView;
-pub(super) use sidebar::SidebarView;
+pub(super) use sidebar::{SidebarAction, SidebarView};
 use std::path::PathBuf;
 pub(super) use workbench::WorkbenchView;
 
@@ -92,7 +92,7 @@ pub(super) fn settings_group() -> Div {
         .bg(rgb(appearance::SURFACE))
 }
 
-fn sidebar_header(expanded: bool, cx: &Context<Desktop>) -> Div {
+fn sidebar_header(expanded: bool, owner: &WeakEntity<Desktop>, cx: &App) -> Div {
     let language = crate::localization::language(cx);
     let (id, icon, label) = if expanded {
         (
@@ -129,10 +129,15 @@ fn sidebar_header(expanded: bool, cx: &Context<Desktop>) -> Div {
                 .ghost()
                 .tooltip(label)
                 .accessibility_label(label)
-                .on_click(cx.listener(move |desktop, _, _, cx| {
-                    desktop.sidebar = !expanded;
-                    cx.notify();
-                })),
+                .on_click({
+                    let owner = owner.clone();
+                    move |_, _, cx| {
+                        let _ = owner.update(cx, |desktop, cx| {
+                            desktop.sidebar = !expanded;
+                            cx.notify();
+                        });
+                    }
+                }),
         )
 }
 
@@ -187,6 +192,16 @@ fn conversation_file_path(source: &str, cwd: &str) -> Result<PathBuf, String> {
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(sidebar) = &self.sidebar_view {
+            let model = self.sidebar_model();
+            let pane = self.session.as_ref().map(|session| session.pane.clone());
+            sidebar.update(cx, |view, cx| view.sync(model, pane, cx));
+        }
+        self.publish_conversation(window, cx);
+        self.sync_composer(cx);
+        let header = self.header_model(crate::localization::language(cx));
+        self.header_view
+            .update(cx, |view, cx| view.set_model(header, cx));
         if self.media.gallery.is_some() {
             let gallery = self.image_gallery_view(window, cx);
             return h_flex()
@@ -249,7 +264,7 @@ impl Desktop {
             cx,
             move |view, window, cx| {
                 let key = view.panel_scope();
-                view.panels.set_open(key.clone(), !open);
+                view.panels = view.panels.clone().set_open(key.clone(), !open);
                 if !open && view.panels.get(key.clone()).active.is_none() {
                     view.panel_focus.focus(window, cx);
                 }
@@ -482,6 +497,7 @@ mod cache_tests {
             .unwrap();
         let app_runtime = Runtime {
             handle: runtime.handle().clone(),
+            sessions: Default::default(),
             connections: Arc::default(),
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
@@ -687,7 +703,7 @@ mod cache_tests {
         }));
         let (desktop, window) = cx.add_window_view(|window, cx| {
             let mut desktop = Desktop::new(
-                Mode::SideChat {
+                Mode::Fixture {
                     remote: None,
                     cwd: String::new(),
                 },
@@ -809,15 +825,19 @@ mod cache_tests {
     fn browser_frames_do_not_broadcast_desktop_notifications(cx: &mut TestAppContext) {
         let (runtime, app_runtime) = init(cx);
         let mut snapshot = Snapshot {
-            connected: true,
+            connection: agent_core::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        Arc::make_mut(&mut snapshot.navigation).draft_key = DraftKey::Session {
-            session: SessionRef {
-                provider: agent_protocol::session::ProviderKind::Codex,
-                id: "browser-fixture".into(),
-            },
-        };
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+            DraftKey::Session {
+                session: SessionRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "browser-fixture".into(),
+                },
+            };
         let store =
             runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
         let mut session = Some(runtime.block_on(async {
@@ -953,8 +973,11 @@ mod cache_tests {
         window.simulate_resize(size(px(1000.), px(700.)));
         desktop.update(window, |desktop, cx| {
             let key = desktop.panel_scope();
-            desktop.panels.set_open(key.clone(), true);
-            desktop.panels.set_layout(key, PanelLayout::Expanded);
+            desktop.panels = desktop.panels.clone().set_open(key.clone(), true);
+            desktop.panels = desktop
+                .panels
+                .clone()
+                .set_layout(key, PanelLayout::Expanded);
             cx.notify();
         });
         window.run_until_parked();
@@ -974,7 +997,7 @@ mod cache_tests {
                 let mut desktop = Desktop::new(Mode::Main, window, cx);
                 desktop.onboarding = false;
                 let key = desktop.draft_key().clone();
-                Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).drafts).insert(
+                Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).input.drafts).insert(
                     key,
                     Arc::new(Draft {
                         model: Some(agent_protocol::models::ModelRef {
@@ -996,7 +1019,7 @@ mod cache_tests {
         window.run_until_parked();
         assert!(window.debug_bounds("model-choice-extra").is_none());
         owner.unwrap().update(window, |desktop, cx| {
-            Arc::make_mut(&mut desktop.snapshot).models = Arc::new(
+            Arc::make_mut(&mut desktop.snapshot).catalog.models = Arc::new(
                 serde_json::from_value(serde_json::json!([
                     {"id":"extra","model":{"provider":"codex","id":"extra"},"displayName":"Extra"}
                 ]))
@@ -1040,15 +1063,15 @@ mod cache_tests {
                 // input/Store boundary and can notify while Tokio is pumped.
                 view.hosts = None;
                 view.app_updates = None;
-                view.panels.open(view.panel_scope(), Panel::Files, None);
+                view.open_surface(view.panel_scope(), Panel::Files, None);
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session.clone());
-                Arc::make_mut(&mut snapshot.navigation).draft_key = session.clone().into();
-                snapshot.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
+                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id = Some(session.clone());
+                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key = session.clone().into();
+                snapshot.lists.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
                     "data":[{"id":{"provider":"codex","id":"selected"},"name":"Task"}],
                     "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,
                 })).unwrap()));
-                Arc::make_mut(&mut snapshot.conversations).insert(session.clone(), Arc::new(serde_json::from_value(serde_json::json!({
+                Arc::make_mut(&mut snapshot.sessions.conversations).insert(session.clone(), Arc::new(serde_json::from_value(serde_json::json!({
                     "id":{"provider":"codex","id":"selected"},
                     "turns":[{"id":"turn","status":"completed","items":[{"id":"answer","body":{"inline":{"body":{"assistantText":{"text":"Original answer","phase":"final"}}}}}]}]
                 })).unwrap()));
@@ -1152,7 +1175,7 @@ mod cache_tests {
         // fixture separately before checking streaming and animation reuse.
         desktop.update(cx, |view, cx| {
             let snapshot = Arc::make_mut(&mut view.snapshot);
-            Arc::make_mut(snapshot.threads.as_mut().unwrap()).data[0].status =
+            Arc::make_mut(snapshot.lists.threads.as_mut().unwrap()).data[0].status =
                 agent_protocol::models::SessionStatus::Running;
             cx.notify();
         });
@@ -1161,7 +1184,7 @@ mod cache_tests {
         desktop.update(cx, |view, cx| {
             let snapshot = Arc::make_mut(&mut view.snapshot);
             let thread = Arc::make_mut(
-                Arc::make_mut(&mut snapshot.conversations)
+                Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&session)
                     .unwrap(),
             );
@@ -1228,7 +1251,9 @@ mod cache_tests {
             "the cached composer must grow with multiline input"
         );
         let before = notifications.get();
-        let store = desktop.read_with(cx, |view, _| view.session.as_ref().unwrap().store.clone());
+        let store = desktop.read_with(cx, |view, _| {
+            view.session.as_ref().unwrap().host.store.clone()
+        });
         runtime
             .block_on(store.dispatch(Intent::NewChat {
                 cwd: "/next-project".into(),
@@ -1242,13 +1267,13 @@ mod cache_tests {
                 .unwrap();
             cx.run_until_parked();
             if desktop.read_with(cx, |view, _| {
-                view.snapshot.navigation.cwd == "/next-project"
+                view.snapshot.pane.navigation.cwd == "/next-project"
             }) {
                 break;
             }
         }
         desktop.read_with(cx, |view, cx| {
-            assert_eq!(view.snapshot.navigation.cwd, "/next-project");
+            assert_eq!(view.snapshot.pane.navigation.cwd, "/next-project");
             assert!(view.composer.input.read(cx).value().is_empty());
         });
         assert!(

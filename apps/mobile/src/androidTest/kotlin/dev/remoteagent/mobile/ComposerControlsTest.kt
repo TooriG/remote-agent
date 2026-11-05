@@ -52,7 +52,7 @@ class ComposerControlsTest {
                 )
         Snapshot.restore(state.toString().encodeToByteArray()).use { snapshot ->
             val intents = mutableListOf<Intent>()
-            compose.setContent { MaterialTheme { ModelPickerButton(snapshot, { intent, _ -> intents.add(intent) }) } }
+            compose.setContent { MaterialTheme { ModelPickerFixture(snapshot, { intent, _ -> intents.add(intent) }) } }
             compose.onNodeWithTag("model.settings").performClick()
             compose.onNodeWithText("Other Provider").performClick()
             compose.onNodeWithText("GPT-6.1").performClick()

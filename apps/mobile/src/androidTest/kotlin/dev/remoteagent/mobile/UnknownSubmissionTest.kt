@@ -58,7 +58,7 @@ class UnknownSubmissionTest {
             compose.setContent {
                 val snapshot = current.value
                 MaterialTheme {
-                    ThreadDetailScreen(
+                    ThreadDetailFixture(
                         snapshot,
                         projectConversationRows(snapshot, snapshot.conversationSource(), null),
                         { intent, done ->
@@ -173,7 +173,7 @@ class UnknownSubmissionTest {
             compose.setContent {
                 val snapshot = current.value
                 MaterialTheme {
-                    ThreadDetailScreen(
+                    ThreadDetailFixture(
                         snapshot,
                         projectConversationRows(snapshot, snapshot.conversationSource(), null),
                         { intent, done ->

@@ -175,6 +175,7 @@ pub async fn connect(
         accept(incoming)
     );
     writer.state.lock().unwrap().threads = snapshot
+        .sessions
         .conversations
         .iter()
         .map(|(id, thread)| (id.clone(), json!({"thread":thread})))

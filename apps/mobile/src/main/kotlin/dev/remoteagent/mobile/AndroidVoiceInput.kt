@@ -19,26 +19,25 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.painterResource
+import dev.remoteagent.core.ComposerPresentation
 import dev.remoteagent.core.DraftKey
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.SessionRef
-import dev.remoteagent.core.Snapshot
 import java.util.Locale
 
 // Recognition runs in the phone's speech activity, which owns microphone permission.
 @Composable
 internal fun VoiceInputButton(
-    snapshot: Snapshot,
+    composer: ComposerPresentation,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     enabled: Boolean,
 ) {
     val language = LocalUiLanguage.current
-    val currentSnapshot by rememberUpdatedState(snapshot)
     val currentPerform by rememberUpdatedState(perform)
     var selection by
-        rememberSaveable(stateSaver = voiceDraftKeySaver) { mutableStateOf(snapshot.navigation().draftKey) }
+        rememberSaveable(stateSaver = voiceDraftKeySaver) { mutableStateOf(composer.controls().navigation.draftKey) }
     var pending by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     val recognition =
@@ -51,14 +50,7 @@ internal fun VoiceInputButton(
                         it.isNotBlank()
                     }
                 if (spoken != null) {
-                    val draft = currentSnapshot.draft(selection)
-                    val text =
-                        draft.text +
-                            (if (draft.text.isNotEmpty() && !draft.text.last().isWhitespace()) "\n" else "") +
-                            spoken
-                    currentPerform(
-                        Intent.EditComposer(selection, text, text.toByteArray(Charsets.UTF_8).size.toUInt())
-                    ) {}
+                    currentPerform(Intent.AppendTranscript(selection, spoken)) {}
                 } else error = language.text("音声を認識できませんでした。もう一度お試しください。")
             } else if (requested && result.resultCode != Activity.RESULT_CANCELED) {
                 error = language.text("音声入力に失敗しました。端末の音声認識の設定や接続を確認してください。")
@@ -66,7 +58,7 @@ internal fun VoiceInputButton(
         }
     IconButton(
         onClick = {
-            selection = snapshot.navigation().draftKey
+            selection = composer.controls().navigation.draftKey
             pending = true
             try {
                 recognition.launch(voiceRecognitionIntent(language.text("AIへの依頼を話してください")))

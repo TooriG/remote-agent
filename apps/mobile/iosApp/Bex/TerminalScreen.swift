@@ -3,7 +3,7 @@ import SwiftTerm
 import SwiftUI
 
 struct TerminalScreen: View {
-    @ObservedObject var model: AppViewModel
+    let model: ConversationModel
     let cwd: String
     let handle: String
 
@@ -92,7 +92,7 @@ private struct NativeTerminalView: UIViewRepresentable {
         func dispatch(_ intent: Intent) {
             guard let session, let receipt = try? session.dispatch(intent: intent) else { return }
             // Preserve input order and drain tracked receipts without publishing
-            // an AppViewModel snapshot from a UIKit lifecycle callback.
+            // an ConversationModel snapshot from a UIKit lifecycle callback.
             Task { _ = try? await receipt.wait() }
         }
 

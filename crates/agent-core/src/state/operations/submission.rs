@@ -23,6 +23,7 @@ impl Operation for Dictate {
     type Input = Arc<Draft>;
     fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
         Ok(snapshot
+            .input
             .drafts
             .get(&self.draft_key)
             .cloned()
@@ -56,7 +57,7 @@ impl Operation for Dictate {
         append_transcript(&mut Arc::make_mut(&mut draft).text, &output.text);
         let (next, effects) = submission(
             snapshot,
-            snapshot.navigation.thread_id.clone(),
+            snapshot.pane.navigation.thread_id.clone(),
             self.draft_key.clone(),
             draft,
             self.client_user_message_id.clone(),
@@ -73,7 +74,7 @@ impl Operation for Dictate {
             return Vec::new();
         }
         let draft = Arc::make_mut(
-            Arc::make_mut(&mut snapshot.drafts)
+            Arc::make_mut(&mut snapshot.input.drafts)
                 .entry(self.draft_key)
                 .or_default(),
         );
@@ -136,7 +137,8 @@ impl Operation for StartSubmission {
     }
     type Output = crate::session::OpenedSession;
     fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.subscriptions).insert(output.session, output.subscription_id);
+        Arc::make_mut(&mut snapshot.sessions.subscriptions)
+            .insert(output.session, output.subscription_id);
         self.complete(snapshot, output.response.thread, false)
     }
     fn outcome(output: &mut Self::Output) -> Outcome {
@@ -169,7 +171,8 @@ impl Operation for StartSubmission {
             .await
     }
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.subscriptions).insert(output.session, output.subscription_id);
+        Arc::make_mut(&mut snapshot.sessions.subscriptions)
+            .insert(output.session, output.subscription_id);
         self.complete(snapshot, output.response.thread, true)
     }
 }
@@ -188,15 +191,15 @@ impl StartSubmission {
             ..
         } = self;
         let Some(id) = thread.id.clone() else {
-            snapshot.error = Some("thread ID is missing".into());
+            Arc::make_mut(&mut snapshot.pane).error = Some("thread ID is missing".into());
             return Vec::new();
         };
         thread
             .submissions
             .entry(client_user_message_id.clone())
             .or_insert(crate::session::SubmissionDelivery::Accepted { turn_id: None });
-        Arc::make_mut(&mut snapshot.draft_sessions).insert(draft_key.clone(), id.clone());
-        let current = snapshot.drafts.get(&draft_key);
+        Arc::make_mut(&mut snapshot.sessions.draft_sessions).insert(draft_key.clone(), id.clone());
+        let current = snapshot.input.drafts.get(&draft_key);
         let empty = Arc::new(Draft {
             text: String::new(),
             attachments: Vec::new(),
@@ -210,12 +213,17 @@ impl StartSubmission {
             empty
         };
         if current_view {
-            Arc::make_mut(&mut snapshot.workspaces).insert(
-                id.clone().into(),
-                snapshot.workspace.location(snapshot.navigation.cwd.clone()),
-            );
-        } else if let Some(workspace) = Arc::make_mut(&mut snapshot.workspaces).remove(&draft_key) {
-            Arc::make_mut(&mut snapshot.workspaces).insert(id.clone().into(), workspace);
+            let location = snapshot
+                .pane
+                .workspace
+                .location(snapshot.pane.navigation.cwd.clone());
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces)
+                .insert(id.clone().into(), location);
+        } else if let Some(workspace) =
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces).remove(&draft_key)
+        {
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces)
+                .insert(id.clone().into(), workspace);
         }
         let effects = if current_view {
             open_thread(snapshot, thread, None, None, None)
@@ -223,14 +231,16 @@ impl StartSubmission {
             refresh_thread(snapshot, thread);
             Vec::new()
         };
-        let drafts = Arc::make_mut(&mut snapshot.drafts);
+        if remove_original {
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces).remove(&draft_key);
+        }
+        let drafts = Arc::make_mut(&mut snapshot.input.drafts);
         if remove_original {
             drafts.remove(&draft_key);
-            Arc::make_mut(&mut snapshot.workspaces).remove(&draft_key);
         }
         drafts.insert(id.clone().into(), target);
-        if let Some(pending) =
-            Arc::make_mut(&mut snapshot.pending_submissions).get_mut(&client_user_message_id)
+        if let Some(pending) = Arc::make_mut(&mut snapshot.sessions.pending_submissions)
+            .get_mut(&client_user_message_id)
         {
             Arc::make_mut(pending).draft_key = id.clone().into();
         }
@@ -259,7 +269,10 @@ impl Operation for SendSubmission {
     type Input = (bool, Option<crate::session::ProviderKind>);
     fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
         Ok((
-            !snapshot.subscriptions.contains_key(&self.thread_id),
+            !snapshot
+                .sessions
+                .subscriptions
+                .contains_key(&self.thread_id),
             snapshot.draft_provider(&self.thread_id.clone().into(), self.draft.model.as_ref()),
         ))
     }
@@ -324,7 +337,7 @@ impl Operation for SendSubmission {
             ..
         } = self;
 
-        if let Some(thread) = shared_mut(&mut snapshot.conversations, &thread_id) {
+        if let Some(thread) = shared_mut(&mut snapshot.sessions.conversations, &thread_id) {
             thread.submissions.insert(
                 client_user_message_id,
                 crate::session::SubmissionDelivery::Accepted { turn_id },
@@ -404,7 +417,7 @@ impl Operation for UploadAttachment {
     fn apply(mut self, snapshot: &mut Snapshot, path: Self::Output) -> Vec<Effect> {
         self.attachment.path = path;
         Arc::make_mut(
-            Arc::make_mut(&mut snapshot.drafts)
+            Arc::make_mut(&mut snapshot.input.drafts)
                 .entry(self.draft_key)
                 .or_default(),
         )
@@ -427,12 +440,13 @@ mod startup_identity_tests {
             id: "created".into(),
         };
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.navigation).draft_key = if current_view {
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key = if current_view
+        {
             draft_key.clone()
         } else {
             DraftKey::from("other")
         };
-        let navigation = snapshot.navigation.clone();
+        let navigation = snapshot.pane.navigation.clone();
         let thread: Thread =
             serde_json::from_value(serde_json::json!({"id":session, "cwd":"/project"})).unwrap();
         let effects = StartSubmission {
@@ -444,16 +458,19 @@ mod startup_identity_tests {
         }
         .complete(&mut snapshot, thread, current_view);
         assert!(effects.is_empty(), "the Host owns the admitted first input");
-        assert!(snapshot.pending_submissions.is_empty());
-        assert_eq!(snapshot.draft_sessions.get(&draft_key), Some(&session));
+        assert!(snapshot.sessions.pending_submissions.is_empty());
+        assert_eq!(
+            snapshot.sessions.draft_sessions.get(&draft_key),
+            Some(&session)
+        );
         if current_view {
-            assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&session));
+            assert_eq!(snapshot.pane.navigation.thread_id.as_ref(), Some(&session));
         } else {
-            assert_eq!(snapshot.navigation, navigation);
+            assert_eq!(snapshot.pane.navigation, navigation);
         }
         let restored =
             crate::persistence::decode(&crate::persistence::encode(&snapshot).unwrap()).unwrap();
-        assert!(restored.draft_sessions.is_empty());
+        assert!(restored.sessions.draft_sessions.is_empty());
     }
 }
 
@@ -466,7 +483,7 @@ mod dictation_tests {
         #[values(true, false)] send: bool,
     ) {
         let mut snapshot = Snapshot::default();
-        let draft_key = snapshot.navigation.draft_key.clone();
+        let draft_key = snapshot.pane.navigation.draft_key.clone();
         let operation = Dictate {
             draft_key: draft_key.clone(),
             preparation: None,
@@ -475,7 +492,7 @@ mod dictation_tests {
             client_user_message_id: "voice".into(),
         };
         let captured = operation.capture(&snapshot).unwrap();
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             draft_key.clone(),
             Arc::new(Draft {
                 text: "typed while recording".into(),
@@ -492,9 +509,9 @@ mod dictation_tests {
             ),
         );
         assert!(effects.is_empty());
-        assert!(snapshot.pending_submissions.is_empty());
+        assert!(snapshot.sessions.pending_submissions.is_empty());
         assert_eq!(
-            snapshot.drafts[&draft_key].text,
+            snapshot.input.drafts[&draft_key].text,
             "typed while recording\nrecognized speech"
         );
         assert_eq!(

@@ -79,8 +79,8 @@ impl Desktop {
     ) {
         let panel = self.panels.get(self.panel_scope());
         let workspace = agent_core::presentation::markdown::file_host_path(
-            self.snapshot.navigation.cwd.clone(),
-            self.snapshot.host_home_directory.clone(),
+            self.snapshot.pane.navigation.cwd.clone(),
+            self.snapshot.connection.host_home_directory.clone(),
         );
         if !visible || workspace.is_empty() {
             self.close_file_browser();
@@ -128,9 +128,9 @@ impl Desktop {
             self.reveal_file_in_tree(selected.as_deref(), folder);
         }
         let key = self.file_browser.as_ref().unwrap().model.key.clone();
-        let revision = self.snapshot.workspace.file_trees.revision();
+        let revision = self.snapshot.files.workspace.file_trees.revision();
         if self.file_browser.as_ref().unwrap().revision != revision {
-            let tree = self.snapshot.file_tree(key.clone());
+            let tree = self.snapshot.files.file_tree(key.clone());
             let browser = self.file_browser.as_mut().unwrap();
             if self.file_search.read(cx).value().as_ref() != tree.query {
                 self.file_search.update(cx, |input, cx| {

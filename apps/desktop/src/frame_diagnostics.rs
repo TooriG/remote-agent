@@ -299,9 +299,9 @@ mod tests {
     fn names_drop_module_paths_but_keep_generic_structure() {
         assert_eq!(
             type_name(
-                "gpui_component::sidebar::Sidebar<agent_desktop::app::view::sidebar::SidebarSection>"
+                "gpui_component::sidebar::Sidebar<agent_desktop::app::view::sidebar::SidebarEntry>"
             ),
-            "Sidebar<SidebarSection>"
+            "Sidebar<SidebarEntry>"
         );
         assert_eq!(type_name("gpui::Entity<(a::B, c::D)>"), "Entity<(B, D)>");
         assert_eq!(type_name("Plain"), "Plain");

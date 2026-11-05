@@ -4,9 +4,6 @@ import dev.remoteagent.core.ConversationRow
 import dev.remoteagent.core.RenderedConversation
 import dev.remoteagent.core.RenderedItem
 import dev.remoteagent.core.RenderedTurn
-import dev.remoteagent.core.Snapshot
-import dev.remoteagent.core.Thread
-import dev.remoteagent.core.projectConversation
 
 /** Previous values are inputs; projecting rows never mutates a published result. */
 internal data class ConversationProjection(
@@ -18,12 +15,10 @@ internal data class ConversationProjection(
 )
 
 internal fun projectConversationRows(
-    snapshot: Snapshot,
-    thread: Thread?,
+    next: RenderedConversation?,
     previous: ConversationProjection?,
 ): ConversationProjection? {
-    if (thread == null) return null
-    val next = projectConversation(snapshot, thread, previous?.source)
+    if (next == null) return null
     return if (previous?.source?.let(next::unchanged) == true) previous
     else {
         val turns = mutableMapOf<String, Pair<RenderedTurn, List<ConversationRow>>>()

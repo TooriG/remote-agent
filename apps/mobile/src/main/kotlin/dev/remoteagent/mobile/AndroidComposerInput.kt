@@ -7,18 +7,18 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import dev.remoteagent.core.ComposerPresentation
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
-import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.insertInvocation
 
 @Composable
-internal fun ComposerTextInput(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+internal fun ComposerTextInput(composer: ComposerPresentation, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
     val language = LocalUiLanguage.current
-    val navigation = snapshot.navigation()
-    val draft = snapshot.draft(navigation.draftKey)
+    val navigation = composer.controls().navigation
+    val draft = composer.draft()
     val cursor = draft.text.toByteArray(Charsets.UTF_8).size.toUInt()
-    ComposerInvocationPicker(snapshot.composerSuggestions(draft.text, cursor)) { invocation ->
+    ComposerInvocationPicker(composer.composerSuggestions(draft.text, cursor)) { invocation ->
         insertInvocation(draft.text, cursor, invocation.kind, invocation.name)?.let {
             perform(Intent.InsertInvocation(navigation.draftKey, it.text, invocation)) {}
         }

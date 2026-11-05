@@ -8,8 +8,12 @@ extension FileEntry: @retroactive Identifiable {
     }
 }
 
-extension ThreadScreen {
-    func conversationDirectorySheet(_ destination: WorkspaceDestination) -> some View {
+struct ConversationDirectorySheet: View {
+    let model: ConversationModel
+    let destination: WorkspaceDestination
+    let close: () -> Void
+
+    var body: some View {
         NavigationStack {
             WorkspaceScreen(
                 model: model,
@@ -23,16 +27,16 @@ extension ThreadScreen {
                 ) },
                 initialLine: destination.fileLine
             ) {
-                openedDirectory = nil
+                close()
             }
             .onDisappear {
-                guard model.selectedProfileId == destination.scope.host,
+                guard model.host == destination.scope.host,
                       model.coreDraftKey == destination.scope.draft else { return }
                 model.perform(.reviewWorkspace(ReviewWorkspace(cwd: model.cwd)))
             }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("閉じる") { openedDirectory = nil }
+                    Button("閉じる", action: close)
                 }
             }
         }
@@ -40,7 +44,7 @@ extension ThreadScreen {
 }
 
 struct WorkspaceScreen: View {
-    @ObservedObject var model: AppViewModel
+    let model: ConversationModel
     let root: String
     let draft: DraftKey
     var initialFile: FileEntry?
@@ -49,7 +53,8 @@ struct WorkspaceScreen: View {
 
     var body: some View {
         WorkspaceDirectoryScreen(
-            snapshot: model.snapshot,
+            files: model.files,
+            home: model.hostHomeDirectory,
             directory: root,
             initialFile: initialFile,
             initialLine: initialLine,
@@ -74,14 +79,15 @@ struct WorkspaceScreen: View {
 
     private func fileDraft(_ path: String) -> Binding<String> {
         Binding(get: {
-            model.snapshot.fileDraft(path: path)?.text ??
-                model.snapshot.file().flatMap { $0.path == path ? $0.text : nil } ?? ""
+            model.files.fileDraft(path: path)?.text ??
+                model.files.file().flatMap { $0.path == path ? $0.text : nil } ?? ""
         }, set: { model.perform(.setFileDraft(path: path, text: $0)) })
     }
 }
 
 private struct WorkspaceDirectoryScreen: View {
-    let snapshot: AgentCore.Snapshot
+    let files: AgentCore.Files
+    let home: String?
     let directory: String
     let initialFile: FileEntry?
     let initialLine: UInt32?
@@ -99,7 +105,7 @@ private struct WorkspaceDirectoryScreen: View {
     @State private var busy = false
 
     private var root: String {
-        fileHostPath(path: directory, home: snapshot.hostHomeDirectory())
+        fileHostPath(path: directory, home: home)
     }
 
     private var key: FileTreeKey {
@@ -107,7 +113,7 @@ private struct WorkspaceDirectoryScreen: View {
     }
 
     var body: some View {
-        let tree = snapshot.fileTree(key: key)
+        let tree = files.fileTree(key: key)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -139,7 +145,7 @@ private struct WorkspaceDirectoryScreen: View {
                     refreshCompletion?.resume()
                     refreshCompletion = continuation
                     perform(.fileTree(key: key, action: .refresh)) { next, _ in
-                        if !next.fileTree(key: key).refreshing {
+                        if !next.files().fileTree(key: key).refreshing {
                             finishRefresh()
                         }
                     }
@@ -175,7 +181,7 @@ private struct WorkspaceDirectoryScreen: View {
                                  path: path, directory: false, size: 0)
         }
         .sheet(item: $selected) { entry in
-            WorkspaceFileSheet(snapshot: snapshot, text: fileDraft(entry.path), perform: perform,
+            WorkspaceFileSheet(files: files, text: fileDraft(entry.path), perform: perform,
                                entry: entry, line: selectedLine, download: downloadFile, share: download) { path in
                 aiEdit(path)
                 selected = nil
@@ -250,148 +256,6 @@ private struct WorkspaceDirectoryScreen: View {
                 let url = try await downloadFile(path)
                 selected = nil; sharedFile = SharedFile(url: url)
             } catch { self.error = errorText(error: error.localizedDescription) }
-        }
-    }
-}
-
-struct WorkspaceDiffScreen: View {
-    @ObservedObject var model: AppViewModel
-    let root: String
-    @State private var files: [WorkspaceDiffFile]?
-
-    var body: some View {
-        // Core runs only the newest review read; an older request can finish
-        // first, so the view follows the snapshot rather than its own request.
-        let review = model.snapshot.review()
-        Group {
-            if let error = model.snapshot.operationError(key: .workspaceReview) {
-                VStack {
-                    AppNotice(text: error).padding()
-                    Button("再試行", action: loadDiff).accessibilityIdentifier("files.diff.retry")
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let files, !files.isEmpty {
-                ScrollView {
-                    LazyVStack(spacing: 16) {
-                        ForEach(files, id: \.path) { file in
-                            WorkspaceDiffCard(file: file)
-                        }
-                    }.padding(12)
-                }
-            } else if files != nil {
-                Text("変更はありません").foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .onAppear(perform: loadDiff)
-        .task(id: ReviewIdentity(review: review)) {
-            guard let review else { return }
-            let next = await Task.detached(priority: .userInitiated) { review.diffFiles() }.value
-            guard !Task.isCancelled else { return }
-            files = next
-        }
-    }
-
-    private func loadDiff() {
-        files = nil
-        model.perform(.reviewWorkspace(ReviewWorkspace(cwd: root)))
-    }
-}
-
-private struct ReviewIdentity: Equatable {
-    let review: WorkspaceReview?
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        guard let left = lhs.review, let right = rhs.review else { return lhs.review == nil && rhs.review == nil }
-        return left.unchanged(other: right)
-    }
-}
-
-struct WorkspaceDiffCard: View {
-    let file: WorkspaceDiffFile
-    @State private var expanded = true
-
-    var body: some View {
-        LazyVStack(spacing: 0) {
-            Button { expanded.toggle() } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    Text(file.path).fontWeight(.semibold).frame(maxWidth: .infinity, alignment: .leading)
-                    if let additions = file.additions {
-                        Text("+\(additions)").foregroundColor(.green)
-                    }
-                    if let deletions = file.deletions {
-                        Text("−\(deletions)").foregroundColor(.red)
-                    }
-                }.font(.subheadline).padding(12).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("diff.file.\(file.path)")
-            .background(Color(uiColor: .secondarySystemGroupedBackground))
-            if expanded {
-                if file.rows.isEmpty {
-                    Text("テキスト差分はありません").font(.caption).foregroundColor(.secondary).padding()
-                }
-                ForEach(file.rows.indices, id: \.self) { index in
-                    let row = file.rows[index]
-                    HStack(alignment: .top, spacing: 0) {
-                        if row.kind == "+" || row.kind == "-" || row.kind == " " {
-                            Text((row.new ?? row.old).map(String.init) ?? "")
-                                .foregroundColor(.secondary).frame(width: 40, alignment: .trailing).padding(
-                                    .trailing,
-                                    8
-                                )
-                        }
-                        Text(row.text.isEmpty ? " " : row.text)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                    }
-                    .font(.system(.footnote, design: .monospaced))
-                    .padding(.vertical, 3).padding(.horizontal, 8)
-                    .background(row.kind == "+" ? Color.green.opacity(0.18) :
-                        row.kind == "-" ? Color.red.opacity(0.18) :
-                        row.kind == "@" ? Color.secondary.opacity(0.12) : Color.clear)
-                }
-            }
-        }
-        .background(Color(uiColor: .systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-struct WorkspaceAgentsScreen: View {
-    let agents: [AgentSummary]
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if agents.isEmpty {
-                    Text("サブエージェントが起動するとここに表示されます。")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(agents, id: \.key) { agent in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            if agent.active {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text(agent.title)
-                            Spacer()
-                            AppText(agent.status).foregroundStyle(.secondary)
-                        }
-                        if let detail = agent.detail {
-                            Text(detail).foregroundStyle(.secondary)
-                        }
-                        if let model = agent.model {
-                            Text(model).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                    .padding(.leading, CGFloat(agent.depth) * 16)
-                }
-            }.font(.subheadline).padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

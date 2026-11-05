@@ -65,7 +65,7 @@ fn availability(
 impl Snapshot {
     pub fn connection_setup(&self) -> ConnectionSetup {
         use crate::state::operations::{OperationKey, OperationPhase};
-        let checks_failed = self.connected
+        let checks_failed = self.connection.connected
             && [OperationKey::Models, OperationKey::Accounts]
                 .iter()
                 .any(|key| {
@@ -81,11 +81,11 @@ impl Snapshot {
         .into_iter()
         .map(|(provider, name)| {
             let availability = availability(
-                self.connected,
+                self.connection.connected,
                 provider,
-                &self.models,
-                self.account.accounts.as_deref(),
-                &self.model_errors,
+                &self.catalog.models,
+                self.catalog.account.accounts.as_deref(),
+                &self.catalog.model_errors,
             );
             let availability = match availability {
                 AgentAvailability::Checking if checks_failed => AgentAvailability::Unavailable,
@@ -96,13 +96,15 @@ impl Snapshot {
                 name: name.into(),
                 error: (availability == AgentAvailability::Unavailable)
                     .then(|| {
-                        self.model_errors
+                        self.catalog
+                            .model_errors
                             .get(provider.key())
                             .and_then(|error| error.get("message"))
                             .and_then(Value::as_str)
                             .map(super::error::error_text)
                             .or_else(|| {
-                                self.account
+                                self.catalog
+                                    .account
                                     .accounts
                                     .as_ref()?
                                     .errors
@@ -154,10 +156,13 @@ mod tests {
     #[test]
     fn setup_retains_the_failed_providers_reason_without_blaming_other_agents() {
         let mut snapshot = Snapshot {
-            connected: true,
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        snapshot.model_errors = std::sync::Arc::new(
+        snapshot.catalog.model_errors = std::sync::Arc::new(
             serde_json::from_value(serde_json::json!({
                 "codex": {"code":"provider_timeout", "message":"Codex model discovery timed out"}
             }))
@@ -173,7 +178,7 @@ mod tests {
         );
         assert!(agents[1].error.is_none());
         assert!(agents[2].error.is_none());
-        snapshot.connected = false;
+        snapshot.connection.connected = false;
         assert!(
             snapshot
                 .connection_setup()
@@ -187,11 +192,17 @@ mod tests {
     fn account_probe_failures_are_scoped_and_recover_without_logging_out() {
         use std::sync::Arc;
         let mut snapshot = Snapshot {
-            connected: true,
-            models: Arc::new(serde_json::from_value(serde_json::json!([
-                {"id":"gpt", "model":{"provider":"codex","id":"gpt"}, "displayName":"GPT", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
-                {"id":"sonnet", "model":{"provider":"claude","id":"sonnet"}, "displayName":"Sonnet", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
-            ])).unwrap()),
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
+            catalog: crate::state::Catalog {
+                models: Arc::new(serde_json::from_value(serde_json::json!([
+                    {"id":"gpt", "model":{"provider":"codex","id":"gpt"}, "displayName":"GPT", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                    {"id":"sonnet", "model":{"provider":"claude","id":"sonnet"}, "displayName":"Sonnet", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
+                ])).unwrap()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let accounts: Accounts = serde_json::from_value(serde_json::json!({
@@ -199,7 +210,7 @@ mod tests {
             "selected":{"codex":"native", "claude":"claude:desktop"},
             "errors":{"claude":"executable is missing: claude"}
         })).unwrap();
-        Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(accounts));
+        Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(accounts));
         let setup = snapshot.connection_setup();
         assert!(setup.can_start);
         assert_eq!(setup.agents[0].availability, AgentAvailability::Ready);
@@ -210,7 +221,7 @@ mod tests {
             Some("executable is missing: claude")
         );
         Arc::make_mut(
-            Arc::make_mut(&mut snapshot.account)
+            Arc::make_mut(&mut snapshot.catalog.account)
                 .accounts
                 .as_mut()
                 .unwrap(),
@@ -228,10 +239,13 @@ mod tests {
         use std::sync::Arc;
         for key in [OperationKey::Models, OperationKey::Accounts] {
             let mut snapshot = Snapshot {
-                connected: true,
+                connection: crate::state::Connection {
+                    connected: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
-            Arc::make_mut(&mut snapshot.operations).insert(
+            snapshot.operations.insert(
                 key.clone(),
                 OperationState {
                     generation: 1,
@@ -248,7 +262,7 @@ mod tests {
                     .iter()
                     .all(|agent| agent.availability == AgentAvailability::Unavailable)
             );
-            Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(
+            Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(
                 serde_json::from_value(serde_json::json!({
                     "accounts":[{"id":"native","provider":"codex"}],
                     "selected":{"codex":"native"}
@@ -259,15 +273,12 @@ mod tests {
                 snapshot.connection_setup().agents[0].availability,
                 AgentAvailability::Unavailable
             );
-            Arc::make_mut(&mut snapshot.operations)
-                .get_mut(&key)
-                .unwrap()
-                .phase = OperationPhase::Running;
+            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Running;
             assert_eq!(
                 snapshot.connection_setup().agents[0].availability,
                 AgentAvailability::Checking
             );
-            snapshot.models = Arc::new(
+            snapshot.catalog.models = Arc::new(
                 serde_json::from_value(serde_json::json!([{
                     "id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT",
                     "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}
@@ -275,17 +286,14 @@ mod tests {
                 .unwrap(),
             );
             assert!(snapshot.connection_setup().can_start);
-            Arc::make_mut(&mut snapshot.operations)
-                .get_mut(&key)
-                .unwrap()
-                .phase = OperationPhase::Failed {
+            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
                 message: "refresh failed".into(),
             };
             assert!(
                 snapshot.connection_setup().can_start,
                 "cached ready providers survive a failed refresh"
             );
-            snapshot.connected = false;
+            snapshot.connection.connected = false;
             let setup = snapshot.connection_setup();
             assert!(!setup.can_start);
             assert!(
@@ -337,14 +345,20 @@ mod tests {
     #[test]
     fn one_ready_provider_can_start_without_configuring_the_other() {
         let mut snapshot = Snapshot {
-            connected: true,
-            models: std::sync::Arc::new(serde_json::from_value(serde_json::json!([
-                {"id":"gpt", "model":{"provider":"codex","id":"gpt"}, "displayName":"GPT", "settings": { "defaultReasoningEffort":"", "supportedReasoningEfforts":[]}},
-                {"id":"sonnet", "model":{"provider":"claude","id":"sonnet"}, "displayName":"Sonnet", "settings": { "defaultReasoningEffort":"", "supportedReasoningEfforts":[]}}
-            ])).unwrap()),
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
+            catalog: crate::state::Catalog {
+                models: std::sync::Arc::new(serde_json::from_value(serde_json::json!([
+                    {"id":"gpt", "model":{"provider":"codex","id":"gpt"}, "displayName":"GPT", "settings": { "defaultReasoningEffort":"", "supportedReasoningEfforts":[]}},
+                    {"id":"sonnet", "model":{"provider":"claude","id":"sonnet"}, "displayName":"Sonnet", "settings": { "defaultReasoningEffort":"", "supportedReasoningEfforts":[]}}
+                ])).unwrap()),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        std::sync::Arc::make_mut(&mut snapshot.account).accounts = Some(std::sync::Arc::new(
+        std::sync::Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(std::sync::Arc::new(
             serde_json::from_value(serde_json::json!({
                 "accounts":[{"id":"native", "provider":"codex"}, {"id":"native", "provider":"claude"}],
                 "selected":{"codex":"native"}
@@ -359,7 +373,7 @@ mod tests {
         );
         assert_eq!(setup.agents[0].label, "利用可能");
         assert_eq!(setup.agents[1].label, "未ログイン");
-        snapshot.connected = false;
+        snapshot.connection.connected = false;
         let setup = snapshot.connection_setup();
         assert!(!setup.can_start);
         assert!(

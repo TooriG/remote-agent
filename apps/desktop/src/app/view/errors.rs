@@ -25,10 +25,9 @@ pub(in crate::app) fn error_view(
 /// An error notice as the error list shows it.
 #[derive(PartialEq)]
 pub(in crate::app) struct ErrorRow {
-    notice: ErrorNotice,
+    pub(in crate::app) notice: ErrorNotice,
     /// Raised by this window rather than the Store.
-    local: bool,
-    recovery: Option<String>,
+    pub(in crate::app) local: bool,
 }
 
 impl Desktop {
@@ -50,10 +49,6 @@ impl Desktop {
             .error_notices(scope.clone())
             .into_iter()
             .map(|notice| ErrorRow {
-                recovery: self
-                    .snapshot
-                    .error_recovery(notice.id.clone())
-                    .map(|recovery| recovery.label),
                 notice,
                 local: false,
             })
@@ -67,21 +62,27 @@ impl Desktop {
                     context: scope.label().into(),
                     title: "操作に失敗しました".into(),
                     text: agent_core::presentation::error::error_text(message),
+                    recovery_label: None,
                 },
                 local: true,
-                recovery: None,
             });
         }
         rows
     }
 
     pub(super) fn error_notices(&self, scope: ErrorScope, cx: &Context<Self>) -> Div {
-        let disconnected = scope == ErrorScope::Application && !self.snapshot.connected;
+        let disconnected = scope == ErrorScope::Application && !self.snapshot.connection.connected;
         let rows = self.error_rows(&scope);
         // A lost connection is not an error, but desktop waits for the user to reconnect.
         let idle = disconnected && !self.connecting && rows.is_empty();
-        Self::error_list(&rows, scope, disconnected.then_some(self.connecting), cx)
-            .when(idle, |list| list.child(Self::disconnected_notice(cx)))
+        error_list(
+            &rows,
+            scope,
+            disconnected.then_some(self.connecting),
+            cx,
+            Self::notice_action,
+        )
+        .when(idle, |list| list.child(Self::disconnected_notice(cx)))
     }
 
     fn disconnected_notice(cx: &Context<Self>) -> impl IntoElement {
@@ -109,128 +110,153 @@ impl Desktop {
             ))
     }
 
-    /// `reconnect` offers to reconnect, disabled while connecting.
-    pub(super) fn error_list(
-        rows: &[ErrorRow],
-        scope: ErrorScope,
-        reconnect: Option<bool>,
-        cx: &Context<Self>,
-    ) -> Div {
-        let language = crate::localization::language(cx);
-        v_flex()
-            .gap_2()
-            .min_w_0()
-            .children(rows.iter().enumerate().map(|(index, row)| {
-                let local = row.local;
-                let notice = row.notice.clone();
-                let target = scope.clone();
-                let dismiss_target = scope.clone();
-                let copied = format!("{} · {}\n{}", notice.context, notice.title, notice.text);
-                let dismissed = notice.id.clone();
-                let recovered = notice.id.clone();
-                let detail = notice.text.to_string();
-                h_flex()
-                    .debug_selector(move || format!("error-notice-{}-{index}", target.label()))
-                    .items_start()
-                    .gap_3()
-                    .p_3()
-                    .min_w_0()
-                    .rounded_lg()
-                    .bg(rgb(appearance::RAISED))
-                    .border_1()
-                    .border_color(rgba(0xff8e8638))
-                    .child(Icon::new(IconName::TriangleAlert).text_color(rgb(0xff8e86)))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                                agent_core::localization::localized_ui_text(
-                                    language,
-                                    notice.context,
-                                ),
-                            ))
-                            .child(div().text_sm().font_semibold().child(
-                                agent_core::localization::localized_ui_text(language, notice.title),
-                            ))
-                            .child(
-                                div()
-                                    .id(format!("error-details-{}-{index}", scope.label()))
-                                    .text_sm()
-                                    .text_color(rgb(appearance::MUTED))
-                                    .line_clamp(3)
-                                    .tooltip(move |window, cx| {
-                                        tooltip::Tooltip::new(detail.clone()).build(window, cx)
-                                    })
-                                    .child(error_view(&notice.text, language)),
-                            )
-                            .when_some(row.recovery.clone(), |body, label| {
-                                body.child(button(
-                                    format!("recover-error-{index}"),
-                                    agent_core::localization::localized_ui_text(language, label),
-                                    cx,
-                                    move |view, _, _| {
-                                        if let Some(recovery) =
-                                            view.snapshot.error_recovery(recovered.clone())
-                                        {
-                                            view.dispatch(recovery.intent)
-                                        }
-                                    },
-                                ))
-                            })
-                            .when_some(reconnect, |body, connecting| {
-                                body.child(
-                                    button(
-                                        format!("reconnect-error-{index}"),
-                                        language.text("再接続"),
-                                        cx,
-                                        |view, window, cx| {
-                                            view.switch_host(view.remote.clone(), window, cx)
-                                        },
-                                    )
-                                    .disabled(connecting),
-                                )
-                            }),
-                    )
-                    .child(icon_button(
-                        format!("copy-error-{}-{index}", scope.label()),
-                        IconName::Copy,
-                        language.text("エラーの詳細をコピー"),
-                        cx,
-                        move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
-                        },
-                    ))
-                    .child(
-                        icon_button(
-                            format!("dismiss-error-{}-{index}", scope.label()),
-                            IconName::Close,
-                            language.text("エラーを閉じる"),
-                            cx,
-                            move |view, _, _| {
-                                if local {
-                                    if let op::ErrorId::Application { message } = &dismissed
-                                        && view.local_errors.get(&dismiss_target) == Some(message)
-                                    {
-                                        view.local_errors.remove(&dismiss_target);
-                                    }
-                                } else {
-                                    view.dispatch(Intent::DismissError {
-                                        id: dismissed.clone(),
-                                    });
-                                }
-                            },
-                        )
-                        .debug_selector({
-                            let scope = scope.clone();
-                            move || format!("dismiss-error-{}-{index}", scope.label())
-                        }),
-                    )
-            }))
+    pub(in crate::app) fn notice_action(
+        &mut self,
+        action: NoticeAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            NoticeAction::Dispatch(intent) => self.dispatch(intent),
+            NoticeAction::Reconnect => self.switch_host(self.remote.clone(), window, cx),
+            NoticeAction::DismissLocal(scope, op::ErrorId::Application { message }) => {
+                if self.local_errors.get(&scope) == Some(&message) {
+                    self.local_errors.remove(&scope);
+                }
+            }
+            NoticeAction::DismissLocal(_, _) => {}
+        }
     }
 }
 
+#[derive(Clone)]
+pub(in crate::app) enum NoticeAction {
+    Dispatch(Intent),
+    Reconnect,
+    DismissLocal(ErrorScope, op::ErrorId),
+}
+
+/// `reconnect` offers to reconnect, disabled while connecting.
+pub(in crate::app) fn error_list<V: 'static>(
+    rows: &[ErrorRow],
+    scope: ErrorScope,
+    reconnect: Option<bool>,
+    cx: &Context<V>,
+    action: fn(&mut V, NoticeAction, &mut Window, &mut Context<V>),
+) -> Div {
+    let language = crate::localization::language(cx);
+    v_flex()
+        .gap_2()
+        .min_w_0()
+        .children(rows.iter().enumerate().map(|(index, row)| {
+            let local = row.local;
+            let notice = row.notice.clone();
+            let target = scope.clone();
+            let dismiss_target = scope.clone();
+            let copied = format!("{} · {}\n{}", notice.context, notice.title, notice.text);
+            let dismissed = notice.id.clone();
+            let recovered = notice.id.clone();
+            let detail = notice.text.to_string();
+            h_flex()
+                .debug_selector(move || format!("error-notice-{}-{index}", target.label()))
+                .items_start()
+                .gap_3()
+                .p_3()
+                .min_w_0()
+                .rounded_lg()
+                .bg(rgb(appearance::RAISED))
+                .border_1()
+                .border_color(rgba(0xff8e8638))
+                .child(Icon::new(IconName::TriangleAlert).text_color(rgb(0xff8e86)))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
+                            agent_core::localization::localized_ui_text(language, notice.context),
+                        ))
+                        .child(div().text_sm().font_semibold().child(
+                            agent_core::localization::localized_ui_text(language, notice.title),
+                        ))
+                        .child(
+                            div()
+                                .id(format!("error-details-{}-{index}", scope.label()))
+                                .text_sm()
+                                .text_color(rgb(appearance::MUTED))
+                                .line_clamp(3)
+                                .tooltip(move |window, cx| {
+                                    tooltip::Tooltip::new(detail.clone()).build(window, cx)
+                                })
+                                .child(error_view(&notice.text, language)),
+                        )
+                        .when_some(row.notice.recovery_label.clone(), |body, label| {
+                            body.child(button(
+                                format!("recover-error-{index}"),
+                                agent_core::localization::localized_ui_text(language, label),
+                                cx,
+                                move |view, window, cx| {
+                                    action(
+                                        view,
+                                        NoticeAction::Dispatch(Intent::RecoverError {
+                                            id: recovered.clone(),
+                                        }),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            ))
+                        })
+                        .when_some(reconnect, |body, connecting| {
+                            body.child(
+                                button(
+                                    format!("reconnect-error-{index}"),
+                                    language.text("再接続"),
+                                    cx,
+                                    move |view, window, cx| {
+                                        action(view, NoticeAction::Reconnect, window, cx)
+                                    },
+                                )
+                                .disabled(connecting),
+                            )
+                        }),
+                )
+                .child(icon_button(
+                    format!("copy-error-{}-{index}", scope.label()),
+                    IconName::Copy,
+                    language.text("エラーの詳細をコピー"),
+                    cx,
+                    move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
+                    },
+                ))
+                .child(
+                    icon_button(
+                        format!("dismiss-error-{}-{index}", scope.label()),
+                        IconName::Close,
+                        language.text("エラーを閉じる"),
+                        cx,
+                        move |view, window, cx| {
+                            let notice = if local {
+                                NoticeAction::DismissLocal(
+                                    dismiss_target.clone(),
+                                    dismissed.clone(),
+                                )
+                            } else {
+                                NoticeAction::Dispatch(Intent::DismissError {
+                                    id: dismissed.clone(),
+                                })
+                            };
+                            action(view, notice, window, cx);
+                        },
+                    )
+                    .debug_selector({
+                        let scope = scope.clone();
+                        move || format!("dismiss-error-{}-{index}", scope.label())
+                    }),
+                )
+        }))
+}
 #[cfg(test)]
 mod tests {
     use super::{Arc, Desktop, DraftKey, ErrorScope, Mode, Runtime, appearance, platform};
@@ -249,6 +275,7 @@ mod tests {
             appearance::init(cx);
             cx.set_global(Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -258,7 +285,7 @@ mod tests {
         let mut handle = None;
         let (_, window) = cx.add_window_view(|window, cx| {
             let desktop = Desktop::new(
-                Mode::SideChat {
+                Mode::Fixture {
                     remote: None,
                     cwd: "/fixture".into(),
                 },
@@ -272,8 +299,9 @@ mod tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                snapshot.connected = true;
-                Arc::make_mut(&mut snapshot.navigation).draft_key = first.clone();
+                snapshot.connection.connected = true;
+                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+                    first.clone();
                 view.local_errors
                     .insert(ErrorScope::Application, "draft persistence failed".into());
                 view.local_errors.insert(
@@ -292,8 +320,10 @@ mod tests {
         for key in [DraftKey::from("other"), first.clone()] {
             window.update(|_, cx| {
                 desktop.update(cx, |view, cx| {
-                    Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).draft_key =
-                        key.clone();
+                    Arc::make_mut(
+                        &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
+                    )
+                    .draft_key = key.clone();
                     cx.notify();
                 })
             });
@@ -321,6 +351,7 @@ mod tests {
             appearance::init(cx);
             cx.set_global(Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -329,7 +360,7 @@ mod tests {
         let mut handle = None;
         let (_, window) = cx.add_window_view(|window, cx| {
             let desktop = Desktop::new(
-                Mode::SideChat {
+                Mode::Fixture {
                     remote: None,
                     cwd: "/fixture".into(),
                 },
@@ -345,8 +376,8 @@ mod tests {
             window.update(|_, cx| {
                 desktop.update(cx, |view, cx| {
                     let snapshot = Arc::make_mut(&mut view.snapshot);
-                    snapshot.connected = connected;
-                    snapshot.connection_failure = failure.map(Into::into);
+                    snapshot.connection.connected = connected;
+                    snapshot.connection.connection_failure = failure.map(Into::into);
                     view.connecting = connecting;
                     cx.notify();
                 })

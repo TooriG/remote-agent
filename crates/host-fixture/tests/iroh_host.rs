@@ -27,20 +27,23 @@ use host_fixture::test_support::{HostFixture, Memory, assert_project_directory};
 // Codex new-chat preference.
 fn codex_chat_snapshot() -> agent_core::state::Snapshot {
     agent_core::state::Snapshot {
-        model_preferences: agent_core::state::ModelPreferences {
-            provider: Some(agent_protocol::session::ProviderKind::Codex),
-            selections: [(
-                agent_protocol::session::ProviderKind::Codex,
-                agent_core::state::ModelSelection {
-                    model: agent_protocol::models::ModelRef {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        id: "fixture-model".into(),
+        catalog: agent_core::state::Catalog {
+            model_preferences: agent_core::state::ModelPreferences {
+                provider: Some(agent_protocol::session::ProviderKind::Codex),
+                selections: [(
+                    agent_protocol::session::ProviderKind::Codex,
+                    agent_core::state::ModelSelection {
+                        model: agent_protocol::models::ModelRef {
+                            provider: agent_protocol::session::ProviderKind::Codex,
+                            id: "fixture-model".into(),
+                        },
+                        effort: None,
+                        service_tier: None,
                     },
-                    effort: None,
-                    service_tier: None,
-                },
-            )]
-            .into(),
+                )]
+                .into(),
+            },
+            ..Default::default()
         },
         ..Default::default()
     }
@@ -271,6 +274,7 @@ async fn pairing_is_atomic_local_management_is_private_and_revocation_closes_act
         assert!(
             manager
                 .snapshot()
+                .connection
                 .management
                 .status
                 .as_ref()
@@ -288,6 +292,7 @@ async fn pairing_is_atomic_local_management_is_private_and_revocation_closes_act
         assert!(
             !manager
                 .snapshot()
+                .connection
                 .management
                 .status
                 .as_ref()
@@ -305,6 +310,7 @@ async fn pairing_is_atomic_local_management_is_private_and_revocation_closes_act
         assert!(
             !manager
                 .snapshot()
+                .connection
                 .management
                 .status
                 .as_ref()
@@ -467,7 +473,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
             .await
             .unwrap();
         let uploaded = PathBuf::from(
-            &store.snapshot().drafts[&agent_core::state::DraftKey::from("transfer-draft")]
+            &store.snapshot().input.drafts[&agent_core::state::DraftKey::from("transfer-draft")]
                 .attachments[0]
                 .path,
         );
@@ -513,7 +519,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
         assert_eq!(std::fs::read(destination).unwrap(), content);
         // A new chat has no project or working directory yet. Its attachment
         // must still reach Host storage, without changing the selected draft.
-        assert!(store.snapshot().navigation.cwd.is_empty());
+        assert!(store.snapshot().pane.navigation.cwd.is_empty());
         store
             .dispatch(Intent::UploadAttachment(op::UploadAttachment {
                 draft_key: "unscoped-draft".into(),
@@ -526,7 +532,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
             .await
             .unwrap();
         let uploaded = PathBuf::from(
-            &store.snapshot().drafts[&agent_core::state::DraftKey::from("unscoped-draft")]
+            &store.snapshot().input.drafts[&agent_core::state::DraftKey::from("unscoped-draft")]
                 .attachments[0]
                 .path,
         );
@@ -546,7 +552,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
             .await
             .unwrap();
         assert_eq!(std::fs::read(destination).unwrap(), content);
-        assert!(store.snapshot().connected);
+        assert!(store.snapshot().connection.connected);
         store
             .dispatch(Intent::ReviewWorkspace(op::ReviewWorkspace {
                 cwd: directory.path().to_str().unwrap().into(),
@@ -554,10 +560,20 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
             .await
             .unwrap();
         let snapshot = store.snapshot();
-        assert!(snapshot.workspace.review.as_ref().unwrap().files.is_empty());
-        assert!(snapshot.error.is_none());
-        let retained =
-            store.snapshot().drafts[&agent_core::state::DraftKey::from("transfer-draft")].clone();
+        assert!(
+            snapshot
+                .pane
+                .workspace
+                .review
+                .as_ref()
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        assert!(snapshot.pane.error.is_none());
+        let retained = store.snapshot().input.drafts
+            [&agent_core::state::DraftKey::from("transfer-draft")]
+            .clone();
         let retry = op::UploadAttachment {
             draft_key: "transfer-draft".into(),
             attachment: Attachment {
@@ -578,7 +594,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
                 .is_err()
         );
         assert_eq!(
-            store.snapshot().drafts[&agent_core::state::DraftKey::from("transfer-draft")],
+            store.snapshot().input.drafts[&agent_core::state::DraftKey::from("transfer-draft")],
             retained
         );
         let upload = op::OperationKey::Attachment {
@@ -591,8 +607,9 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
             .await
             .unwrap();
         let recovered = store.snapshot();
-        let attachments =
-            &recovered.drafts[&agent_core::state::DraftKey::from("transfer-draft")].attachments;
+        let attachments = &recovered.input.drafts
+            [&agent_core::state::DraftKey::from("transfer-draft")]
+            .attachments;
         assert_eq!(attachments.len(), retained.attachments.len() + 1);
         assert_eq!(attachments[0], retained.attachments[0]);
         assert_eq!(std::fs::read(&attachments[1].path).unwrap(), content);
@@ -602,7 +619,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
         );
 
         store.close().await.unwrap();
-        assert!(!store.snapshot().connected);
+        assert!(!store.snapshot().connection.connected);
         client.close().await;
         fixture.close().await.unwrap();
     })
@@ -713,7 +730,7 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
         let prompt = "[delayed-input] Preserve this input through reconnect";
         store
             .dispatch(Intent::SetDraftText {
-                thread_id: store.snapshot().navigation.draft_key.clone(),
+                thread_id: store.snapshot().pane.navigation.draft_key.clone(),
                 text: prompt.into(),
             })
             .await
@@ -729,7 +746,7 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
                 .is_err()
         );
         assert_eq!(
-            store.snapshot().drafts[&store.snapshot().navigation.draft_key].text,
+            store.snapshot().input.drafts[&store.snapshot().pane.navigation.draft_key].text,
             prompt
         );
         let restored =
@@ -745,9 +762,9 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             })
             .await
             .unwrap();
-        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        let id = store.snapshot().pane.navigation.thread_id.clone().unwrap();
         assert!(
-            store.snapshot().subscriptions.contains_key(&id),
+            store.snapshot().sessions.subscriptions.contains_key(&id),
             "input must have an active subscription before it reaches the provider"
         );
         let mut updates = store.subscribe();
@@ -755,14 +772,18 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
         // deliberately unmaterialized after that acknowledgement.
         updates
             .wait_for(|snapshot| {
-                snapshot.conversations.get(&id).is_some_and(|thread| {
-                    thread.preparation.is_none()
-                        && thread.turns.as_ref().is_some_and(|turns| {
-                            turns.iter().any(|turn| {
-                                turn.status == agent_protocol::execution::TurnStatus::Running
+                snapshot
+                    .sessions
+                    .conversations
+                    .get(&id)
+                    .is_some_and(|thread| {
+                        thread.preparation.is_none()
+                            && thread.turns.as_ref().is_some_and(|turns| {
+                                turns.iter().any(|turn| {
+                                    turn.status == agent_protocol::execution::TurnStatus::Running
+                                })
                             })
-                        })
-                })
+                    })
             })
             .await
             .unwrap();
@@ -805,10 +826,10 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
             .await
             .unwrap();
-        assert!(store.snapshot().error.is_none());
-        assert!(store.snapshot().subscriptions.contains_key(&id));
+        assert!(store.snapshot().pane.error.is_none());
+        assert!(store.snapshot().sessions.subscriptions.contains_key(&id));
         assert!(
-            store.snapshot().conversations[&id]
+            store.snapshot().sessions.conversations[&id]
                 .turns
                 .as_ref()
                 .unwrap()
@@ -820,8 +841,8 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
         let mut updates = store.subscribe();
         loop {
             let current = updates.borrow_and_update().clone();
-            assert!(current.error.is_none(), "{:?}", current.error);
-            if current.conversations[&id]
+            assert!(current.pane.error.is_none(), "{:?}", current.pane.error);
+            if current.sessions.conversations[&id]
                 .turns
                 .as_ref()
                 .is_some_and(|turns| {
@@ -840,17 +861,17 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             .await
             .unwrap();
         let current = store.snapshot();
-        assert!(current.error.is_none());
-        assert!(current.pending_submissions.is_empty());
+        assert!(current.pane.error.is_none());
+        assert!(current.sessions.pending_submissions.is_empty());
         assert!(
-            current.drafts[&agent_core::state::DraftKey::from(&id)]
+            current.input.drafts[&agent_core::state::DraftKey::from(&id)]
                 .text
                 .is_empty()
-                && current.drafts[&agent_core::state::DraftKey::from(&id)]
+                && current.input.drafts[&agent_core::state::DraftKey::from(&id)]
                     .attachments
                     .is_empty()
         );
-        let turn = &current.conversations[&id].turns.as_ref().unwrap()[0];
+        let turn = &current.sessions.conversations[&id].turns.as_ref().unwrap()[0];
         assert_eq!(turn.status.label(), "completed");
         let items = turn.items.as_ref().unwrap();
         assert!(items.iter().any(|item| item_text(item) == Some(prompt)));
@@ -928,15 +949,15 @@ async fn chat_preparation_recovers_in_the_same_conversation_after_reconnecting()
         let blocked = root.join("bex-chats");
         std::fs::write(&blocked, "not a directory").unwrap();
         store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
-        store.dispatch(Intent::SetDraftText { thread_id: store.snapshot().navigation.draft_key.clone(), text: "[success] recover preparation".into() }).await.unwrap();
+        store.dispatch(Intent::SetDraftText { thread_id: store.snapshot().pane.navigation.draft_key.clone(), text: "[success] recover preparation".into() }).await.unwrap();
         assert!(matches!(store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "recover-chat".into() }).await.unwrap(), Outcome::StartedThread { .. }));
-        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        let id = store.snapshot().pane.navigation.thread_id.clone().unwrap();
         let mut updates = store.subscribe();
         loop {
             let snapshot = updates.borrow_and_update().clone();
-            if let Some(preparation) = snapshot.conversations[&id].preparation.as_ref().filter(|preparation| matches!(preparation.status, agent_protocol::session::PreparationStatus::Failed { .. })) {
+            if let Some(preparation) = snapshot.sessions.conversations[&id].preparation.as_ref().filter(|preparation| matches!(preparation.status, agent_protocol::session::PreparationStatus::Failed { .. })) {
                 assert!(preparation.submission.input.iter().any(|input| matches!(input, rpc::Input::Text { text } if text == "[success] recover preparation")));
-                assert!(snapshot.pending_submissions[&agent_protocol::ids::ClientInputId::from("recover-chat")].accepted);
+                assert!(snapshot.sessions.pending_submissions[&agent_protocol::ids::ClientInputId::from("recover-chat")].accepted);
                 assert!(snapshot.selected_directory().is_empty());
                 break;
             }
@@ -948,9 +969,9 @@ async fn chat_preparation_recovers_in_the_same_conversation_after_reconnecting()
         store.dispatch(Intent::RetryPreparation(op::RetryPreparation { thread_id: id.clone() })).await.unwrap();
         loop {
             let snapshot = updates.borrow_and_update().clone();
-            if snapshot.conversations[&id].preparation.is_none() && snapshot.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 1 && turns[0].status == agent_protocol::execution::TurnStatus::Completed) {
-                assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&id));
-                assert_eq!(Path::new(&snapshot.navigation.cwd), blocked);
+            if snapshot.sessions.conversations[&id].preparation.is_none() && snapshot.sessions.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 1 && turns[0].status == agent_protocol::execution::TurnStatus::Completed) {
+                assert_eq!(snapshot.pane.navigation.thread_id.as_ref(), Some(&id));
+                assert_eq!(Path::new(&snapshot.pane.navigation.cwd), blocked);
                 break;
             }
             updates.changed().await.unwrap();
@@ -1003,14 +1024,14 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
         // Compare submission effects after asynchronous model defaults
         // have loaded, so catalog normalization cannot change the draft.
         let mut updates = store.subscribe();
-        while updates.borrow_and_update().models.is_empty() {
+        while updates.borrow_and_update().catalog.models.is_empty() {
             updates.changed().await.unwrap();
         }
         store.dispatch(Intent::NewChat { cwd: if project { workspace.to_str().unwrap().into() } else { String::new() } }).await.unwrap();
         let mut thread_id = None;
         let mut session_cwd = None;
         for number in 0..2 {
-            let key = store.snapshot().navigation.draft_key.clone();
+            let key = store.snapshot().pane.navigation.draft_key.clone();
             let prompt = format!("[success] automatic={automatic}, project={project}, photo={photo}, message={number}");
             store.dispatch(Intent::SetDraftText { thread_id: key.clone(), text: prompt.clone() }).await.unwrap();
             let uploaded = if photo {
@@ -1019,21 +1040,21 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
                     attachment: Attachment { path: source.to_str().unwrap().into(), name: "photo.png".into(), is_image: true },
                 })).await.unwrap();
                 let current = store.snapshot();
-                Some(current.drafts[&current.navigation.draft_key].attachments[0].path.clone())
+                Some(current.input.drafts[&current.pane.navigation.draft_key].attachments[0].path.clone())
             } else { None };
             let sent = store.dispatch(Intent::Submit { thread_id: thread_id.clone(), client_user_message_id: format!("client-{number}").into() }).await.unwrap_or_else(|error| panic!("{prompt}: {error}"));
             assert!(if number == 0 { matches!(sent, Outcome::StartedThread { .. }) } else { matches!(sent, Outcome::Submitted { .. }) });
-            let id = store.snapshot().navigation.thread_id.clone().unwrap();
+            let id = store.snapshot().pane.navigation.thread_id.clone().unwrap();
             if let Some(previous) = &thread_id { assert_eq!(&id, previous); }
             let mut updates = store.subscribe();
             loop {
-                let completed = updates.borrow_and_update().conversations.get(&id).is_some_and(|thread| {
+                let completed = updates.borrow_and_update().sessions.conversations.get(&id).is_some_and(|thread| {
                     thread.turns.as_ref().is_some_and(|turns| turns.len() == number + 1 && turns[number].status.label() == "completed")
                 });
                 if completed { break; }
                 updates.changed().await.unwrap();
             }
-            let cwd = store.snapshot().navigation.cwd.clone();
+            let cwd = store.snapshot().pane.navigation.cwd.clone();
             if let Some(previous) = &session_cwd { assert_eq!(&cwd, previous); }
             if project {
                 assert_project_directory(Path::new(&cwd), &workspace, automatic.then_some(destination.as_path()));
@@ -1042,16 +1063,16 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
                 assert!(store.snapshot().selected_directory().is_empty(), "an unselected chat must remain unselected: {cwd}");
                 assert_eq!(Path::new(&cwd), root.join("bex-chats"));
                 let snapshot = store.snapshot();
-                assert_eq!(snapshot.conversations[&id].project_id, models::ProjectMembership::Unassigned {});
-                assert_eq!(snapshot.conversations[&id].cwd.as_deref(), root.join("bex-chats").to_str());
+                assert_eq!(snapshot.sessions.conversations[&id].project_id, models::ProjectMembership::Unassigned {});
+                assert_eq!(snapshot.sessions.conversations[&id].cwd.as_deref(), root.join("bex-chats").to_str());
             }
             store.dispatch(Intent::ShowThreadList).await.unwrap();
             store.dispatch(Intent::ListSessions(op::ListSessions::new(Default::default()))).await.unwrap();
             if project {
                 store.dispatch(Intent::SetProjectExpanded { project_id: "default".into(), expanded: true }).await.unwrap();
-                store.dispatch(Intent::ListSessions(op::ListSessions::new((*store.snapshot().list_query).clone()))).await.unwrap();
+                store.dispatch(Intent::ListSessions(op::ListSessions::new((*store.snapshot().lists.list_query).clone()))).await.unwrap();
                 loop {
-                    if updates.borrow_and_update().project_threads.get("default").is_some_and(|page| page.data.iter().any(|thread| thread.id.as_ref() == Some(&id))) { break; }
+                    if updates.borrow_and_update().lists.project_threads.get("default").is_some_and(|page| page.data.iter().any(|thread| thread.id.as_ref() == Some(&id))) { break; }
                     updates.changed().await.unwrap();
                 }
             }
@@ -1059,26 +1080,26 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
             if project {
                 store.dispatch(Intent::ReviewWorkspace(op::ReviewWorkspace { cwd: cwd.clone() })).await.unwrap();
             } else {
-                assert!(store.snapshot().workspace.review_cwd.is_none());
-                assert!(store.snapshot().workspace.review.is_none());
+                assert!(store.snapshot().pane.workspace.review_cwd.is_none());
+                assert!(store.snapshot().pane.workspace.review.is_none());
             }
             let agent_core::store::Outcome::Directory { listing } = store.dispatch(Intent::ListFiles(op::ListFiles { path: cwd.clone() })).await.unwrap() else { panic!("expected directory result") };
             assert_eq!(listing.path, cwd);
-            assert_eq!(store.snapshot().navigation.cwd, cwd, "reopening must preserve the execution directory");
+            assert_eq!(store.snapshot().pane.navigation.cwd, cwd, "reopening must preserve the execution directory");
             assert_eq!(store.snapshot().selected_directory(), if project { cwd.clone() } else { String::new() });
             let snapshot = store.snapshot();
-            assert!(snapshot.connected);
-            assert!(snapshot.error.is_none(), "{prompt}: {:?}", snapshot.error);
-            assert!(snapshot.pending_submissions.is_empty());
-            let page = if project { &snapshot.project_threads["default"] } else { snapshot.threads.as_ref().unwrap() };
+            assert!(snapshot.connection.connected);
+            assert!(snapshot.pane.error.is_none(), "{prompt}: {:?}", snapshot.pane.error);
+            assert!(snapshot.sessions.pending_submissions.is_empty());
+            let page = if project { &snapshot.lists.project_threads["default"] } else { snapshot.lists.threads.as_ref().unwrap() };
             let listed = page.data.iter().find(|thread| thread.id.as_ref() == Some(&id)).expect("sent conversation must be listed");
             assert_eq!(listed.project_id, if project { models::ProjectMembership::Assigned("default".into()) } else { models::ProjectMembership::Unassigned {} });
             let restored: agent_core::state::Snapshot = serde_json::from_slice(&serde_json::to_vec(snapshot.as_ref()).unwrap()).unwrap();
             assert_eq!(restored.selected_directory(), snapshot.selected_directory());
 
-            let draft = &snapshot.drafts[&agent_core::state::DraftKey::from(&id)];
+            let draft = &snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)];
             assert!(draft.text.is_empty() && draft.attachments.is_empty());
-            let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[number];
+            let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[number];
             assert_submission_items(turn, &prompt, uploaded.as_deref(), bytes);
             thread_id = Some(id);
             session_cwd = Some(cwd);
@@ -1132,6 +1153,7 @@ async fn remote_registration_pairs_the_local_client_identity_for_direct_connecti
             .unwrap();
         let invitation = manager_b
             .snapshot()
+            .connection
             .management
             .invitation
             .as_ref()
@@ -1151,9 +1173,9 @@ async fn remote_registration_pairs_the_local_client_identity_for_direct_connecti
                 .unwrap(),
             Outcome::RemoteHostPaired { id: id.clone() }
         );
-        assert_eq!(manager_a.snapshot().management.remotes.len(), 1);
-        assert_eq!(manager_a.snapshot().management.remotes[0].id, id);
-        assert!(manager_a.snapshot().error.is_none());
+        assert_eq!(manager_a.snapshot().connection.management.remotes.len(), 1);
+        assert_eq!(manager_a.snapshot().connection.management.remotes[0].id, id);
+        assert!(manager_a.snapshot().pane.error.is_none());
         let direct_session = endpoint_a.connect(&second.ticket).await.unwrap();
         let (direct_peer, _direct_events) = direct_session
             .open_peer(Duration::from_secs(10), 128)
@@ -1175,10 +1197,10 @@ async fn remote_registration_pairs_the_local_client_identity_for_direct_connecti
             .await
             .unwrap();
         let snapshot = manager_a.snapshot();
-        assert_eq!(snapshot.management.remotes.len(), 1);
-        assert_eq!(snapshot.management.remotes[0].id, id);
+        assert_eq!(snapshot.connection.management.remotes.len(), 1);
+        assert_eq!(snapshot.connection.management.remotes[0].id, id);
         assert_eq!(
-            snapshot.management.remotes[0]
+            snapshot.connection.management.remotes[0]
                 .ticket
                 .parse::<Ticket>()
                 .unwrap()
@@ -1189,12 +1211,26 @@ async fn remote_registration_pairs_the_local_client_identity_for_direct_connecti
             .dispatch(Intent::RemoveRemoteHost(op::RemoveRemoteHost { id }))
             .await
             .unwrap();
-        assert!(manager_a.snapshot().management.remotes.is_empty());
+        assert!(
+            manager_a
+                .snapshot()
+                .connection
+                .management
+                .remotes
+                .is_empty()
+        );
         manager_a
             .dispatch(Intent::LoadHostManagement(op::LoadHostManagement {}))
             .await
             .unwrap();
-        assert!(manager_a.snapshot().management.remotes.is_empty());
+        assert!(
+            manager_a
+                .snapshot()
+                .connection
+                .management
+                .remotes
+                .is_empty()
+        );
         direct_peer.close().await;
         direct_session.close();
         manager_a.close().await.unwrap();
@@ -1230,7 +1266,7 @@ async fn opening_a_task_uses_cached_history_while_the_host_read_is_pending() {
             let store = if let Some(store) = owner.take() { store } else {
                 Store::connect(&endpoint, &fixture.ticket, saved.take().unwrap(), None, "Fixture device").await.unwrap()
             };
-            assert_eq!(store.snapshot().conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }), cached);
+            assert_eq!(store.snapshot().sessions.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }), cached);
             if cached {
                 // The imported transcript answers; a native change made outside
                 // the Host waits for the project to be imported again.
@@ -1241,33 +1277,33 @@ async fn opening_a_task_uses_cached_history_while_the_host_read_is_pending() {
             }
             let opening = store.dispatch(Intent::ReadThread(op::ReadThread::open(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() })));
             tokio::pin!(opening);
-            assert_eq!(store.snapshot().navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("selected"));
-            assert_eq!(store.snapshot().navigation.draft_key, agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }));
-            assert_eq!(store.snapshot().drafts[&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() })].text, "Unsent draft");
+            assert_eq!(store.snapshot().pane.navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("selected"));
+            assert_eq!(store.snapshot().pane.navigation.draft_key, agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }));
+            assert_eq!(store.snapshot().input.drafts[&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() })].text, "Unsent draft");
             if !cached {
                 while !root.join("history-read-held").exists() {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 assert!(tokio::time::timeout(Duration::from_millis(50), &mut opening).await.is_err());
             } else {
-                let thread = &store.snapshot().conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }];
+                let thread = &store.snapshot().sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }];
                 assert_eq!(item_text(&(thread.turns.as_ref().unwrap().last().unwrap().items.as_ref().unwrap()[0])), Some("History for Selected task"));
             }
             // List refresh shares the production transport but must not wait for history.
             store.dispatch(Intent::ListSessions(op::ListSessions::new(Default::default()))).await.unwrap();
-            assert!(store.snapshot().threads.as_ref().unwrap().data.iter().any(|thread| thread.id.as_ref().map(|session| session.id.as_str()) == Some("selected")));
+            assert!(store.snapshot().lists.threads.as_ref().unwrap().data.iter().any(|thread| thread.id.as_ref().map(|session| session.id.as_str()) == Some("selected")));
             if !cached {
                 std::fs::remove_file(root.join("hold-history-reads")).unwrap();
                 std::fs::remove_file(root.join("history-read-held")).unwrap();
             }
             opening.await.unwrap();
             let current = store.snapshot();
-            let last = current.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }].turns.as_ref().unwrap().last().unwrap();
+            let last = current.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }].turns.as_ref().unwrap().last().unwrap();
             assert_eq!(last.status.label(), "completed");
             assert_eq!(item_text(&(last.items.as_ref().unwrap()[0])), Some("History for Selected task"));
-            assert_eq!(current.navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("selected"));
-            assert_eq!(current.drafts[&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() })].text, "Unsent draft");
-            assert!(current.error.is_none(), "{:?}", current.error);
+            assert_eq!(current.pane.navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("selected"));
+            assert_eq!(current.input.drafts[&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() })].text, "Unsent draft");
+            assert!(current.pane.error.is_none(), "{:?}", current.pane.error);
             store.dispatch(Intent::ShowThreadList).await.unwrap();
             saved = Some(serde_json::from_slice(&serde_json::to_vec(&store.snapshot()).unwrap()).unwrap());
             store.close().await.unwrap();
@@ -1301,7 +1337,7 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
             .dispatch(Intent::NewChat { cwd: String::new() })
             .await
             .unwrap();
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store
             .dispatch(Intent::SetDraftText {
                 thread_id: key,
@@ -1316,11 +1352,11 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
             })
             .await
             .unwrap();
-        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        let id = store.snapshot().pane.navigation.thread_id.clone().unwrap();
         let mut updates = store.subscribe();
         loop {
             let snapshot = updates.borrow_and_update().clone();
-            let thread = &snapshot.conversations[&id];
+            let thread = &snapshot.sessions.conversations[&id];
             if thread.preparation.is_none()
                 && thread.turns.as_ref().is_some_and(|turns| {
                     turns.first().is_some_and(|turn| {
@@ -1348,7 +1384,7 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
                 .await
                 .unwrap();
             let snapshot = store.snapshot();
-            let items: Vec<_> = snapshot.conversations[&id]
+            let items: Vec<_> = snapshot.sessions.conversations[&id]
                 .turns
                 .as_ref()
                 .unwrap()
@@ -1373,8 +1409,9 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
                 "older response missing after restore={restore}"
             );
             let rendered = agent_core::presentation::conversation::project_conversation(
-                &snapshot,
-                snapshot.conversations[&id].clone(),
+                &snapshot.pane.navigation.draft_key,
+                &snapshot.sessions.pending_submissions,
+                snapshot.sessions.conversations[&id].clone(),
                 &None,
             );
             let responses: Vec<_> = rendered
@@ -1394,13 +1431,13 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
                 "latest response collapsed after restore={restore}"
             );
             assert!(responses.contains(&"duplicate-history-old"));
-            assert!(snapshot.pending_submissions.is_empty());
+            assert!(snapshot.sessions.pending_submissions.is_empty());
             assert!(
-                snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+                snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                     .text
                     .is_empty()
             );
-            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
         }
         store.close().await.unwrap();
         endpoint.close().await;
@@ -1434,7 +1471,10 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
             "turns":[{"id":"turn-0","status":"completed","items":[{"id":"item-0-0","status":"completed","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"answer 0/0","phase":"unknown"}}}}}]}, {"id":"turn-11","status":"completed","items":[{"id":"item-11-0","status":"completed","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"answer 11/0","phase":"unknown"}}}}}],
                 "itemsSummary":true}]})).unwrap();
         let initial = Snapshot {
-            conversations: Arc::new(std::collections::BTreeMap::from([(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }, Arc::new(previous))])),
+            sessions: agent_core::state::Sessions {
+                conversations: Arc::new(std::collections::BTreeMap::from([(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }, Arc::new(previous))])),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let store = Store::new((local.peer, local.events), initial);
@@ -1453,7 +1493,7 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
         let imported_reads = read(directory.path()).len();
         store.dispatch(Intent::ReadThread(op::ReadThread::new(session.clone()))).await.unwrap();
         let snapshot = store.snapshot();
-        let thread = &snapshot.conversations[&session];
+        let thread = &snapshot.sessions.conversations[&session];
         let window = op::HISTORY_WINDOW_TURNS as usize;
         assert_eq!(thread.turns.as_ref().unwrap().len(), window, "initial display is a bounded turn summary page");
         assert_eq!(thread.history_has_more, Some(true));
@@ -1461,17 +1501,17 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
         assert_eq!(latest.items.as_ref().unwrap().len(), 1);
         assert!(latest.items_summary);
         assert_eq!(latest.items.as_ref().unwrap()[0].id, "item-11-619".into());
-        let rendered = agent_core::presentation::conversation::project_conversation(&snapshot, thread.clone(), &None);
+        let rendered = agent_core::presentation::conversation::project_conversation(&snapshot.pane.navigation.draft_key, &snapshot.sessions.pending_submissions, thread.clone(), &None);
         assert_eq!(rendered.turns.len(), window, "the rendered history must contain no empty turn placeholders");
         for _ in 0..20 {
             let snapshot = store.snapshot();
-            if snapshot.conversations[&session].history_has_more != Some(true) { break; }
+            if snapshot.sessions.conversations[&session].history_has_more != Some(true) { break; }
             store.dispatch(Intent::ReadOlder { thread_id: session.clone() }).await.unwrap();
         }
-        let ids: Vec<_> = store.snapshot().conversations[&session].turns.as_ref().unwrap().iter().map(|turn| turn.id.clone()).collect();
+        let ids: Vec<_> = store.snapshot().sessions.conversations[&session].turns.as_ref().unwrap().iter().map(|turn| turn.id.clone()).collect();
         for turn_id in ids {
             store.dispatch(Intent::LoadTurnItems(op::LoadTurnItems { thread_id: session.clone(), turn_id: turn_id.clone() })).await.unwrap();
-            while store.snapshot().conversations[&session].turns.as_ref().unwrap().iter()
+            while store.snapshot().sessions.conversations[&session].turns.as_ref().unwrap().iter()
                 .any(|turn| turn.id == turn_id && turn.items_summary) {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
@@ -1482,7 +1522,7 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
                 store.dispatch(Intent::ReadThread(op::ReadThread::open(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }))).await.unwrap();
             }
             let snapshot = store.snapshot();
-            let thread = &snapshot.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }];
+            let thread = &snapshot.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "history".into() }];
             assert_eq!(thread.history_has_more, Some(false));
             let loaded = thread.turns.as_ref().unwrap();
             assert_eq!(loaded.len(), turns.len());
@@ -1494,7 +1534,7 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
                 assert_eq!(actual.len(), expected.len());
                 for (actual, expected) in actual.iter().zip(expected) {assert_eq!(json!(actual.id),expected["id"]); assert!(matches!(actual.body(),agent_protocol::items::ItemBody::AssistantText {text,..} if text == expected["text"].as_str().unwrap()));}
             }
-            assert_eq!(snapshot.error, None);
+            assert_eq!(snapshot.pane.error, None);
         }
         store.close().await.unwrap();
         local.endpoint.close().await;
@@ -1535,7 +1575,7 @@ async fn generated_images_are_visible_on_open_reopen_and_older_pages_without_exp
             local.peer.call(&agent_protocol::session::ReadHistory {
                 session: session.clone(), cursor, include_activity: false,
             }).await.unwrap().prepend_to(&mut response.thread);
-            let rendered = project_conversation(&Default::default(), Arc::new(response.thread), &None);
+            let rendered = project_conversation(&Default::default(), &Default::default(), Arc::new(response.thread), &None);
             assert_eq!(rendered.turns.len(), 6);
             for (index, turn) in rendered.turns.iter().enumerate() {
                 assert!(!turn.source.items_summary, "imported turns hold no hidden work");
@@ -2197,7 +2237,7 @@ async fn upstream_exit_keeps_host_management_connected() {
             )))
             .await
             .unwrap();
-        assert!(store.snapshot().connected);
+        assert!(store.snapshot().connection.connected);
         std::fs::write(directory.path().join("exit-on-list"), "").unwrap();
         assert!(
             store
@@ -2226,7 +2266,7 @@ async fn upstream_exit_keeps_host_management_connected() {
                 .unwrap()["nodeId"]
                 .is_string()
         );
-        assert!(store.snapshot().connected);
+        assert!(store.snapshot().connection.connected);
         assert!(!fixture.running.is_finished());
         management.close().await;
         store.close().await.unwrap();
@@ -2403,7 +2443,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
         let mut updates = store.subscribe();
         loop {
             let snapshot = updates.borrow_and_update().clone();
-            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
             if condition(&snapshot) {
                 return;
             }
@@ -2482,6 +2522,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
             .unwrap();
         let expires_at = desktop
             .snapshot()
+            .connection
             .management
             .invitation
             .as_ref()
@@ -2495,6 +2536,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
         assert!((30 * 24 * 60 * 60 - 5..=30 * 24 * 60 * 60).contains(&remaining));
         let invitation = desktop
             .snapshot()
+            .connection
             .management
             .invitation
             .as_ref()
@@ -2518,8 +2560,8 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
             .unwrap();
 
         for (index, final_status) in ["completed", "interrupted"].into_iter().enumerate() {
-            let previous_id = mobile.snapshot().navigation.thread_id.clone();
-            let draft_key = mobile.snapshot().navigation.draft_key.clone();
+            let previous_id = mobile.snapshot().pane.navigation.thread_id.clone();
+            let draft_key = mobile.snapshot().pane.navigation.draft_key.clone();
             let prompt = format!("[approval] shared turn {index}");
             mobile
                 .dispatch(Intent::SetDraftText {
@@ -2535,7 +2577,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
                 })
                 .await
                 .unwrap();
-            let id = mobile.snapshot().navigation.thread_id.clone().unwrap();
+            let id = mobile.snapshot().pane.navigation.thread_id.clone().unwrap();
             wait_for(&mobile, |snapshot| snapshot.requests().next().is_some()).await;
             desktop
                 .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
@@ -2543,6 +2585,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
                 .unwrap();
             let active = |snapshot: &Snapshot| {
                 snapshot
+                    .sessions
                     .conversations
                     .get(&id)
                     .and_then(|thread| thread.turns.as_ref())
@@ -2608,7 +2651,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
                 .unwrap();
             for store in [&mobile, &desktop] {
                 wait_for(store, |snapshot| {
-                    snapshot.conversations[&id]
+                    snapshot.sessions.conversations[&id]
                         .turns
                         .as_ref()
                         .unwrap()
@@ -2623,8 +2666,8 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
                     .await
                     .unwrap();
                 let snapshot = store.snapshot();
-                assert!(snapshot.error.is_none());
-                let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
+                assert!(snapshot.pane.error.is_none());
+                let turns = snapshot.sessions.conversations[&id].turns.as_ref().unwrap();
                 assert_eq!(turns.len(), index + 1);
                 let turn = turns.last().unwrap();
                 assert_eq!(turn.status.label(), final_status);
@@ -2648,15 +2691,15 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
                     )));
                 }
             }
-            assert!(mobile.snapshot().pending_submissions.is_empty());
+            assert!(mobile.snapshot().sessions.pending_submissions.is_empty());
             let snapshot = mobile.snapshot();
             assert!(
-                snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+                snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                     .text
                     .is_empty()
             );
             assert!(
-                snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+                snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                     .attachments
                     .is_empty()
             );
@@ -2711,7 +2754,7 @@ async fn completed_conversations_refresh_the_sidebar_without_manual_reload() {
                 let observer = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
                 for client in [&store, &observer] {
                     let mut initial = client.subscribe();
-                    while initial.borrow_and_update().threads.is_none() || !initial.borrow().operations.is_empty() { initial.changed().await.unwrap(); }
+                    while initial.borrow_and_update().lists.threads.is_none() || !initial.borrow().operations.is_empty() { initial.changed().await.unwrap(); }
                 }
                 let list_reads = || std::fs::read_to_string(root.join("rpc-trace.jsonl")).unwrap().lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).filter(|entry| entry["method"] == "thread/list").count();
                 let before = list_reads();
@@ -2719,20 +2762,20 @@ async fn completed_conversations_refresh_the_sidebar_without_manual_reload() {
                 if scoped {
                     store.dispatch(Intent::SetProjectExpanded { project_id: "project".into(), expanded: true }).await.unwrap();
                 }
-                let key = store.snapshot().navigation.draft_key.clone();
+                let key = store.snapshot().pane.navigation.draft_key.clone();
                 store.dispatch(Intent::SetDraftText { thread_id: key, text: "[success] list automatically".into() }).await.unwrap();
                 store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "sidebar-message".into() }).await.unwrap();
-                let id = store.snapshot().navigation.thread_id.clone().unwrap();
+                let id = store.snapshot().pane.navigation.thread_id.clone().unwrap();
                 let mut updates = store.subscribe();
                 let reflected = tokio::time::timeout(Duration::from_secs(3), async {
                     loop {
                         let snapshot = updates.borrow_and_update().clone();
-                        let complete = snapshot.conversations[&id].turns.as_ref().is_some_and(|turns| turns.first().is_some_and(|turn| turn.status == agent_protocol::execution::TurnStatus::Completed));
+                        let complete = snapshot.sessions.conversations[&id].turns.as_ref().is_some_and(|turns| turns.first().is_some_and(|turn| turn.status == agent_protocol::execution::TurnStatus::Completed));
                         let listed = snapshot.thread_list().is_some_and(|list| list.threads.iter().chain(list.projects.iter().flat_map(|project| &project.threads)).any(|thread| thread.id == id && thread.title == "Completed conversation" && thread.project_id == scoped.then(|| "project".into())));
                         if complete && listed {
-                            assert!(snapshot.pending_submissions.is_empty());
-                            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-                            assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty());
+                            assert!(snapshot.sessions.pending_submissions.is_empty());
+                            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+                            assert!(snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty());
                             if scoped {
                                 assert_project_directory(Path::new(&snapshot.selected_directory()), &project, automatic.then_some(project.join(".worktree").as_path()));
                             }
@@ -2745,7 +2788,7 @@ async fn completed_conversations_refresh_the_sidebar_without_manual_reload() {
                 tokio::time::timeout(Duration::from_secs(3), async {
                     loop {
                         let snapshot = observed.borrow_and_update().clone();
-                        if snapshot.threads.iter().flat_map(|page| &page.data).chain(snapshot.project_threads.values().flat_map(|page| &page.data)).any(|row| row.id.as_ref() == Some(&id) && row.name.as_deref() == Some("Completed conversation")) { break; }
+                        if snapshot.lists.threads.iter().flat_map(|page| &page.data).chain(snapshot.lists.project_threads.values().flat_map(|page| &page.data)).any(|row| row.id.as_ref() == Some(&id) && row.name.as_deref() == Some("Completed conversation")) { break; }
                         observed.changed().await.unwrap();
                     }
                 }).await.expect("passive client must receive metadata without a list refresh");
@@ -2781,20 +2824,20 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
         let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
         store.dispatch(Intent::UpdateWorktreeSettings(op::UpdateWorktreeSettings { settings: models::WorktreeSettings { create_on_new_session: true, ..Default::default() } })).await.unwrap();
         store.dispatch(Intent::NewChat { cwd: project.to_str().unwrap().into() }).await.unwrap();
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store.dispatch(Intent::SetDraftText { thread_id: key, text: "[success] [delayed-input] keep running".into() }).await.unwrap();
         store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "managed".into() }).await.unwrap();
-        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        let id = store.snapshot().pane.navigation.thread_id.clone().unwrap();
         let mut updates = store.subscribe();
         let turn_id = loop {
             let snapshot = updates.borrow_and_update().clone();
-            if let Some(turn) = snapshot.conversations[&id].turns.as_ref().and_then(|turns| turns.first()) { break turn.id.clone(); }
+            if let Some(turn) = snapshot.sessions.conversations[&id].turns.as_ref().and_then(|turns| turns.first()) { break turn.id.clone(); }
             updates.changed().await.unwrap();
         };
-        let path = store.snapshot().navigation.cwd.clone();
+        let path = store.snapshot().pane.navigation.cwd.clone();
         store.dispatch(Intent::ListWorktrees(op::ListWorktrees {})).await.unwrap();
         let snapshot = store.snapshot();
-        let entries = snapshot.workspace.worktrees.as_ref().unwrap();
+        let entries = snapshot.files.workspace.worktrees.as_ref().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, path);
         assert_eq!(entries[0].project_path, project.to_str().unwrap());
@@ -2805,7 +2848,7 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
         store.dispatch(Intent::Interrupt(op::Interrupt { thread_id: id.clone(), turn_id })).await.unwrap();
         loop {
             let snapshot = updates.borrow_and_update().clone();
-            if snapshot.conversations[&id].turns.as_ref().is_some_and(|turns| turns[0].status.label() == "interrupted") { break; }
+            if snapshot.sessions.conversations[&id].turns.as_ref().is_some_and(|turns| turns[0].status.label() == "interrupted") { break; }
             updates.changed().await.unwrap();
         }
         let local = fixture.local().await.unwrap();
@@ -2833,12 +2876,12 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
         store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
         store.dispatch(Intent::RemoveWorktree(op::RemoveWorktree { path: path.clone() })).await.unwrap();
         assert!(!Path::new(&path).exists());
-        assert_eq!(store.snapshot().workspace.worktrees.as_ref().unwrap().len(), 1);
+        assert_eq!(store.snapshot().files.workspace.worktrees.as_ref().unwrap().len(), 1);
         store.disconnect().await.unwrap();
         store.reconnect(&endpoint, &fixture.ticket, None, "Fixture device").await.unwrap();
         store.dispatch(Intent::ListWorktrees(op::ListWorktrees {})).await.unwrap();
-        assert_eq!(store.snapshot().workspace.worktrees.as_ref().unwrap().len(), 1);
-        assert!(store.snapshot().error.is_none());
+        assert_eq!(store.snapshot().files.workspace.worktrees.as_ref().unwrap().len(), 1);
+        assert!(store.snapshot().pane.error.is_none());
         assert!(String::from_utf8(git(&["branch", "--list", "bex/*"])).unwrap().contains("bex/session-"));
         let listed = local.peer.call(&rpc::ListSessions::new(Default::default())).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
         assert!(listed["data"].as_array().unwrap().iter().any(|thread| thread["id"] == json!(id)), "removal must preserve conversation history");
@@ -3128,7 +3171,7 @@ async fn visualization_reaches_store_and_reopens_after_source_removal() {
             .unwrap();
         store
             .dispatch(Intent::SetDraftText {
-                thread_id: store.snapshot().navigation.draft_key.clone(),
+                thread_id: store.snapshot().pane.navigation.draft_key.clone(),
                 text: prompt.into(),
             })
             .await
@@ -3140,12 +3183,12 @@ async fn visualization_reaches_store_and_reopens_after_source_removal() {
             })
             .await
             .unwrap();
-        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        let id = store.snapshot().pane.navigation.thread_id.clone().unwrap();
         let mut updates = store.subscribe();
         loop {
             let snapshot = updates.borrow_and_update().clone();
-            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-            if snapshot.conversations[&id]
+            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+            if snapshot.sessions.conversations[&id]
                 .turns
                 .as_ref()
                 .is_some_and(|turns| {
@@ -3163,14 +3206,14 @@ async fn visualization_reaches_store_and_reopens_after_source_removal() {
             id: &agent_protocol::session::SessionRef,
             prompt: &str,
         ) -> String {
-            assert!(snapshot.error.is_none());
-            assert!(snapshot.pending_submissions.is_empty());
+            assert!(snapshot.pane.error.is_none());
+            assert!(snapshot.sessions.pending_submissions.is_empty());
             assert!(
-                snapshot.drafts[&agent_core::state::DraftKey::from(id)]
+                snapshot.input.drafts[&agent_core::state::DraftKey::from(id)]
                     .text
                     .is_empty()
             );
-            let turns = snapshot.conversations[id].turns.as_ref().unwrap();
+            let turns = snapshot.sessions.conversations[id].turns.as_ref().unwrap();
             assert_eq!(turns.last().unwrap().status.label(), "completed");
             let items: Vec<_> = turns
                 .iter()
@@ -3382,7 +3425,7 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
                     "{step}: {index}"
                 );
             }
-            assert_eq!(snapshot.error, None);
+            assert_eq!(snapshot.pane.error, None);
         }
         git(&repo, &["merge", "--no-ff", "-m", "merge task", "task"]);
         store
@@ -3456,7 +3499,7 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
                 let row = list.threads.iter().find(|row| &row.id == id).unwrap();
                 assert_eq!(row.worktree_status, if index < 2 && !(index == 1 && step == "missing-metadata") { expected } else { None }, "{step}: {index}");
             }
-            assert_eq!(snapshot.error, None);
+            assert_eq!(snapshot.pane.error, None);
         }
         store.close().await.unwrap();
         local.endpoint.close().await;
@@ -3657,8 +3700,8 @@ async fn oversized_session_opens_repeatedly_and_downloads_lossless_items_without
         store.dispatch(Intent::LoadTurnItems(op::LoadTurnItems { thread_id: thread_id.clone(), turn_id: "oversized-turn".into() })).await.unwrap();
         loop {
             let snapshot = updates.borrow_and_update().clone();
-            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-            let items = &snapshot.conversations[&thread_id].turns.as_ref().unwrap()[0]
+            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+            let items = &snapshot.sessions.conversations[&thread_id].turns.as_ref().unwrap()[0]
                 .items
                 .as_ref()
                 .unwrap();
@@ -3673,7 +3716,7 @@ async fn oversized_session_opens_repeatedly_and_downloads_lossless_items_without
             updates.changed().await.unwrap();
         }
         assert_eq!(
-            store.snapshot().conversations[&thread_id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().len(),
+            store.snapshot().sessions.conversations[&thread_id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().len(),
             2,
             "imported turn details hold messages and images"
         );
@@ -3709,7 +3752,7 @@ async fn adding_a_chat_folder_registers_a_project_before_submission() {
         let store = Store::new((local.peer, local.events), Snapshot::default());
         let mut updates = store.subscribe();
         updates
-            .wait_for(|snapshot| snapshot.connected && snapshot.threads.is_some())
+            .wait_for(|snapshot| snapshot.connection.connected && snapshot.lists.threads.is_some())
             .await
             .unwrap();
         for _ in 0..2 {
@@ -3725,7 +3768,7 @@ async fn adding_a_chat_folder_registers_a_project_before_submission() {
             assert_eq!(duplicate.unwrap(), folder.to_str().unwrap());
             updates
                 .wait_for(|snapshot| {
-                    snapshot.navigation.cwd == folder.to_str().unwrap()
+                    snapshot.pane.navigation.cwd == folder.to_str().unwrap()
                         && snapshot.thread_list().is_some_and(|list| {
                             list.projects
                                 .iter()
@@ -3739,10 +3782,10 @@ async fn adding_a_chat_folder_registers_a_project_before_submission() {
             assert_eq!(list.projects.len(), 1);
             assert!(list.threads.is_empty());
             assert_ne!(
-                snapshot.navigation.draft_key,
+                snapshot.pane.navigation.draft_key,
                 agent_core::state::Navigation::default().draft_key
             );
-            assert_eq!(snapshot.error, None);
+            assert_eq!(snapshot.pane.error, None);
         }
         let project_id = store.snapshot().thread_list().unwrap().projects[0]
             .id

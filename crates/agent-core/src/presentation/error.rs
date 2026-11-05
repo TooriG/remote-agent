@@ -21,6 +21,7 @@ pub struct ErrorNotice {
     pub context: String,
     pub title: String,
     pub text: ErrorText,
+    pub recovery_label: Option<String>,
 }
 
 /// UI copy is written in the source language, Japanese. Host, transport and
@@ -45,8 +46,7 @@ impl std::fmt::Display for ErrorText {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-pub struct ErrorRecovery {
+pub(crate) struct ErrorRecovery {
     pub label: String,
     pub intent: crate::state::Intent,
 }
@@ -130,9 +130,8 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
     })
 }
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
-    pub fn error_recovery(&self, id: ErrorId) -> Option<ErrorRecovery> {
+    pub(crate) fn error_recovery(&self, id: ErrorId) -> Option<ErrorRecovery> {
         use crate::state::{Intent, operations as op};
         let ErrorId::Operation { key, generation } = id else {
             return None;
@@ -163,7 +162,7 @@ impl Snapshot {
             OperationKey::ProjectScan => ("再検索", Intent::ScanProjects(op::ScanProjects {})),
             OperationKey::SessionList | OperationKey::SessionPage { .. } => (
                 "会話一覧を再読み込み",
-                Intent::ListSessions(op::ListSessions::new((*self.list_query).clone())),
+                Intent::ListSessions(op::ListSessions::new((*self.lists.list_query).clone())),
             ),
             OperationKey::SaveFile { path } => {
                 ("保存を再試行", Intent::SaveFile(op::SaveFile { path }))
@@ -175,13 +174,20 @@ impl Snapshot {
             intent,
         })
     }
+}
 
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
     pub fn error_notices(&self, scope: ErrorScope) -> Vec<ErrorNotice> {
         let mut notices = Vec::new();
         if scope == ErrorScope::Application {
             let application = [
-                (&self.connection_failure, "接続", "ホストに接続できません"),
-                (&self.error, "操作", "操作に失敗しました"),
+                (
+                    &self.connection.connection_failure,
+                    "接続",
+                    "ホストに接続できません",
+                ),
+                (&self.pane.error, "操作", "操作に失敗しました"),
             ];
             for (error, context, title) in application {
                 if let Some(error) = error {
@@ -192,6 +198,7 @@ impl Snapshot {
                         context: context.into(),
                         title: title.into(),
                         text: error_text(error),
+                        recovery_label: None,
                     });
                 }
             }
@@ -212,6 +219,12 @@ impl Snapshot {
                     context: scope.label().into(),
                     title: title.into(),
                     text: error_text(message),
+                    recovery_label: self
+                        .error_recovery(ErrorId::Operation {
+                            key: key.clone(),
+                            generation: state.generation,
+                        })
+                        .map(|recovery| recovery.label),
                 });
             }
         }
@@ -569,7 +582,7 @@ mod notice_tests {
     use std::sync::Arc;
 
     fn failed(snapshot: &mut Snapshot, key: OperationKey, generation: u64, message: &str) {
-        Arc::make_mut(&mut snapshot.operations).insert(
+        snapshot.operations.insert(
             key,
             OperationState {
                 generation,
@@ -590,7 +603,10 @@ mod notice_tests {
     fn connection_and_operation_failures_have_separate_context_and_dismissal() {
         let draft = DraftKey::default();
         let mut snapshot = Snapshot {
-            connection_failure: Some("connection lost".into()),
+            connection: crate::state::Connection {
+                connection_failure: Some("connection lost".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         failed(
@@ -673,7 +689,10 @@ mod notice_tests {
     #[test]
     fn validation_failure_preserves_connection_error_and_belongs_to_workspace() {
         let snapshot = Snapshot {
-            connection_failure: Some("connection lost".into()),
+            connection: crate::state::Connection {
+                connection_failure: Some("connection lost".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let (next, effects) = reduce(
@@ -705,7 +724,7 @@ mod notice_tests {
             id: "model".into(),
         };
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.list_query).search_term = "keep filter".into();
+        Arc::make_mut(&mut snapshot.lists.list_query).search_term = "keep filter".into();
         let cases = [
             (OperationKey::Models, Intent::LoadModels(op::LoadModels {})),
             (
@@ -732,7 +751,7 @@ mod notice_tests {
             ),
             (
                 OperationKey::SessionList,
-                Intent::ListSessions(op::ListSessions::new((*snapshot.list_query).clone())),
+                Intent::ListSessions(op::ListSessions::new((*snapshot.lists.list_query).clone())),
             ),
             (
                 OperationKey::SaveFile {
@@ -763,10 +782,7 @@ mod notice_tests {
                     })
                     .is_none()
             );
-            Arc::make_mut(&mut snapshot.operations)
-                .get_mut(&key)
-                .unwrap()
-                .phase = OperationPhase::Running;
+            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Running;
             assert!(snapshot.error_recovery(id).is_none());
         }
         for key in [
@@ -787,8 +803,14 @@ mod notice_tests {
     #[test]
     fn closing_an_old_global_notice_preserves_a_newer_error_and_recovery_clears_it() {
         let snapshot = Snapshot {
-            connected: true,
-            error: Some("save failed".into()),
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
+            pane: Arc::new(crate::state::PaneState {
+                error: Some("save failed".into()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let notice = snapshot
@@ -797,14 +819,20 @@ mod notice_tests {
             .unwrap();
         assert_eq!(notice.title, "操作に失敗しました");
         let newer = Snapshot {
-            error: Some("connection lost".into()),
+            connection: crate::state::Connection {
+                ..snapshot.connection.clone()
+            },
+            pane: Arc::new(crate::state::PaneState {
+                error: Some("connection lost".into()),
+                ..Default::default()
+            }),
             ..snapshot
         };
         let (next, _) = reduce(
             &newer,
             Event::Intent(Intent::DismissError { id: notice.id }),
         );
-        assert_eq!(next.error, newer.error);
+        assert_eq!(next.pane.error, newer.pane.error);
         let (next, _) = reduce(&next, Event::Connected);
         assert!(next.error_notices(ErrorScope::Application).is_empty());
     }
@@ -873,7 +901,7 @@ mod notice_tests {
     fn dismissal_does_not_cancel_a_running_operation() {
         let key = OperationKey::Models;
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.operations).insert(
+        snapshot.operations.insert(
             key.clone(),
             OperationState {
                 generation: 1,
@@ -905,7 +933,7 @@ mod notice_tests {
             failed(&mut snapshot, OperationKey::Submission { draft_key: other.clone() }, 100, "other failure");
             let dismissed = snapshot.error_notices(conversation(&first)).pop().unwrap();
             prop_assert_eq!(snapshot.error_notices(conversation(&other))[0].text.details.clone(), Some("other failure".into()));
-            Arc::make_mut(&mut snapshot.operations).insert(key.clone(), OperationState {
+            snapshot.operations.insert(key.clone(), OperationState {
                 generation: newer,
                 phase: if running { OperationPhase::Running } else { OperationPhase::Failed { message: message.clone() } },
             });

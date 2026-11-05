@@ -81,14 +81,17 @@ fn decorations_match_captured_sources_across_root_and_project_pages() {
         ..Default::default()
     };
     let mut state = Snapshot {
-        threads: Some(list(vec![current.clone(), cleared.clone()], vec![project])),
-        project_threads: Arc::new(
-            [
-                ("changed".into(), list(vec![current.clone()], Vec::new())),
-                ("stale".into(), list(stale, Vec::new())),
-            ]
-            .into(),
-        ),
+        lists: crate::state::Lists {
+            threads: Some(list(vec![current.clone(), cleared.clone()], vec![project])),
+            project_threads: Arc::new(
+                [
+                    ("changed".into(), list(vec![current.clone()], Vec::new())),
+                    ("stale".into(), list(stale, Vec::new())),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let previous = state.clone();
@@ -105,24 +108,24 @@ fn decorations_match_captured_sources_across_root_and_project_pages() {
         ],
     };
     assert!(operation.apply(&mut state, output).is_empty());
-    let root = state.threads.as_ref().unwrap();
+    let root = state.lists.threads.as_ref().unwrap();
     assert_eq!(root.data[0].worktree_status, Some(WorktreeStatus::Merged));
     assert_eq!(root.data[1].worktree_status, None);
     assert_eq!(root.projects[0].favicon_png, None);
     assert_eq!(
-        state.project_threads["changed"].data[0].worktree_status,
+        state.lists.project_threads["changed"].data[0].worktree_status,
         Some(WorktreeStatus::Merged)
     );
     assert!(Arc::ptr_eq(
-        &state.project_threads["stale"],
-        &previous.project_threads["stale"]
+        &state.lists.project_threads["stale"],
+        &previous.lists.project_threads["stale"]
     ));
     assert_eq!(
-        previous.threads.as_ref().unwrap().data[0].worktree_status,
+        previous.lists.threads.as_ref().unwrap().data[0].worktree_status,
         Some(WorktreeStatus::Unmerged)
     );
     assert_eq!(
-        previous.threads.as_ref().unwrap().projects[0]
+        previous.lists.threads.as_ref().unwrap().projects[0]
             .favicon_png
             .as_deref(),
         Some("old")
@@ -138,8 +141,13 @@ fn unchanged_decorations_preserve_shared_lists() {
         ..Default::default()
     };
     let original = Snapshot {
-        threads: Some(list(vec![current.clone()], vec![project])),
-        project_threads: Arc::new([("p".into(), list(vec![current.clone()], Vec::new()))].into()),
+        lists: crate::state::Lists {
+            threads: Some(list(vec![current.clone()], vec![project])),
+            project_threads: Arc::new(
+                [("p".into(), list(vec![current.clone()], Vec::new()))].into(),
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     };
     for statuses in [
@@ -155,12 +163,12 @@ fn unchanged_decorations_preserve_shared_lists() {
             },
         );
         assert!(Arc::ptr_eq(
-            state.threads.as_ref().unwrap(),
-            original.threads.as_ref().unwrap()
+            state.lists.threads.as_ref().unwrap(),
+            original.lists.threads.as_ref().unwrap()
         ));
         assert!(Arc::ptr_eq(
-            &state.project_threads,
-            &original.project_threads
+            &state.lists.project_threads,
+            &original.lists.project_threads
         ));
     }
 }
@@ -168,13 +176,16 @@ fn unchanged_decorations_preserve_shared_lists() {
 #[test]
 fn icons_apply_without_root_threads_or_status_changes() {
     let mut state = Snapshot {
-        threads: Some(list(
-            Vec::new(),
-            vec![Project {
-                id: "p".into(),
-                ..Default::default()
-            }],
-        )),
+        lists: crate::state::Lists {
+            threads: Some(list(
+                Vec::new(),
+                vec![Project {
+                    id: "p".into(),
+                    ..Default::default()
+                }],
+            )),
+            ..Default::default()
+        },
         ..Default::default()
     };
     assert!(
@@ -189,12 +200,12 @@ fn icons_apply_without_root_threads_or_status_changes() {
             .is_empty()
     );
     assert_eq!(
-        state.threads.as_ref().unwrap().projects[0]
+        state.lists.threads.as_ref().unwrap().projects[0]
             .favicon_png
             .as_deref(),
         Some("icon")
     );
-    state.threads = None;
+    state.lists.threads = None;
     assert!(
         read(&[])
             .apply(
@@ -212,7 +223,12 @@ fn icons_apply_without_root_threads_or_status_changes() {
 fn project_decorations_do_not_require_a_root_list() {
     let current = row(ProviderKind::Codex, "task", Some("/repo"), None);
     let original = Snapshot {
-        project_threads: Arc::new([("p".into(), list(vec![current.clone()], Vec::new()))].into()),
+        lists: crate::state::Lists {
+            project_threads: Arc::new(
+                [("p".into(), list(vec![current.clone()], Vec::new()))].into(),
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let output = ListDecorations {
@@ -222,17 +238,17 @@ fn project_decorations_do_not_require_a_root_list() {
     let mut state = original.clone();
     read(&[]).apply(&mut state, output.clone());
     assert!(Arc::ptr_eq(
-        &state.project_threads,
-        &original.project_threads
+        &state.lists.project_threads,
+        &original.lists.project_threads
     ));
     read(&[current]).apply(&mut state, output);
-    assert!(state.threads.is_none());
+    assert!(state.lists.threads.is_none());
     assert_eq!(
-        state.project_threads["p"].data[0].worktree_status,
+        state.lists.project_threads["p"].data[0].worktree_status,
         Some(WorktreeStatus::Merged)
     );
     assert_eq!(
-        original.project_threads["p"].data[0].worktree_status,
+        original.lists.project_threads["p"].data[0].worktree_status,
         Some(WorktreeStatus::Unmerged)
     );
 }

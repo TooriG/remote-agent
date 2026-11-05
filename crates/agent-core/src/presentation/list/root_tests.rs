@@ -12,23 +12,26 @@ fn id(name: &str) -> SessionRef {
 #[test]
 fn standalone_rows_keep_unknown_memberships_while_recent_chats_include_assigned_rows() {
     let mut snapshot = Snapshot {
-        threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
-            "data":[
-                {"id":id("assigned"),"name":"Assigned","projectId":"native"},
-                {"id":id("unknown"),"name":"Unknown project","projectId":"missing","listStale":true},
-                {"id":id("standalone"),"name":"Standalone","projectId":null},
-                {"id":id("placed"),"name":"Placed","projectId":null},
-                {"id":id("empty-project"),"name":"Empty project","projectId":""},
-                {"id":id("child"),"name":"Child","parentId":id("standalone")},
-                {"name":"No identity"}
-            ],
-            "projects":[{"id":"native","name":"Native","roots":[]},{"id":"","name":"Empty native ID","roots":[]}],
-            "hasMore":true,"hasMoreProjects":false,"projectPages":{},"limit":10
-        })).unwrap())),
+        lists: crate::state::Lists {
+            threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
+                "data":[
+                    {"id":id("assigned"),"name":"Assigned","projectId":"native"},
+                    {"id":id("unknown"),"name":"Unknown project","projectId":"missing","listStale":true},
+                    {"id":id("standalone"),"name":"Standalone","projectId":null},
+                    {"id":id("placed"),"name":"Placed","projectId":null},
+                    {"id":id("empty-project"),"name":"Empty project","projectId":""},
+                    {"id":id("child"),"name":"Child","parentId":id("standalone")},
+                    {"name":"No identity"}
+                ],
+                "projects":[{"id":"native","name":"Native","roots":[]},{"id":"","name":"Empty native ID","roots":[]}],
+                "hasMore":true,"hasMoreProjects":false,"projectPages":{},"limit":10
+            })).unwrap())),
+            ..Default::default()
+        },
         ..Default::default()
     };
-    Arc::make_mut(&mut snapshot.project_preferences).insert(
-        snapshot.storage_scope.clone(),
+    Arc::make_mut(&mut snapshot.lists.project_preferences).insert(
+        snapshot.connection.storage_scope.clone(),
         [(
             "native".into(),
             ProjectPreferences {
@@ -41,10 +44,10 @@ fn standalone_rows_keep_unknown_memberships_while_recent_chats_include_assigned_
         )]
         .into(),
     );
-    Arc::make_mut(&mut snapshot.activity)
+    Arc::make_mut(&mut snapshot.lists.activity)
         .active
         .insert(id("standalone"), true);
-    Arc::make_mut(&mut snapshot.activity)
+    Arc::make_mut(&mut snapshot.lists.activity)
         .unread
         .insert(id("unknown"));
     let list = snapshot.thread_list().unwrap();
@@ -84,7 +87,7 @@ fn standalone_rows_keep_unknown_memberships_while_recent_chats_include_assigned_
     }
     assert!(recent.projects == list.projects && recent.hidden_projects == list.hidden_projects);
     assert!(recent.has_more);
-    snapshot.threads = None;
+    snapshot.lists.threads = None;
     assert!(snapshot.thread_list().is_none());
     assert!(snapshot.recent_thread_list().is_none());
 }

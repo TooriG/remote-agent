@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppViewModel
+    let model: AppViewModel
     let openConnections: () -> Void
 
     var body: some View {
@@ -16,7 +16,14 @@ struct SettingsSheet: View {
                 }
                 Section {
                     NavigationLink {
-                        AgentSettingsScreen(model: model, close: { dismiss() })
+                        if let chat = model.chat {
+                            AgentSettingsScreen(
+                                model: chat,
+                                profiles: model.profiles,
+                                selectProfile: model.selectProfile,
+                                close: { dismiss() }
+                            ).id(chat.host)
+                        }
                     } label: { Label("アカウント", systemImage: "person.crop.circle") }
                         .accessibilityIdentifier("settings.agents")
                         .disabled(!model.isConnected)
@@ -65,7 +72,7 @@ struct LanguageSettings: View {
 }
 
 struct WorktreeSettingsScreen: View {
-    @ObservedObject var model: AppViewModel
+    let model: AppViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var createOnNewSession = false
     @State private var copyOnCreate = false
@@ -183,7 +190,7 @@ struct WorktreeSettingsScreen: View {
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
-            guard let settings = snapshot.worktreeSettings() else { error = "設定の応答が無効です。"; return }
+            guard let settings = snapshot.files().worktreeSettings() else { error = "設定の応答が無効です。"; return }
             createOnNewSession = settings.createOnNewSession
             copyOnCreate = settings.copyOnCreate
             deleteUnchanged = settings.deleteUnchanged
@@ -207,7 +214,7 @@ struct WorktreeSettingsScreen: View {
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
-            guard snapshot.worktreeSettings() != nil else { error = "設定を保存できませんでした。"; return }
+            guard snapshot.files().worktreeSettings() != nil else { error = "設定を保存できませんでした。"; return }
             dismiss()
         }
     }

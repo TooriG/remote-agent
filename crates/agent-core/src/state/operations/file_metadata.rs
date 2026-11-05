@@ -6,10 +6,10 @@ pub(crate) fn ensure_file_metadata(
     paths: Vec<String>,
     now_ms: u64,
 ) -> Vec<Effect> {
-    if !snapshot.connected {
+    if !snapshot.connection.connected {
         return Vec::new();
     }
-    let (generation, paths) = Arc::make_mut(&mut snapshot.workspace)
+    let (generation, paths) = Arc::make_mut(&mut snapshot.files.workspace)
         .file_metadata
         .ensure(paths, now_ms);
     paths
@@ -18,7 +18,7 @@ pub(crate) fn ensure_file_metadata(
             Effect::execute(ReadMetadata {
                 paths: paths.to_vec(),
                 generation,
-                connection: snapshot.connection_generation,
+                connection: snapshot.connection.connection_generation,
                 requested_at: now_ms,
             })
         })
@@ -54,8 +54,10 @@ impl Operation for ReadMetadata {
         Some((self.requested_at, None))
     }
     fn apply(self, snapshot: &mut Snapshot, (checked_at, output): Self::Output) -> Vec<Effect> {
-        if snapshot.connected && snapshot.connection_generation == self.connection {
-            Arc::make_mut(&mut snapshot.workspace)
+        if snapshot.connection.connected
+            && snapshot.connection.connection_generation == self.connection
+        {
+            Arc::make_mut(&mut snapshot.files.workspace)
                 .file_metadata
                 .received(
                     self.generation,
@@ -76,7 +78,7 @@ mod tests {
         let mut snapshot = Snapshot::default();
         let paths: Vec<_> = (0..130).map(|n| format!("/a/{n}")).collect();
         assert!(ensure_file_metadata(&mut snapshot, paths.clone(), 0).is_empty());
-        snapshot.connected = true;
+        snapshot.connection.connected = true;
         let effects = ensure_file_metadata(&mut snapshot, paths.clone(), 0);
         assert_eq!(effects.len(), 3);
         assert!(ensure_file_metadata(&mut snapshot, paths, 1).is_empty());
@@ -85,12 +87,15 @@ mod tests {
     #[test]
     fn stale_navigation_can_complete_but_a_previous_connection_cannot_publish_metadata() {
         let mut snapshot = Snapshot {
-            connected: true,
-            connection_generation: 2,
+            connection: crate::state::Connection {
+                connected: true,
+                connection_generation: 2,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let paths = vec!["/a".into()];
-        let (generation, _) = Arc::make_mut(&mut snapshot.workspace)
+        let (generation, _) = Arc::make_mut(&mut snapshot.files.workspace)
             .file_metadata
             .ensure(paths.clone(), 0);
         let request = |connection| ReadMetadata {
@@ -100,8 +105,8 @@ mod tests {
             requested_at: 0,
         };
         request(1).stale(&mut snapshot, (1, None));
-        assert!(snapshot.workspace.file_metadata.get("/a").is_none());
+        assert!(snapshot.files.workspace.file_metadata.get("/a").is_none());
         request(2).stale(&mut snapshot, (2, None));
-        assert!(snapshot.workspace.file_metadata.get("/a").is_some());
+        assert!(snapshot.files.workspace.file_metadata.get("/a").is_some());
     }
 }

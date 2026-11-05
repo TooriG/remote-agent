@@ -19,12 +19,6 @@ struct HostProfile: Codable, Identifiable, Equatable {
     }
 }
 
-struct ConversationPresentationInput {
-    let source: AgentCore.Thread
-    let snapshot: AgentCore.Snapshot
-    let host: String?
-}
-
 final class ConversationItem: Sendable {
     let source: RenderedItem
     let data: ItemPresentation

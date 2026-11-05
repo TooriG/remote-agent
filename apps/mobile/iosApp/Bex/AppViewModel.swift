@@ -1,39 +1,37 @@
 import AgentCore
-import Combine
 import Foundation
 import Network
+import Observation
 import UIKit
 
 @MainActor
-final class AppViewModel: ObservableObject {
-    @Published private(set) var snapshot = AgentCore.Snapshot.empty()
-    @Published var screen: AppScreen = .threads
-    @Published var sideChatRequest: SideChatRequest?
-    @Published var composerFocusRequest: UUID?
-    @Published var transferError: String?
-    @Published var transferring = false
-    @Published var connections: [String: Task<Void, Never>] = [:]
-    @Published var pairingConnection: Task<Void, Never>?
+@Observable
+final class AppViewModel {
+    @ObservationIgnored private(set) var publication = Presentation.empty()
+    private(set) var snapshot = AgentCore.Snapshot.empty()
+    private(set) var isConnected = false
+    private(set) var loadingThreads = false
+    private(set) var notices: [ErrorScope: [ErrorNotice]] = [:]
+    var screen: AppScreen = .threads
+    var connections: [String: Task<Void, Never>] = [:]
+    var pairingConnection: Task<Void, Never>?
     var isConnecting: Bool {
         screen == .pairing ? pairingConnection != nil : selectedProfileId.flatMap { connections[$0] } != nil
     }
 
-    @Published var pairingError: String?
-    @Published private(set) var pairingInvitation: Invitation?
+    var pairingError: String?
+    private(set) var pairingInvitation: Invitation?
     private var pairingReturnScreen: AppScreen = .threads
-    @Published var notice: String?
-    @Published var profiles: [HostProfile] = []
-    @Published private(set) var selectedProfileId: String?
-    @Published private(set) var allProfiles = false
-    @Published private(set) var conversation: ConversationPresentation?
-    @Published private(set) var list: ThreadList?
-    private(set) var models: [Model] = []
-    private var presentationTask: Task<Void, Never>?
-    private var pendingPresentation: ConversationPresentationInput?
-    private var recentConversations: [ConversationPresentation] = []
+    var notice: String?
+    var profiles: [HostProfile] = []
+    private(set) var selectedProfileId: String?
+    private(set) var allProfiles = false
+    private(set) var list: ThreadList?
 
-    lazy var sessions = ClientSessions(recentChats: false, clientBuild: Self.clientBuild,
-                                       deviceName: UIDevice.current.name)
+    @ObservationIgnored lazy var sessions = ClientSessions(recentChats: false, clientBuild: Self.clientBuild,
+                                                           deviceName: UIDevice.current.name)
+    private(set) var chat: ConversationModel?
+    private var conversations: [String: ConversationModel] = [:]
     private(set) var session: ClientSession?
 
     var store: AgentStore? {
@@ -43,9 +41,6 @@ final class AppViewModel: ObservableObject {
     var observations: [String: Task<Void, Never>] = [:]
     private let pathMonitor = NWPathMonitor()
     let liveActivities = TaskLiveActivities()
-    let panels = Panels()
-    let workbenchInstance = UUID()
-    var workbenchSideChats: [UInt64: SideChatRequest] = [:]
 
     init() {
         observeLiveActivityRequests()
@@ -101,8 +96,10 @@ final class AppViewModel: ObservableObject {
         let storage = MobileSessionStorage(host: id)
         let owner = sessions.open(host: id, storage: storage, platform: storage)
         session = owner
+        chat = conversations[id] ?? ConversationModel(host: id, session: owner)
+        conversations[id] = chat
         _ = try? owner.dispatch(intent: .showThreadList)
-        publish(owner.snapshot())
+        publish(owner.presentation())
         observe(owner, host: id)
     }
 
@@ -125,11 +122,13 @@ final class AppViewModel: ObservableObject {
         }
         connections.removeValue(forKey: id)?.cancel()
         observations.removeValue(forKey: id)?.cancel()
+        conversations.removeValue(forKey: id)
         let old = sessions.remove(host: id)
         if selectedProfileId == id {
             resetPresentation()
             selectedProfileId = nil
             session = nil
+            chat = nil
             UserDefaults.standard.removeObject(forKey: "bex.selected-host")
         }
         profiles.removeAll { $0.id == id }
@@ -155,11 +154,11 @@ final class AppViewModel: ObservableObject {
     }
 
     private func resetPresentation() {
-        recentConversations.removeAll()
-        pendingPresentation = nil
-        conversation = nil
         notice = nil
-        publish(AgentCore.Snapshot.empty())
+        publication = Presentation.empty()
+        snapshot = AgentCore.Snapshot.empty()
+        isConnected = false
+        loadingThreads = false
     }
 
     func openPairing() {
@@ -233,14 +232,14 @@ final class AppViewModel: ObservableObject {
         }
         do {
             let receipt = try owner.dispatch(intent: intent)
-            publish(owner.snapshot())
+            publish(owner.presentation())
             let host = selectedProfileId
             Task { [weak self] in
                 let result: Result<Outcome, Error>
                 do { result = try await .success(receipt.wait()) } catch { result = .failure(error) }
                 guard let self else { return }
                 if selectedProfileId == host, session === owner {
-                    publish(owner.snapshot())
+                    publish(owner.presentation())
                 }
                 completion(result)
             }
@@ -249,8 +248,9 @@ final class AppViewModel: ObservableObject {
 }
 
 extension AppViewModel {
-    func publish(_ next: AgentCore.Snapshot) {
-        let changes = next.changes(previous: snapshot)
+    func publish(_ value: Presentation) {
+        let changes = value.changes(previous: publication)
+        let next = value.snapshot()
         guard changes.changed else { return }
         updateProfile(next, host: selectedProfileId)
         if changes.list {
@@ -259,17 +259,27 @@ extension AppViewModel {
                 store?.recordConnectionEvent(phase: .listPublished, value: next.connected() ? 1 : 0)
             }
         }
-        if changes.models {
-            models = next.models()
+        chat?.publish(value)
+        publication = value
+        updateConnection(connected: next.connected(), loading: next.operationRunning(key: .sessionList))
+        let scopes: [ErrorScope] = [.application, .projects, .settings, .workspace]
+        let notices = Dictionary(uniqueKeysWithValues: scopes.map { ($0, next.errorNotices(scope: $0)) })
+        if self.notices != notices {
+            self.notices = notices
         }
-        migrateWorkbench(to: next)
         snapshot = next
         synchronizeLiveActivities(foreground: UIApplication.shared.applicationState == .active)
-        if changes.conversation {
-            projectConversation(next.conversationSource())
-        }
         if let error = session?.persistenceError() {
             notice = error
+        }
+    }
+
+    private func updateConnection(connected: Bool, loading: Bool) {
+        if isConnected != connected {
+            isConnected = connected
+        }
+        if loadingThreads != loading {
+            loadingThreads = loading
         }
     }
 
@@ -283,39 +293,6 @@ extension AppViewModel {
                 profiles[index] = profile
                 do { try HostProfile.save(profiles) } catch { notice = error.localizedDescription }
             }
-        }
-    }
-
-    private func projectConversation(_ source: AgentCore.Thread?) {
-        guard let source else {
-            conversation = nil
-            pendingPresentation = nil
-            return
-        }
-        if conversation?.id != source.id() {
-            conversation = recentConversations.first { $0.id == source.id() }
-        }
-        pendingPresentation = ConversationPresentationInput(source: source, snapshot: snapshot, host: selectedProfileId)
-        guard presentationTask == nil else { return }
-        presentationTask = Task { [weak self] in
-            while let self, let input = pendingPresentation {
-                pendingPresentation = nil
-                let previous = conversation
-                let rendered = await Task.detached(priority: .userInitiated) {
-                    ConversationPresentation.project(input.source, snapshot: input.snapshot, previous: previous)
-                }.value
-                if selectedProfileId == input.host, snapshot.conversationUnchanged(other: input.snapshot) {
-                    conversation = rendered
-                    if rendered.id != nil {
-                        recentConversations.removeAll { $0.id == rendered.id }
-                        recentConversations.insert(rendered, at: 0)
-                        if recentConversations.count > 3 {
-                            recentConversations.removeLast()
-                        }
-                    }
-                }
-            }
-            self?.presentationTask = nil
         }
     }
 

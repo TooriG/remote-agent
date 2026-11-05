@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ModelSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppViewModel
+    let model: ConversationModel
 
     var body: some View {
         NavigationStack {
@@ -15,7 +15,7 @@ struct ModelSettingsSheet: View {
 }
 
 struct ModelSettingsScreen: View {
-    @ObservedObject var model: AppViewModel
+    let model: ConversationModel
     let close: () -> Void
     @State private var search = ""
     @State private var providerOverride: ProviderKind?
@@ -37,7 +37,7 @@ struct ModelSettingsScreen: View {
 
     var body: some View {
         Form {
-            ErrorNotices(model: model, scope: .settings)
+            ErrorNotices(notices: model.snapshot.errorNotices(scope: .settings), perform: { model.perform($0) })
             Section("エージェント") {
                 Picker("エージェント", selection: Binding<ProviderKind?>(
                     get: { provider }, set: {
@@ -93,7 +93,7 @@ struct ModelSettingsScreen: View {
             loadingModels = true
             model.perform(.loadModels(LoadModels())) { _ in loadingModels = false }
         }
-        .onChange(of: model.selectedProfileId) { _ in
+        .onChange(of: model.host) { _ in
             providerOverride = nil
             search = ""
         }

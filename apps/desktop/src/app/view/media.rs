@@ -22,9 +22,12 @@ impl Desktop {
                     error: None,
                 },
             );
-            let cwd = self.snapshot.navigation.cwd.clone();
+            let cwd = self.snapshot.pane.navigation.cwd.clone();
             let remote = self.remote.is_some();
-            let store = self.session.as_ref().map(|session| session.store.clone());
+            let store = self
+                .session
+                .as_ref()
+                .map(|session| session.host.store.clone());
             let destination = self
                 .media
                 .image_dir
@@ -186,8 +189,8 @@ impl Desktop {
         if let Some((file, lookup_path)) =
             agent_core::presentation::markdown::desktop_file_reference(
                 source,
-                &self.snapshot.navigation.cwd,
-                self.snapshot.host_home_directory.as_deref(),
+                &self.snapshot.pane.navigation.cwd,
+                self.snapshot.connection.host_home_directory.as_deref(),
             )
         {
             self.activate_reference(
@@ -549,8 +552,8 @@ mod file_panel_tests {
     fn reference_request(view: &Desktop, source: &str, epoch: u64) -> files::ReferenceRequest {
         let (file, lookup_path) = agent_core::presentation::markdown::desktop_file_reference(
             source,
-            &view.snapshot.navigation.cwd,
-            view.snapshot.host_home_directory.as_deref(),
+            &view.snapshot.pane.navigation.cwd,
+            view.snapshot.connection.host_home_directory.as_deref(),
         )
         .unwrap();
         files::ReferenceRequest {
@@ -565,10 +568,10 @@ mod file_panel_tests {
         window: &mut Window,
         cx: &mut Context<Desktop>,
     ) -> files::ReferenceRequest {
-        Arc::make_mut(&mut view.snapshot).connected = true;
-        let request = reference_request(view, source, view.snapshot.epoch);
+        Arc::make_mut(&mut view.snapshot).connection.connected = true;
+        let request = reference_request(view, source, view.snapshot.connection.epoch);
         view.open_reference(request.target, window, cx);
-        reference_request(view, source, view.snapshot.epoch)
+        reference_request(view, source, view.snapshot.connection.epoch)
     }
 
     #[gpui::test]
@@ -587,6 +590,7 @@ mod file_panel_tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -596,7 +600,7 @@ mod file_panel_tests {
         let (_, window) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: None,
                         cwd: cwd.clone(),
                     },
@@ -611,11 +615,11 @@ mod file_panel_tests {
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut snapshot.navigation).cwd = cwd.clone();
+                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd = cwd.clone();
                 view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this draft", window, cx)
                 });
-                view.panels.open(view.panel_scope(), Panel::Files, None);
+                view.open_surface(view.panel_scope(), Panel::Files, None);
                 view.sync_file_browser(true, window, cx);
                 view.file_browser.as_mut().unwrap().model.tree =
                     Arc::new(agent_core::presentation::files::FileTreeView {
@@ -632,7 +636,7 @@ mod file_panel_tests {
                         ready: true,
                         ..Default::default()
                     });
-                view.panels.set_open(view.panel_scope(), true);
+                view.panels = view.panels.clone().set_open(view.panel_scope(), true);
                 cx.notify();
             });
         });
@@ -712,7 +716,7 @@ mod file_panel_tests {
                     "notebook.ipynb",
                 ] {
                     let target = directory.path().join(name).to_string_lossy().into_owned();
-                    view.panels.set_open(view.panel_scope(), false);
+                    view.panels = view.panels.clone().set_open(view.panel_scope(), false);
                     let request = start_reference(view, &target, window, cx);
                     // The fixture is offline; deliver the Host's resolution
                     // through the same production completion used by links.
@@ -787,7 +791,8 @@ mod file_panel_tests {
                     Some(source.as_str()),
                     "tree and explicit editor opens supersede pending lookups"
                 );
-                let mut copy = reference_request(view, "missing.rs:12:3", view.snapshot.epoch);
+                let mut copy =
+                    reference_request(view, "missing.rs:12:3", view.snapshot.connection.epoch);
                 copy.action = files::ReferenceAction::Menu(
                     agent_core::presentation::files::FileAction::CopyRelativePath,
                 );
@@ -836,7 +841,7 @@ mod file_panel_tests {
                     OperationCompletion::FileReference(Box::new(reference_request(
                         view,
                         &source,
-                        view.snapshot.epoch + 1,
+                        view.snapshot.connection.epoch + 1,
                     ))),
                     Ok(resolved(&source, false)),
                     window,
@@ -922,6 +927,7 @@ mod file_panel_tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -931,7 +937,7 @@ mod file_panel_tests {
         let (_, window) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -949,8 +955,10 @@ mod file_panel_tests {
         let desktop = desktop.unwrap();
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
-                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).cwd =
-                    "/fixture".into();
+                Arc::make_mut(
+                    &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
+                )
+                .cwd = "/fixture".into();
                 view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this side draft", window, cx)
                 });

@@ -16,10 +16,10 @@ pub(crate) fn file_tree_action(
     {
         return Vec::new();
     }
-    let connection = snapshot.connection_generation;
-    let trees = &mut Arc::make_mut(&mut snapshot.workspace).file_trees;
+    let connection = snapshot.connection.connection_generation;
+    let trees = &mut Arc::make_mut(&mut snapshot.files.workspace).file_trees;
     let work = trees.action(key, action, connection);
-    if snapshot.connected {
+    if snapshot.connection.connected {
         effects(work)
     } else {
         trees.disconnected();
@@ -28,19 +28,19 @@ pub(crate) fn file_tree_action(
 }
 pub(crate) fn reconnect_file_trees(snapshot: &mut Snapshot) -> Vec<Effect> {
     effects(
-        Arc::make_mut(&mut snapshot.workspace)
+        Arc::make_mut(&mut snapshot.files.workspace)
             .file_trees
-            .reconnect(snapshot.connection_generation),
+            .reconnect(snapshot.connection.connection_generation),
     )
 }
 pub(crate) fn refresh_file_trees(snapshot: &mut Snapshot, path: &str) -> Vec<Effect> {
-    if !snapshot.connected {
+    if !snapshot.connection.connected {
         return Vec::new();
     }
     effects(
-        Arc::make_mut(&mut snapshot.workspace)
+        Arc::make_mut(&mut snapshot.files.workspace)
             .file_trees
-            .refresh_matching(path, snapshot.connection_generation),
+            .refresh_matching(path, snapshot.connection.connection_generation),
     )
 }
 
@@ -92,12 +92,11 @@ impl Operation for ReadTreeDirectory {
         Some(Err("フォルダを読み込めませんでした。".into()))
     }
     fn apply(self, snapshot: &mut Snapshot, result: Self::Output) -> Vec<Effect> {
-        effects(Arc::make_mut(&mut snapshot.workspace).file_trees.directory(
-            &self.key,
-            self.path,
-            self.generation,
-            result,
-        ))
+        effects(
+            Arc::make_mut(&mut snapshot.files.workspace)
+                .file_trees
+                .directory(&self.key, self.path, self.generation, result),
+        )
     }
 }
 
@@ -122,6 +121,7 @@ impl Operation for DebounceSearchTree {
         // its own debounce while a prior RPC is running, and stale timers must
         // never issue an obsolete Host search.
         if snapshot
+            .files
             .workspace
             .file_trees
             .search_current(&self.0.key, self.0.generation)
@@ -158,11 +158,9 @@ impl Operation for SearchTree {
         Some(Err("ファイルを検索できませんでした。".into()))
     }
     fn apply(self, snapshot: &mut Snapshot, result: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.workspace).file_trees.searched(
-            &self.key,
-            self.generation,
-            result,
-        );
+        Arc::make_mut(&mut snapshot.files.workspace)
+            .file_trees
+            .searched(&self.key, self.generation, result);
         Vec::new()
     }
 }
@@ -187,7 +185,7 @@ mod tests {
     #[test]
     fn only_the_latest_debounce_can_start_a_host_search() {
         let mut snapshot = Snapshot::default();
-        let trees = &mut Arc::make_mut(&mut snapshot.workspace).file_trees;
+        let trees = &mut Arc::make_mut(&mut snapshot.files.workspace).file_trees;
         trees.action(
             key("/workspace"),
             FileTreeAction::Open {
@@ -226,7 +224,7 @@ mod tests {
         let current = query("current");
         assert!(old.apply(&mut snapshot, Ok(())).is_empty());
         assert_eq!(current.apply(&mut snapshot, Ok(())).len(), 1);
-        let trees = &mut Arc::make_mut(&mut snapshot.workspace).file_trees;
+        let trees = &mut Arc::make_mut(&mut snapshot.files.workspace).file_trees;
         let pending = trees.action(
             key("/workspace"),
             FileTreeAction::Query {
@@ -263,10 +261,14 @@ mod tests {
     #[test]
     fn reducer_owns_tree_updates_without_mutating_published_snapshots() {
         let mut before = Snapshot {
-            connected: true,
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        Arc::make_mut(&mut before.navigation).cwd = "/another-thread".into();
+        Arc::make_mut(&mut Arc::make_mut(&mut before.pane).navigation).cwd =
+            "/another-thread".into();
         let (mut next, effects) = crate::state::reduce(
             &before,
             crate::state::Event::Intent(Intent::FileTree {
@@ -279,9 +281,9 @@ mod tests {
             }),
         );
         assert_eq!(effects.len(), 1);
-        assert!(!before.file_tree(key("/workspace")).pending);
-        assert!(next.file_tree(key("/workspace")).pending);
-        assert!(!next.file_tree(key("/workspace")).ready);
+        assert!(!before.files.file_tree(key("/workspace")).pending);
+        assert!(next.files.file_tree(key("/workspace")).pending);
+        assert!(!next.files.file_tree(key("/workspace")).ready);
         assert_eq!(
             file_tree_action(
                 &mut next,
@@ -314,7 +316,7 @@ mod tests {
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
             updates.wait_for(|snapshot| {
-                let tree = snapshot.file_tree(key("/workspace"));
+                let tree = snapshot.files.file_tree(key("/workspace"));
                 !tree.pending && tree.error.is_some()
             }),
         )
@@ -329,12 +331,13 @@ mod tests {
         );
         let _ = store.dispatch(open).await;
         updates
-            .wait_for(|snapshot| !snapshot.file_tree(key("/workspace")).pending)
+            .wait_for(|snapshot| !snapshot.files.file_tree(key("/workspace")).pending)
             .await
             .unwrap();
         assert!(
             store
                 .snapshot()
+                .files
                 .file_tree(key("/workspace"))
                 .error
                 .is_some()
@@ -348,17 +351,17 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             let mut initial = Snapshot::default();
             super::super::ReadFileOpenCapabilities {}.prepare(&mut initial).unwrap();
-            initial.preferred_editor = Some(agent_protocol::editors::EditorId::Cursor);
+            initial.files.preferred_editor = Some(agent_protocol::editors::EditorId::Cursor);
             super::super::ReadFileOpenCapabilities {}.apply(&mut initial,
                 agent_protocol::editors::FileOpenCapabilities { editors: vec![agent_protocol::editors::EditorId::Cursor], reveal: None });
             let (mut initial, _) = crate::state::reduce(&initial, Event::Disconnected);
-            assert!(initial.file_open_capabilities.is_none());
+            assert!(initial.files.file_open_capabilities.is_none());
             let key = FileTreeKey { owner: "mobile".into(), root: "/workspace".into() };
             assert!(file_tree_action(&mut initial, key.clone(), FileTreeAction::Open {
                 surface: crate::presentation::files::FileTreeSurface::Mobile,
                 locale: "en-US".into(), workspace_root: "/workspace".into(),
             }).is_empty());
-            assert!(initial.file_tree(key.clone()).error.is_some());
+            assert!(initial.files.file_tree(key.clone()).error.is_some());
             let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
             let store = crate::store::Store::new(peer, initial);
             let mut methods = Vec::new();
@@ -378,12 +381,12 @@ mod tests {
                 writer.reply(&request, json!({"result":reply})).await.unwrap();
             }
             let mut updates = store.subscribe();
-            updates.wait_for(|snapshot| snapshot.file_tree(key.clone()).ready && snapshot.file_open_capabilities.is_some()).await.unwrap();
+            updates.wait_for(|snapshot| snapshot.files.file_tree(key.clone()).ready && snapshot.files.file_open_capabilities.is_some()).await.unwrap();
             let snapshot = store.snapshot();
-            assert_eq!(snapshot.file_tree(key.clone()).rows[0].path, "new.rs");
-            assert!(snapshot.file_tree(key).error.is_none());
-            assert_eq!(snapshot.preferred_editor, Some(agent_protocol::editors::EditorId::Cursor));
-            assert_eq!(snapshot.file_open_capabilities.as_ref().unwrap().editors, [agent_protocol::editors::EditorId::Zed]);
+            assert_eq!(snapshot.files.file_tree(key.clone()).rows[0].path, "new.rs");
+            assert!(snapshot.files.file_tree(key).error.is_none());
+            assert_eq!(snapshot.files.preferred_editor, Some(agent_protocol::editors::EditorId::Cursor));
+            assert_eq!(snapshot.files.file_open_capabilities.as_ref().unwrap().editors, [agent_protocol::editors::EditorId::Zed]);
             assert_eq!(methods.iter().filter(|method| *method == "host/file/openCapabilities").count(), 1);
             store.close().await.unwrap();
         }).await.unwrap();

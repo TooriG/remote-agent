@@ -39,11 +39,11 @@ impl FileChips {
             .collect();
         let paths: Vec<_> = files.values().map(|chip| chip.file.path.clone()).collect();
         let owner = desktop.downgrade();
-        let epoch = desktop.read(cx).snapshot.epoch;
+        let epoch = desktop.read(cx).snapshot.connection.epoch;
         if !paths.is_empty() {
             cx.defer(move |cx| {
                 let _ = owner.update(cx, |desktop, _| {
-                    if desktop.snapshot.epoch == epoch {
+                    if desktop.snapshot.connection.epoch == epoch {
                         desktop.ensure_reference_metadata(paths);
                     }
                 });
@@ -134,7 +134,7 @@ impl FileChip {
             caption,
             desktop: desktop.downgrade(),
             focus: cx.focus_handle(),
-            epoch: desktop.read(cx).snapshot.epoch,
+            epoch: desktop.read(cx).snapshot.connection.epoch,
             _observation: cx.observe(desktop, |view, desktop, cx| {
                 let metadata = desktop
                     .read(cx)
@@ -158,7 +158,7 @@ impl FileChip {
     ) {
         cx.stop_propagation();
         let _ = self.desktop.update(cx, |desktop, cx| {
-            if desktop.snapshot.epoch != self.epoch {
+            if desktop.snapshot.connection.epoch != self.epoch {
                 return;
             }
             if menu {
@@ -305,7 +305,7 @@ impl Render for FileChip {
             .on_hover(cx.listener(|view, hovered, _, cx| {
                 if *hovered {
                     let _ = view.desktop.update(cx, |desktop, _| {
-                        if desktop.snapshot.epoch == view.epoch {
+                        if desktop.snapshot.connection.epoch == view.epoch {
                             desktop.ensure_reference_metadata(vec![view.file.path.clone()]);
                         }
                     });

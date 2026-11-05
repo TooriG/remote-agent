@@ -1,6 +1,5 @@
 import AgentCore
 import Foundation
-import UniformTypeIdentifiers
 
 struct DraftIdentity: Hashable {
     let profile: String?
@@ -10,24 +9,6 @@ struct DraftIdentity: Hashable {
 typealias SnapshotRequest = (Intent, @escaping (AgentCore.Snapshot, Result<Outcome, Error>) -> Void) -> Void
 
 extension AppViewModel {
-    var sending: Bool {
-        snapshot.operationRunning(key: .submission(draftKey: coreDraftKey))
-    }
-
-    var transcribing: Bool {
-        snapshot.operationRunning(key: .dictation(draftKey: coreDraftKey))
-    }
-
-    var loadingThreads: Bool {
-        snapshot.operationRunning(key: .sessionList)
-    }
-
-    var interruptingTurnId: String? {
-        guard let session = selectedThreadId,
-              let turn = snapshot.conversation(id: session)?.activeTurnId() else { return nil }
-        return snapshot.operationRunning(key: .interrupt(session: session, turn: turn)) ? turn : nil
-    }
-
     func recordScene(_ value: UInt64) {
         sessions.recordScene(value: value)
     }
@@ -40,45 +21,12 @@ extension AppViewModel {
         perform(intent) { [self] result in completion(snapshot, result) }
     }
 
-    var isConnected: Bool {
-        snapshot.connected()
-    }
-
     var selectedProfileName: String? {
         profiles.first { $0.id == selectedProfileId }?.name
     }
 
-    var selectedThreadId: SessionRef? {
-        snapshot.navigation().threadId
-    }
-
-    var isNewThread: Bool {
-        selectedThreadId == nil && screen == .thread
-    }
-
     var threadLoadState: LoadState {
         loadingThreads ? .loading : list != nil ? .ready : notice != nil ? .failed : .idle
-    }
-
-    var cwd: String {
-        snapshot.navigation().cwd
-    }
-
-    var selectedDirectory: String {
-        snapshot.selectedDirectory()
-    }
-
-    var coreDraftKey: DraftKey {
-        snapshot.navigation().draftKey
-    }
-
-    var draftKey: DraftIdentity {
-        DraftIdentity(profile: selectedProfileId, key: coreDraftKey)
-    }
-
-    var draft: String {
-        get { snapshot.draft(key: coreDraftKey).text }
-        set { perform(.setDraftText(threadId: coreDraftKey, text: newValue)) }
     }
 
     func showProfiles() {
@@ -152,7 +100,7 @@ extension AppViewModel {
     func openThread(_ id: SessionRef) {
         notice = nil
         perform(.readThread(ReadThread(threadId: id, open: true)))
-        if selectedThreadId == id {
+        if snapshot.navigation().threadId == id {
             screen = .thread
         }
     }
@@ -166,145 +114,5 @@ extension AppViewModel {
             selectProfile(host)
         }
         showThreadList()
-    }
-
-    func loadOlderHistory(
-        _ id: SessionRef,
-        completion: @escaping (_ succeeded: Bool, _ turnCount: UInt64, _ hasMore: Bool) -> Void
-    ) {
-        guard selectedThreadId == id else { return }
-        notice = nil
-        perform(.readOlder(threadId: id)) { [weak self] result in
-            guard let self else { return }
-            completion((try? result.get()) != nil, snapshot.conversation(id: id)?.turnCount() ?? 0,
-                       snapshot.historyControl(session: id)?.hasMore ?? false)
-        }
-    }
-
-    func send() {
-        perform(.submit(
-            threadId: snapshot.navigation().threadId,
-            clientUserMessageId: UUID().uuidString
-        )) { [weak self] _ in
-            self?.persist()
-        }
-    }
-
-    func restoreUnknownSubmission(_ id: String) {
-        perform(.restoreUnknownSubmission(clientUserMessageId: id)) { [weak self] _ in self?.persist() }
-    }
-
-    func discardUnknownSubmission(_ id: String) {
-        perform(.discardUnknownSubmission(clientUserMessageId: id)) { [weak self] _ in self?.persist() }
-    }
-
-    func removeAttachment(_ id: Int) {
-        perform(.removeAttachment(draftKey: coreDraftKey, index: UInt32(id))) { [weak self] _ in self?.persist() }
-    }
-
-    func transcribe(_ audio: Data, draftKey key: DraftIdentity, sendImmediately: Bool,
-                    preparation: DictationPreparation?) {
-        guard !transcribing, key == draftKey else { return }
-        perform(.transcribe(Dictate(
-            draftKey: coreDraftKey,
-            preparation: preparation?.id(),
-            audio: audio,
-            send: sendImmediately,
-            clientUserMessageId: UUID().uuidString
-        ))) { [weak self] _ in
-            withExtendedLifetime(preparation) {
-                self?.persist()
-            }
-        }
-    }
-
-    func interrupt(_ turnId: String) {
-        guard let threadId = snapshot.navigation().threadId else { return }
-        perform(.interrupt(Interrupt(threadId: threadId, turnId: turnId)))
-    }
-}
-
-extension AppViewModel {
-    func attach(_ url: URL, temporaryDirectory: URL? = nil) async throws {
-        let access = url.startAccessingSecurityScopedResource()
-        transferring = true
-        transferError = nil
-        defer {
-            persist()
-            if access {
-                url.stopAccessingSecurityScopedResource()
-            }
-            if let temporaryDirectory {
-                try? FileManager.default.removeItem(at: temporaryDirectory)
-            }
-            transferring = false
-        }
-        let attachment = Attachment(path: url.path, name: url.lastPathComponent,
-                                    isImage: UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true)
-        _ = try await outcome(for: .uploadAttachment(UploadAttachment(
-            draftKey: coreDraftKey,
-            attachment: attachment
-        )))
-    }
-
-    func respond(_ requestId: String, _ answer: Answer) {
-        perform(.respond(Respond(requestId: requestId, answer: answer)))
-    }
-
-    /// The question the open conversation's composer answers.
-    var questionPrompt: QuestionPrompt? {
-        selectedThreadId.flatMap { snapshot.questionPrompt(threadId: $0) }
-    }
-
-    /// The other request the composer answers; the question panel owns questions.
-    var dockedRequest: Request? {
-        selectedThreadId.flatMap { snapshot.dockedRequests(session: $0) }?.first { request in
-            if case .question = request.requestBody {
-                return false
-            }
-            return true
-        }
-    }
-
-    func answerQuestion(_ requestId: String, _ action: QuestionAction) {
-        perform(.answerQuestion(requestId: requestId, action: action))
-    }
-
-    func readItemDetails(threadId: SessionRef, turnId: String, itemId: String) async -> String? {
-        do {
-            _ = try await outcome(for: .readItem(ReadItem(threadId: threadId, turnId: turnId, itemId: itemId)))
-            return nil
-        } catch { return error.localizedDescription }
-    }
-
-    func download(_ path: String) async throws -> URL {
-        let host = selectedProfileId
-        return try await inTemporaryDirectory { directory in
-            let target = directory.appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent)
-            _ = try await outcome(for: .downloadFile(DownloadFile(source: path, destination: target.path)))
-            guard selectedProfileId == host else { throw CancellationError() }
-            try Task.checkCancellation()
-            return target
-        }
-    }
-
-    func outcome(for intent: Intent) async throws -> Outcome {
-        try await withCheckedThrowingContinuation { continuation in
-            perform(intent) { continuation.resume(with: $0) }
-        }
-    }
-
-    func forkAndOpen(through turnId: String, completion: @escaping (String?) -> Void) {
-        guard let threadId = selectedThreadId, let host = selectedProfileId else { completion(nil); return }
-        perform(.forkSession(ForkSession(threadId: threadId, lastTurnId: turnId))) { [self] result in
-            guard selectedProfileId == host, selectedThreadId == threadId else { completion(nil); return }
-            switch result {
-            case let .success(.startedThread(id)):
-                openThread(id)
-                completion(nil)
-            case let .failure(error): completion(error.localizedDescription)
-            default: completion("会話を分岐できませんでした。")
-            }
-        }
     }
 }

@@ -4,26 +4,14 @@ import android.content.Context
 import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -32,7 +20,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.AgentStore
@@ -44,6 +31,7 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListSessions
 import dev.remoteagent.core.OperationKey
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.Presentation
 import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.UploadAttachment
@@ -93,7 +81,35 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
+    private var publication = Presentation.empty()
     var snapshot by mutableStateOf(Snapshot.empty())
+        private set
+
+    var conversationContext by mutableStateOf(Presentation.empty().conversationContext())
+        private set
+
+    var composer by mutableStateOf(Presentation.empty().composer())
+        private set
+
+    var files by mutableStateOf(Snapshot.empty().files())
+        private set
+
+    var fileLocation by mutableStateOf(FileLocation("", null))
+        private set
+
+    var isConnected by mutableStateOf(false)
+        private set
+
+    var loadingThreads by mutableStateOf(false)
+        private set
+
+    var listQuery by mutableStateOf(Snapshot.empty().listQuery())
+        private set
+
+    var applicationNotices by mutableStateOf(emptyList<dev.remoteagent.core.ErrorNotice>())
+        private set
+
+    var projectNotices by mutableStateOf(emptyList<dev.remoteagent.core.ErrorNotice>())
         private set
 
     var conversation by mutableStateOf<ConversationProjection?>(null)
@@ -114,13 +130,10 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
 
     var notice by mutableStateOf<String?>(null)
     val loadingHistory: Boolean
-        get() = snapshot.navigation().threadId?.let { snapshot.operationRunning(OperationKey.History(it)) } ?: false
+        get() = conversationContext.history()?.loading == true
 
     val shouldReconnect: Boolean
-        get() = !snapshot.connected() && connectionSelection.hostId != null && screen != Screen.Pairing
-
-    val loadingThreads: Boolean
-        get() = snapshot.operationRunning(OperationKey.SessionList)
+        get() = !isConnected && connectionSelection.hostId != null && screen != Screen.Pairing
 
     var list by mutableStateOf<ThreadList?>(null)
         private set
@@ -180,11 +193,11 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 complete(Result.failure(error))
                 return
             }
-        publish(store.snapshot())
+        publish(store.presentation())
         val host = connectionSelection.hostId
         scope.launch {
             val result = runCatching { receipt.wait() }
-            if (host == connectionSelection.hostId && session === store) publish(store.snapshot())
+            if (host == connectionSelection.hostId && session === store) publish(store.presentation())
             complete(result)
         }
     }
@@ -207,9 +220,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         connectionSelection = connectionSelection.copy(hostId = id)
         repository.selected = id
         notice = null
-        publish(Snapshot.empty())
+        publish(Presentation.empty())
         selected.dispatch(Intent.ShowThreadList)
-        publish(selected.snapshot())
+        publish(selected.presentation())
         observe(id, selected)
     }
 
@@ -308,7 +321,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 try {
                     store.resume(profile.ticket)
                     if (connectionSelection.hostId == profile.id) {
-                        publish(store.snapshot())
+                        publish(store.presentation())
                         notice = null
                     }
                 } catch (error: AgentException) {
@@ -334,11 +347,10 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             try {
                 val store = selected.ready()
                 if (!isActive) return@launch
-                var previous = store.snapshot()
+                var previous = store.presentation()
                 receiveHost(previous, host, true)
                 while (isActive) {
-                    store.nextSnapshot(previous)
-                    val latest = store.snapshot()
+                    val latest = store.nextPresentation(previous)
                     receiveHost(latest, host, latest.changes(previous).list)
                     previous = latest
                 }
@@ -348,20 +360,31 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         }
     }
 
-    private fun receiveHost(next: Snapshot, host: String, listChanged: Boolean) {
-        updateProfile(next, host)
+    private fun receiveHost(next: Presentation, host: String, listChanged: Boolean) {
+        updateProfile(next.snapshot(), host)
         if (connectionSelection.hostId == host) {
             owner = session?.store()
             publish(next)
         } else if (connectionSelection.all && listChanged) updateTaskList()
     }
 
-    private fun publish(next: Snapshot) {
-        val changes = next.changes(snapshot)
+    private fun publish(value: Presentation) {
+        val changes = value.changes(publication)
+        val next = value.snapshot()
         if (!changes.changed) return
         if (changes.reconnected) notice = null
         if (changes.list) updateTaskList()
-        if (changes.conversation) conversation = projectConversationRows(next, next.conversationSource(), conversation)
+        if (changes.context) conversationContext = value.conversationContext()
+        if (changes.composer) composer = value.composer()
+        if (changes.conversation) conversation = projectConversationRows(value.conversation(), conversation)
+        publication = value
+        isConnected = next.connected()
+        loadingThreads = next.operationRunning(OperationKey.SessionList)
+        listQuery = next.listQuery()
+        applicationNotices = next.errorNotices(ErrorScope.Application)
+        projectNotices = next.errorNotices(ErrorScope.Projects)
+        if (changes.groups.files || changes.groups.pane) files = next.files()
+        fileLocation = FileLocation(next.navigation().cwd, next.hostHomeDirectory())
         snapshot = next
         session?.persistenceError()?.let { notice = it }
     }
@@ -468,45 +491,23 @@ internal fun RemoteAgentApp(
     var settings by remember { mutableStateOf(false) }
     ObserveConnectionLifecycle(activity, model::lifecycle)
     BackHandler(model.screen != Screen.Threads) { model.showThreads() }
-    CompositionLocalProvider(LocalUiLanguage provides model.language, LocalHostSnapshot provides model.snapshot) {
+    CompositionLocalProvider(
+        LocalUiLanguage provides model.language,
+        LocalFiles provides model.files,
+        LocalFileLocation provides model.fileLocation,
+    ) {
         AppTheme {
             Scaffold(
                 topBar = { if (model.screen in listOf(Screen.Pairing, Screen.Hosts)) HostAppBar { settings = true } }
             ) { padding ->
                 Column(Modifier.fillMaxSize().appContentInsets(padding)) {
                     ConnectionStatus(model.notice, model.busy, model.shouldReconnect, model::connect)
-                    ErrorNotices(model.snapshot, ErrorScope.Application, model::perform, model::connect)
-                    when (model.screen) {
-                        Screen.Pairing -> PairingScreen(model.busy, model::pair, model::showThreads, requestQrScan)
-                        Screen.Hosts ->
-                            ProfilesScreen(model.profiles, model::selectConnection) { model.screen = Screen.Pairing }
-                        Screen.Threads -> {
-                            ErrorNotices(model.snapshot, ErrorScope.Projects, model::perform)
-                            ThreadListScreen(
-                                model.list,
-                                model.snapshot.listQuery(),
-                                model.loadingThreads,
-                                model::performList,
-                                title = {
-                                    ConnectionListTitle(
-                                        model.profiles,
-                                        model.connectionSelection,
-                                        model.snapshot.connected(),
-                                        select = model::selectConnection,
-                                        openSettings = { settings = true },
-                                    )
-                                },
-                                scopeKey =
-                                    if (model.connectionSelection.all) "all"
-                                    else model.connectionSelection.hostId.orEmpty(),
-                                emptyContent =
-                                    if (model.profiles.isEmpty()) {
-                                        { EmptyConnections(connect = { model.screen = Screen.Pairing }) }
-                                    } else null,
-                            )
-                        }
-                        Screen.Conversation -> ConversationPane(model)
-                    }
+                    ErrorNotices(
+                        model.applicationNotices,
+                        model::perform,
+                        if (model.isConnected) null else model::connect,
+                    )
+                    AppScreenContent(model, requestQrScan) { settings = true }
                 }
             }
         }
@@ -525,52 +526,39 @@ internal fun RemoteAgentApp(
 }
 
 @Composable
-private fun PairingScreen(
-    busy: Boolean,
-    pair: (String) -> Unit,
-    showHosts: () -> Unit,
-    scan: (onContents: (String) -> Unit) -> Unit,
+private fun androidx.compose.foundation.layout.ColumnScope.AppScreenContent(
+    model: AndroidAppModel,
+    requestQrScan: (onContents: (String) -> Unit) -> Unit,
+    openSettings: () -> Unit,
 ) {
-    val language = LocalUiLanguage.current
-    var contents by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(language.text("PCとペアリング"), style = MaterialTheme.typography.headlineMedium)
-        Text(language.text("PCのBexに表示されたQRコードを読み取ります。QRの内容はこの端末に保存しません。"))
-        Button(onClick = { scan { value -> contents = value } }) { Text(language.text("QRコードを読み取る")) }
-        OutlinedTextField(
-            contents,
-            { contents = it },
-            Modifier.fillMaxWidth(),
-            label = { Text(language.text("ペアリングQR（手入力）")) },
-            minLines = 3,
-        )
-        Button(onClick = { pair(contents) }, enabled = contents.isNotBlank() && !busy) { Text(language.text("ペアリング")) }
-        Button(onClick = showHosts) { Text(language.text("戻る")) }
-    }
-}
-
-@Composable
-private fun ProfilesScreen(profiles: List<HostProfile>, select: (String) -> Unit, pair: () -> Unit) {
-    val language = LocalUiLanguage.current
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
-        item { Button(onClick = pair) { Text(language.text("PCを追加")) } }
-        items(profiles, key = { it.id }) { profile ->
-            Card(onClick = { select(profile.id) }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(profile.name)
-                    Text(profile.id, style = MaterialTheme.typography.bodySmall)
-                }
-            }
+    when (model.screen) {
+        Screen.Pairing -> PairingScreen(model.busy, model::pair, model::showThreads, requestQrScan)
+        Screen.Hosts -> ProfilesScreen(model.profiles, model::selectConnection) { model.screen = Screen.Pairing }
+        Screen.Threads -> {
+            ErrorNotices(model.projectNotices, model::perform)
+            ThreadListScreen(
+                model.list,
+                model.listQuery,
+                model.loadingThreads,
+                model::performList,
+                title = {
+                    ConnectionListTitle(
+                        model.profiles,
+                        model.connectionSelection,
+                        model.isConnected,
+                        select = model::selectConnection,
+                        openSettings = openSettings,
+                    )
+                },
+                scopeKey = if (model.connectionSelection.all) "all" else model.connectionSelection.hostId.orEmpty(),
+                emptyContent =
+                    if (model.profiles.isEmpty()) {
+                        { EmptyConnections(connect = { model.screen = Screen.Pairing }) }
+                    } else null,
+            )
         }
+        Screen.Conversation -> ConversationPane(model)
     }
-}
-
-@Composable
-private fun ConnectionStatus(notice: String?, busy: Boolean, reconnect: Boolean, connect: () -> Unit) {
-    val language = LocalUiLanguage.current
-    notice?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
-    if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-    if (reconnect) Button(onClick = connect, enabled = !busy) { Text(language.text("再接続")) }
 }
 
 @Composable
@@ -578,25 +566,32 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
     androidx.compose.runtime.key(model.selectionKey) {
         var scrollToTopRequest by remember { mutableStateOf(0) }
         ConversationHeader(
-            model.snapshot.navigation().threadId?.let(model.snapshot::conversation)?.title(),
+            model.conversation?.source?.source()?.title(),
             model::showThreads,
         ) {
             scrollToTopRequest += 1
         }
         androidx.compose.foundation.layout.Row {
-            FilesLauncher(model.snapshot, model::perform)
+            FilesLauncher(model.files, model.fileLocation.cwd, model::perform)
             TerminalLauncher(model.snapshot, model::perform)
             BrowserLauncher(model.snapshot.navigation().threadId, model.connectionSelection.hostId, model::browser)
         }
         ThreadDetailScreen(
-            model.snapshot,
+            model.conversationContext,
             model.conversation,
             model::perform,
             if (model.loadingHistory) null else model::older,
             Modifier.weight(1f),
             scrollToTopRequest = scrollToTopRequest,
         ) { onSend ->
-            ThreadComposer(model.snapshot, model::perform, onSend) { transferState ->
+            ThreadComposer(
+                model.composer,
+                model::perform,
+                onSend,
+                settings = { selected, dismiss ->
+                    ModelPickerDialog(model.snapshot, selected, model::perform, dismiss)
+                },
+            ) { transferState ->
                 AttachmentButton(model.selectionKey, model::attach, transferState)
             }
         }
@@ -607,19 +602,3 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
 // Keep IME handling at the screen boundary so it cannot create a gap below the composer.
 internal fun Modifier.appContentInsets(padding: PaddingValues): Modifier =
     padding(padding).consumeWindowInsets(padding).imePadding()
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun HostAppBar(openSettings: () -> Unit) {
-    val language = LocalUiLanguage.current
-    TopAppBar(
-        title = {
-            androidx.compose.foundation.Image(
-                androidx.compose.ui.res.painterResource(R.drawable.agent_icon),
-                "Bex",
-                Modifier.size(26.dp),
-            )
-        },
-        actions = { androidx.compose.material3.TextButton(onClick = openSettings) { Text(language.text("設定")) } },
-    )
-}

@@ -20,6 +20,7 @@ impl Operation for ListAccounts {
             .iter_mut()
             .map(|account| {
                 account.usage = snapshot
+                    .catalog
                     .account
                     .accounts
                     .as_ref()
@@ -38,7 +39,7 @@ impl Operation for ListAccounts {
                 })
             })
             .collect();
-        Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(output));
+        Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(output));
         snapshot.normalize_model_drafts();
         effects
     }
@@ -64,7 +65,7 @@ rpc::rpc_method!(ReadAccountUsage, ReadAccountUsage, |self| {
 impl Operation for ReadAccountUsage {
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        if let Some(accounts) = &mut Arc::make_mut(&mut snapshot.account).accounts
+        if let Some(accounts) = &mut Arc::make_mut(&mut snapshot.catalog.account).accounts
             && let Some(account) = Arc::make_mut(accounts).accounts.iter_mut().find(|account| {
                 account.provider == self.provider
                     && account.id == self.id
@@ -94,18 +95,18 @@ impl Operation for SelectAccount {
 }
 
 fn apply_selection(snapshot: &mut Snapshot, output: rpc::AccountSelection) {
-    snapshot.composer_catalog = None;
+    snapshot.catalog.composer_catalogs = Arc::default();
     let rpc::AccountSelection {
         selected_id,
         provider,
         persistence_error,
     } = output;
-    if let Some(accounts) = &mut Arc::make_mut(&mut snapshot.account).accounts {
+    if let Some(accounts) = &mut Arc::make_mut(&mut snapshot.catalog.account).accounts {
         let accounts = Arc::make_mut(accounts);
         accounts.selected.insert(provider, selected_id);
     }
     if let Some(error) = persistence_error {
-        snapshot.error = Some(error);
+        Arc::make_mut(&mut snapshot.pane).error = Some(error);
     }
 }
 
@@ -141,6 +142,7 @@ impl Operation for SelectAccountForDraft {
     fn apply(self, snapshot: &mut Snapshot, (selection, catalog): Self::Output) -> Vec<Effect> {
         let previous_provider = snapshot.model_provider_for_draft(self.thread_id.clone());
         let mut draft = snapshot
+            .input
             .drafts
             .get(&self.thread_id)
             .map(|draft| (**draft).clone())
@@ -151,12 +153,14 @@ impl Operation for SelectAccountForDraft {
             Ok(catalog) => {
                 LoadModels {}.apply(snapshot, catalog);
                 if snapshot
+                    .catalog
                     .models
                     .iter()
                     .any(|model| model.model.provider == provider)
                 {
                     if previous_provider != Some(provider) {
-                        let selection = snapshot.model_preferences.selections.get(&provider);
+                        let selection =
+                            snapshot.catalog.model_preferences.selections.get(&provider);
                         draft.model = selection.map(|selection| selection.model.clone());
                         draft.effort = selection.and_then(|selection| selection.effort.clone());
                         draft.service_tier =
@@ -167,8 +171,8 @@ impl Operation for SelectAccountForDraft {
                         draft.effort.as_deref(),
                         draft.service_tier.as_deref(),
                         Some(provider),
-                        &snapshot.models,
-                        &snapshot.model_errors,
+                        &snapshot.catalog.models,
+                        &snapshot.catalog.model_errors,
                         snapshot.allows_custom_codex_models(),
                     );
                     let settings = (
@@ -177,10 +181,11 @@ impl Operation for SelectAccountForDraft {
                         tier.map(str::to_owned),
                     );
                     (draft.model, draft.effort, draft.service_tier) = settings;
-                    Arc::make_mut(&mut snapshot.drafts).insert(self.thread_id, Arc::new(draft));
+                    Arc::make_mut(&mut snapshot.input.drafts)
+                        .insert(self.thread_id, Arc::new(draft));
                 }
             }
-            Err(error) => snapshot.error = Some(error.to_string()),
+            Err(error) => Arc::make_mut(&mut snapshot.pane).error = Some(error.to_string()),
         }
         vec![Effect::execute(ListAccounts {})]
     }
@@ -196,7 +201,7 @@ impl Operation for StartAccountLogin {
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, login: Self::Output) -> Vec<Effect> {
-        let account = Arc::make_mut(&mut snapshot.account);
+        let account = Arc::make_mut(&mut snapshot.catalog.account);
         account.login = Some(Arc::new(login));
         Vec::new()
     }
@@ -225,7 +230,7 @@ impl Operation for ReadAccountLogin {
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, status: Self::Output) -> Vec<Effect> {
         if status.completed {
-            Arc::make_mut(&mut snapshot.account).login = None;
+            Arc::make_mut(&mut snapshot.catalog.account).login = None;
             if let Some(id) = status.account_id {
                 let intent = match self.thread_id {
                     Some(thread_id) => Intent::SelectAccountForDraft(SelectAccountForDraft {
@@ -261,7 +266,7 @@ impl Operation for CancelAccountLogin {
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
-        let account = Arc::make_mut(&mut snapshot.account);
+        let account = Arc::make_mut(&mut snapshot.catalog.account);
         account.login = None;
         Vec::new()
     }
@@ -278,13 +283,13 @@ impl Operation for LogoutAccount {
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.account).accounts = None;
+        Arc::make_mut(&mut snapshot.catalog.account).accounts = None;
         let mut effects = vec![
             Effect::execute(ListAccounts {}),
             Effect::execute(LoadModels {}),
         ];
         if self.provider == crate::session::ProviderKind::DeepSeek {
-            Arc::make_mut(&mut snapshot.account).dsh_credentials = None;
+            Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials = None;
             effects.push(Effect::execute(ReadDshCredentials {}));
         }
         effects
@@ -309,7 +314,7 @@ impl Operation for ReadDshCredentials {
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.account).dsh_credentials = Some(Arc::new(credentials));
+        Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials = Some(Arc::new(credentials));
         Vec::new()
     }
 }
@@ -322,7 +327,7 @@ impl Operation for UpdateDshCredential {
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut snapshot.account).dsh_credentials = Some(Arc::new(credentials));
+        Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials = Some(Arc::new(credentials));
         vec![
             Effect::execute(ListAccounts {}),
             Effect::execute(LoadModels {}),
@@ -338,8 +343,8 @@ mod account_model_tests {
     #[rstest::rstest]
     fn catalogs_and_accounts_can_arrive_in_either_order(#[values(true, false)] models_first: bool) {
         let mut snapshot = Snapshot::default();
-        let key = snapshot.navigation.draft_key.clone();
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        let key = snapshot.pane.navigation.draft_key.clone();
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             key.clone(),
             Arc::new(Draft {
                 text: "keep this input".into(),
@@ -356,7 +361,7 @@ mod account_model_tests {
             service_tier: Some("default".into()),
             ..Default::default()
         });
-        Arc::make_mut(&mut snapshot.drafts).insert(explicit_key.clone(), explicit.clone());
+        Arc::make_mut(&mut snapshot.input.drafts).insert(explicit_key.clone(), explicit.clone());
         let accounts: rpc::Accounts = serde_json::from_value(json!({
             "accounts":[{"id":"b","provider":"claude"}], "selected":{"claude":"b"}
         }))
@@ -378,7 +383,7 @@ mod account_model_tests {
             ListAccounts {}.apply(&mut snapshot, accounts.clone());
         }
         assert!(snapshot.model_provider_for_draft(key.clone()).is_none());
-        assert_eq!(snapshot.drafts[&explicit_key], explicit);
+        assert_eq!(snapshot.input.drafts[&explicit_key], explicit);
         if models_first {
             ListAccounts {}.apply(&mut snapshot, accounts);
         } else {
@@ -388,8 +393,8 @@ mod account_model_tests {
             snapshot.model_provider_for_draft(key.clone()),
             Some(crate::session::ProviderKind::Claude)
         );
-        assert_eq!(snapshot.drafts[&key].text, "keep this input");
-        assert_eq!(snapshot.drafts[&explicit_key], explicit);
+        assert_eq!(snapshot.input.drafts[&key].text, "keep this input");
+        assert_eq!(snapshot.input.drafts[&explicit_key], explicit);
     }
 
     #[test]
@@ -413,7 +418,7 @@ mod account_model_tests {
         }
         .apply(&mut snapshot, usage.clone());
         ListAccounts {}.apply(&mut snapshot, accounts);
-        let listed = snapshot.account.accounts.as_ref().unwrap();
+        let listed = snapshot.catalog.account.accounts.as_ref().unwrap();
         assert_eq!(
             listed
                 .selected
@@ -437,7 +442,7 @@ mod account_model_tests {
         }
         .apply(&mut snapshot, usage.clone());
         assert!(
-            snapshot.account.accounts.as_ref().unwrap().accounts[0]
+            snapshot.catalog.account.accounts.as_ref().unwrap().accounts[0]
                 .usage
                 .is_none()
         );
@@ -453,6 +458,7 @@ mod account_model_tests {
         .apply(&mut snapshot, usage);
         assert!(
             snapshot
+                .catalog
                 .account
                 .accounts
                 .as_ref()
@@ -465,14 +471,14 @@ mod account_model_tests {
     #[test]
     fn account_selection_preserves_supported_settings_and_normalizes_new_catalog() {
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(serde_json::from_value(json!({
+        Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(serde_json::from_value(json!({
             "accounts":[{"id":"a","provider":"codex"},{"id":"b","provider":"codex"},{"id":"claude:c","provider":"claude"}],
             "selected":{"codex":"a","claude":"claude:c"}
         })).unwrap()));
         let codex: Model = serde_json::from_value(json!({"id":"gpt","model":{"provider": "codex", "id": "gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],"serviceTiers":[{"id":"fast","fast":true}]}})).unwrap();
         let claude: Model = serde_json::from_value(json!({"id":"claude:sonnet","model":{"provider": "claude", "id": "sonnet"},"displayName":"Sonnet", "settings": {"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}})).unwrap();
-        snapshot.models = Arc::new(vec![codex.clone(), claude.clone()]);
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        snapshot.catalog.models = Arc::new(vec![codex.clone(), claude.clone()]);
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             "draft".into(),
             Arc::new(Draft {
                 model: Some(agent_protocol::models::ModelRef {
@@ -513,7 +519,7 @@ mod account_model_tests {
             vec![codex.clone(), claude.clone()],
         );
         assert_eq!(
-            snapshot.drafts[&crate::state::DraftKey::from("draft")]
+            snapshot.input.drafts[&crate::state::DraftKey::from("draft")]
                 .model
                 .as_ref(),
             Some(&agent_protocol::models::ModelRef {
@@ -522,13 +528,13 @@ mod account_model_tests {
             })
         );
         assert_eq!(
-            snapshot.drafts[&crate::state::DraftKey::from("draft")]
+            snapshot.input.drafts[&crate::state::DraftKey::from("draft")]
                 .effort
                 .as_deref(),
             Some("medium")
         );
         assert_eq!(
-            snapshot.drafts[&crate::state::DraftKey::from("draft")]
+            snapshot.input.drafts[&crate::state::DraftKey::from("draft")]
                 .service_tier
                 .as_deref(),
             Some("fast")
@@ -539,7 +545,7 @@ mod account_model_tests {
             crate::session::ProviderKind::Claude,
             vec![codex.clone(), claude.clone()],
         );
-        let draft = &snapshot.drafts[&crate::state::DraftKey::from("draft")];
+        let draft = &snapshot.input.drafts[&crate::state::DraftKey::from("draft")];
         assert_eq!(
             draft.model.as_ref(),
             Some(&agent_protocol::models::ModelRef {
@@ -551,6 +557,7 @@ mod account_model_tests {
         assert_eq!(draft.service_tier.as_deref(), Some("default"));
         assert_eq!(
             snapshot
+                .catalog
                 .account
                 .accounts
                 .as_ref()
@@ -569,7 +576,7 @@ mod account_model_tests {
             },
         );
         assert_eq!(
-            snapshot.drafts[&crate::state::DraftKey::from("draft")]
+            snapshot.input.drafts[&crate::state::DraftKey::from("draft")]
                 .model
                 .as_ref(),
             Some(&agent_protocol::models::ModelRef {
@@ -593,6 +600,7 @@ mod account_model_tests {
         );
         assert_eq!(
             snapshot
+                .catalog
                 .account
                 .accounts
                 .as_ref()
@@ -607,13 +615,13 @@ mod account_model_tests {
             vec![restricted]
         );
         assert_eq!(
-            snapshot.drafts[&crate::state::DraftKey::from("draft")]
+            snapshot.input.drafts[&crate::state::DraftKey::from("draft")]
                 .effort
                 .as_deref(),
             Some("medium")
         );
         assert_eq!(
-            snapshot.drafts[&crate::state::DraftKey::from("draft")]
+            snapshot.input.drafts[&crate::state::DraftKey::from("draft")]
                 .service_tier
                 .as_deref(),
             Some("default")

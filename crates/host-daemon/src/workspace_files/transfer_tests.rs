@@ -36,7 +36,7 @@ async fn wait_for(store: &Store, condition: impl Fn(&Snapshot) -> bool) {
     let mut updates = store.subscribe();
     loop {
         let snapshot = updates.borrow_and_update().clone();
-        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
         if condition(&snapshot) {
             return;
         }
@@ -224,7 +224,7 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
         let source = workspace.path().join("screenshot.png");
         let bytes = b"captured image";
         std::fs::write(&source, bytes).unwrap();
-        let draft_key = fixture.store.snapshot().navigation.draft_key.clone();
+        let draft_key = fixture.store.snapshot().pane.navigation.draft_key.clone();
         let upload = fixture
             .store
             .dispatch(Intent::UploadAttachment(op::UploadAttachment {
@@ -269,7 +269,7 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
             .await
             .unwrap();
         upload.await.unwrap();
-        let attached = fixture.store.snapshot().drafts[&draft_key].attachments[0].clone();
+        let attached = fixture.store.snapshot().input.drafts[&draft_key].attachments[0].clone();
         assert!(
             std::path::Path::new(&attached.path)
                 .starts_with(dunce::canonicalize(fixture.files.upload_directory.as_ref()).unwrap())
@@ -307,7 +307,7 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
             .unwrap();
         download.await.unwrap();
         assert_eq!(std::fs::read(&destination).unwrap(), bytes);
-        assert_eq!(before.drafts[&draft_key].text, "edited during upload");
+        assert_eq!(before.input.drafts[&draft_key].text, "edited during upload");
         assert!(!source.exists());
         let download = fixture
             .store
@@ -339,10 +339,10 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
             "ファイルまたはフォルダが見つかりません。"
         );
         let after = fixture.store.snapshot();
-        assert!(after.error.is_none());
-        assert!(after.connected);
-        assert_eq!(after.conversations, before.conversations);
-        assert_eq!(after.drafts, before.drafts);
+        assert!(after.pane.error.is_none());
+        assert!(after.connection.connected);
+        assert_eq!(after.sessions.conversations, before.sessions.conversations);
+        assert_eq!(after.input.drafts, before.input.drafts);
         assert_eq!(
             std::fs::read(&destination).unwrap(),
             bytes,
@@ -396,6 +396,7 @@ async fn uploading_a_named_pipe_fails_without_waiting_or_reserving_host_storage(
         fixture
             .store
             .snapshot()
+            .input
             .drafts
             .values()
             .all(|draft| draft.attachments.is_empty())
@@ -515,7 +516,7 @@ async fn bulk_item_reads_hold_slots_through_body_application_without_starving_co
         if let agent_protocol::items::ItemBody::AssistantText {text, ..} = changed.body_mut() {*text = "live update".into();}
         fixture.update(SessionChange::Item {turn_id:"turn".into(), item: changed.into()}).await;
         fixture.update(SessionChange::Request { request: serde_json::from_value(json!({"id": "approval", "target": {"turn": {"turnId": "turn", "itemId": "item-0"}}, "delivery": "awaiting", "body": {"approval": {"kind": "command", "description": "", "details": "", "choices": [{"id": "choice-0", "label": "承認", "description": "", "effect": "allow"}, {"id": "choice-1", "label": "このセッションで承認", "description": "", "effect": "allowLasting"}, {"id": "choice-2", "label": "拒否", "description": "", "effect": "deny"}]}}})).unwrap() }).await;
-        wait_for(&fixture.store, |s| s.request("approval").is_some() && matches!(s.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "A".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0].body(), agent_protocol::items::ItemBody::AssistantText {text, ..} if text == "live update")).await;
+        wait_for(&fixture.store, |s| s.request("approval").is_some() && matches!(s.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "A".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0].body(), agent_protocol::items::ItemBody::AssistantText {text, ..} if text == "live update")).await;
         for intent in [
             Intent::Respond(op::Respond {request_id: "approval".into(),answer:Answer::Approval {choice_id: "choice-2".into()}}),
             Intent::Interrupt(op::Interrupt {thread_id: agent_protocol::session::SessionRef {provider:agent_protocol::session::ProviderKind::Codex,id:"A".into()},turn_id:"turn".into()}),
@@ -538,10 +539,10 @@ async fn bulk_item_reads_hold_slots_through_body_application_without_starving_co
                 fixture.files.transfer(OWNER, stream).await.unwrap();
             }
         };
-        let complete = wait_for(&fixture.store, |s| s.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "A".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().all(|item| !item.is_deferred()));
+        let complete = wait_for(&fixture.store, |s| s.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "A".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().all(|item| !item.is_deferred()));
         tokio::select! { _ = serving => unreachable!(), _ = complete => {} }
         let snapshot = fixture.store.snapshot();
-        let items = snapshot.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "A".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap();
+        let items = snapshot.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "A".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap();
         assert_eq!(items.len(), 12);
         for (id, actual) in items.iter().enumerate() {
             let expected: agent_protocol::models::Item = serde_json::from_value(item(id, true)).unwrap();
@@ -593,7 +594,7 @@ async fn stale_control_responses_consume_grants_before_retrying_more_than_eight_
                     .await;
                 wait_for(&fixture.store, |s| {
                     command_output(
-                        &s.conversations[&agent_protocol::session::SessionRef {
+                        &s.sessions.conversations[&agent_protocol::session::SessionRef {
                             provider: agent_protocol::session::ProviderKind::Codex,
                             id: "A".into(),
                         }]
@@ -623,7 +624,7 @@ async fn stale_control_responses_consume_grants_before_retrying_more_than_eight_
         }
         completion.await.unwrap();
         let snapshot = fixture.store.snapshot();
-        let turn = &snapshot.conversations[&agent_protocol::session::SessionRef {
+        let turn = &snapshot.sessions.conversations[&agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "A".into(),
         }]

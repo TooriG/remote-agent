@@ -16,9 +16,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.core.app.ActivityOptionsCompat
+import dev.remoteagent.core.AgentStore
 import dev.remoteagent.core.DraftKey
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Snapshot
+import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -44,7 +46,7 @@ class VoiceInputTest {
         var snapshot = original
         restoration.setContent {
             CompositionLocalProvider(LocalActivityResultRegistryOwner provides registry) {
-                MaterialTheme { VoiceInputButton(snapshot, { intent, _ -> intents.add(intent) }, true) }
+                MaterialTheme { VoiceInputFixture(snapshot, { intent, _ -> intents.add(intent) }, true) }
             }
         }
         compose.onNodeWithContentDescription("音声入力").performClick()
@@ -59,10 +61,19 @@ class VoiceInputTest {
         restoration.emulateSavedInstanceStateRestore()
         compose.runOnIdle { registry.complete(Activity.RESULT_OK, "続きの音声🎤") }
         compose.runOnIdle {
-            val edit = intents.single() as Intent.EditComposer
+            val edit = intents.single() as Intent.AppendTranscript
             assertEquals(DraftKey.Local("original"), edit.threadId)
-            assertEquals("更新後の依頼\n続きの音声🎤", edit.text)
-            assertEquals(edit.text.toByteArray(Charsets.UTF_8).size.toUInt(), edit.cursor)
+            assertEquals("続きの音声🎤", edit.text)
+            runBlocking {
+                val store = AgentStore.offline(other.serializeLocalState(), null, "voice-fixture")
+                try {
+                    store.dispatch(edit).wait()
+                    assertEquals("更新後の依頼\n続きの音声🎤", store.snapshot().draft(edit.threadId).text)
+                    assertEquals(DraftKey.Local("other"), store.snapshot().navigation().draftKey)
+                } finally {
+                    store.shutdown()
+                }
+            }
         }
         original.close()
         other.close()
@@ -75,7 +86,7 @@ class VoiceInputTest {
             val intents = mutableListOf<Intent>()
             compose.setContent {
                 CompositionLocalProvider(LocalActivityResultRegistryOwner provides registry) {
-                    MaterialTheme { VoiceInputButton(snapshot, { intent, _ -> intents.add(intent) }, true) }
+                    MaterialTheme { VoiceInputFixture(snapshot, { intent, _ -> intents.add(intent) }, true) }
                 }
             }
             compose.onNodeWithContentDescription("音声入力").performClick()
@@ -84,8 +95,9 @@ class VoiceInputTest {
             compose.onNodeWithContentDescription("音声入力").performClick()
             compose.runOnIdle { registry.complete(Activity.RESULT_OK, "音声の追記") }
             compose.runOnIdle {
-                val edit = intents.single() as Intent.EditComposer
-                assertEquals("既存の依頼\n音声の追記", edit.text)
+                val edit = intents.single() as Intent.AppendTranscript
+                assertEquals(snapshot.navigation().draftKey, edit.threadId)
+                assertEquals("音声の追記", edit.text)
             }
         }
     }
@@ -97,7 +109,7 @@ class VoiceInputTest {
             val registry = SpeechRegistry(unavailable = true)
             compose.setContent {
                 CompositionLocalProvider(LocalActivityResultRegistryOwner provides registry) {
-                    MaterialTheme { VoiceInputButton(snapshot, { intent, _ -> intents.add(intent) }, true) }
+                    MaterialTheme { VoiceInputFixture(snapshot, { intent, _ -> intents.add(intent) }, true) }
                 }
             }
             compose.onNodeWithContentDescription("音声入力").performClick()

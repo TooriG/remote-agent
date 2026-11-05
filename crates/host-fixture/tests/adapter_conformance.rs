@@ -349,7 +349,10 @@ async fn setup_catalog_isolates_stalled_native_providers(
         panic!("native accounts must remain readable before discovery");
     };
     let mut snapshot = agent_core::state::Snapshot {
-        connected: true,
+        connection: agent_core::state::Connection {
+            connected: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     agent_core::state::operations::ListAccounts {}.apply(&mut snapshot, accounts);
@@ -404,12 +407,13 @@ async fn setup_catalog_isolates_stalled_native_providers(
     ] {
         assert_eq!(
             snapshot
+                .catalog
                 .models
                 .iter()
                 .any(|model| model.model.provider == provider),
             !stalls
         );
-        let error = snapshot.model_errors.get(provider.key());
+        let error = snapshot.catalog.model_errors.get(provider.key());
         if stalls {
             assert_eq!(error.unwrap()["code"], "provider_timeout");
         } else {
@@ -451,7 +455,7 @@ async fn setup_catalog_isolates_stalled_native_providers(
         panic!("retry must return the recovered catalog");
     };
     agent_core::state::operations::LoadModels {}.apply(&mut snapshot, catalog);
-    assert!(snapshot.model_errors.is_empty());
+    assert!(snapshot.catalog.model_errors.is_empty());
     let setup = snapshot.connection_setup();
     assert!(setup.can_start);
     assert!(

@@ -67,7 +67,7 @@ impl Desktop {
             .on_open_change(move |open, window, cx| {
                 if *open {
                     let _ = opening.update(cx, |view, cx| {
-                        if view.snapshot.account.login.is_some() {
+                        if view.snapshot.catalog.account.login.is_some() {
                             view.model_controls.panel = ModelPanel::Accounts;
                         } else {
                             view.model_controls.provider = None;
@@ -249,12 +249,12 @@ impl Desktop {
     pub(super) fn account_controls(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let in_settings = self.tab == Tab::Settings;
-        let accounts = self.snapshot.account.accounts.as_ref();
+        let accounts = self.snapshot.catalog.account.accounts.as_ref();
         let provider = self.account_provider();
         let disabled = self.account.busy
             || self.busy > 0
-            || self.snapshot.account.login.is_some()
-            || !self.snapshot.connected;
+            || self.snapshot.catalog.account.login.is_some()
+            || !self.snapshot.connection.connected;
         let mut services = h_flex().gap_1().when(in_settings, |row| {
             row.w_full()
                 .border_b_1()
@@ -331,7 +331,7 @@ impl Desktop {
                 })
                 .into_any_element();
         }
-        if self.snapshot.account.login.is_some() {
+        if self.snapshot.catalog.account.login.is_some() {
             body = body.child(self.account_login_controls(None, cx));
         } else {
             body = body.child(
@@ -454,7 +454,7 @@ impl Desktop {
 
     fn codex_cli_controls(&self, disabled: bool, cx: &Context<Self>) -> Div {
         let language = crate::localization::language(cx);
-        let cli = self.snapshot.account.codex_cli.as_deref();
+        let cli = self.snapshot.catalog.account.codex_cli.as_deref();
         let updating = self.snapshot.operation_running(op::OperationKey::CodexCli);
         v_flex().gap_4().mt_2()
             .child(div().text_lg().font_semibold().child("Codex CLI"))
@@ -484,6 +484,7 @@ impl Desktop {
             .provider
             .or_else(|| {
                 self.snapshot
+                    .catalog
                     .account
                     .login
                     .as_ref()
@@ -514,7 +515,7 @@ impl Desktop {
         }
     }
     pub(in crate::app) fn account_operation(&mut self, intent: Intent) {
-        if self.account.busy || self.session.is_none() || !self.snapshot.connected {
+        if self.account.busy || self.session.is_none() || !self.snapshot.connection.connected {
             return;
         }
         if let Intent::StartAccountLogin(start) = &intent {
@@ -527,7 +528,7 @@ impl Desktop {
 
     fn credential_controls(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let disabled = !self.snapshot.connected
+        let disabled = !self.snapshot.connection.connected
             || self
                 .snapshot
                 .operation_running(op::OperationKey::DshCredentials);
@@ -672,10 +673,10 @@ impl Desktop {
         cx: &Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
-        let Some(login) = &self.snapshot.account.login else {
+        let Some(login) = &self.snapshot.catalog.account.login else {
             return div().into_any_element();
         };
-        let disabled = !self.snapshot.connected || self.account.busy || self.busy > 0;
+        let disabled = !self.snapshot.connection.connected || self.account.busy || self.busy > 0;
         let url = login.verification_url.clone();
         let cancel_id = login.login_id.clone();
         let provider = login.provider;
@@ -980,7 +981,7 @@ impl Desktop {
                             s.model_controls.panel = ModelPanel::Models;
                         },
                     )
-                    .disabled(self.snapshot.account.login.is_some())
+                    .disabled(self.snapshot.catalog.account.login.is_some())
                     .debug_selector(|| "model-panel-back".into()),
                 )
                 .child(div().text_base().child(language.text("アカウント")));
@@ -999,8 +1000,8 @@ impl Desktop {
         let provider = self.account_provider();
         let disabled = self.account.busy
             || self.busy > 0
-            || !self.snapshot.connected
-            || self.snapshot.account.login.is_some();
+            || !self.snapshot.connection.connected
+            || self.snapshot.catalog.account.login.is_some();
         let mut agents = v_flex()
             .flex_shrink_0()
             .gap_2()
@@ -1052,6 +1053,7 @@ impl Desktop {
         }
         let account = self
             .snapshot
+            .catalog
             .account
             .accounts
             .as_ref()
@@ -1537,28 +1539,29 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
             });
         });
         let (view, window) = cx.add_window_view(|window, cx| {
-            let desktop = cx.new(|cx| Desktop::new(Mode::SideChat {
+            let desktop = cx.new(|cx| Desktop::new(Mode::Fixture {
                 remote: Some(RemoteHost { id: "fixture".into(), name: "fixture".into(), ticket: "invalid-fixture-ticket".into() }), cwd: "/fixture".into(),
             }, window, cx));
             desktop.update(cx, |view, _| {
                 let key = view.draft_key().to_owned();
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                snapshot.connected = true;
-                Arc::make_mut(&mut snapshot.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({
+                snapshot.connection.connected = true;
+                Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({
                     "accounts":[{"provider":"codex","id":"first","email":"first@example.invalid","usage":{"windows":[{"label":"週間枠","remainingPercent":42}],"fetchedAt":1}},
                     {"provider":"claude","id":"claude:second"}],"selected":{"codex":"first","claude":"claude:second"}
                 })).unwrap()));
-                snapshot.models = Arc::new(serde_json::from_value(serde_json::json!([
+                snapshot.catalog.models = Arc::new(serde_json::from_value(serde_json::json!([
                     {"id":"gpt","model":{"provider": "codex", "id": "gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],"serviceTiers":[{"id":"priority","fast":true}]}},
                     {"id":"claude:sonnet","model":{"provider": "claude", "id": "sonnet"},"displayName":"Sonnet", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
                 ])).unwrap());
-                Arc::make_mut(&mut snapshot.drafts).insert(key, Arc::new(Draft { model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "gpt".into() }), ..Default::default() }));
+                Arc::make_mut(&mut snapshot.input.drafts).insert(key, Arc::new(Draft { model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "gpt".into() }), ..Default::default() }));
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
             PickerView(desktop)
@@ -1658,9 +1661,11 @@ mod tests {
                     id: "existing".into(),
                 };
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut snapshot.navigation).thread_id = Some(session.clone());
-                Arc::make_mut(&mut snapshot.navigation).draft_key = session.clone().into();
-                Arc::make_mut(&mut snapshot.drafts).insert(session.into(), Arc::new(draft));
+                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+                    Some(session.clone());
+                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+                    session.clone().into();
+                Arc::make_mut(&mut snapshot.input.drafts).insert(session.into(), Arc::new(draft));
                 view.model_controls.provider = None;
                 view.model_controls
                     .search
@@ -1710,6 +1715,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -1718,7 +1724,7 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -1735,8 +1741,8 @@ mod tests {
                     Some(agent_protocol::session::ProviderKind::DeepSeek);
                 view.model_controls.panel = ModelPanel::Accounts;
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                snapshot.connected = true;
-                Arc::make_mut(&mut snapshot.account).dsh_credentials =
+                snapshot.connection.connected = true;
+                Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials =
                     Some(Arc::new(agent_protocol::dsh::Credentials {
                         routes: vec![agent_protocol::dsh::CredentialRoute {
                             provider: agent_protocol::dsh::KeyProvider::OpenRouter,
@@ -1793,7 +1799,7 @@ mod tests {
         window.run_until_parked();
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, _| {
-                Arc::make_mut(&mut view.snapshot).models = Arc::new(serde_json::from_value(serde_json::json!([
+                Arc::make_mut(&mut view.snapshot).catalog.models = Arc::new(serde_json::from_value(serde_json::json!([
                     {"id":"official","credentialRoute":"DeepSeek","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
                     {"id":"router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":"[\"openrouter\",\"deepseek/deepseek-v4.1-flash\"]"},"displayName":"OpenRouter · DeepSeek V4.1 Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
                 ])).unwrap());
@@ -1821,20 +1827,24 @@ mod tests {
             .unwrap();
         let app_runtime = crate::Runtime {
             handle: runtime.handle().clone(),
+            sessions: Default::default(),
             connections: Arc::new(crate::platform::Connections::default()),
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
         };
         let mut snapshot = agent_core::state::Snapshot {
-            models: Arc::new(serde_json::from_value(serde_json::json!([
-            {"id":"official","credentialRoute":"DeepSeek","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek公式 · Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
-            {"id":"router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":"[\"openrouter\",\"deepseek/deepseek-v4.1-flash\"]"},"displayName":"OpenRouter · DeepSeek V4.1 Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
-        ])).unwrap()),
+            catalog: agent_core::state::Catalog {
+                models: Arc::new(serde_json::from_value(serde_json::json!([
+                {"id":"official","credentialRoute":"DeepSeek","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek公式 · Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                {"id":"router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":"[\"openrouter\",\"deepseek/deepseek-v4.1-flash\"]"},"displayName":"OpenRouter · DeepSeek V4.1 Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
+            ])).unwrap()),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        let key = snapshot.navigation.draft_key.clone();
-        let official = snapshot.models[0].model.clone();
-        Arc::make_mut(&mut snapshot.drafts).insert(
+        let key = snapshot.pane.navigation.draft_key.clone();
+        let official = snapshot.catalog.models[0].model.clone();
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
             key,
             Arc::new(Draft {
                 text: "keep my unfinished input".into(),
@@ -1862,7 +1872,7 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -1876,7 +1886,7 @@ mod tests {
             });
             desktop.update(cx, |view, _| {
                 view.snapshot = store.snapshot();
-                Arc::make_mut(&mut view.snapshot).connected = true;
+                Arc::make_mut(&mut view.snapshot).connection.connected = true;
                 view.session = Some(session);
                 view.model_controls.provider =
                     Some(agent_protocol::session::ProviderKind::DeepSeek);
@@ -1899,7 +1909,7 @@ mod tests {
             );
             assert_eq!(desktop.draft().text, "keep my unfinished input");
             assert_eq!(
-                store.snapshot().drafts[desktop.draft_key()].model,
+                store.snapshot().input.drafts[desktop.draft_key()].model,
                 desktop.draft().model
             );
         });

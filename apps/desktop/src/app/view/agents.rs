@@ -132,6 +132,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::default(),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -140,19 +141,19 @@ mod tests {
         let (view, window) = cx.add_window_view(|window,cx| {
             let mut desktop = Desktop::new(Mode::Main,window,cx);
             desktop.onboarding = false;
-            desktop.panels.set_open(desktop.panel_scope(), false);
+            desktop.panels = desktop.panels.clone().set_open(desktop.panel_scope(), false);
             let parent = agent_protocol::session::SessionRef { provider:agent_protocol::session::ProviderKind::Codex, id:"parent".into() };
             let snapshot = Arc::make_mut(&mut desktop.snapshot);
-            snapshot.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
+            snapshot.lists.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
                 "data":[{"id":{"provider":"codex","id":"parent"},"name":"Parent"}],
                 "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap()));
-            Arc::make_mut(&mut snapshot.conversations).insert(
+            Arc::make_mut(&mut snapshot.sessions.conversations).insert(
                 agent_protocol::session::SessionRef { provider: parent.provider, id:"child".into() },
                 Arc::new(serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"child"},"parentId":{"provider":"codex","id":"parent"},"name":"Review","status":"running"})).unwrap())
             );
-            Arc::make_mut(&mut snapshot.navigation).thread_id = Some(parent.clone());
-            Arc::make_mut(&mut snapshot.navigation).draft_key = parent.clone().into();
-            Arc::make_mut(&mut snapshot.drafts).insert(parent.into(),Arc::new(Draft { text:"Keep my draft".into(),..Default::default() }));
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id = Some(parent.clone());
+            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key = parent.clone().into();
+            Arc::make_mut(&mut snapshot.input.drafts).insert(parent.into(),Arc::new(Draft { text:"Keep my draft".into(),..Default::default() }));
             desktop
         });
         window.simulate_resize(size(px(1600.), px(900.)));
@@ -179,7 +180,7 @@ mod tests {
             assert!(desktop.snapshot.agent_panel()[0].active);
             let snapshot = Arc::make_mut(&mut desktop.snapshot);
             let child = snapshot.agent_panel()[0].key.clone();
-            Arc::make_mut(&mut snapshot.activity).active.insert(
+            Arc::make_mut(&mut snapshot.lists.activity).active.insert(
                 agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "child".into(),

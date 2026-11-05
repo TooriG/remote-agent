@@ -45,40 +45,52 @@ pub struct ComposerSuggestions {
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     pub fn composer_suggestions(&self, text: String, cursor: u32) -> Option<ComposerSuggestions> {
-        let (_, kind, filter) = query(&text, cursor as usize)?;
-        let catalog = self
-            .composer_catalog
-            .as_ref()
-            .filter(|c| c.cwd == self.navigation.cwd);
-        let filter = filter.to_lowercase();
-        let provider = self.model_provider_for_draft(self.navigation.draft_key.clone());
-        let candidates: Vec<_> = catalog
-            .into_iter()
-            .flat_map(|c| &c.candidates)
-            .filter(|c| {
-                Some(c.invocation.provider) == provider
-                    && c.invocation.kind == kind
-                    && (filter.is_empty()
-                        || c.invocation.name.to_lowercase().contains(&filter)
-                        || c.description.to_lowercase().contains(&filter))
-            })
-            .cloned()
-            .collect();
-        let status = match catalog {
-            None => Some("候補を読み込み中…".into()),
-            Some(c) if c.loading && candidates.is_empty() => Some("候補を読み込み中…".into()),
-            Some(c)
-                if provider
-                    .and_then(|provider| c.errors.get(&provider))
-                    .is_some_and(|errors| !errors.is_empty()) =>
-            {
-                Some(c.errors[&provider.unwrap()].join("\n"))
-            }
-            Some(_) if candidates.is_empty() => Some("該当する候補がありません".into()),
-            _ => None,
-        };
-        Some(ComposerSuggestions { candidates, status })
+        suggestions(
+            self.catalog
+                .composer_catalogs
+                .get(&self.pane.navigation.cwd)
+                .map(AsRef::as_ref),
+            self.model_provider_for_draft(self.pane.navigation.draft_key.clone()),
+            text,
+            cursor,
+        )
     }
+}
+
+pub(crate) fn suggestions(
+    catalog: Option<&agent_protocol::composer::ComposerCatalog>,
+    provider: Option<agent_protocol::session::ProviderKind>,
+    text: String,
+    cursor: u32,
+) -> Option<ComposerSuggestions> {
+    let (_, kind, filter) = query(&text, cursor as usize)?;
+    let filter = filter.to_lowercase();
+    let candidates: Vec<_> = catalog
+        .into_iter()
+        .flat_map(|c| &c.candidates)
+        .filter(|c| {
+            Some(c.invocation.provider) == provider
+                && c.invocation.kind == kind
+                && (filter.is_empty()
+                    || c.invocation.name.to_lowercase().contains(&filter)
+                    || c.description.to_lowercase().contains(&filter))
+        })
+        .cloned()
+        .collect();
+    let status = match catalog {
+        None => Some("候補を読み込み中…".into()),
+        Some(c) if c.loading && candidates.is_empty() => Some("候補を読み込み中…".into()),
+        Some(c)
+            if provider
+                .and_then(|provider| c.errors.get(&provider))
+                .is_some_and(|errors| !errors.is_empty()) =>
+        {
+            Some(c.errors[&provider.unwrap()].join("\n"))
+        }
+        Some(_) if candidates.is_empty() => Some("該当する候補がありません".into()),
+        _ => None,
+    };
+    Some(ComposerSuggestions { candidates, status })
 }
 
 #[derive(Debug, Clone)]
@@ -185,13 +197,16 @@ mod tests {
             ..Default::default()
         };
         let snapshot = Snapshot {
-            drafts: std::sync::Arc::new(
-                [(
-                    crate::state::DraftKey::from("chat"),
-                    std::sync::Arc::new(draft),
-                )]
-                .into(),
-            ),
+            input: crate::state::Input {
+                drafts: std::sync::Arc::new(
+                    [(
+                        crate::state::DraftKey::from("chat"),
+                        std::sync::Arc::new(draft),
+                    )]
+                    .into(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         };
         for text in ["plain text", "$review-other", "prefix$review", ""] {
@@ -203,7 +218,7 @@ mod tests {
                 }),
             );
             assert!(
-                next.drafts[&crate::state::DraftKey::from("chat")]
+                next.input.drafts[&crate::state::DraftKey::from("chat")]
                     .invocations
                     .is_empty(),
                 "{text}"
@@ -228,21 +243,29 @@ mod tests {
         let mut claude = codex.clone();
         claude.provider = ProviderKind::Claude;
         let mut snapshot = Snapshot {
-            composer_catalog: Some(std::sync::Arc::new(ComposerCatalog {
-                candidates: [codex.clone(), claude.clone()]
-                    .map(|invocation| ComposerCandidate {
-                        invocation,
-                        description: String::new(),
-                    })
-                    .into(),
-                errors: [(ProviderKind::Claude, vec!["Claude unavailable".into()])].into(),
+            catalog: crate::state::Catalog {
+                composer_catalogs: std::sync::Arc::new(
+                    (Some(std::sync::Arc::new(ComposerCatalog {
+                        candidates: [codex.clone(), claude.clone()]
+                            .map(|invocation| ComposerCandidate {
+                                invocation,
+                                description: String::new(),
+                            })
+                            .into(),
+                        errors: [(ProviderKind::Claude, vec!["Claude unavailable".into()])].into(),
+                        ..Default::default()
+                    })))
+                    .into_iter()
+                    .map(|catalog| (catalog.cwd.clone(), catalog))
+                    .collect(),
+                ),
                 ..Default::default()
-            })),
+            },
             ..Default::default()
         };
         std::sync::Arc::make_mut(
-            std::sync::Arc::make_mut(&mut snapshot.drafts)
-                .entry(snapshot.navigation.draft_key.clone())
+            std::sync::Arc::make_mut(&mut snapshot.input.drafts)
+                .entry(snapshot.pane.navigation.draft_key.clone())
                 .or_default(),
         )
         .model = Some(agent_protocol::models::ModelRef {
@@ -254,8 +277,8 @@ mod tests {
         assert_eq!(suggestions.candidates.len(), 1);
         assert!(suggestions.status.is_none());
         std::sync::Arc::make_mut(
-            std::sync::Arc::make_mut(&mut snapshot.drafts)
-                .entry(snapshot.navigation.draft_key.clone())
+            std::sync::Arc::make_mut(&mut snapshot.input.drafts)
+                .entry(snapshot.pane.navigation.draft_key.clone())
                 .or_default(),
         )
         .model = Some(agent_protocol::models::ModelRef {
@@ -290,15 +313,23 @@ mod tests {
             candidate("İSTANBUL", "Remote OPERATIONS", Codex, Plugin),
         ];
         let mut snapshot = Snapshot {
-            composer_catalog: Some(Arc::new(ComposerCatalog {
-                candidates: candidates.clone(),
+            catalog: crate::state::Catalog {
+                composer_catalogs: std::sync::Arc::new(
+                    (Some(Arc::new(ComposerCatalog {
+                        candidates: candidates.clone(),
+                        ..Default::default()
+                    })))
+                    .into_iter()
+                    .map(|catalog| (catalog.cwd.clone(), catalog))
+                    .collect(),
+                ),
                 ..Default::default()
-            })),
+            },
             ..Default::default()
         };
         Arc::make_mut(
-            Arc::make_mut(&mut snapshot.drafts)
-                .entry(snapshot.navigation.draft_key.clone())
+            Arc::make_mut(&mut snapshot.input.drafts)
+                .entry(snapshot.pane.navigation.draft_key.clone())
                 .or_default(),
         )
         .model = Some(agent_protocol::models::ModelRef {
@@ -332,7 +363,12 @@ mod tests {
             );
         }
         assert_eq!(
-            snapshot.composer_catalog.as_ref().unwrap().candidates,
+            snapshot
+                .catalog
+                .composer_catalogs
+                .get(&snapshot.pane.navigation.cwd)
+                .unwrap()
+                .candidates,
             candidates
         );
     }
@@ -340,10 +376,13 @@ mod tests {
     #[test]
     fn editing_loads_catalog_once_and_selection_preserves_settings() {
         let snapshot = Snapshot {
-            connected: true,
+            connection: crate::state::Connection {
+                connected: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        let key = snapshot.navigation.draft_key.clone();
+        let key = snapshot.pane.navigation.draft_key.clone();
         let (snapshot, effects) = reduce(
             &snapshot,
             Event::Intent(Intent::EditComposer {
@@ -353,7 +392,14 @@ mod tests {
             }),
         );
         assert_eq!(effects.len(), 1);
-        assert!(snapshot.composer_catalog.as_ref().unwrap().loading);
+        assert!(
+            snapshot
+                .catalog
+                .composer_catalogs
+                .get(&snapshot.pane.navigation.cwd)
+                .unwrap()
+                .loading
+        );
         let (snapshot, effects) = reduce(
             &snapshot,
             Event::Intent(Intent::EditComposer {
@@ -363,7 +409,7 @@ mod tests {
             }),
         );
         assert!(effects.is_empty());
-        let mut draft = snapshot.drafts[&key].as_ref().clone();
+        let mut draft = snapshot.input.drafts[&key].as_ref().clone();
         draft.model = Some(agent_protocol::models::ModelRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "selected-model".into(),
@@ -387,14 +433,14 @@ mod tests {
         )
         .0;
         assert_eq!(
-            snapshot.drafts[&key].model.as_ref(),
+            snapshot.input.drafts[&key].model.as_ref(),
             Some(&agent_protocol::models::ModelRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "selected-model".into()
             })
         );
-        assert_eq!(snapshot.drafts[&key].effort.as_deref(), Some("high"));
-        assert_eq!(snapshot.drafts[&key].invocations, vec![skill()]);
+        assert_eq!(snapshot.input.drafts[&key].effort.as_deref(), Some("high"));
+        assert_eq!(snapshot.input.drafts[&key].invocations, vec![skill()]);
     }
 
     #[test]
@@ -405,15 +451,25 @@ mod tests {
                 cwd: "/project".into(),
             }),
         );
-        assert!(offline.composer_catalog.is_none());
+        assert!(
+            offline
+                .catalog
+                .composer_catalogs
+                .get(&offline.pane.navigation.cwd)
+                .is_none()
+        );
         let (connected, _) = reduce(&offline, Event::Connected);
-        let catalog = connected.composer_catalog.as_ref().unwrap();
+        let catalog = connected
+            .catalog
+            .composer_catalogs
+            .get(&connected.pane.navigation.cwd)
+            .unwrap();
         assert_eq!(catalog.cwd, "/project");
         assert!(catalog.loading);
         let (edited, effects) = reduce(
             &connected,
             Event::Intent(Intent::EditComposer {
-                thread_id: connected.navigation.draft_key.clone(),
+                thread_id: connected.pane.navigation.draft_key.clone(),
                 text: "/".into(),
                 cursor: 1,
             }),
@@ -424,7 +480,11 @@ mod tests {
         );
         assert!(std::sync::Arc::ptr_eq(
             catalog,
-            edited.composer_catalog.as_ref().unwrap()
+            edited
+                .catalog
+                .composer_catalogs
+                .get(&edited.pane.navigation.cwd)
+                .unwrap()
         ));
         let (other, _) = reduce(
             &edited,
@@ -432,23 +492,46 @@ mod tests {
                 cwd: "/other".into(),
             }),
         );
-        assert_eq!(other.composer_catalog.as_ref().unwrap().cwd, "/other");
+        assert_eq!(
+            other
+                .catalog
+                .composer_catalogs
+                .get(&other.pane.navigation.cwd)
+                .unwrap()
+                .cwd,
+            "/other"
+        );
         assert!(
             other
-                .composer_catalog
-                .as_ref()
+                .catalog
+                .composer_catalogs
+                .get(&other.pane.navigation.cwd)
                 .unwrap()
                 .candidates
                 .is_empty()
         );
         let (disconnected, _) = reduce(&other, Event::Disconnected);
-        assert!(disconnected.composer_catalog.is_none());
+        assert!(
+            disconnected
+                .catalog
+                .composer_catalogs
+                .get(&disconnected.pane.navigation.cwd)
+                .is_none()
+        );
         let (reconnected, _) = reduce(&disconnected, Event::Connected);
-        assert_eq!(reconnected.composer_catalog.as_ref().unwrap().cwd, "/other");
+        assert_eq!(
+            reconnected
+                .catalog
+                .composer_catalogs
+                .get(&reconnected.pane.navigation.cwd)
+                .unwrap()
+                .cwd,
+            "/other"
+        );
         let mut claude = offline;
         std::sync::Arc::make_mut(
-            std::sync::Arc::make_mut(&mut claude.drafts)
-                .get_mut(&claude.navigation.draft_key)
+            std::sync::Arc::make_mut(&mut claude.input.drafts)
+                .get_mut(&claude.pane.navigation.draft_key)
                 .unwrap(),
         )
         .model = Some(agent_protocol::models::ModelRef {
@@ -456,7 +539,13 @@ mod tests {
             id: "claude".into(),
         });
         let (claude, _) = reduce(&claude, Event::Connected);
-        assert!(claude.composer_catalog.is_some());
+        assert!(
+            claude
+                .catalog
+                .composer_catalogs
+                .get(&claude.pane.navigation.cwd)
+                .is_some()
+        );
         assert!(claude.composer_suggestions("/".into(), 1).is_some());
     }
 
@@ -465,13 +554,16 @@ mod tests {
         fn refresh_keeps_matching_candidates_without_a_loading_message(filter in "[a-z]{0,12}") {
             use crate::state::operations::Operation;
             let mut snapshot = Snapshot {
-                composer_catalog: Some(std::sync::Arc::new(ComposerCatalog {
-                    candidates: vec![ComposerCandidate { invocation: skill(), description: "Review code".into() }],
+                catalog: crate::state::Catalog {
+                    composer_catalogs: std::sync::Arc::new((Some(std::sync::Arc::new(ComposerCatalog {
+                        candidates: vec![ComposerCandidate { invocation: skill(), description: "Review code".into() }],
+                        ..Default::default()
+                    }))).into_iter().map(|catalog| (catalog.cwd.clone(), catalog)).collect()),
                     ..Default::default()
-                })),
+                },
                 ..Default::default()
             };
-            std::sync::Arc::make_mut(&mut snapshot.drafts).insert(snapshot.navigation.draft_key.clone(), std::sync::Arc::new(crate::state::Draft {
+            std::sync::Arc::make_mut(&mut snapshot.input.drafts).insert(snapshot.pane.navigation.draft_key.clone(), std::sync::Arc::new(crate::state::Draft {
                 model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "model".into() }),
                 ..Default::default()
             }));
@@ -481,7 +573,7 @@ mod tests {
             let matches = "review".contains(&filter) || "review code".contains(&filter);
             proptest::prop_assert_eq!(suggestions.candidates.len(), usize::from(matches));
             proptest::prop_assert_eq!(suggestions.status.as_deref(), if matches { None } else { Some("候補を読み込み中…") });
-            proptest::prop_assert_eq!(&snapshot.composer_catalog.as_ref().unwrap().candidates[0].invocation, &skill());
+            proptest::prop_assert_eq!(&snapshot.catalog.composer_catalogs.get(&snapshot.pane.navigation.cwd).unwrap().candidates[0].invocation, &skill());
         }
     }
 
@@ -518,7 +610,7 @@ mod tests {
             )
             .0;
         }
-        let draft = snapshot.drafts[&crate::state::DraftKey::from("chat")].as_ref();
+        let draft = snapshot.input.drafts[&crate::state::DraftKey::from("chat")].as_ref();
         assert_eq!(draft.invocations, vec![other.clone(), plugin.clone()]);
         let restored: Draft =
             serde_json::from_str(&serde_json::to_string(&draft).unwrap()).unwrap();

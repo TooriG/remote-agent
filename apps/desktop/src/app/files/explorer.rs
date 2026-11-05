@@ -176,6 +176,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -185,7 +186,7 @@ mod tests {
         let (_, window) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: None,
                         cwd: "/workspace".into(),
                     },
@@ -200,16 +201,20 @@ mod tests {
         window.simulate_resize(size(px(1500.), px(900.)));
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
-                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).navigation).cwd =
-                    "/workspace".into();
+                Arc::make_mut(
+                    &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
+                )
+                .cwd = "/workspace".into();
                 view.file_explorer.storage = Some(storage.clone());
                 view.file_explorer.preferred = 320.;
-                view.panels.open(
+                view.open_surface(
                     view.panel_scope(),
                     Panel::File,
                     Some("/workspace/a.txt".into()),
                 );
-                view.panels
+                view.panels = view
+                    .panels
+                    .clone()
                     .set_layout(view.panel_scope(), PanelLayout::Expanded);
                 cx.notify();
             })

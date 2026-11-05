@@ -23,8 +23,8 @@ impl Desktop {
         lookup_path: Option<&str>,
     ) -> FileMenuTarget {
         let root = agent_core::presentation::markdown::file_host_path(
-            self.snapshot.navigation.cwd.clone(),
-            self.snapshot.host_home_directory.clone(),
+            self.snapshot.pane.navigation.cwd.clone(),
+            self.snapshot.connection.host_home_directory.clone(),
         );
         FileMenuTarget {
             path: file.path.clone(),
@@ -45,10 +45,10 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let capabilities = self.snapshot.file_open_capabilities.as_deref();
+        let capabilities = self.snapshot.files.file_open_capabilities.as_deref();
         let target = self.reference_target(file, lookup_path);
         let editor = preferred_editor(
-            self.snapshot.preferred_editor,
+            self.snapshot.files.preferred_editor,
             capabilities.map_or(&[], |value| value.editors.as_slice()),
         );
         let items = file_reference_menu(
@@ -96,7 +96,7 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         self.file_open_generation += 1;
-        if !self.snapshot.connected {
+        if !self.snapshot.connection.connected {
             let directory = self
                 .snapshot
                 .file_metadata(target.path.clone())
@@ -119,7 +119,7 @@ impl Desktop {
                 inspect_directory: matches!(action, ReferenceAction::Open(_)),
             }),
             OperationCompletion::FileReference(Box::new(ReferenceRequest {
-                epoch: self.snapshot.epoch,
+                epoch: self.snapshot.connection.epoch,
                 target,
                 action,
             })),
@@ -132,7 +132,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if request.epoch != self.snapshot.epoch
+        if request.epoch != self.snapshot.connection.epoch
             || matches!(request.action, ReferenceAction::Open(id) if id != self.file_open_generation)
         {
             return;

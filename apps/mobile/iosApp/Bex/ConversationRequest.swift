@@ -331,12 +331,13 @@ struct QuestionPanel: View {
 }
 
 /// Composer controls while a question awaits an answer.
-extension ThreadScreen {
+extension ConversationComposer {
     /// While a question awaits an answer, the primary action answers it.
     @ViewBuilder
     func questionActions(_ question: QuestionPrompt, runningTurnId: String?) -> some View {
         if let runningTurnId {
-            stopButton(runningTurnId)
+            ComposerStopButton(turnId: runningTurnId, interrupting: model.interruptingTurnId == runningTurnId,
+                               stop: model.interrupt)
         }
         if question.canGoBack {
             Button("前へ") { model.answerQuestion(question.requestId, .back) }
@@ -346,7 +347,7 @@ extension ThreadScreen {
                 .accessibilityIdentifier("request.back")
         }
         let enabled = question.canAdvance && model.isConnected
-            && !model.snapshot.operationRunning(key: .request(id: question.requestId))
+            && model.composer.requestPhase(id: question.requestId) != .running
         Button {
             // Commit native text before the answer is read.
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)

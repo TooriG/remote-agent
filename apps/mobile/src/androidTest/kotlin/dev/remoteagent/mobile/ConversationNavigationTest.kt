@@ -62,7 +62,7 @@ class ConversationNavigationTest {
                         Column {
                             var topRequest by remember { mutableStateOf(0) }
                             ConversationHeader("Fixture", {}) { topRequest += 1 }
-                            ThreadDetailScreen(
+                            ThreadDetailFixture(
                                 snapshot,
                                 projection,
                                 { _, _ -> },

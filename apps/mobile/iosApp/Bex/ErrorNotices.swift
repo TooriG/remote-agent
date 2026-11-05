@@ -24,11 +24,12 @@ extension ErrorText {
 }
 
 struct ErrorNotices: View {
-    @ObservedObject var model: AppViewModel
-    let scope: ErrorScope
+    let notices: [ErrorNotice]
+    let perform: (Intent) -> Void
+    var reconnect: (() -> Void)?
+    var reconnecting = false
 
     var body: some View {
-        let notices = model.snapshot.errorNotices(scope: scope)
         if !notices.isEmpty {
             VStack(spacing: 8) {
                 ForEach(notices, id: \.id) { notice in
@@ -50,11 +51,11 @@ struct ErrorNotices: View {
                                     Text(verbatim: details).font(.caption).textSelection(.enabled)
                                 }.font(.caption)
                             }
-                            if let recovery = model.snapshot.errorRecovery(id: notice.id) {
-                                Button { model.perform(recovery.intent) } label: { AppText(recovery.label) }
+                            if let label = notice.recoveryLabel {
+                                Button { perform(.recoverError(id: notice.id)) } label: { AppText(label) }
                             }
-                            if scope == .application, !model.snapshot.connected() {
-                                Button("再接続") { model.connect() }.disabled(model.isConnecting)
+                            if let reconnect {
+                                Button("再接続", action: reconnect).disabled(reconnecting)
                             }
                         }
                         Spacer(minLength: 0)
@@ -62,7 +63,7 @@ struct ErrorNotices: View {
                             UIPasteboard.general.string = "\(notice.title)\n\(notice.text.plainText)"
                         } label: { Image(systemName: "doc.on.doc") }
                             .accessibilityLabel("エラーの詳細をコピー")
-                        Button { model.perform(.dismissError(id: notice.id)) } label: {
+                        Button { perform(.dismissError(id: notice.id)) } label: {
                             Image(systemName: "xmark")
                         }
                         .accessibilityLabel("エラーを閉じる")

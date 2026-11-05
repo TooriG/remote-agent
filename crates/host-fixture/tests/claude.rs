@@ -64,7 +64,7 @@ async fn connect(host: &HostFixture, snapshot: Snapshot) -> (Store, Endpoint) {
 }
 
 async fn draft(store: &Store, text: &str) {
-    let key = store.snapshot().navigation.draft_key.clone();
+    let key = store.snapshot().pane.navigation.draft_key.clone();
     store
         .dispatch(Intent::SetDraftText {
             thread_id: key,
@@ -76,7 +76,7 @@ async fn draft(store: &Store, text: &str) {
 
 async fn send(store: &Store, text: &str, client_id: &str) -> agent_protocol::session::SessionRef {
     draft(store, text).await;
-    let thread_id = store.snapshot().navigation.thread_id.clone();
+    let thread_id = store.snapshot().pane.navigation.thread_id.clone();
     let outcome = store
         .dispatch(Intent::Submit {
             thread_id: thread_id.clone(),
@@ -89,7 +89,7 @@ async fn send(store: &Store, text: &str, client_id: &str) -> agent_protocol::ses
     } else {
         matches!(outcome, Outcome::StartedThread { .. })
     });
-    store.snapshot().navigation.thread_id.clone().unwrap()
+    store.snapshot().pane.navigation.thread_id.clone().unwrap()
 }
 
 /// Read the inputs the Claude fixture appended to its workspace trace.
@@ -134,9 +134,9 @@ async fn until(store: &Store, condition: impl Fn(&Snapshot) -> bool) -> Arc<Snap
         let snapshot = store.snapshot();
         panic!(
             "Claude state did not settle: error={:?}, turns={:?}, requests={:?}, expanded={:?}, root={:?}, pages={:?}",
-            snapshot.error,
+            snapshot.pane.error,
             snapshot
-                .conversations
+                .sessions.conversations
                 .values()
                 .flat_map(|thread| thread.turns.iter().flatten())
                 .map(|turn| (&turn.id, &turn.status, &turn.error))
@@ -145,13 +145,13 @@ async fn until(store: &Store, condition: impl Fn(&Snapshot) -> bool) -> Arc<Snap
                 .requests()
                 .map(|request| (&request.id, &request.body))
                 .collect::<Vec<_>>(),
-            snapshot.expanded_projects,
-            snapshot.threads.as_ref().map(|list| (
+            snapshot.lists.expanded_projects,
+            snapshot.lists.threads.as_ref().map(|list| (
                 list.projects.iter().map(|project| &project.id).collect::<Vec<_>>(),
                 list.data.iter().map(|thread| (&thread.id, &thread.project_id)).collect::<Vec<_>>(),
                 &list.provider_errors,
             )),
-            snapshot.project_threads.iter().map(|(id, list)| (
+            snapshot.lists.project_threads.iter().map(|(id, list)| (
                 id,
                 list.data.iter().map(|thread| &thread.id).collect::<Vec<_>>(),
             )).collect::<Vec<_>>(),
@@ -167,6 +167,7 @@ async fn completed(
 ) -> Arc<Snapshot> {
     until(store, |snapshot| {
         snapshot
+            .sessions
             .conversations
             .get(id)
             .and_then(|thread| thread.turns.as_ref())
@@ -190,7 +191,7 @@ async fn listed(
         .unwrap();
     if let Some(project_root) = project_root {
         let snapshot = until(store, |snapshot| {
-            snapshot.threads.as_ref().is_some_and(|list| {
+            snapshot.lists.threads.as_ref().is_some_and(|list| {
                 list.projects.iter().any(|project| {
                     project
                         .roots
@@ -201,6 +202,7 @@ async fn listed(
         })
         .await;
         let project_id = snapshot
+            .lists
             .threads
             .as_ref()
             .unwrap()
@@ -270,6 +272,7 @@ async fn model_refresh_observes_catalog_changes_without_restarting_host() {
             ("custom", "Custom model"),
         ] {
             let entry = snapshot
+                .catalog
                 .models
                 .iter()
                 .find(|entry| {
@@ -290,6 +293,7 @@ async fn model_refresh_observes_catalog_changes_without_restarting_host() {
         .unwrap();
         let claude_models = |snapshot: &Snapshot| {
             snapshot
+                .catalog
                 .models
                 .iter()
                 .filter(|model| model.model.provider == ProviderKind::Claude)
@@ -330,7 +334,7 @@ async fn model_refresh_observes_catalog_changes_without_restarting_host() {
                 .default_reasoning_effort,
             "high"
         );
-        assert!(snapshot.model_errors.is_empty());
+        assert!(snapshot.catalog.model_errors.is_empty());
         store.close().await.unwrap();
         endpoint.close().await;
         fixture.close().await.unwrap();
@@ -433,13 +437,13 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
         let mut fixture = host(&root, memory.clone(), fixture_program()).await;
         let (mut store, mut endpoint) = connect(&fixture, Snapshot::default()).await;
         store.dispatch(Intent::NewChat { cwd: if selected { workspace.to_str().unwrap().into() } else { String::new() } }).await.unwrap();
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store.dispatch(Intent::SelectModel { thread_id: key.clone(), model: agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Claude, id: "default".into() } }).await.unwrap();
         store.dispatch(Intent::SelectEffort { thread_id: key, effort: "low".into() }).await.unwrap();
         let mut previous_id = None;
         let mut previous_cwd = None;
         for number in 0..2 {
-            let key = store.snapshot().navigation.draft_key.clone();
+            let key = store.snapshot().pane.navigation.draft_key.clone();
             if attachment != "none" {
                 let path = root.join(if attachment == "image" { "photo.png" } else { "note.txt" });
                 if attachment == "image" {
@@ -453,19 +457,19 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
             let id = send(&store, &format!("message {number}"), &format!("client-{number}")).await;
             if let Some(previous) = &previous_id { assert_eq!(&id, previous); }
             let snapshot = completed(&store, &id, number + 1, "completed").await;
-            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-            assert!(snapshot.pending_submissions.is_empty());
-            assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.drafts[&agent_core::state::DraftKey::from(&id)].attachments.is_empty());
-            assert_eq!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].model.as_ref().map(|model| model.id.as_str()), Some("default"));
-            assert_eq!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].effort.as_deref(), Some("low"));
-            let cwd = snapshot.navigation.cwd.clone();
+            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+            assert!(snapshot.sessions.pending_submissions.is_empty());
+            assert!(snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].attachments.is_empty());
+            assert_eq!(snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].model.as_ref().map(|model| model.id.as_str()), Some("default"));
+            assert_eq!(snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].effort.as_deref(), Some("low"));
+            let cwd = snapshot.pane.navigation.cwd.clone();
             if let Some(previous) = &previous_cwd { assert_eq!(&cwd, previous); }
             assert_project_directory(
                 Path::new(&cwd),
                 &if selected { workspace.clone() } else { root.join("bex-chats") },
                 (selected && automatic).then_some(root.join("worktrees").as_path()),
             );
-            let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[number];
+            let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[number];
             let items = turn.items.as_ref().unwrap();
             assert!(items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::Reasoning { .. }) && item_text(item) == Some("Fixture reasoning")));
             let responses: Vec<_> = items.iter().filter(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. })).collect();
@@ -482,7 +486,7 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
             if attachment == "file" { assert!(inputs[number]["content"][1]["text"].as_str().unwrap().contains("note.txt")); }
             listed(&store, &id, selected.then_some(workspace.as_path())).await;
             store.dispatch(Intent::ReadThread(op::ReadThread::open(id.clone()))).await.unwrap();
-            assert_eq!(store.snapshot().conversations[&id].turns.as_ref().unwrap().len(), number + 1);
+            assert_eq!(store.snapshot().sessions.conversations[&id].turns.as_ref().unwrap().len(), number + 1);
             let saved: Snapshot = serde_json::from_slice(&serde_json::to_vec(store.snapshot().as_ref()).unwrap()).unwrap();
             store.close().await.unwrap();
             endpoint.close().await;
@@ -490,7 +494,7 @@ async fn claude_submission_preserves_inputs_settings_workspaces_and_history_acro
             fixture = host(&root, memory.clone(), fixture_program()).await;
             (store, endpoint) = connect(&fixture, saved).await;
             store.dispatch(Intent::ReadThread(op::ReadThread::open(id.clone()))).await.unwrap();
-            assert_eq!(store.snapshot().conversations[&id].turns.as_ref().unwrap().len(), number + 1);
+            assert_eq!(store.snapshot().sessions.conversations[&id].turns.as_ref().unwrap().len(), number + 1);
             previous_id = Some(id);
             previous_cwd = Some(cwd);
         }
@@ -512,7 +516,7 @@ async fn unsupported_controls_and_session_elicitation_keep_claude_running() {
             .unwrap();
         store
             .dispatch(Intent::SelectModel {
-                thread_id: store.snapshot().navigation.draft_key.clone(),
+                thread_id: store.snapshot().pane.navigation.draft_key.clone(),
                 model: agent_protocol::models::ModelRef {
                     provider: agent_protocol::session::ProviderKind::Claude,
                     id: "default".into(),
@@ -546,7 +550,7 @@ async fn unsupported_controls_and_session_elicitation_keep_claude_running() {
             }
             let snapshot = completed(&store, &id, index + 1, "completed").await;
             assert!(snapshot.requests().next().is_none());
-            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
         }
         store.disconnect().await.unwrap();
         endpoint.close().await;
@@ -566,7 +570,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             .dispatch(Intent::NewChat { cwd: String::new() })
             .await
             .unwrap();
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store
             .dispatch(Intent::SelectModel {
                 thread_id: key,
@@ -579,7 +583,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             .unwrap();
         let id = send(&store, "permission", "permission-1").await;
         until(&store, |snapshot| snapshot.requests().next().is_some()).await;
-        let cwd = store.snapshot().navigation.cwd.clone();
+        let cwd = store.snapshot().pane.navigation.cwd.clone();
         assert!(!Path::new(&cwd).join("approved.txt").exists());
         store.disconnect().await.unwrap();
         store
@@ -649,7 +653,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
         }
         let snapshot = completed(&store, &id, 3, "completed").await;
         assert!(
-            snapshot.conversations[&id].turns.as_ref().unwrap()[2]
+            snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2]
                 .items
                 .as_ref()
                 .unwrap()
@@ -657,13 +661,13 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
                 .any(|item| item_text(item) == Some("Blue"))
         );
         assert_eq!(
-            snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text,
+            snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].text,
             "Green please"
         );
         assert!(snapshot.question_prompt(id.clone()).is_none());
         send(&store, "wait", "wait").await;
         let snapshot = until(&store, |snapshot| {
-            snapshot.conversations[&id]
+            snapshot.sessions.conversations[&id]
                 .turns
                 .as_ref()
                 .unwrap()
@@ -676,7 +680,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
                 .any(|item| item_text(item) == Some("Waiting for interruption"))
         })
         .await;
-        let turn_id = snapshot.conversations[&id]
+        let turn_id = snapshot.sessions.conversations[&id]
             .turns
             .as_ref()
             .unwrap()
@@ -685,18 +689,18 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             .id
             .clone();
         send(&store, "wait", "busy").await;
-        assert!(store.snapshot().error.is_none());
+        assert!(store.snapshot().pane.error.is_none());
         assert!(
-            store.snapshot().drafts[&agent_core::state::DraftKey::from(&id)]
+            store.snapshot().input.drafts[&agent_core::state::DraftKey::from(&id)]
                 .text
                 .is_empty()
         );
         until(&store, |snapshot| {
-            !snapshot.pending_submissions.contains_key("busy")
+            !snapshot.sessions.pending_submissions.contains_key("busy")
         })
         .await;
         let local = fixture.local().await.unwrap();
-        let previous_turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[2].id;
+        let previous_turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2].id;
         assert!(
             local
                 .peer
@@ -711,7 +715,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             "a delayed stop must not interrupt the next native turn"
         );
         assert_eq!(
-            store.snapshot().conversations[&id]
+            store.snapshot().sessions.conversations[&id]
                 .turns
                 .as_ref()
                 .unwrap()
@@ -729,7 +733,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             .await
             .unwrap();
         let snapshot = completed(&store, &id, 4, "interrupted").await;
-        let turn = snapshot.conversations[&id]
+        let turn = snapshot.sessions.conversations[&id]
             .turns
             .as_ref()
             .unwrap()
@@ -742,7 +746,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
         store
             .dispatch(Intent::Interrupt(op::Interrupt {
                 thread_id: id.clone(),
-                turn_id: snapshot.conversations[&id]
+                turn_id: snapshot.sessions.conversations[&id]
                     .turns
                     .as_ref()
                     .unwrap()
@@ -754,7 +758,7 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             .await
             .unwrap();
         let snapshot = completed(&store, &id, 5, "interrupted").await;
-        let turn = snapshot.conversations[&id]
+        let turn = snapshot.sessions.conversations[&id]
             .turns
             .as_ref()
             .unwrap()
@@ -764,10 +768,13 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
         assert!(snapshot.requests().next().is_none());
         send(&store, "after interruption", "recovered").await;
         let snapshot = completed(&store, &id, 6, "completed").await;
-        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-        assert!(snapshot.requests().next().is_none() && snapshot.pending_submissions.is_empty());
+        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
         assert!(
-            snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+            snapshot.requests().next().is_none()
+                && snapshot.sessions.pending_submissions.is_empty()
+        );
+        assert!(
+            snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                 .text
                 .is_empty()
         );
@@ -787,6 +794,7 @@ async fn provider_switch_preserves_conversation_identity_history_and_workspace()
         let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
         let codex_model = store
             .snapshot()
+            .catalog
             .models
             .iter()
             .find(|model| model.model.provider == ProviderKind::Codex)
@@ -807,7 +815,7 @@ async fn provider_switch_preserves_conversation_identity_history_and_workspace()
                 })
                 .await
                 .unwrap();
-            let key = store.snapshot().navigation.draft_key.clone();
+            let key = store.snapshot().pane.navigation.draft_key.clone();
             store
                 .dispatch(Intent::SelectModel {
                     thread_id: key,
@@ -822,7 +830,7 @@ async fn provider_switch_preserves_conversation_identity_history_and_workspace()
             )
             .await;
             let original_snapshot = completed(&store, &id, 1, "completed").await;
-            let cwd = original_snapshot.navigation.cwd.clone();
+            let cwd = original_snapshot.pane.navigation.cwd.clone();
 
             let mut expected = vec!["original provider"];
             for (step, model, text) in [
@@ -843,19 +851,19 @@ async fn provider_switch_preserves_conversation_identity_history_and_workspace()
                 expected.push(text);
                 completed(&store, &id, expected.len(), "completed").await;
                 let snapshot = until(&store, |snapshot| {
-                    snapshot.conversations[&id].active_provider == Some(model.provider)
+                    snapshot.sessions.conversations[&id].active_provider == Some(model.provider)
                 })
                 .await;
-                assert_eq!(snapshot.navigation.thread_id.as_ref(), Some(&id));
-                assert_eq!(snapshot.navigation.cwd, cwd);
+                assert_eq!(snapshot.pane.navigation.thread_id.as_ref(), Some(&id));
+                assert_eq!(snapshot.pane.navigation.cwd, cwd);
                 assert!(
-                    snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+                    snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                         .text
                         .is_empty()
                 );
-                assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-                assert!(snapshot.pending_submissions.is_empty());
-                let messages: Vec<_> = snapshot.conversations[&id]
+                assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+                assert!(snapshot.sessions.pending_submissions.is_empty());
+                let messages: Vec<_> = snapshot.sessions.conversations[&id]
                     .turns
                     .iter()
                     .flatten()
@@ -907,22 +915,23 @@ async fn unconfigured_claude_keeps_codex_usable_without_model_errors() {
                 ..Default::default()
             };
             let mut snapshot = Snapshot::default();
-            Arc::make_mut(&mut snapshot.drafts)
+            Arc::make_mut(&mut snapshot.input.drafts)
                 .insert("saved-claude".into(), Arc::new(saved.clone()));
             let (store, endpoint) = connect(&fixture, snapshot).await;
             assert_eq!(
-                *store.snapshot().drafts[&agent_core::state::DraftKey::from("saved-claude")],
+                *store.snapshot().input.drafts[&agent_core::state::DraftKey::from("saved-claude")],
                 saved
             );
-            assert!(!store.snapshot().models.is_empty());
+            assert!(!store.snapshot().catalog.models.is_empty());
             assert!(
-                store.snapshot().model_errors.is_empty(),
+                store.snapshot().catalog.model_errors.is_empty(),
                 "installed={installed}: {:?}",
-                store.snapshot().model_errors
+                store.snapshot().catalog.model_errors
             );
             assert!(
                 store
                     .snapshot()
+                    .catalog
                     .models
                     .iter()
                     .all(|model| model.model.provider == ProviderKind::Codex)
@@ -934,19 +943,19 @@ async fn unconfigured_claude_keeps_codex_usable_without_model_errors() {
                 .unwrap();
             store
                 .dispatch(Intent::SelectModel {
-                    thread_id: store.snapshot().navigation.draft_key.clone(),
-                    model: store.snapshot().models[0].model.clone(),
+                    thread_id: store.snapshot().pane.navigation.draft_key.clone(),
+                    model: store.snapshot().catalog.models[0].model.clone(),
                 })
                 .await
                 .unwrap();
             let id = send(&store, "Codex remains available", "codex-only").await;
             let snapshot = completed(&store, &id, 1, "completed").await;
-            assert!(snapshot.error.is_none());
+            assert!(snapshot.pane.error.is_none());
             assert!(
-                snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+                snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                     .text
                     .is_empty()
-                    && snapshot.pending_submissions.is_empty()
+                    && snapshot.sessions.pending_submissions.is_empty()
             );
             store.close().await.unwrap();
             endpoint.close().await;
@@ -983,31 +992,31 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
         for index in 0..2 {
             let fixture = HostFixture::start(&root, config.clone(), memory.clone(), "Independent Host", false, Some(fixture_program())).await.unwrap();
             let (store, endpoint) = connect(&fixture, saved).await;
-            assert!(store.snapshot().connected);
-            assert!(store.snapshot().model_errors.contains_key("codex"));
-            assert!(store.snapshot().models.iter().all(|model| model.model.provider == ProviderKind::Claude));
+            assert!(store.snapshot().connection.connected);
+            assert!(store.snapshot().catalog.model_errors.contains_key("codex"));
+            assert!(store.snapshot().catalog.models.iter().all(|model| model.model.provider == ProviderKind::Claude));
             if let Some(id) = &thread_id {
                 store.dispatch(Intent::ReadThread(op::ReadThread::open(id.clone()))).await.unwrap();
             } else {
                 store.dispatch(Intent::NewChat { cwd: if selected { workspace.to_str().unwrap().into() } else { String::new() } }).await.unwrap();
-                let key = store.snapshot().navigation.draft_key.clone();
+                let key = store.snapshot().pane.navigation.draft_key.clone();
                 store.dispatch(Intent::SelectModel { thread_id: key, model: agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Claude, id: "default".into() } }).await.unwrap();
             }
             let id = send(&store, &format!("independent {index}"), &format!("independent-{index}")).await;
             let snapshot = completed(&store, &id, index + 1, "completed").await;
-            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-            assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.pending_submissions.is_empty());
-            let current = snapshot.conversations[&id].cwd.clone().unwrap();
+            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+            assert!(snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.sessions.pending_submissions.is_empty());
+            let current = snapshot.sessions.conversations[&id].cwd.clone().unwrap();
             if let Some(previous) = &cwd { assert_eq!(previous, &current); }
             assert_project_directory(
                 Path::new(&current),
                 &if selected { workspace.clone() } else { root.join("bex-chats") },
                 (selected && automatic).then_some(root.join("worktrees").as_path()),
             );
-            let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
+            let turns = snapshot.sessions.conversations[&id].turns.as_ref().unwrap();
             assert!(turns[index].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.starts_with(&format!("reply {}: independent {index}", index + 1)))));
             let snapshot = listed(&store, &id, selected.then_some(workspace.as_path())).await;
-            let list = snapshot.threads.as_ref().unwrap();
+            let list = snapshot.lists.threads.as_ref().unwrap();
             assert!(list.provider_errors.as_ref().unwrap()["codex"]["message"].is_string());
             let management = fixture.local().await.unwrap();
             let status = management.peer.call(&rpc::ReadHostStatus {}).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
@@ -1024,10 +1033,10 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
                 let review = management.peer.call(&serde_json::from_value::<rpc::ReviewWorkspace>(json!({"cwd":current})).unwrap()).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
                 assert!(review["files"].as_array().unwrap().iter().any(|file| file["path"] == "tracked.txt"));
             }
-            let drafts = store.snapshot().drafts.clone();
+            let drafts = store.snapshot().input.drafts.clone();
             let dictation = management.peer.request::<rpc::Transcription>(&agent_protocol::protocol::Call::Transcribe(serde_json::from_value::<rpc::Transcribe>(json!({"preparation":null,"audio":"AAA="})).unwrap())).await.map(|output| serde_json::to_value(output).unwrap());
             assert!(dictation.is_err());
-            assert_eq!(*store.snapshot().drafts, *drafts);
+            assert_eq!(*store.snapshot().input.drafts, *drafts);
             assert!(management.peer.call(&op::ReadWorktreeSettings {}).await.is_ok());
             let count_worktrees = || std::fs::read_dir(root.join("worktrees")).map(|entries| entries.count()).unwrap_or_default();
             let before = count_worktrees();
@@ -1057,6 +1066,7 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
             .unwrap();
         let model = store
             .snapshot()
+            .catalog
             .models
             .iter()
             .find(|model| model.model.provider == ProviderKind::Codex)
@@ -1065,7 +1075,7 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
             .clone();
         store
             .dispatch(Intent::SelectModel {
-                thread_id: store.snapshot().navigation.draft_key.clone(),
+                thread_id: store.snapshot().pane.navigation.draft_key.clone(),
                 model,
             })
             .await
@@ -1076,7 +1086,7 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
             .dispatch(Intent::NewChat { cwd: String::new() })
             .await
             .unwrap();
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store
             .dispatch(Intent::SelectModel {
                 thread_id: key,
@@ -1089,7 +1099,7 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
             .unwrap();
         let id = send(&store, "permission", "claude-approval").await;
         until(&store, |snapshot| snapshot.requests().count() == 2).await;
-        let cwd = store.snapshot().navigation.cwd.clone();
+        let cwd = store.snapshot().pane.navigation.cwd.clone();
         store
             .dispatch(Intent::StartTerminal(
                 serde_json::from_value(json!({
@@ -1120,16 +1130,19 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
         }
         until(&store, |snapshot| {
             snapshot.requests().count() == 1
-                && !snapshot.activity.active[&codex_id]
-                && snapshot.conversations[&codex_id].turns.as_ref().unwrap()[0]
+                && !snapshot.lists.activity.active[&codex_id]
+                && snapshot.sessions.conversations[&codex_id]
+                    .turns
+                    .as_ref()
+                    .unwrap()[0]
                     .status
                     .label()
                     == "failed"
         })
         .await;
-        assert!(store.snapshot().connected);
+        assert!(store.snapshot().connection.connected);
         assert!(!fixture.running.is_finished());
-        assert!(!store.snapshot().activity.active[&codex_id]);
+        assert!(!store.snapshot().lists.activity.active[&codex_id]);
         assert!(
             matches!(
                 store.snapshot().terminals["codex-terminal"].phase,
@@ -1146,7 +1159,7 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
         assert_eq!(snapshot.requests().count(), 1);
         let request = snapshot.requests().next().unwrap();
         assert!(
-            snapshot.conversations[&id]
+            snapshot.sessions.conversations[&id]
                 .requests
                 .contains_key(&request.id)
         );
@@ -1161,10 +1174,13 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
             .await
             .unwrap();
         let snapshot = completed(&store, &id, 1, "completed").await;
-        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-        assert!(snapshot.requests().next().is_none() && snapshot.pending_submissions.is_empty());
+        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
         assert!(
-            snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+            snapshot.requests().next().is_none()
+                && snapshot.sessions.pending_submissions.is_empty()
+        );
+        assert!(
+            snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                 .text
                 .is_empty()
         );
@@ -1176,12 +1192,12 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
             .dispatch(Intent::LoadModels(op::LoadModels {}))
             .await
             .unwrap();
-        assert!(store.snapshot().model_errors.contains_key("codex"));
+        assert!(store.snapshot().catalog.model_errors.contains_key("codex"));
         send(&store, "after Codex exit", "claude-after-exit").await;
         let snapshot = completed(&store, &id, 2, "completed").await;
-        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
         assert!(
-            snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+            snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                 .text
                 .is_empty()
         );
@@ -1210,7 +1226,7 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
             .dispatch(Intent::NewChat { cwd: String::new() })
             .await
             .unwrap();
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store
             .dispatch(Intent::SelectModel {
                 thread_id: key,
@@ -1226,27 +1242,27 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
             thread_id: None,
             client_user_message_id: "auth-failure".into(),
         }).await.unwrap();
-        let id = store.snapshot().navigation.thread_id.clone().unwrap();
+        let id = store.snapshot().pane.navigation.thread_id.clone().unwrap();
         let failed_preparation = |snapshot: &Snapshot| {
-            snapshot.conversations[&id].preparation.as_ref().is_some_and(|preparation| matches!(preparation.status, agent_protocol::session::PreparationStatus::Failed { .. }))
+            snapshot.sessions.conversations[&id].preparation.as_ref().is_some_and(|preparation| matches!(preparation.status, agent_protocol::session::PreparationStatus::Failed { .. }))
         };
         let snapshot = until(&store, failed_preparation).await;
-        let preparation = snapshot.conversations[&id].preparation.as_ref().unwrap();
+        let preparation = snapshot.sessions.conversations[&id].preparation.as_ref().unwrap();
         assert!(matches!(&preparation.status, agent_protocol::session::PreparationStatus::Failed { error } if error.message.contains("サブスク認証")));
         assert!(preparation.submission.input.iter().any(|input| matches!(input, rpc::Input::Text { text } if text == "keep my draft")));
-        assert!(snapshot.pending_submissions[&agent_protocol::ids::ClientInputId::from("auth-failure")].accepted);
-        assert!(snapshot.conversations[&id].turns.as_ref().is_none_or(|turns| turns.is_empty()));
+        assert!(snapshot.sessions.pending_submissions[&agent_protocol::ids::ClientInputId::from("auth-failure")].accepted);
+        assert!(snapshot.sessions.conversations[&id].turns.as_ref().is_none_or(|turns| turns.is_empty()));
         std::fs::write(&config, json!({"initializeError":true}).to_string()).unwrap();
         store.dispatch(Intent::RetryPreparation(op::RetryPreparation { thread_id: id.clone() })).await.unwrap();
         let snapshot = until(&store, |snapshot| {
-            snapshot.conversations[&id].preparation.as_ref().is_some_and(|preparation| matches!(&preparation.status, agent_protocol::session::PreparationStatus::Failed { error } if error.message.contains("fixture initialization failed")))
+            snapshot.sessions.conversations[&id].preparation.as_ref().is_some_and(|preparation| matches!(&preparation.status, agent_protocol::session::PreparationStatus::Failed { error } if error.message.contains("fixture initialization failed")))
         }).await;
-        assert!(snapshot.conversations[&id].turns.as_ref().is_none_or(|turns| turns.is_empty()));
+        assert!(snapshot.sessions.conversations[&id].turns.as_ref().is_none_or(|turns| turns.is_empty()));
         std::fs::write(&config, json!({"resultError":true}).to_string()).unwrap();
         store.dispatch(Intent::RetryPreparation(op::RetryPreparation { thread_id: id.clone() })).await.unwrap();
         let snapshot = completed(&store, &id, 1, "failed").await;
         assert_eq!(
-            snapshot.conversations[&id].turns.as_ref().unwrap()[0]
+            snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0]
                 .error
                 .as_ref()
                 .unwrap()
@@ -1257,14 +1273,14 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
         send(&store, "retry", "retry").await;
         let snapshot = completed(&store, &id, 2, "completed").await;
         assert!(snapshot.operation_error(op::OperationKey::Submission { draft_key: (&id).into() }).is_none());
-        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
         assert!(
-            snapshot.drafts[&agent_core::state::DraftKey::from(&id)]
+            snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)]
                 .text
                 .is_empty()
         );
         assert!(
-            snapshot.conversations[&id].turns.as_ref().unwrap()[1]
+            snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1]
                 .error
                 .is_none()
         );
@@ -1286,13 +1302,13 @@ async fn live_claude_subscription_completes_and_resumes_through_store_and_host()
         let fixture = host(root.path(), memory.clone(), Path::new(&program)).await;
         let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
         store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store.dispatch(Intent::SelectModel { thread_id: key, model: agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Claude, id: "haiku".into() } }).await.unwrap();
         let id = send(&store, "Remember marker AGENT_CLAUDE_STORE_OK. Reply with exactly that marker. Do not use tools.", "live-1").await;
         let snapshot = completed(&store, &id, 1, "completed").await;
-        assert!(snapshot.error.is_none());
-        assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.pending_submissions.is_empty());
-        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_STORE_OK"))));
+        assert!(snapshot.pane.error.is_none());
+        assert!(snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.sessions.pending_submissions.is_empty());
+        assert!(snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_STORE_OK"))));
         store.close().await.unwrap();
         endpoint.close().await;
         fixture.close().await.unwrap();
@@ -1301,30 +1317,30 @@ async fn live_claude_subscription_completes_and_resumes_through_store_and_host()
         store.dispatch(Intent::ReadThread(op::ReadThread::open(id.clone()))).await.unwrap();
         send(&store, "Reply with exactly the marker from my previous message. Do not use tools.", "live-2").await;
         let snapshot = completed(&store, &id, 2, "completed").await;
-        assert!(snapshot.error.is_none());
-        assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.pending_submissions.is_empty());
-        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[1].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_STORE_OK"))));
+        assert!(snapshot.pane.error.is_none());
+        assert!(snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.sessions.pending_submissions.is_empty());
+        assert!(snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_STORE_OK"))));
         send(&store, "Count from 1 to 10000, one number per line. Do not use tools.", "live-stop").await;
-        let snapshot = until(&store, |snapshot| snapshot.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 3 && turns[2].items.as_ref().is_some_and(|items| items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| !text.is_empty()))))).await;
-        let turn_id = snapshot.conversations[&id].turns.as_ref().unwrap()[2].id.clone();
+        let snapshot = until(&store, |snapshot| snapshot.sessions.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 3 && turns[2].items.as_ref().is_some_and(|items| items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| !text.is_empty()))))).await;
+        let turn_id = snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2].id.clone();
         store.dispatch(Intent::Interrupt(op::Interrupt { thread_id: id.clone(), turn_id })).await.unwrap();
         let snapshot = completed(&store, &id, 3, "interrupted").await;
-        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-        let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[2];
+        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+        let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2];
         assert!(turn.error.is_none(), "{:?}", turn.error);
         send(&store, "Reply with exactly AGENT_CLAUDE_RECOVERED. Do not use tools.", "live-recovery").await;
         let snapshot = completed(&store, &id, 4, "completed").await;
-        assert!(snapshot.error.is_none());
-        assert!(snapshot.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.pending_submissions.is_empty());
-        assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[3].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_RECOVERED"))));
+        assert!(snapshot.pane.error.is_none());
+        assert!(snapshot.input.drafts[&agent_core::state::DraftKey::from(&id)].text.is_empty() && snapshot.sessions.pending_submissions.is_empty());
+        assert!(snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[3].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_RECOVERED"))));
         send(&store, "Count from 1 to 100, one number per line. Do not use tools.", "live-before-additional").await;
-        until(&store, |snapshot| snapshot.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 5 && turns[4].items.as_ref().is_some_and(|items| items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| !text.is_empty()))))).await;
-        assert!(agent_protocol::session::input_unavailable_reason(&store.snapshot().conversations[&id]).is_none());
+        until(&store, |snapshot| snapshot.sessions.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 5 && turns[4].items.as_ref().is_some_and(|items| items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| !text.is_empty()))))).await;
+        assert!(agent_protocol::session::input_unavailable_reason(&store.snapshot().sessions.conversations[&id]).is_none());
         send(&store, "Reply with exactly AGENT_CLAUDE_ADDITIONAL_OK. Do not use tools.", "live-additional").await;
         let snapshot = completed(&store, &id, 5, "completed").await;
-        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-        assert!(snapshot.pending_submissions.is_empty());
-        let items = snapshot.conversations[&id].turns.as_ref().unwrap()[4].items.as_ref().unwrap();
+        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+        assert!(snapshot.sessions.pending_submissions.is_empty());
+        let items = snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[4].items.as_ref().unwrap();
         assert_eq!(items.iter().filter(|item| item.client_input_id.as_deref() == Some("live-additional")).count(), 1);
         assert!(items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_ADDITIONAL_OK"))));
         store.close().await.unwrap();
@@ -1344,7 +1360,7 @@ async fn consecutive_claude_inputs_reuse_one_native_process() {
         .unwrap();
     store
         .dispatch(Intent::SelectModel {
-            thread_id: store.snapshot().navigation.draft_key.clone(),
+            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
             model: agent_protocol::models::ModelRef {
                 provider: agent_protocol::session::ProviderKind::Claude,
                 id: "default".into(),
@@ -1356,7 +1372,7 @@ async fn consecutive_claude_inputs_reuse_one_native_process() {
     completed(&store, &id, 1, "completed").await;
     send(&store, "second", "reuse-2").await;
     let snapshot = completed(&store, &id, 2, "completed").await;
-    let inputs = session_inputs(session_trace(Path::new(&snapshot.navigation.cwd)));
+    let inputs = session_inputs(session_trace(Path::new(&snapshot.pane.navigation.cwd)));
     assert!(inputs[0]["process"].is_string());
     assert_eq!(
         inputs[0]["process"], inputs[1]["process"],
@@ -1408,7 +1424,7 @@ async fn deleted_claude_worktree_restarts_the_retained_process_and_continues_the
             .unwrap();
         store
             .dispatch(Intent::SelectModel {
-                thread_id: store.snapshot().navigation.draft_key.clone(),
+                thread_id: store.snapshot().pane.navigation.draft_key.clone(),
                 model: agent_protocol::models::ModelRef {
                     provider: agent_protocol::session::ProviderKind::Claude,
                     id: "default".into(),
@@ -1418,14 +1434,14 @@ async fn deleted_claude_worktree_restarts_the_retained_process_and_continues_the
             .unwrap();
         let id = send(&store, "first", "before-removal").await;
         let snapshot = completed(&store, &id, 1, "completed").await;
-        let cwd = snapshot.navigation.cwd.clone();
+        let cwd = snapshot.pane.navigation.cwd.clone();
         let inputs_path = session_trace(Path::new(&cwd));
         let before = session_inputs(&inputs_path);
         std::fs::remove_dir_all(&cwd).unwrap();
         assert_eq!(send(&store, "second", "after-removal").await, id);
         let snapshot = completed(&store, &id, 2, "completed").await;
-        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-        assert_eq!(snapshot.navigation.cwd, cwd);
+        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+        assert_eq!(snapshot.pane.navigation.cwd, cwd);
         let after = session_inputs(&inputs_path);
         assert_ne!(
             before[0]["process"], after[1]["process"],
@@ -1565,14 +1581,14 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         while !native.join("usage-requested").exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store.dispatch(Intent::SelectAccountForDraft(op::SelectAccountForDraft { provider: agent_protocol::session::ProviderKind::Claude,
             id: "claude:desktop".into(), thread_id: key,
         })).await.unwrap();
-        assert!(store.snapshot().account.accounts.as_ref().unwrap().accounts[0].usage.is_none());
+        assert!(store.snapshot().catalog.account.accounts.as_ref().unwrap().accounts[0].usage.is_none());
         std::fs::remove_file(native.join("usage-paused")).unwrap();
-        until(&store, |snapshot| snapshot.account.accounts.as_ref().is_some_and(|accounts| accounts.accounts[0].usage.is_some())).await;
-        let usage = store.snapshot().account.accounts.as_ref().unwrap().accounts[0].usage.clone().unwrap();
+        until(&store, |snapshot| snapshot.catalog.account.accounts.as_ref().is_some_and(|accounts| accounts.accounts[0].usage.is_some())).await;
+        let usage = store.snapshot().catalog.account.accounts.as_ref().unwrap().accounts[0].usage.clone().unwrap();
         assert!(usage.error.is_none(), "{usage:?}");
         assert_eq!(usage.windows.len(), 3);
         assert_eq!(usage.windows[0].remaining_percent, 28);
@@ -1581,25 +1597,25 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         assert_eq!(usage.windows[2].remaining_percent, 66);
         assert_eq!(usage.windows[2].resets_at, Some(2000518400));
 
-        assert_eq!(store.snapshot().account.accounts.as_ref().unwrap().selected.get(&agent_protocol::session::ProviderKind::Claude).map(String::as_str), Some("claude:desktop"));
+        assert_eq!(store.snapshot().catalog.account.accounts.as_ref().unwrap().selected.get(&agent_protocol::session::ProviderKind::Claude).map(String::as_str), Some("claude:desktop"));
         store.dispatch(Intent::NewChat { cwd: root.to_string_lossy().into() }).await.unwrap();
-        let key = store.snapshot().navigation.draft_key.clone();
+        let key = store.snapshot().pane.navigation.draft_key.clone();
         store.dispatch(Intent::SelectModel { thread_id: key, model: agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Claude, id: "default".into() } }).await.unwrap();
         let thread = send(&store, "first account", "account-first").await;
         completed(&store, &thread, 1, "completed").await;
 
         store.dispatch(Intent::StartAccountLogin(op::StartAccountLogin { provider: agent_protocol::session::ProviderKind::Claude })).await.unwrap();
-        let login = store.snapshot().account.login.clone().unwrap();
+        let login = store.snapshot().catalog.account.login.clone().unwrap();
         assert!(login.requires_code_submission);
         assert!(login.verification_url.starts_with("https://claude.com/"));
         assert!(store.dispatch(Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: "claude:wrong".into(), code: "fixture-code".into() })).await.is_err());
         store.dispatch(Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: login.login_id.clone(), code: "fixture-code".into() })).await.unwrap();
         loop {
             store.dispatch(Intent::ReadAccountLogin(op::ReadAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: login.login_id.clone(), thread_id: None })).await.unwrap();
-            if store.snapshot().account.login.is_none() { break; }
+            if store.snapshot().catalog.account.login.is_none() { break; }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        until(&store, |snapshot| snapshot.account.accounts.as_ref().is_some_and(|accounts| accounts.selected.get(&agent_protocol::session::ProviderKind::Claude) == Some(&login.login_id))).await;
+        until(&store, |snapshot| snapshot.catalog.account.accounts.as_ref().is_some_and(|accounts| accounts.selected.get(&agent_protocol::session::ProviderKind::Claude) == Some(&login.login_id))).await;
         send(&store, "second account, same history", "account-second").await;
         completed(&store, &thread, 2, "completed").await;
         let profile = root.join("claude").join("accounts").join(login.login_id.strip_prefix("claude:").unwrap());
@@ -1609,18 +1625,18 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         let fixture = start().await.unwrap();
         let (store, endpoint) = connect(&fixture, snapshot).await;
         store.dispatch(Intent::ListAccounts(op::ListAccounts {})).await.unwrap();
-        assert_eq!(store.snapshot().account.accounts.as_ref().unwrap().selected.get(&agent_protocol::session::ProviderKind::Claude), Some(&login.login_id));
+        assert_eq!(store.snapshot().catalog.account.accounts.as_ref().unwrap().selected.get(&agent_protocol::session::ProviderKind::Claude), Some(&login.login_id));
         send(&store, "resumed after restart", "account-third").await;
         completed(&store, &thread, 3, "completed").await;
 
         store.dispatch(Intent::StartAccountLogin(op::StartAccountLogin { provider: agent_protocol::session::ProviderKind::Claude })).await.unwrap();
-        let canceled = store.snapshot().account.login.clone().unwrap();
+        let canceled = store.snapshot().catalog.account.login.clone().unwrap();
         store.dispatch(Intent::CancelAccountLogin(op::CancelAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: canceled.login_id.clone() })).await.unwrap();
         assert!(!root.join("claude").join("accounts").join(canceled.login_id.strip_prefix("claude:").unwrap()).exists());
         assert!(native.join("projects").exists(), "cancel must preserve shared history");
         store.dispatch(Intent::LogoutAccount(op::LogoutAccount { provider: agent_protocol::session::ProviderKind::Claude, id: login.login_id.clone() })).await.unwrap();
         store.dispatch(Intent::ListAccounts(op::ListAccounts {})).await.unwrap();
-        assert!(!store.snapshot().account.accounts.as_ref().unwrap().selected.contains_key(&agent_protocol::session::ProviderKind::Claude));
+        assert!(!store.snapshot().catalog.account.accounts.as_ref().unwrap().selected.contains_key(&agent_protocol::session::ProviderKind::Claude));
         let snapshot = (*store.snapshot()).clone();
         drop(store); endpoint.close().await; fixture.close().await.unwrap();
         let fixture = start().await.unwrap();
@@ -1628,13 +1644,13 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         let store = Store::connect(&endpoint, &fixture.ticket, snapshot, None, "Fixture device").await.unwrap();
         store.dispatch(Intent::LoadModels(op::LoadModels {})).await.unwrap();
         let logged_out = store.snapshot();
-        assert!(logged_out.models.is_empty(), "logged-out Claude and unavailable Codex must not expose models");
-        assert!(logged_out.model_errors.contains_key("codex"), "the catalog must retain the unavailable provider's error");
+        assert!(logged_out.catalog.models.is_empty(), "logged-out Claude and unavailable Codex must not expose models");
+        assert!(logged_out.catalog.model_errors.contains_key("codex"), "the catalog must retain the unavailable provider's error");
         assert!(!logged_out.connection_setup().can_start, "a catalog without usable models cannot finish setup");
         store.dispatch(Intent::ListAccounts(op::ListAccounts {})).await.unwrap();
-        assert!(!store.snapshot().account.accounts.as_ref().unwrap().selected.contains_key(&agent_protocol::session::ProviderKind::Claude), "restart must preserve logout without selecting the native account");
+        assert!(!store.snapshot().catalog.account.accounts.as_ref().unwrap().selected.contains_key(&agent_protocol::session::ProviderKind::Claude), "restart must preserve logout without selecting the native account");
         store.dispatch(Intent::SelectAccount(op::SelectAccount { provider: agent_protocol::session::ProviderKind::Claude, id: "claude:desktop".into() })).await.unwrap();
-        until(&store, |snapshot| snapshot.models.iter().any(|model| model.model == agent_protocol::models::ModelRef {provider:ProviderKind::Claude,id:"default".into()})).await;
+        until(&store, |snapshot| snapshot.catalog.models.iter().any(|model| model.model == agent_protocol::models::ModelRef {provider:ProviderKind::Claude,id:"default".into()})).await;
         send(&store, "back to native account", "account-fourth").await;
         completed(&store, &thread, 4, "completed").await;
         let homes = std::fs::read_to_string(root.join("claude-auth-homes.jsonl")).unwrap();
@@ -1667,7 +1683,7 @@ async fn claude_cancel_recovers_from_logout_failure_only_when_logged_out() {
                 }))
                 .await
                 .unwrap();
-            let login = store.snapshot().account.login.clone().unwrap();
+            let login = store.snapshot().catalog.account.login.clone().unwrap();
             let profile = root
                 .path()
                 .join("claude/accounts")
@@ -1743,7 +1759,7 @@ async fn live_claude_account_login_url_and_cancellation() {
         }))
         .await
         .unwrap();
-    let login = store.snapshot().account.login.clone().unwrap();
+    let login = store.snapshot().catalog.account.login.clone().unwrap();
     assert!(login.requires_code_submission);
     assert!(login.verification_url.starts_with("https://claude.com/"));
     store
@@ -1791,7 +1807,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .unwrap();
         store
             .dispatch(Intent::SelectModel {
-                thread_id: store.snapshot().navigation.draft_key.clone(),
+                thread_id: store.snapshot().pane.navigation.draft_key.clone(),
                 model: models::ModelRef {
                     provider: ProviderKind::Claude,
                     id: "default".into(),
@@ -1801,7 +1817,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .unwrap();
         store
             .dispatch(Intent::SelectEffort {
-                thread_id: store.snapshot().navigation.draft_key.clone(),
+                thread_id: store.snapshot().pane.navigation.draft_key.clone(),
                 effort: "low".into(),
             })
             .await
@@ -1819,7 +1835,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .await
             .unwrap();
         let snapshot = store.snapshot();
-        let thread = &snapshot.conversations[&id];
+        let thread = &snapshot.sessions.conversations[&id];
         let turn = thread.turns.as_ref().unwrap().last().unwrap();
         assert_eq!(
             turn.status,
@@ -1834,7 +1850,8 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
                 .any(|item| item_text(item) == Some("あとで報告します"))
         );
         let projected = agent_core::presentation::conversation::project_conversation(
-            &snapshot,
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
             thread.clone(),
             &None,
         );
@@ -1853,13 +1870,13 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .unwrap();
         if prompt == "background" {
             let snapshot = until(&store, |snapshot| {
-                snapshot.conversations[&id].turns.as_ref().unwrap()[0]
+                snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0]
                     .items.as_ref().unwrap().iter().any(|item|
                         item.status == agent_protocol::execution::ItemStatus::Completed
                         && item.is_deferred()
                         && matches!(item.body(), agent_protocol::items::ItemBody::CommandExecution {output, exit_code:None, ..} if output == "background done"))
             }).await;
-            let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[0];
+            let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0];
             assert_eq!(turn.status, TurnStatus::Running);
             store
                 .dispatch(Intent::ReadItem(op::ReadItem {
@@ -1870,8 +1887,8 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
                 .await
                 .unwrap();
             let snapshot = store.snapshot();
-            assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
-            assert!(snapshot.conversations[&id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().any(|item|
+            assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+            assert!(snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().any(|item|
                 item.status == agent_protocol::execution::ItemStatus::Completed
                 && !item.is_deferred()
                 && matches!(item.body(), agent_protocol::items::ItemBody::CommandExecution {output, exit_code:None, ..} if output == "background stdout\n")
@@ -1879,7 +1896,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             std::fs::remove_file(root.path().join("background-paused")).unwrap();
         }
         let snapshot = completed(&store, &id, 1, "completed").await;
-        let thread = &snapshot.conversations[&id];
+        let thread = &snapshot.sessions.conversations[&id];
         let items = thread.turns.as_ref().unwrap()[0].items.as_ref().unwrap();
         assert!(items.iter().any(|item| item.status == agent_protocol::execution::ItemStatus::Completed
             && matches!(item.body(), agent_protocol::items::ItemBody::CommandExecution {exit_code, output, ..}
@@ -1895,7 +1912,8 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
                 .any(|item| item_text(item) == Some("approved"))
         );
         let projected = agent_core::presentation::conversation::project_conversation(
-            &snapshot,
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
             thread.clone(),
             &Some(projected),
         );
@@ -1909,7 +1927,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
         store
             .dispatch(Intent::Interrupt(op::Interrupt {
                 thread_id: id.clone(),
-                turn_id: snapshot.conversations[&id].turns.as_ref().unwrap()[2]
+                turn_id: snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2]
                     .id
                     .clone(),
             }))
@@ -1917,13 +1935,13 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .unwrap();
         let snapshot = completed(&store, &id, 3, "interrupted").await;
         assert!(snapshot.requests().next().is_none());
-        let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[2];
+        let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2];
         assert!(turn.error.is_none(), "{:?}", turn.error);
         // A settings change replaces the retained CLI. The same native
         // conversation must resume after its background work was stopped.
         store
             .dispatch(Intent::SelectEffort {
-                thread_id: snapshot.navigation.draft_key.clone(),
+                thread_id: snapshot.pane.navigation.draft_key.clone(),
                 effort: "high".into(),
             })
             .await
@@ -1931,7 +1949,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
         send(&store, "after stop", "after-interruption").await;
         let snapshot = completed(&store, &id, 4, "completed").await;
         assert!(
-            snapshot.conversations[&id].turns.as_ref().unwrap()[3]
+            snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[3]
                 .items
                 .as_ref()
                 .unwrap()
@@ -1962,7 +1980,7 @@ async fn claude_responses_show_their_time_and_fork_from_the_selected_turn() {
         .unwrap();
     store
         .dispatch(Intent::SelectModel {
-            thread_id: store.snapshot().navigation.draft_key.clone(),
+            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
             model: models::ModelRef {
                 provider: ProviderKind::Claude,
                 id: "default".into(),
@@ -1974,8 +1992,13 @@ async fn claude_responses_show_their_time_and_fork_from_the_selected_turn() {
     completed(&store, &id, 1, "completed").await;
     send(&store, "second", "fork-second").await;
     let snapshot = completed(&store, &id, 2, "completed").await;
-    let thread = snapshot.conversations[&id].clone();
-    let projected = project_conversation(&snapshot, thread.clone(), &None);
+    let thread = snapshot.sessions.conversations[&id].clone();
+    let projected = project_conversation(
+        &snapshot.pane.navigation.draft_key,
+        &snapshot.sessions.pending_submissions,
+        thread.clone(),
+        &None,
+    );
     for turn in &projected.turns {
         assert!(
             turn.rows.iter().any(|row| matches!(
@@ -1992,14 +2015,19 @@ async fn claude_responses_show_their_time_and_fork_from_the_selected_turn() {
         .await
         .unwrap();
     let snapshot = until(&store, |snapshot| {
-        snapshot.conversations.iter().any(|(fork, thread)| {
-            fork != &id
-                && fork.provider == ProviderKind::Claude
-                && thread.turns.as_ref().is_some_and(|turns| turns.len() == 1)
-        })
+        snapshot
+            .sessions
+            .conversations
+            .iter()
+            .any(|(fork, thread)| {
+                fork != &id
+                    && fork.provider == ProviderKind::Claude
+                    && thread.turns.as_ref().is_some_and(|turns| turns.len() == 1)
+            })
     })
     .await;
     let (_, forked) = snapshot
+        .sessions
         .conversations
         .iter()
         .find(|(fork, _)| *fork != &id)
@@ -2032,7 +2060,7 @@ async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_
         .unwrap();
     store
         .dispatch(Intent::SelectModel {
-            thread_id: store.snapshot().navigation.draft_key.clone(),
+            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
             model: models::ModelRef {
                 provider: ProviderKind::Claude,
                 id: "default".into(),
@@ -2042,7 +2070,7 @@ async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_
         .unwrap();
     let says = |turn: usize, text: &'static str| {
         move |snapshot: &Snapshot| {
-            snapshot.conversations.values().any(|thread| {
+            snapshot.sessions.conversations.values().any(|thread| {
                 thread
                     .turns
                     .as_ref()
@@ -2057,7 +2085,11 @@ async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_
     std::fs::remove_file(&paused).unwrap();
     let snapshot = until(&store, says(0, "結果を報告します")).await;
     assert_eq!(
-        snapshot.conversations[&id].turns.as_ref().unwrap().len(),
+        snapshot.sessions.conversations[&id]
+            .turns
+            .as_ref()
+            .unwrap()
+            .len(),
         1,
         "Claude's answer to its finished shell must stay in the requesting turn"
     );
@@ -2069,14 +2101,14 @@ async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_
     store
         .dispatch(Intent::Interrupt(op::Interrupt {
             thread_id: id.clone(),
-            turn_id: snapshot.conversations[&id].turns.as_ref().unwrap()[1]
+            turn_id: snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1]
                 .id
                 .clone(),
         }))
         .await
         .unwrap();
     let snapshot = completed(&store, &id, 2, "interrupted").await;
-    let turn = &snapshot.conversations[&id].turns.as_ref().unwrap()[1];
+    let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1];
     assert!(turn.error.is_none(), "{:?}", turn.error);
     std::fs::remove_file(&paused).unwrap();
     send(&store, "after interrupt", "after-background-shell").await;
@@ -2105,7 +2137,7 @@ async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows()
         .unwrap();
     store
         .dispatch(Intent::SelectModel {
-            thread_id: store.snapshot().navigation.draft_key.clone(),
+            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
             model: models::ModelRef {
                 provider: ProviderKind::Claude,
                 id: "default".into(),
@@ -2114,7 +2146,7 @@ async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows()
         .await
         .unwrap();
     let texts = |snapshot: &Snapshot, id: &agent_protocol::session::SessionRef| {
-        snapshot.conversations[id]
+        snapshot.sessions.conversations[id]
             .turns
             .iter()
             .flatten()
@@ -2155,7 +2187,7 @@ async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows()
             .is_some_and(|turn| turn.iter().any(|text| text == "reply 2: next question"))
     })
     .await;
-    let turns = snapshot.conversations[&id].turns.as_ref().unwrap();
+    let turns = snapshot.sessions.conversations[&id].turns.as_ref().unwrap();
     assert_eq!(turns.len(), 2, "{:?}", texts(&snapshot, &id));
     assert_eq!(turns[0].status.label(), "completed");
     assert_eq!(turns[1].id, "while-background-shell".into());
@@ -2220,7 +2252,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
         })
         .await
         .unwrap();
-    let key = store.snapshot().navigation.draft_key.clone();
+    let key = store.snapshot().pane.navigation.draft_key.clone();
     store
         .dispatch(Intent::SelectModel {
             thread_id: key,
@@ -2234,6 +2266,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
     let id = send(&store, "wait", "initial").await;
     until(&store, |snapshot| {
         snapshot
+            .sessions
             .conversations
             .get(&id)
             .and_then(|thread| thread.turns.as_ref())
@@ -2247,14 +2280,16 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
     })
     .await;
     assert!(
-        store.snapshot().conversations[&id]
+        store.snapshot().sessions.conversations[&id]
             .capabilities
             .unwrap()
             .additional_input
     );
     assert!(
-        agent_protocol::session::input_unavailable_reason(&store.snapshot().conversations[&id])
-            .is_none()
+        agent_protocol::session::input_unavailable_reason(
+            &store.snapshot().sessions.conversations[&id]
+        )
+        .is_none()
     );
     let local = fixture.local().await.unwrap();
     assert!(
@@ -2269,7 +2304,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
     );
     send(&store, "follow-up", "steered").await;
     let snapshot = completed(&store, &id, turns_per_wait, "completed").await;
-    let items = snapshot.conversations[&id]
+    let items = snapshot.sessions.conversations[&id]
         .turns
         .as_ref()
         .unwrap()
@@ -2290,13 +2325,16 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
             .iter()
             .any(|item| item_text(item) == Some("reply 2: follow-up"))
     );
-    assert!(snapshot.pending_submissions.is_empty());
+    assert!(snapshot.sessions.pending_submissions.is_empty());
     store
         .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
         .await
         .unwrap();
     let refreshed = store.snapshot();
-    let turns = refreshed.conversations[&id].turns.as_ref().unwrap();
+    let turns = refreshed.sessions.conversations[&id]
+        .turns
+        .as_ref()
+        .unwrap();
     assert_eq!(
         turns.len(),
         turns_per_wait,
@@ -2313,6 +2351,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
     send(&store, "wait", "wait-again").await;
     until(&store, |snapshot| {
         snapshot
+            .sessions
             .conversations
             .get(&id)
             .and_then(|thread| thread.turns.as_ref())
@@ -2325,7 +2364,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
             })
     })
     .await;
-    let waiting_turn = store.snapshot().conversations[&id]
+    let waiting_turn = store.snapshot().sessions.conversations[&id]
         .turns
         .as_ref()
         .unwrap()
@@ -2348,7 +2387,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
         .await
         .unwrap();
     let snapshot = completed(&store, &id, 2 * turns_per_wait, "completed").await;
-    let items = snapshot.conversations[&id]
+    let items = snapshot.sessions.conversations[&id]
         .turns
         .as_ref()
         .unwrap()
@@ -2370,7 +2409,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
     );
     send(&store, "after completion", "last").await;
     completed(&store, &id, 2 * turns_per_wait + 1, "completed").await;
-    let inputs = session_inputs(session_trace(Path::new(&snapshot.navigation.cwd)));
+    let inputs = session_inputs(session_trace(Path::new(&snapshot.pane.navigation.cwd)));
     let inputs = inputs.as_array().unwrap();
     assert_eq!(inputs.len(), 5);
     assert!(
@@ -2380,7 +2419,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
     );
     send(&store, "wait", "before-live-refresh").await;
     until(&store, |snapshot| {
-        snapshot.conversations[&id]
+        snapshot.sessions.conversations[&id]
             .turns
             .as_ref()
             .unwrap()
@@ -2400,7 +2439,10 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
         .await
         .unwrap();
     let refreshed = store.snapshot();
-    let turns = refreshed.conversations[&id].turns.as_ref().unwrap();
+    let turns = refreshed.sessions.conversations[&id]
+        .turns
+        .as_ref()
+        .unwrap();
     assert_eq!(
         turns.len(),
         3 * turns_per_wait + 1,

@@ -185,7 +185,7 @@ impl Desktop {
         };
         self.project_editor = Some(ProjectEditor {
             id: id.into(),
-            scope: self.snapshot.storage_scope.clone(),
+            scope: self.snapshot.connection.storage_scope.clone(),
             name: cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(project.name.clone())
@@ -208,7 +208,7 @@ impl Desktop {
             .child(h_flex().gap_2()
                 .child(Button::new("save-project").label(language.text("保存")).primary().on_click(cx.listener(move |s, _, _, cx| {
                     let editor = s.project_editor.as_ref().unwrap();
-                    if editor.scope != s.snapshot.storage_scope {
+                    if editor.scope != s.snapshot.connection.storage_scope {
                         s.set_error(language.text("接続先が変わりました。プロジェクトを開き直してください").into());
                         s.project_editor = None; cx.notify(); return;
                     }

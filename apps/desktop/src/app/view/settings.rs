@@ -1,14 +1,14 @@
-use super::sidebar::SidebarSection;
+use super::sidebar::{SidebarEntry, SidebarRow};
 use super::*;
 
 impl Desktop {
-    pub(super) fn open_settings(&mut self, page: SettingsPage) {
+    pub(in crate::app) fn open_settings(&mut self, page: SettingsPage) {
         self.tab = Tab::Settings;
         self.settings_page = page;
         match page {
             SettingsPage::General | SettingsPage::Connections => {}
             SettingsPage::Agents => {
-                if self.snapshot.account.login.is_none() {
+                if self.snapshot.catalog.account.login.is_none() {
                     self.model_controls.provider = None;
                 }
                 self.account.sign_out = None;
@@ -21,71 +21,6 @@ impl Desktop {
                 self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
             }
         }
-    }
-
-    pub(super) fn settings_sidebar(
-        current: SettingsPage,
-        cx: &Context<Self>,
-    ) -> Sidebar<SidebarSection> {
-        let language = crate::localization::language(cx);
-        let mut navigation = Vec::new();
-        for (label, icon, page) in [
-            (
-                language.text("一般"),
-                IconName::Settings,
-                SettingsPage::General,
-            ),
-            (
-                language.text("エージェント"),
-                IconName::User,
-                SettingsPage::Agents,
-            ),
-            (
-                language.text("端末と接続"),
-                IconName::Network,
-                SettingsPage::Connections,
-            ),
-            (
-                language.text("ワークツリー"),
-                IconName::Folder,
-                SettingsPage::Worktrees,
-            ),
-        ] {
-            navigation.push(
-                SidebarMenuItem::new(label)
-                    .icon(icon)
-                    .active(current == page)
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.open_settings(page);
-                        if page == SettingsPage::Connections
-                            && let Some(hosts) = &s.hosts
-                        {
-                            hosts.update(cx, |hosts, _| hosts.refresh());
-                        }
-                        cx.notify();
-                    }))
-                    .into(),
-            );
-        }
-        Sidebar::new("settings-sidebar")
-            .header(
-                button(
-                    "settings-back",
-                    language.text("会話に戻る"),
-                    cx,
-                    |s, _, _| s.tab = Tab::Chat,
-                )
-                .icon(IconName::ArrowLeft)
-                .debug_selector(|| "settings-back".into())
-                .w_full()
-                .h(px(40.)),
-            )
-            .child(SidebarSection {
-                label: language.text("設定"),
-                menu: navigation,
-                collapsed: false,
-                add_project: None,
-            })
     }
 
     pub(super) fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -140,7 +75,9 @@ impl Desktop {
                     .flex_shrink_0()
                     .when(self.sidebar, |header| header.px_8())
                     .when(!self.sidebar, |header| {
-                        header.child(sidebar_header(false, cx)).pr_8()
+                        header
+                            .child(sidebar_header(false, &cx.weak_entity(), cx))
+                            .pr_8()
                     })
                     .text_xs()
                     .child(header)
@@ -177,11 +114,12 @@ impl Desktop {
                                     ),
                             )
                             .when(!errors.is_empty(), |body| {
-                                body.child(Self::error_list(
+                                body.child(errors::error_list(
                                     &errors,
                                     ErrorScope::Settings,
                                     None,
                                     cx,
+                                    Desktop::notice_action,
                                 ))
                             })
                             .child(body),
@@ -205,7 +143,7 @@ impl Desktop {
                 self.busy > 0
                     || self.worktrees.dirty
                     || self.worktrees.saving
-                    || self.snapshot.account.login.is_some(),
+                    || self.snapshot.catalog.account.login.is_some(),
                 cx,
             )
             .into_any_element()
@@ -234,7 +172,7 @@ impl Desktop {
             .child(
                 div()
                     .text_color(rgb(appearance::MUTED))
-                    .child(language.text(if self.snapshot.connected {
+                    .child(language.text(if self.snapshot.connection.connected {
                         "接続済み"
                     } else {
                         "未接続"
@@ -346,7 +284,7 @@ impl Desktop {
                 .outline()
                 .h(px(32.))
                 .debug_selector(|| "settings-import-projects".into())
-                .disabled(!self.snapshot.connected),
+                .disabled(!self.snapshot.connection.connected),
             );
         v_flex()
             .gap_8()
@@ -358,7 +296,7 @@ impl Desktop {
                         .child(view.connection_choices(
                             ConnectionLayout::Settings,
                             self.remote.as_ref().map(|host| host.id.as_str()),
-                            self.snapshot.connected,
+                            self.snapshot.connection.connected,
                             agent_controls,
                             cx,
                         ))
@@ -370,9 +308,10 @@ impl Desktop {
 
     fn worktree_settings(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let disabled =
-            !self.snapshot.connected || self.snapshot.workspace.settings.is_none() || self.busy > 0;
-        let settings = self.snapshot.workspace.settings.as_ref();
+        let disabled = !self.snapshot.connection.connected
+            || self.snapshot.files.workspace.settings.is_none()
+            || self.busy > 0;
+        let settings = self.snapshot.files.workspace.settings.as_ref();
         let body = v_flex()
             .gap_8()
             .child(settings_group().p_5().child(self.worktree_scope(cx)));
@@ -494,7 +433,7 @@ impl Desktop {
 
     fn project_worktree_cleanup(&self, project: String, disabled: bool, cx: &Context<Self>) -> Div {
         let language = crate::localization::language(cx);
-        let settings = self.snapshot.workspace.settings.as_deref();
+        let settings = self.snapshot.files.workspace.settings.as_deref();
         let current =
             settings.and_then(|settings| settings.project_delete_unchanged.get(&project).copied());
         let shared = settings.is_some_and(|settings| settings.delete_unchanged);
@@ -549,9 +488,10 @@ impl Desktop {
     }
     pub(super) fn workspace_card(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let enabled = self.snapshot.connected && !self.snapshot.navigation.cwd.is_empty();
+        let enabled =
+            self.snapshot.connection.connected && !self.snapshot.pane.navigation.cwd.is_empty();
         let review_enabled = enabled && !self.snapshot.selected_directory().is_empty();
-        let review = self.snapshot.workspace.review.as_ref();
+        let review = self.snapshot.pane.workspace.review.as_ref();
         let (additions, deletions) =
             review.map_or((0, 0), |review| (review.additions, review.deletions));
         let mut sources = v_flex().gap_1();
@@ -614,28 +554,29 @@ impl Desktop {
                     .child(
                         button(
                             "context-files",
-                            if self.snapshot.navigation.cwd.is_empty() {
+                            if self.snapshot.pane.navigation.cwd.is_empty() {
                                 language.text("フォルダを選択").into()
                             } else if self.snapshot.selected_directory().is_empty() {
                                 language.text("チャット").into()
                             } else {
-                                file_name(&self.snapshot.navigation.cwd)
+                                file_name(&self.snapshot.pane.navigation.cwd)
                             },
                             cx,
                             |s, _, cx| {
-                                if s.snapshot.navigation.cwd.is_empty() {
+                                if s.snapshot.pane.navigation.cwd.is_empty() {
                                     s.pick_folder();
                                 } else {
-                                    s.browse(s.snapshot.navigation.cwd.clone(), cx);
+                                    s.browse(s.snapshot.pane.navigation.cwd.clone(), cx);
                                 }
                             },
                         )
                         .icon(IconName::FolderOpen)
                         .w_full(),
                     )
-                    .when(self.local_shell && self.snapshot.connected, |body| {
-                        body.child(self.open_in_editor_row(cx))
-                    })
+                    .when(
+                        self.local_shell && self.snapshot.connection.connected,
+                        |body| body.child(self.open_in_editor_row(cx)),
+                    )
                     .when_some(
                         review.filter(|review| !review.branch.is_empty()),
                         |body, review| {
@@ -692,7 +633,7 @@ impl Desktop {
                             "all-files",
                             language.text("すべてのファイル"),
                             cx,
-                            |s, _, cx| s.browse(s.snapshot.navigation.cwd.clone(), cx),
+                            |s, _, cx| s.browse(s.snapshot.pane.navigation.cwd.clone(), cx),
                         )
                         .icon(IconName::Folder)
                         .w_full()
@@ -717,12 +658,13 @@ impl Desktop {
         };
         let options = self
             .snapshot
+            .files
             .file_open_capabilities
             .as_ref()
             .map(|capabilities| capabilities.editors.clone())
             .unwrap_or_default();
-        let selected = preferred_editor(self.snapshot.preferred_editor, &options);
-        let no_cwd = self.snapshot.navigation.cwd.is_empty();
+        let selected = preferred_editor(self.snapshot.files.preferred_editor, &options);
+        let no_cwd = self.snapshot.pane.navigation.cwd.is_empty();
         let language = crate::localization::language(cx);
         let label = match selected {
             Some(editor) => agent_core::localization::localized_ui_format(
@@ -788,7 +730,7 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         self.dispatch(Intent::SetPreferredEditor { editor });
-        let cwd = self.snapshot.navigation.cwd.clone();
+        let cwd = self.snapshot.pane.navigation.cwd.clone();
         self.open_in_editor(cwd, None, None, editor, false, cx);
     }
 }
@@ -815,10 +757,10 @@ impl Desktop {
                             s.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                         },
                     )
-                    .disabled(!self.snapshot.connected || self.worktrees.removing),
+                    .disabled(!self.snapshot.connection.connected || self.worktrees.removing),
                 ),
         );
-        let Some(worktrees) = &self.snapshot.workspace.worktrees else {
+        let Some(worktrees) = &self.snapshot.files.workspace.worktrees else {
             return body
                 .child(language.text("一覧を読み込み中…"))
                 .into_any_element();
@@ -834,7 +776,7 @@ impl Desktop {
         }
         for (index, worktree) in worktrees.iter().enumerate() {
             let path = worktree.path.clone();
-            let current = Path::new(&self.snapshot.navigation.cwd).starts_with(&worktree.path);
+            let current = Path::new(&self.snapshot.pane.navigation.cwd).starts_with(&worktree.path);
             let reason = worktree
                 .blocked_reason
                 .as_deref()
@@ -867,7 +809,7 @@ impl Desktop {
                             .outline()
                             .disabled(
                                 reason.is_some()
-                                    || !self.snapshot.connected
+                                    || !self.snapshot.connection.connected
                                     || self.worktrees.removing,
                             ),
                         ),
@@ -896,7 +838,7 @@ impl Desktop {
                         move |s, window, cx| s.open_chat(id.clone(), window, cx),
                     )
                     .icon(IconName::FileText)
-                    .disabled(!self.snapshot.connected || self.worktrees.removing),
+                    .disabled(!self.snapshot.connection.connected || self.worktrees.removing),
                 );
             }
             if let Some(reason) = reason {
@@ -913,7 +855,7 @@ impl Desktop {
                     .child(h_flex().gap_2()
                         .child(button(format!("cancel-remove-worktree-{index}"), language.text("取消"), cx, |s, _, _| s.worktrees.removal = None).disabled(self.worktrees.removing))
                         .child(button(format!("confirm-remove-worktree-{index}"), language.text("ワークツリーを削除"), cx, move |s, _, _| s.remove_worktree(path.clone()))
-                            .disabled(reason.is_some() || !self.snapshot.connected || self.worktrees.removing)));
+                            .disabled(reason.is_some() || !self.snapshot.connection.connected || self.worktrees.removing)));
             }
             body = body.child(entry);
         }
@@ -921,7 +863,7 @@ impl Desktop {
     }
 
     fn remove_worktree(&mut self, path: String) {
-        if self.worktrees.removing || !self.snapshot.connected {
+        if self.worktrees.removing || !self.snapshot.connection.connected {
             return;
         }
         self.worktrees.removing = true;
@@ -929,5 +871,66 @@ impl Desktop {
             Intent::RemoveWorktree(op::RemoveWorktree { path }),
             OperationCompletion::RemoveWorktree,
         );
+    }
+}
+
+impl super::sidebar::SidebarView {
+    pub(in crate::app::view) fn settings_sidebar(
+        current: SettingsPage,
+        cx: &Context<Self>,
+    ) -> Sidebar<SidebarEntry> {
+        let language = crate::localization::language(cx);
+        let mut navigation: Vec<SidebarRow> = Vec::new();
+        for (label, icon, page) in [
+            (
+                language.text("一般"),
+                IconName::Settings,
+                SettingsPage::General,
+            ),
+            (
+                language.text("エージェント"),
+                IconName::User,
+                SettingsPage::Agents,
+            ),
+            (
+                language.text("端末と接続"),
+                IconName::Network,
+                SettingsPage::Connections,
+            ),
+            (
+                language.text("ワークツリー"),
+                IconName::Folder,
+                SettingsPage::Worktrees,
+            ),
+        ] {
+            navigation.push(
+                SidebarMenuItem::new(label)
+                    .icon(icon)
+                    .active(current == page)
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.open_settings(page, cx);
+                        cx.notify();
+                    }))
+                    .into(),
+            );
+        }
+        Sidebar::new("settings-sidebar")
+            .header(
+                button(
+                    "settings-back",
+                    language.text("会話に戻る"),
+                    cx,
+                    |_, _, cx| cx.emit(super::sidebar::SidebarAction::Conversations),
+                )
+                .icon(IconName::ArrowLeft)
+                .debug_selector(|| "settings-back".into())
+                .w_full()
+                .h(px(40.)),
+            )
+            .child(SidebarEntry::from(SidebarRow::Section {
+                label: language.text("設定"),
+                add_project: None,
+            }))
+            .children(navigation.into_iter().map(SidebarEntry::from))
     }
 }

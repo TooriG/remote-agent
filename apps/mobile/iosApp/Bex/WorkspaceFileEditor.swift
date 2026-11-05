@@ -138,7 +138,7 @@ private struct WorkspaceFilePreview: View {
 }
 
 struct WorkspaceFileSheet: View {
-    let snapshot: AgentCore.Snapshot
+    let files: AgentCore.Files
     @Binding var text: String
     let perform: SnapshotRequest
     let entry: FileEntry
@@ -153,11 +153,11 @@ struct WorkspaceFileSheet: View {
     @State private var confirmReload = false
     @State private var selection: TextSelection?
     private var file: FileContent? {
-        snapshot.file().flatMap { $0.path == entry.path ? $0 : nil }
+        files.file().flatMap { $0.path == entry.path ? $0 : nil }
     }
 
     private var revision: String {
-        snapshot.fileDraft(path: entry.path)?.revision ?? file?.revision ?? ""
+        files.fileDraft(path: entry.path)?.revision ?? file?.revision ?? ""
     }
 
     private var savedText: String {
@@ -250,8 +250,8 @@ struct WorkspaceFileSheet: View {
                 error = failure.localizedDescription; return
             }
             initialized = true
-            if let file = snapshot.file(), file.path == entry.path,
-               (snapshot.fileDraft(path: entry.path)?.revision ?? file.revision) != file.revision {
+            if let file = snapshot.files().file(), file.path == entry.path,
+               (snapshot.files().fileDraft(path: entry.path)?.revision ?? file.revision) != file.revision {
                 error = "ホストのファイルが変更されています。下書きは保持しました。再読込すると下書きを破棄します。"
             }
         }

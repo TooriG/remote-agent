@@ -47,7 +47,7 @@ impl ClientStorage for Storage {
     }
 }
 fn draft(snapshot: &mut Snapshot, text: &str) {
-    Arc::make_mut(&mut snapshot.drafts).insert(
+    Arc::make_mut(&mut snapshot.input.drafts).insert(
         "draft".into(),
         Arc::new(Draft {
             text: text.into(),
@@ -72,14 +72,15 @@ fn selection(
 }
 fn remember(snapshot: &mut Snapshot, selection: ModelSelection) {
     let provider = selection.model.provider;
-    snapshot.model_preferences.provider = Some(provider);
+    snapshot.catalog.model_preferences.provider = Some(provider);
     snapshot
+        .catalog
         .model_preferences
         .selections
         .insert(provider, selection);
 }
 fn selected(snapshot: &Snapshot) -> &ModelSelection {
-    &snapshot.model_preferences.selections[&ProviderKind::Codex]
+    &snapshot.catalog.model_preferences.selections[&ProviderKind::Codex]
 }
 fn with_disk(disk: Arc<DeviceDisk>) -> Arc<Storage> {
     Arc::new(Storage {
@@ -100,16 +101,19 @@ async fn device_preferences_apply_across_hosts_without_replacing_their_work() {
             Some("priority".into()),
         ),
     );
-    defaults.preferred_editor = Some(EditorId::Zed);
+    defaults.files.preferred_editor = Some(EditorId::Zed);
     let disk = Arc::new(DeviceDisk::default());
-    *disk.models.lock().unwrap() = serde_json::to_vec(&defaults.model_preferences).unwrap();
+    *disk.models.lock().unwrap() = serde_json::to_vec(&defaults.catalog.model_preferences).unwrap();
     *disk.editor.lock().unwrap() =
         serde_json::to_vec(&EditorPreferences::capture(&defaults)).unwrap();
     let device = Arc::new(DevicePreferences::default());
     for host in ["first", "second"] {
         let storage = with_disk(disk.clone());
         let mut saved = Snapshot {
-            storage_scope: host.into(),
+            connection: crate::state::Connection {
+                storage_scope: host.into(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         draft(&mut saved, &format!("{host}'s draft"));
@@ -118,11 +122,14 @@ async fn device_preferences_apply_across_hosts_without_replacing_their_work() {
             .restore(false, None)
             .await
             .unwrap();
-        assert_eq!(restored.drafts, saved.drafts);
-        assert_eq!(restored.navigation, saved.navigation);
-        assert_eq!(restored.storage_scope, host);
-        assert_eq!(restored.model_preferences, defaults.model_preferences);
-        assert_eq!(restored.preferred_editor, Some(EditorId::Zed));
+        assert_eq!(restored.input.drafts, saved.input.drafts);
+        assert_eq!(restored.pane.navigation, saved.pane.navigation);
+        assert_eq!(restored.connection.storage_scope, host);
+        assert_eq!(
+            restored.catalog.model_preferences,
+            defaults.catalog.model_preferences
+        );
+        assert_eq!(restored.files.preferred_editor, Some(EditorId::Zed));
     }
     assert_eq!(disk.writes.load(Ordering::SeqCst), 0);
 }
@@ -166,22 +173,22 @@ async fn simultaneous_views_keep_each_providers_choice_when_closed_in_reverse_or
         .await
         .unwrap();
     assert_eq!(
-        restored.model_preferences.provider,
+        restored.catalog.model_preferences.provider,
         Some(ProviderKind::Claude)
     );
     assert_eq!(
-        restored.model_preferences.selections[&ProviderKind::Codex],
+        restored.catalog.model_preferences.selections[&ProviderKind::Codex],
         codex
     );
     assert_eq!(
-        restored.model_preferences.selections[&ProviderKind::Claude],
+        restored.catalog.model_preferences.selections[&ProviderKind::Claude],
         claude
     );
     let main = crate::persistence::decode(&main_storage.local.lock().unwrap()).unwrap();
     let side = crate::persistence::decode(&side_storage.local.lock().unwrap()).unwrap();
-    assert_eq!(main.drafts[&"draft".into()].text, "main draft");
-    assert_eq!(side.drafts[&"draft".into()].text, "side draft");
-    assert!(restored.drafts.is_empty());
+    assert_eq!(main.input.drafts[&"draft".into()].text, "main draft");
+    assert_eq!(side.input.drafts[&"draft".into()].text, "side draft");
+    assert!(restored.input.drafts.is_empty());
 }
 
 #[tokio::test]
@@ -193,7 +200,7 @@ async fn simultaneous_option_edits_do_not_overwrite_each_other() {
         &mut initial,
         selection(ProviderKind::Codex, "chosen", None, None),
     );
-    *disk.models.lock().unwrap() = serde_json::to_vec(&initial.model_preferences).unwrap();
+    *disk.models.lock().unwrap() = serde_json::to_vec(&initial.catalog.model_preferences).unwrap();
     let main = Persistence::new(with_disk(disk.clone()), device.clone());
     let side = Persistence::new(with_disk(disk.clone()), device);
     let mut first = main.restore(false, None).await.unwrap();
@@ -207,12 +214,14 @@ async fn simultaneous_option_edits_do_not_overwrite_each_other() {
             .unwrap(),
     );
     first
+        .catalog
         .model_preferences
         .selections
         .get_mut(&ProviderKind::Codex)
         .unwrap()
         .effort = Some("high".into());
     second
+        .catalog
         .model_preferences
         .selections
         .get_mut(&ProviderKind::Codex)
@@ -281,7 +290,10 @@ async fn retrying_a_failed_local_save_does_not_reapply_obsolete_device_edits() {
         .await
         .unwrap();
     assert_eq!(selected(&restored).effort.as_deref(), Some("low"));
-    assert_eq!(restored.drafts[&"draft".into()].text, "recover this draft");
+    assert_eq!(
+        restored.input.drafts[&"draft".into()].text,
+        "recover this draft"
+    );
 }
 
 #[tokio::test]
@@ -293,7 +305,7 @@ async fn an_option_edit_reselects_its_provider_without_erasing_the_other_windows
         &mut initial,
         selection(ProviderKind::Codex, "chosen", None, None),
     );
-    *disk.models.lock().unwrap() = serde_json::to_vec(&initial.model_preferences).unwrap();
+    *disk.models.lock().unwrap() = serde_json::to_vec(&initial.catalog.model_preferences).unwrap();
     let main = Persistence::new(with_disk(disk.clone()), device.clone());
     let side = Persistence::new(with_disk(disk.clone()), device);
     let mut first = main.restore(false, None).await.unwrap();
@@ -315,6 +327,7 @@ async fn an_option_edit_reselects_its_provider_without_erasing_the_other_windows
         .await
         .unwrap();
     first
+        .catalog
         .model_preferences
         .selections
         .get_mut(&ProviderKind::Codex)
@@ -327,12 +340,12 @@ async fn an_option_edit_reselects_its_provider_without_erasing_the_other_windows
         .await
         .unwrap();
     assert_eq!(
-        restored.model_preferences.provider,
+        restored.catalog.model_preferences.provider,
         Some(ProviderKind::Codex)
     );
     assert_eq!(selected(&restored).effort.as_deref(), Some("high"));
     assert_eq!(
-        restored.model_preferences.selections[&ProviderKind::Claude]
+        restored.catalog.model_preferences.selections[&ProviderKind::Claude]
             .model
             .id,
         "other"
@@ -398,7 +411,7 @@ async fn failed_device_writes_remain_dirty_when_another_session_saves() {
     );
     assert!(disk.models.lock().unwrap().is_empty());
     disk.fail_models.store(false, Ordering::SeqCst);
-    other.preferred_editor = Some(EditorId::Zed);
+    other.files.preferred_editor = Some(EditorId::Zed);
     second.finish(Arc::new(other)).unwrap().await.unwrap();
     first.finish(Arc::new(high)).unwrap().await.unwrap();
     let restored = Persistence::new(with_disk(disk), Arc::default())
@@ -406,7 +419,7 @@ async fn failed_device_writes_remain_dirty_when_another_session_saves() {
         .await
         .unwrap();
     assert_eq!(selected(&restored).effort.as_deref(), Some("high"));
-    assert_eq!(restored.preferred_editor, Some(EditorId::Zed));
+    assert_eq!(restored.files.preferred_editor, Some(EditorId::Zed));
 }
 
 #[tokio::test]
@@ -428,8 +441,9 @@ async fn final_save_seals_the_queue_even_if_earlier_waiters_are_cancelled() {
     assert_eq!(
         crate::persistence::decode(&storage.local.lock().unwrap())
             .unwrap()
+            .input
             .drafts,
-        snapshot.drafts
+        snapshot.input.drafts
     );
 }
 
@@ -453,8 +467,8 @@ async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
             turns: Some(Vec::new()),
             ..Default::default()
         };
-        snapshot.connected = true;
-        snapshot.threads = Some(Arc::new(ThreadList {
+        snapshot.connection.connected = true;
+        snapshot.lists.threads = Some(Arc::new(ThreadList {
             revision: 1,
             limit: 5,
             data: vec![thread.clone()],
@@ -464,7 +478,7 @@ async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
             project_pages: Default::default(),
             provider_errors: None,
         }));
-        Arc::make_mut(&mut snapshot.conversations).insert(id.clone(), Arc::new(thread));
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(id.clone(), Arc::new(thread));
         draft(&mut snapshot, "host draft");
         remember(
             &mut snapshot,
@@ -479,20 +493,21 @@ async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
                 .restore(false, Some(copies.clone()))
                 .await
                 .unwrap();
-            if restored.conversations.contains_key(&id) && restored.thread_list().is_some() {
+            if restored.sessions.conversations.contains_key(&id) && restored.thread_list().is_some()
+            {
                 break restored;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         };
         assert_eq!(
-            restored.conversations[&id].name.as_deref(),
+            restored.sessions.conversations[&id].name.as_deref(),
             Some("saved conversation")
         );
         assert_eq!(
             restored.thread_list().unwrap().threads[0].title,
             "saved conversation"
         );
-        assert_eq!(restored.drafts[&"draft".into()].text, "host draft");
+        assert_eq!(restored.input.drafts[&"draft".into()].text, "host draft");
         assert_eq!(selected(&restored).model.id, "chosen");
         saving.abort();
         assert!(saving.await.unwrap_err().is_cancelled());
@@ -502,9 +517,9 @@ async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
             .restore(true, Some(copies.clone()))
             .await
             .unwrap();
-        assert!(paired.conversations.is_empty());
+        assert!(paired.sessions.conversations.is_empty());
         assert!(paired.thread_list().is_none());
-        assert!(paired.drafts.is_empty());
+        assert!(paired.input.drafts.is_empty());
         assert_eq!(selected(&paired).model.id, "chosen");
         assert!(!copies.exists());
     })
@@ -533,6 +548,7 @@ async fn autosave_observes_core_changes_without_ui_notifications() {
             storage.saved.notified().await;
             let snapshot = crate::persistence::decode(&storage.local.lock().unwrap()).unwrap();
             if snapshot
+                .input
                 .drafts
                 .get(&"draft".into())
                 .is_some_and(|draft| draft.text == "no UI save")
@@ -560,18 +576,18 @@ fn model_replacement_and_removal_keep_other_providers_choices() {
         &mut before,
         selection(ProviderKind::Codex, "old", Some("high".into()), None),
     );
-    let mut current = before.model_preferences.clone();
+    let mut current = before.catalog.model_preferences.clone();
     current
         .selections
         .get_mut(&ProviderKind::Claude)
         .unwrap()
         .service_tier = Some("fast".into());
-    let mut after = before.model_preferences.clone();
+    let mut after = before.catalog.model_preferences.clone();
     after.selections.insert(
         ProviderKind::Codex,
         selection(ProviderKind::Codex, "new", None, None),
     );
-    let merged = merge_model_preferences(&current, &before.model_preferences, &after);
+    let merged = merge_model_preferences(&current, &before.catalog.model_preferences, &after);
     assert_eq!(
         merged.selections[&ProviderKind::Codex],
         after.selections[&ProviderKind::Codex]
@@ -586,7 +602,8 @@ fn model_replacement_and_removal_keep_other_providers_choices() {
         .get_mut(&ProviderKind::Codex)
         .unwrap()
         .service_tier = Some("priority".into());
-    let replaced = merge_model_preferences(&simultaneous, &before.model_preferences, &after);
+    let replaced =
+        merge_model_preferences(&simultaneous, &before.catalog.model_preferences, &after);
     assert_eq!(
         replaced.selections[&ProviderKind::Codex],
         after.selections[&ProviderKind::Codex]

@@ -1,17 +1,17 @@
 import AgentCore
 import Foundation
 
-extension AppViewModel {
+extension ConversationModel {
     var accounts: [Account] {
         snapshot.accounts()?.accounts ?? []
     }
 
     var selectedModel: ModelRef? {
-        snapshot.draft(key: coreDraftKey).model
+        composer.draft().model
     }
 
     var currentModel: Model? {
-        models.first { $0.model == selectedModel }
+        composer.currentModel()
     }
 
     func chooseModel(_ value: ModelRef) {

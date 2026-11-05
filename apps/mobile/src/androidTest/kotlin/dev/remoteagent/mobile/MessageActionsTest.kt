@@ -122,7 +122,7 @@ class MessageActionsTest {
             lateinit var clipboard: ClipboardManager
             compose.setContent {
                 clipboard = LocalClipboardManager.current
-                MaterialTheme { ThreadDetailScreen(snapshot, projection, { _, _ -> }, null) {} }
+                MaterialTheme { ThreadDetailFixture(snapshot, projection, { _, _ -> }, null) {} }
             }
             compose.onAllNodesWithContentDescription("コピー").assertCountEquals(2)
             compose.onAllNodesWithContentDescription("コピー")[0].performClick()

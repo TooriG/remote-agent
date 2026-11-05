@@ -51,10 +51,11 @@ internal fun ConversationFileViewer(
     workspaceRoot: String? = null,
     dismiss: () -> Unit,
 ) {
-    val snapshot = LocalHostSnapshot.current
+    val files = LocalFiles.current
+    val location = LocalFileLocation.current
     val context = LocalContext.current
-    val cwd = workspaceRoot ?: snapshot.navigation().cwd
-    val home = snapshot.hostHomeDirectory()
+    val cwd = workspaceRoot ?: location.cwd
+    val home = location.home
     val initialPath = fileHostPath(reference.path, home)
     val request = mobileFileOpenRequest(source ?: "", cwd, home)
     var file by remember(reference.path) { mutableStateOf(FileViewerState(initialPath, loading = true)) }
@@ -88,7 +89,7 @@ internal fun ConversationFileViewer(
         file = file.copy(loading = false, error = failure?.let { it.displayMessage() ?: "ファイルを開けません" })
     }
     if (file.directory) {
-        WorkspaceFilesDialog(snapshot, file.path, checkNotNull(perform), dismiss)
+        WorkspaceFilesDialog(files, file.path, checkNotNull(perform), dismiss)
     } else {
         AlertDialog(
             onDismissRequest = dismiss,

@@ -4,7 +4,7 @@ import SwiftUI
 import UIKit
 
 /// Media import
-extension ThreadScreen {
+extension ComposerMediaPicker {
     func importPhotos(_ items: [PhotosPickerItem], draftKey: DraftIdentity) async {
         defer { preparingMedia = false }
         do {
@@ -24,7 +24,9 @@ extension ThreadScreen {
                 : "チャットが切り替わったため、写真・動画をもう一度選択してください。"
         }
     }
+}
 
+extension ConversationComposer {
     func openCamera() {
         composerFocused = false
         guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
@@ -32,12 +34,12 @@ extension ThreadScreen {
             return
         }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized: showingCamera = true
+        case .authorized: mediaPicker = .camera
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 DispatchQueue.main.async {
                     if granted {
-                        showingCamera = true
+                        mediaPicker = .camera
                     } else {
                         model.transferError = "設定アプリでBexのカメラへのアクセスを許可してください。"
                     }

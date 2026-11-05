@@ -61,6 +61,7 @@ import dev.remoteagent.core.FileTreeKey
 import dev.remoteagent.core.FileTreeRow
 import dev.remoteagent.core.FileTreeSurface
 import dev.remoteagent.core.FileTreeView
+import dev.remoteagent.core.Files
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.MarkdownFileKind
 import dev.remoteagent.core.MarkdownFileReference
@@ -71,26 +72,27 @@ import dev.remoteagent.core.fileTreePath
 import java.util.Locale
 import java.util.UUID
 
-internal val LocalHostSnapshot = compositionLocalOf { Snapshot.empty() }
+internal val LocalFiles = compositionLocalOf { Snapshot.empty().files() }
+internal val LocalFileLocation = compositionLocalOf { FileLocation("", null) }
 
 @Composable
-internal fun FilesLauncher(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+internal fun FilesLauncher(files: Files, cwd: String, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
     var opened by remember { mutableStateOf(false) }
     TextButton(onClick = { opened = true }) { Text("Files") }
-    if (opened) WorkspaceFilesDialog(snapshot, snapshot.navigation().cwd, perform) { opened = false }
+    if (opened) WorkspaceFilesDialog(files, cwd, perform) { opened = false }
 }
 
 @Composable
 internal fun WorkspaceFilesDialog(
-    snapshot: Snapshot,
+    files: Files,
     directory: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     dismiss: () -> Unit,
 ) {
     val owner = remember { UUID.randomUUID().toString() }
-    val root = fileHostPath(directory, snapshot.hostHomeDirectory())
+    val root = fileHostPath(directory, LocalFileLocation.current.home)
     val key = remember(root) { FileTreeKey(owner, root) }
-    val tree = snapshot.fileTree(key)
+    val tree = files.fileTree(key)
     val currentPerform by rememberUpdatedState(perform)
     val send: (FileTreeAction) -> Unit = { currentPerform(Intent.FileTree(key, it)) {} }
     var selected by remember(key) { mutableStateOf<MarkdownFileReference?>(null) }

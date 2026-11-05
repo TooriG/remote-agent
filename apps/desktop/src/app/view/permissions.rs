@@ -109,7 +109,9 @@ impl Desktop {
                         mode == PermissionMode::FullAccess && control.mode == Some(mode),
                         |button| button.text_color(rgb(0xf58b42)),
                     )
-                    .disabled(control.loading || version.is_none() || !self.snapshot.connected)
+                    .disabled(
+                        control.loading || version.is_none() || !self.snapshot.connection.connected,
+                    )
                     .on_click(cx.listener(move |view, _, _, _| {
                         if let (Some(provider), Some(version)) = (provider, &version) {
                             view.dispatch(Intent::UpdatePermissionSettings(
@@ -172,6 +174,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -180,7 +183,7 @@ mod tests {
         let (_, window) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: Some(RemoteHost {
                             id: "fixture".into(),
                             name: "fixture".into(),
@@ -194,9 +197,9 @@ mod tests {
             });
             desktop.update(cx, |view, _| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                snapshot.connected = true;
-                Arc::make_mut(&mut snapshot.drafts).insert(
-                    snapshot.navigation.draft_key.clone(),
+                snapshot.connection.connected = true;
+                Arc::make_mut(&mut snapshot.input.drafts).insert(
+                    snapshot.pane.navigation.draft_key.clone(),
                     Arc::new(agent_core::state::Draft {
                         model: Some(agent_protocol::models::ModelRef {
                             provider: agent_protocol::session::ProviderKind::Codex,

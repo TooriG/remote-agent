@@ -42,7 +42,7 @@ fn history_refresh_does_not_expand_its_request_to_the_cached_window(
             .collect(),
     );
     let mut snapshot = Snapshot::default();
-    Arc::make_mut(&mut snapshot.conversations).insert(id.clone(), Arc::new(cached));
+    Arc::make_mut(&mut snapshot.sessions.conversations).insert(id.clone(), Arc::new(cached));
     let mut read = ReadThread {
         limit: requested,
         ..ReadThread::new(id)
@@ -89,7 +89,7 @@ fn unavailable_history_preserves_live_turn_requests_and_subsequent_text() {
     use agent_protocol::session::OpenedSession;
     let cached: Thread = serde_json::from_value(json!({"id":{"provider":"codex","id":"native"},"turns":[{"id":"A","status":"completed","items":[{"id":"past","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"cached history","phase":"unknown"}}}}}]},{"id":"stale","status":"running"}]})).unwrap();
     let mut snapshot = Snapshot::default();
-    Arc::make_mut(&mut snapshot.conversations).insert(
+    Arc::make_mut(&mut snapshot.sessions.conversations).insert(
         agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "native".into(),
@@ -128,7 +128,7 @@ fn unavailable_history_preserves_live_turn_requests_and_subsequent_text() {
             change,
         })),
     );
-    let thread = &snapshot.conversations[&agent_protocol::session::SessionRef {
+    let thread = &snapshot.sessions.conversations[&agent_protocol::session::SessionRef {
         provider: agent_protocol::session::ProviderKind::Codex,
         id: "native".into(),
     }];
@@ -266,17 +266,20 @@ fn updates_target_the_latest_occurrence_without_changing_older_turns() {
 fn storage_changes_keep_drafts_separate_and_restore_the_original_area() {
     use agent_core::state::{Draft, Event, Snapshot, reduce};
     let mut original = Snapshot {
-        storage_scope: "host-key:area-a".into(),
+        connection: agent_core::state::Connection {
+            storage_scope: "host-key:area-a".into(),
+            ..Default::default()
+        },
         ..Default::default()
     };
-    Arc::make_mut(&mut original.conversations).insert(
+    Arc::make_mut(&mut original.sessions.conversations).insert(
         agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "native".into(),
         },
         Arc::new(conversation()),
     );
-    Arc::make_mut(&mut original.drafts).insert(
+    Arc::make_mut(&mut original.input.drafts).insert(
         agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "native".into(),
@@ -288,10 +291,10 @@ fn storage_changes_keep_drafts_separate_and_restore_the_original_area() {
         }),
     );
     let (mut next, _) = reduce(&original, Event::StorageScope("host-key:area-b".into()));
-    assert!(next.conversations.is_empty());
-    assert!(next.drafts.is_empty());
+    assert!(next.sessions.conversations.is_empty());
+    assert!(next.input.drafts.is_empty());
     assert_eq!(
-        next.archived_scopes["host-key:area-a"].drafts[&agent_core::state::DraftKey::from(
+        next.lists.archived_scopes["host-key:area-a"].drafts[&agent_core::state::DraftKey::from(
             agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "native".into()
@@ -300,7 +303,7 @@ fn storage_changes_keep_drafts_separate_and_restore_the_original_area() {
             .text,
         "area A draft"
     );
-    Arc::make_mut(&mut next.drafts).insert(
+    Arc::make_mut(&mut next.input.drafts).insert(
         agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "native".into(),
@@ -315,29 +318,32 @@ fn storage_changes_keep_drafts_separate_and_restore_the_original_area() {
         agent_core::persistence::decode(&agent_core::persistence::encode(&next).unwrap()).unwrap();
     let (restored, _) = reduce(&saved, Event::StorageScope("host-key:area-a".into()));
     assert_eq!(
-        restored.drafts[&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef {
-            provider: agent_protocol::session::ProviderKind::Codex,
-            id: "native".into()
-        })]
-            .text,
-        "area A draft"
-    );
-    assert_eq!(
-        restored.archived_scopes["host-key:area-b"].drafts[&agent_core::state::DraftKey::from(
+        restored.input.drafts[&agent_core::state::DraftKey::from(
             agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "native".into()
             }
         )]
             .text,
+        "area A draft"
+    );
+    assert_eq!(
+        restored.lists.archived_scopes["host-key:area-b"].drafts
+            [&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef {
+                provider: agent_protocol::session::ProviderKind::Codex,
+                id: "native".into()
+            })]
+            .text,
         "area B draft"
     );
-    assert!(restored.conversations.is_empty());
+    assert!(restored.sessions.conversations.is_empty());
     assert_eq!(
-        original.drafts[&agent_core::state::DraftKey::from(agent_protocol::session::SessionRef {
-            provider: agent_protocol::session::ProviderKind::Codex,
-            id: "native".into()
-        })]
+        original.input.drafts[&agent_core::state::DraftKey::from(
+            agent_protocol::session::SessionRef {
+                provider: agent_protocol::session::ProviderKind::Codex,
+                id: "native".into()
+            }
+        )]
             .text,
         "area A draft"
     );
@@ -436,80 +442,95 @@ fn local_storage_keeps_user_work_without_host_caches() {
         ..Default::default()
     });
     let mut original = Snapshot {
-        storage_scope: "host:area".into(),
-        conversations: Arc::new(
-            [(
-                agent_protocol::session::SessionRef {
-                    provider: agent_protocol::session::ProviderKind::Codex,
-                    id: "native".into(),
-                },
-                Arc::new(conversation()),
-            )]
-            .into(),
-        ),
-        drafts: Arc::new(
-            [(
-                SessionRef {
-                    provider: ProviderKind::Codex,
-                    id: "native".into(),
-                }
+        files: agent_core::state::Files {
+            file_drafts: Arc::new(
+                [(
+                    "/file.txt".into(),
+                    Arc::new(FileDraft {
+                        revision: "revision".into(),
+                        text: "unsaved edit".into(),
+                    }),
+                )]
                 .into(),
-                draft.clone(),
-            )]
-            .into(),
-        ),
-        pending_submissions: Arc::new(
-            [(
-                "send-id".into(),
-                Arc::new(PendingSubmission {
-                    sequence: 0,
-                    submitted_at_ms: None,
-                    draft_key: SessionRef {
+            ),
+            ..Default::default()
+        },
+        connection: agent_core::state::Connection {
+            storage_scope: "host:area".into(),
+            epoch: 99,
+            ..Default::default()
+        },
+        sessions: agent_core::state::Sessions {
+            conversations: Arc::new(
+                [(
+                    agent_protocol::session::SessionRef {
+                        provider: agent_protocol::session::ProviderKind::Codex,
+                        id: "native".into(),
+                    },
+                    Arc::new(conversation()),
+                )]
+                .into(),
+            ),
+            pending_submissions: Arc::new(
+                [(
+                    "send-id".into(),
+                    Arc::new(PendingSubmission {
+                        sequence: 0,
+                        submitted_at_ms: None,
+                        draft_key: SessionRef {
+                            provider: ProviderKind::Codex,
+                            id: "native".into(),
+                        }
+                        .into(),
+                        draft: draft.clone(),
+                        turn_id: Some("turn".into()),
+                        after_item_id: None,
+                        accepted: false,
+                        delivery_unknown: true,
+                    }),
+                )]
+                .into(),
+            ),
+            ..Default::default()
+        },
+        input: agent_core::state::Input {
+            drafts: Arc::new(
+                [(
+                    SessionRef {
                         provider: ProviderKind::Codex,
                         id: "native".into(),
                     }
                     .into(),
-                    draft,
-                    turn_id: Some("turn".into()),
-                    after_item_id: None,
-                    accepted: false,
-                    delivery_unknown: true,
+                    draft.clone(),
+                )]
+                .into(),
+            ),
+            ..Default::default()
+        },
+        pane: std::sync::Arc::new(agent_core::state::PaneState {
+            navigation: Arc::new(Navigation {
+                thread_id: Some(agent_protocol::session::SessionRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "native".into(),
                 }),
-            )]
-            .into(),
-        ),
-        file_drafts: Arc::new(
-            [(
-                "/file.txt".into(),
-                Arc::new(FileDraft {
-                    revision: "revision".into(),
-                    text: "unsaved edit".into(),
-                }),
-            )]
-            .into(),
-        ),
-        navigation: Arc::new(Navigation {
-            thread_id: Some(agent_protocol::session::SessionRef {
-                provider: agent_protocol::session::ProviderKind::Codex,
-                id: "native".into(),
+                cwd: "/project".into(),
+                draft_key: SessionRef {
+                    provider: ProviderKind::Codex,
+                    id: "native".into(),
+                }
+                .into(),
             }),
-            cwd: "/project".into(),
-            draft_key: SessionRef {
-                provider: ProviderKind::Codex,
-                id: "native".into(),
-            }
-            .into(),
+            ..Default::default()
         }),
-        epoch: 99,
         ..Default::default()
     };
-    Arc::make_mut(&mut original.activity)
-        .unread
-        .insert(agent_protocol::session::SessionRef {
+    Arc::make_mut(&mut original.lists.activity).unread.insert(
+        agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "native".into(),
-        });
-    Arc::make_mut(&mut original.activity).active.insert(
+        },
+    );
+    Arc::make_mut(&mut original.lists.activity).active.insert(
         agent_protocol::session::SessionRef {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: "native".into(),
@@ -538,18 +559,21 @@ fn local_storage_keeps_user_work_without_host_caches() {
         ]
     );
     let restored = agent_core::persistence::decode(&bytes).unwrap();
-    assert_eq!(restored.drafts, original.drafts);
-    assert_eq!(restored.pending_submissions, original.pending_submissions);
-    assert_eq!(restored.file_drafts, original.file_drafts);
-    assert_eq!(restored.navigation, original.navigation);
-    assert!(restored.activity.unread.is_empty());
-    assert!(restored.activity.active.is_empty());
-    assert!(restored.conversations.is_empty());
-    assert!(restored.threads.is_none());
-    assert!(restored.models.is_empty());
-    assert_eq!(restored.epoch, 0);
-    assert!(!restored.connected);
-    assert!(!original.conversations.is_empty());
+    assert_eq!(restored.input.drafts, original.input.drafts);
+    assert_eq!(
+        restored.sessions.pending_submissions,
+        original.sessions.pending_submissions
+    );
+    assert_eq!(restored.files.file_drafts, original.files.file_drafts);
+    assert_eq!(restored.pane.navigation, original.pane.navigation);
+    assert!(restored.lists.activity.unread.is_empty());
+    assert!(restored.lists.activity.active.is_empty());
+    assert!(restored.sessions.conversations.is_empty());
+    assert!(restored.lists.threads.is_none());
+    assert!(restored.catalog.models.is_empty());
+    assert_eq!(restored.connection.epoch, 0);
+    assert!(!restored.connection.connected);
+    assert!(!original.sessions.conversations.is_empty());
 }
 
 proptest::proptest! {
@@ -574,15 +598,21 @@ proptest::proptest! {
             })]), ..Default::default()
         });
         let original = Snapshot {
-            conversations: Arc::new([
-                (codex.clone(), make_thread(&codex, &codex_text)),
-                (claude.clone(), make_thread(&claude, &claude_text)),
-            ].into()),
-            subscriptions: Arc::new([(codex.clone(), codex_subscription), (claude.clone(), claude_subscription)].into()),
-            drafts: Arc::new([
-                (codex.clone().into(), Arc::new(Draft {text:codex_text.clone(), ..Default::default()})),
-                (claude.clone().into(), Arc::new(Draft {text:claude_text.clone(), ..Default::default()})),
-            ].into()),
+            sessions: agent_core::state::Sessions {
+                conversations: Arc::new([
+                    (codex.clone(), make_thread(&codex, &codex_text)),
+                    (claude.clone(), make_thread(&claude, &claude_text)),
+                ].into()),
+                subscriptions: Arc::new([(codex.clone(), codex_subscription), (claude.clone(), claude_subscription)].into()),
+                ..Default::default()
+            },
+            input: agent_core::state::Input {
+                drafts: Arc::new([
+                    (codex.clone().into(), Arc::new(Draft {text:codex_text.clone(), ..Default::default()})),
+                    (claude.clone().into(), Arc::new(Draft {text:claude_text.clone(), ..Default::default()})),
+                ].into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let (changed, _) = reduce(&original, Event::SessionUpdate(Box::new(SessionUpdate {
@@ -592,13 +622,13 @@ proptest::proptest! {
                 field:TextField::AssistantText, delta:delta.clone(),
             },
         })));
-        proptest::prop_assert!(Arc::ptr_eq(&original.conversations[&codex], &changed.conversations[&codex]));
+        proptest::prop_assert!(Arc::ptr_eq(&original.sessions.conversations[&codex], &changed.sessions.conversations[&codex]));
         let expected_text = format!("{claude_text}{delta}");
-        proptest::prop_assert_eq!(item_text(&(changed.conversations[&claude].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])), Some(expected_text.as_str()));
-        proptest::prop_assert_eq!(&changed.drafts, &original.drafts);
+        proptest::prop_assert_eq!(item_text(&(changed.sessions.conversations[&claude].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])), Some(expected_text.as_str()));
+        proptest::prop_assert_eq!(&changed.input.drafts, &original.input.drafts);
         let restored = agent_core::persistence::decode(&agent_core::persistence::encode(&changed).unwrap()).unwrap();
-        proptest::prop_assert_eq!(restored.drafts.len(), 2);
-        proptest::prop_assert_eq!(&restored.drafts, &original.drafts);
+        proptest::prop_assert_eq!(restored.input.drafts.len(), 2);
+        proptest::prop_assert_eq!(&restored.input.drafts, &original.input.drafts);
     }
 }
 

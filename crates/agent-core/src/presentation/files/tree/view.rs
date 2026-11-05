@@ -1,5 +1,6 @@
 use super::*;
-use crate::state::Snapshot;
+#[cfg(feature = "bindings")]
+use crate::presentation::files::Files;
 use icu_collator::{
     Collator, CollatorBorrowed, CollatorPreferences,
     options::{CollatorOptions, Strength},
@@ -336,8 +337,14 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
-impl Snapshot {
+#[cfg(feature = "bindings")]
+#[uniffi::export]
+impl Files {
+    pub fn file_tree(&self, key: FileTreeKey) -> FileTreeView {
+        self.resources.file_tree(key)
+    }
+}
+impl crate::state::Files {
     pub fn file_tree(&self, key: FileTreeKey) -> FileTreeView {
         self.workspace.file_trees.view(&key)
     }

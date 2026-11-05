@@ -3,6 +3,9 @@ use super::*;
 pub use agent_protocol::operations::StartTerminal;
 
 impl Operation for StartTerminal {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn scheduling(&self) -> Scheduling {
         Scheduling::Terminal {
@@ -56,6 +59,9 @@ impl Operation for StartTerminal {
 pub use agent_protocol::operations::ResizeTerminal;
 
 impl Operation for ResizeTerminal {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
         if let Some(terminal) = shared_mut(&mut snapshot.terminals, &self.handle) {
@@ -90,6 +96,9 @@ impl rpc::RpcMethod for WriteTerminal {
 }
 
 impl Operation for WriteTerminal {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     no_input!();
     fn scheduling(&self) -> Scheduling {
         Scheduling::Terminal {
@@ -120,6 +129,9 @@ impl Operation for WriteTerminal {
 pub use agent_protocol::operations::DetachTerminal;
 
 impl Operation for DetachTerminal {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn scheduling(&self) -> Scheduling {
         Scheduling::Terminal {
@@ -149,6 +161,9 @@ rpc::rpc_method!(KillTerminal, KillTerminal, |self| rpc::TerminalKill {
     process_handle: self.handle.clone()
 });
 impl Operation for KillTerminal {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn scheduling(&self) -> Scheduling {
         Scheduling::Terminal {

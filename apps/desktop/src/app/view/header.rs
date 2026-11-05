@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(PartialEq)]
-struct HeaderModel {
+pub(in crate::app) struct HeaderModel {
     title: String,
     sidebar: bool,
     panel_open: bool,
@@ -12,28 +12,19 @@ struct HeaderModel {
 pub(in crate::app) struct HeaderView {
     desktop: WeakEntity<Desktop>,
     model: Option<HeaderModel>,
-    _observation: Subscription,
     #[cfg(test)]
     pub(super) renders: usize,
 }
 impl HeaderView {
-    pub(in crate::app) fn new(desktop: &Entity<Desktop>, cx: &mut Context<Self>) -> Self {
+    pub(in crate::app) fn new(desktop: &Entity<Desktop>, _: &mut Context<Self>) -> Self {
         Self {
             desktop: desktop.downgrade(),
             model: None,
-            _observation: cx.observe(desktop, |view, desktop, cx| {
-                view.set_model(
-                    desktop
-                        .read(cx)
-                        .header_model(crate::localization::language(cx)),
-                    cx,
-                );
-            }),
             #[cfg(test)]
             renders: 0,
         }
     }
-    fn set_model(&mut self, model: HeaderModel, cx: &mut Context<Self>) {
+    pub(in crate::app) fn set_model(&mut self, model: HeaderModel, cx: &mut Context<Self>) {
         if self.model.as_ref() != Some(&model) {
             self.model = Some(model);
             cx.notify();
@@ -61,13 +52,17 @@ impl Render for HeaderView {
     }
 }
 impl Desktop {
-    fn header_model(&self, language: agent_core::localization::UiLanguage) -> HeaderModel {
+    pub(in crate::app) fn header_model(
+        &self,
+        language: agent_core::localization::UiLanguage,
+    ) -> HeaderModel {
         let panel_open = self.panels.get(self.panel_scope()).open;
         let title = self
             .thread()
             .and_then(|thread| thread.name.as_deref())
             .or_else(|| {
                 self.snapshot
+                    .lists
                     .threads
                     .as_ref()
                     .and_then(|page| {
@@ -117,7 +112,9 @@ impl Desktop {
             .px_4()
             .gap_2();
         if !model.sidebar {
-            header = header.pl_0().child(sidebar_header(false, cx));
+            header = header
+                .pl_0()
+                .child(sidebar_header(false, &cx.weak_entity(), cx));
         }
         header
             .child(

@@ -24,7 +24,7 @@ impl Desktop {
         if !self.local_shell {
             return;
         }
-        if !self.snapshot.connected {
+        if !self.snapshot.connection.connected {
             self.set_error("ホストに接続していません".into());
             cx.notify();
             return;
@@ -43,7 +43,11 @@ impl Desktop {
         cx.notify();
     }
     pub(super) fn download(&mut self, source: String) {
-        let Some(store) = self.session.as_ref().map(|session| session.store.clone()) else {
+        let Some(store) = self
+            .session
+            .as_ref()
+            .map(|session| session.host.store.clone())
+        else {
             self.set_error("ホストに接続していません".into());
             return;
         };

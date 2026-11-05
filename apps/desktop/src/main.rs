@@ -21,6 +21,7 @@ const WINDOW_HEADER_HEIGHT: f32 = 44.;
 pub(crate) struct Runtime {
     pub(crate) handle: tokio::runtime::Handle,
     pub(crate) connections: std::sync::Arc<platform::Connections>,
+    pub(crate) sessions: std::sync::Arc<store_session::Sessions>,
     pub(crate) closing: tokio_util::task::TaskTracker,
     pub(crate) logging_error: Option<String>,
 }
@@ -104,6 +105,7 @@ fn main() {
             handle,
             closing,
             logging_error,
+            sessions: Default::default(),
             connections: std::sync::Arc::new(platform::Connections::default()),
         });
         cx.on_app_quit(|cx| {
@@ -111,6 +113,7 @@ fn main() {
             browser::native::shutdown(cx);
             tracing::info!(target: "agent", operation = "shutdown", "Bex shutting down");
             let runtime = cx.global::<Runtime>().clone();
+            runtime.handle.block_on(runtime.sessions.close());
             async move {
                 runtime.closing.close();
                 let handle = runtime.handle.clone();

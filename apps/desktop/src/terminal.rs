@@ -204,7 +204,7 @@ impl Terminal {
     }
     fn update_snapshot(&mut self, snapshot: Arc<Snapshot>, cx: &mut Context<Self>) {
         self.snapshot = snapshot;
-        if self.snapshot.connected && !self.started {
+        if self.snapshot.connection.connected && !self.started {
             self.started = true;
             self.dispatch(Intent::StartTerminal(op::StartTerminal {
                 handle: self.handle.clone(),
@@ -889,6 +889,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::default(),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,

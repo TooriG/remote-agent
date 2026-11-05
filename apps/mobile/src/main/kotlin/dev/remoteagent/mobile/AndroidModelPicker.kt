@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.remoteagent.core.ComposerPresentation
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.LoadModels
 import dev.remoteagent.core.ModelRef
@@ -35,17 +36,17 @@ import dev.remoteagent.core.Snapshot
 
 @Composable
 internal fun ModelPickerButton(
-    snapshot: Snapshot,
+    composer: ComposerPresentation,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     modifier: Modifier = Modifier,
+    dialog: @Composable (ModelRef?, () -> Unit) -> Unit,
 ) {
     val language = LocalUiLanguage.current
-    val key = snapshot.navigation().draftKey
-    val draft = snapshot.draft(key)
-    val provider = snapshot.modelProviderForDraft(key)
-    val selected = draft.model ?: provider?.let { snapshot.modelForProvider(key, it) }
-    val model = snapshot.models().firstOrNull { it.model == selected }
-    val controls = snapshot.modelQuickControls(key)
+    val controls = composer.controls()
+    val key = controls.navigation.draftKey
+    val selected = controls.selectedModel
+    val model = composer.currentModel()
+    val quick = controls.quick
     var open by remember(key) { mutableStateOf(false) }
     TextButton(
         onClick = {
@@ -56,20 +57,20 @@ internal fun ModelPickerButton(
     ) {
         Text(
             listOfNotNull(
-                    if (controls.fast) "⚡" else null,
+                    if (quick.fast) "⚡" else null,
                     model?.displayName ?: selected?.id ?: language.text("モデルを選択"),
-                    controls.effort.takeIf { it.isNotEmpty() }?.let(::effortLabel),
+                    quick.effort.takeIf { it.isNotEmpty() }?.let(::effortLabel),
                 )
                 .joinToString(" "),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
-    if (open) ModelPickerDialog(snapshot, selected, perform) { open = false }
+    if (open) dialog(selected) { open = false }
 }
 
 @Composable
-private fun ModelPickerDialog(
+internal fun ModelPickerDialog(
     snapshot: Snapshot,
     selected: ModelRef?,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
@@ -84,7 +85,7 @@ private fun ModelPickerDialog(
         title = { Text(language.text("モデルと実行設定")) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ErrorNotices(snapshot, dev.remoteagent.core.ErrorScope.Settings, perform)
+                ErrorNotices(snapshot.errorNotices(dev.remoteagent.core.ErrorScope.Settings), perform)
                 OutlinedTextField(
                     query,
                     { query = it },

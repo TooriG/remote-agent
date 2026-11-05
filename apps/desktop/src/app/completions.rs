@@ -7,7 +7,7 @@ impl Desktop {
         let input = self.composer.input.read(cx);
         if self.composer.completion_dismissed
             || !input.selected_range().is_empty()
-            || !self.snapshot.connected
+            || !self.snapshot.connection.connected
         {
             return None;
         }
@@ -206,19 +206,18 @@ mod tests {
         let _runtime = runtime(cx);
         for width in [360., 850.] {
             let (_, window) = cx.add_window_view(|window, cx| {
-                let desktop = cx.new(|cx| Desktop::new(Mode::SideChat {
+                let desktop = cx.new(|cx| Desktop::new(Mode::Fixture {
                     remote: Some(super::RemoteHost { id: "fixture".into(), name: "fixture".into(), ticket: "invalid-fixture-ticket".into() }),
-                    cwd: "/fixture".into(),
-                }, window, cx));
+                 cwd: "/fixture".into(),}, window, cx));
                 desktop.update(cx, |view, cx| {
                     let snapshot = Arc::make_mut(&mut view.snapshot);
-                    snapshot.connected = true;
-                    Arc::make_mut(&mut snapshot.drafts).insert(snapshot.navigation.draft_key.clone(), Arc::new(agent_core::state::Draft {
+                    snapshot.connection.connected = true;
+                    Arc::make_mut(&mut snapshot.input.drafts).insert(snapshot.pane.navigation.draft_key.clone(), Arc::new(agent_core::state::Draft {
                         model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "model".into() }),
                         ..Default::default()
                     }));
-                    snapshot.composer_catalog = Some(Arc::new(ComposerCatalog {
-                        cwd: snapshot.navigation.cwd.clone(), loading: true,
+                    Arc::make_mut(&mut snapshot.catalog.composer_catalogs).insert(snapshot.pane.navigation.cwd.clone(), Arc::new(ComposerCatalog {
+                        cwd: snapshot.pane.navigation.cwd.clone(), loading: true,
                         candidates: [
                             ("Review", "Investigate whether structured datasets and query results are trustworthy enough to use, including freshness, duplicates and missing values"),
                             ("Analyze Data Quality With A Very Long Skill Name", "First line\nSecond line"),
@@ -275,6 +274,7 @@ mod tests {
             crate::appearance::init(cx);
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
+                sessions: Default::default(),
                 connections: Arc::new(crate::platform::Connections::default()),
                 closing: tokio_util::task::TaskTracker::new(),
                 logging_error: None,
@@ -292,14 +292,14 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let desktop = cx.new(|cx| {
                 let mut desktop = Desktop::new(
-                    Mode::SideChat {
+                    Mode::Fixture {
                         remote: None,
                         cwd: "/fixture".into(),
                     },
                     window,
                     cx,
                 );
-                Arc::make_mut(&mut desktop.snapshot).connected = true;
+                Arc::make_mut(&mut desktop.snapshot).connection.connected = true;
                 desktop.composer.input.update(cx, |input, cx| {
                     input.set_readonly(false, cx);
                     input.set_value("ABCDE", window, cx);
@@ -368,7 +368,7 @@ mod tests {
         let _runtime = runtime(cx);
         let view = cx.add_window(|window, cx| {
             Desktop::new(
-                Mode::SideChat {
+                Mode::Fixture {
                     remote: None,
                     cwd: "/fixture".into(),
                 },
@@ -378,9 +378,9 @@ mod tests {
         });
         view.update(cx, |view, window, cx| {
             let snapshot = Arc::make_mut(&mut view.snapshot);
-            snapshot.connected = true;
-            Arc::make_mut(&mut snapshot.drafts).insert(
-                snapshot.navigation.draft_key.clone(),
+            snapshot.connection.connected = true;
+            Arc::make_mut(&mut snapshot.input.drafts).insert(
+                snapshot.pane.navigation.draft_key.clone(),
                 Arc::new(agent_core::state::Draft {
                     model: Some(agent_protocol::models::ModelRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
@@ -389,19 +389,22 @@ mod tests {
                     ..Default::default()
                 }),
             );
-            snapshot.composer_catalog = Some(Arc::new(ComposerCatalog {
-                cwd: snapshot.navigation.cwd.clone(),
-                candidates: vec![ComposerCandidate {
-                    invocation: Invocation {
-                        provider: agent_protocol::session::ProviderKind::Codex,
-                        kind: InvocationKind::Skill,
-                        name: "review".into(),
-                        path: "/fixture/review/SKILL.md".into(),
-                    },
-                    description: "Review".into(),
-                }],
-                ..Default::default()
-            }));
+            Arc::make_mut(&mut snapshot.catalog.composer_catalogs).insert(
+                snapshot.pane.navigation.cwd.clone(),
+                Arc::new(ComposerCatalog {
+                    cwd: snapshot.pane.navigation.cwd.clone(),
+                    candidates: vec![ComposerCandidate {
+                        invocation: Invocation {
+                            provider: agent_protocol::session::ProviderKind::Codex,
+                            kind: InvocationKind::Skill,
+                            name: "review".into(),
+                            path: "/fixture/review/SKILL.md".into(),
+                        },
+                        description: "Review".into(),
+                    }],
+                    ..Default::default()
+                }),
+            );
             view.composer.input.update(cx, |input, cx| {
                 input.set_readonly(false, cx);
                 input.set_value("日本語 /rev 後半", window, cx);

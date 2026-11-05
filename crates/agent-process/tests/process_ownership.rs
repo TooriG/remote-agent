@@ -7,6 +7,68 @@ use std::{
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[tokio::test]
+async fn provider_file_budget_survives_gui_limits_and_respects_the_hard_cap() {
+    let mut inherited = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut inherited) },
+        0
+    );
+    for (soft, hard) in [
+        (256, 4096),
+        (256, 512),
+        (4096, 8192),
+        (8192, 8192),
+        (256, inherited.rlim_max),
+    ] {
+        let hard = hard.min(inherited.rlim_max);
+        let soft = soft.min(hard);
+        let mut command = agent_process::command(Path::new("/bin/sh")).unwrap();
+        command
+            .args(["-c", "ulimit -Sn; ulimit -Hn"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        // The fixture changes only the supervisor child, never the test runner.
+        unsafe {
+            command.pre_exec(move || {
+                let limit = libc::rlimit {
+                    rlim_cur: soft,
+                    rlim_max: hard,
+                };
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let lifetime = child.stdin.take();
+        let output = child.wait_with_output().await.unwrap();
+        drop(lifetime);
+        assert!(output.status.success());
+        let actual: Vec<libc::rlim_t> = String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .map(|value| {
+                if value == "unlimited" {
+                    libc::RLIM_INFINITY
+                } else {
+                    value.parse().unwrap()
+                }
+            })
+            .collect();
+        assert_eq!(actual[1], hard);
+        if hard == libc::RLIM_INFINITY {
+            assert!((4096..=1 << 20).contains(&actual[0]));
+        } else {
+            assert_eq!(actual[0], hard);
+        }
+    }
+}
+
+#[tokio::test]
 async fn lifetime_pipe_relays_input_and_preserves_native_exit_status() {
     let mut command = agent_process::command(Path::new("/bin/sh")).unwrap();
     let mut child = command

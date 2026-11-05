@@ -133,7 +133,7 @@ impl Hosts {
                 name: format!("WSL ({distro})"),
                 ticket: String::new(),
             })
-            .chain(self.snapshot.management.remotes.iter().cloned())
+            .chain(self.snapshot.connection.management.remotes.iter().cloned())
             .collect()
     }
     fn select(&mut self, remote: Option<RemoteHost>, cx: &mut Context<Self>) {
@@ -169,17 +169,22 @@ impl Hosts {
         self.error = None;
         self.session.take();
         let updates = self.updates.clone();
-        let connections = self.runtime.connections.clone();
         let runtime = self.runtime.clone();
         self.runtime.handle.spawn(async move {
-            StoreSession::publish(
-                connections.connect(None, Snapshot::default()).await,
-                runtime,
-                updates,
-                Update::Connected,
-                |_| Update::Snapshot,
-            )
-            .await;
+            match runtime
+                .sessions
+                .open(None, runtime.clone())
+                .await
+                .and_then(|session| session.side(String::new()))
+            {
+                Ok(session) => {
+                    StoreSession::observe(session, updates, Update::Connected, |_| Update::Snapshot)
+                        .await
+                }
+                Err(error) => {
+                    let _ = updates.send(Update::Connected(Err(error))).await;
+                }
+            }
         });
     }
     pub(super) fn refresh(&mut self) {
@@ -187,7 +192,7 @@ impl Hosts {
             return;
         }
         self.discover_wsl();
-        if self.snapshot.connected {
+        if self.snapshot.connection.connected {
             self.dispatch(
                 Intent::LoadHostManagement(op::LoadHostManagement {}),
                 Action::None,
@@ -197,7 +202,7 @@ impl Hosts {
         }
     }
     fn dispatch(&mut self, intent: Intent, action: Action) {
-        let Some(store) = self.session.as_ref().map(|session| &session.store) else {
+        let Some(store) = self.session.as_ref().map(|session| &session.pane) else {
             return;
         };
         self.busy = true;
@@ -238,7 +243,7 @@ impl Hosts {
                 self.connecting = false;
                 match result {
                     Ok(store) => {
-                        self.snapshot = store.store.snapshot();
+                        self.snapshot = store.pane.snapshot().expect("connected management pane");
                         self.session = Some(store);
                         self.dispatch(
                             Intent::LoadHostManagement(op::LoadHostManagement {}),
@@ -249,20 +254,33 @@ impl Hosts {
                 }
             }
             Update::Snapshot => {
-                if let Some(store) = self.session.as_ref().map(|session| &session.store) {
-                    self.snapshot = store.snapshot();
+                let next = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.pane.snapshot().ok());
+                match next {
+                    Some(next) if self.snapshot.connection != next.connection => {
+                        self.snapshot = next
+                    }
+                    _ => return,
                 }
             }
             Update::Completed(action, result) => {
                 self.busy = false;
-                if let Some(store) = self.session.as_ref().map(|session| &session.store) {
-                    self.snapshot = store.snapshot();
+                if let Some(next) = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.pane.snapshot().ok())
+                {
+                    self.snapshot = next;
                 }
                 match result {
                     Err(error) => self.error = Some(error),
                     Ok(outcome) => match action {
                         Action::Invite => {
-                            if let Some(invitation) = &self.snapshot.management.invitation {
+                            if let Some(invitation) =
+                                &self.snapshot.connection.management.invitation
+                            {
                                 let result = (|| -> Result<_, String> {
                                     let text = serde_json::to_string(invitation)
                                         .map_err(|error| error.to_string())?;
@@ -298,6 +316,7 @@ impl Hosts {
                             if let Outcome::RemoteHostPaired { id } = outcome
                                 && let Some(host) = self
                                     .snapshot
+                                    .connection
                                     .management
                                     .remotes
                                     .iter()
@@ -355,7 +374,7 @@ impl Hosts {
                     language.text("接続中…")
                 }
             } else if (remote.is_none() || remote.is_some_and(|host| host.id.starts_with("wsl:")))
-                && self.snapshot.connected
+                && self.snapshot.connection.connected
             {
                 language.text("利用可能")
             } else {
@@ -426,7 +445,7 @@ impl Hosts {
                                         .ghost()
                                         .accessibility_label(language.text("保存した接続を削除"))
                                         .tooltip(language.text("保存した接続を削除"))
-                                        .disabled(self.busy || !self.snapshot.connected)
+                                        .disabled(self.busy || !self.snapshot.connection.connected)
                                         .on_click(cx.listener(move |view, _, _, cx| {
                                             view.dispatch(
                                                 Intent::RemoveRemoteHost(op::RemoveRemoteHost {
@@ -505,7 +524,7 @@ impl Hosts {
                 })),
         );
         if self.adding_remote {
-            let disabled = self.busy || !self.snapshot.connected;
+            let disabled = self.busy || !self.snapshot.connection.connected;
             let mut methods = h_flex().gap_2();
             for (id, label, use_ssh) in [
                 ("onboarding-use-ssh", language.text("SSHで接続"), true),
@@ -608,7 +627,7 @@ impl Hosts {
                 .child(div().flex_1().child(language.text("Bexの実行環境")))
                 .child(div().text_xs().child(language.text("今後対応"))),
         );
-        if let Some(error) = self.error.as_ref().or(self.snapshot.error.as_ref()) {
+        if let Some(error) = self.error.as_ref().or(self.snapshot.pane.error.as_ref()) {
             choices = choices.child(
                 div()
                     .when(!cards, |view| view.p_4())
@@ -689,9 +708,9 @@ impl Hosts {
 impl Render for Hosts {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let language = crate::localization::language(cx);
-        let disabled = !self.snapshot.connected || self.busy;
+        let disabled = !self.snapshot.connection.connected || self.busy;
         let mut body = v_flex().w_full().gap_5();
-        if !self.snapshot.connected {
+        if !self.snapshot.connection.connected {
             return body
                 .child(
                     div()
@@ -800,7 +819,7 @@ impl Render for Hosts {
                                 })),
                         ),
                 );
-        if let Some(status) = &self.snapshot.management.status {
+        if let Some(status) = &self.snapshot.connection.management.status {
             let mut list = settings_group().overflow_hidden();
             if status.devices.is_empty() {
                 list = list.child(

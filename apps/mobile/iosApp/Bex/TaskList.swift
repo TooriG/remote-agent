@@ -2,7 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct ThreadsScreen: View {
-    @ObservedObject var model: AppViewModel
+    let model: AppViewModel
     @State private var search = ""
     @State private var showingSettings = false
     @State private var openConnectionsAfterSettings = false
@@ -12,7 +12,7 @@ struct ThreadsScreen: View {
         let chats = model.list?.threads ?? []
         List {
             if !model.profiles.isEmpty {
-                ErrorNotices(model: model, scope: .projects).taskListRowStyle()
+                ErrorNotices(notices: model.notices[.projects] ?? [], perform: { model.perform($0) }).taskListRowStyle()
                 if let notice = model.list?.notice {
                     AppNotice(text: notice).taskListRowStyle()
                 }

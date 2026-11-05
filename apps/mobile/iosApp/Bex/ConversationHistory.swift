@@ -2,62 +2,68 @@ import AgentCore
 import SwiftUI
 import UIKit
 
-/// History and row presentation
-extension ThreadScreen {
-    var mediaAccess: ConversationMediaAccess {
-        let host = model.selectedProfileId
-        let draft = model.coreDraftKey
-        let cwd = model.cwd
+extension ConversationModel {
+    func mediaAccess(open: @escaping (WorkspaceDestination) -> Void) -> ConversationMediaAccess {
+        let draft = coreDraftKey
+        let cwd = cwd
         return ConversationMediaAccess(
             host: host,
             cwd: cwd,
-            home: model.snapshot.hostHomeDirectory(),
+            home: hostHomeDirectory,
             draft: draft,
-            download: { [model] path in
-                guard model.selectedProfileId == host else { throw CancellationError() }
-                return try await model.download(path)
+            download: { [self] path in
+                return try await download(path)
             },
-            visualization: { [model] path in
-                guard model.selectedProfileId == host else { throw CancellationError() }
-                let result = try await model.outcome(for: .loadVisualization(LoadVisualization(path: path, cwd: cwd)))
-                guard model.selectedProfileId == host else { throw CancellationError() }
+            visualization: { [self] path in
+                let result = try await outcome(for: .loadVisualization(LoadVisualization(path: path, cwd: cwd)))
                 guard case let .visualization(html) = result else { throw URLError(.badServerResponse) }
                 return html
             },
-            resolve: { [model] source in
-                guard model.selectedProfileId == host else { throw CancellationError() }
-                guard let request = mobileFileOpenRequest(
-                    source: source,
-                    cwd: cwd,
-                    home: model.snapshot.hostHomeDirectory()
-                )
-                else {
-                    throw URLError(.unsupportedURL)
-                }
-                let result = try await model.outcome(for: .resolveFileReference(request))
-                guard model.selectedProfileId == host else { throw CancellationError() }
-                guard case let .fileReferenceResolved(path, directory) = result
-                else { throw URLError(.badServerResponse) }
-                return ConversationMediaAccess.ResolvedFile(
-                    path: path,
-                    isDirectory: directory,
-                    line: markdownFileTarget(source: source, cwd: cwd, surface: .mobile)?.line
-                )
+            resolve: { [self, home = hostHomeDirectory] source in
+                try await resolveConversationFile(source, cwd: cwd, home: home)
             },
             openDirectory: { path in
-                guard model.selectedProfileId == host, model.coreDraftKey == draft else { return }
-                openedDirectory = WorkspaceDestination(
-                    scope: model.snapshot.panelScope(host: host ?? "", draft: draft), directory: path
-                )
+                guard self.coreDraftKey == draft else { return }
+                open(WorkspaceDestination(
+                    scope: self.snapshot.panelScope(host: host, draft: draft), directory: path
+                ))
             },
             openFile: { path, line in
-                guard model.selectedProfileId == host, model.coreDraftKey == draft else { return }
-                openedDirectory = WorkspaceDestination(
-                    scope: model.snapshot.panelScope(host: host ?? "", draft: draft), directory: cwd, filePath: path,
+                guard self.coreDraftKey == draft else { return }
+                open(WorkspaceDestination(
+                    scope: self.snapshot.panelScope(host: host, draft: draft), directory: cwd, filePath: path,
                     fileLine: line
-                )
+                ))
             }
         )
+    }
+
+    private func resolveConversationFile(_ source: String, cwd: String,
+                                         home: String?) async throws -> ConversationMediaAccess.ResolvedFile {
+        guard let request = mobileFileOpenRequest(source: source, cwd: cwd, home: home)
+        else { throw URLError(.unsupportedURL) }
+        let result = try await outcome(for: .resolveFileReference(request))
+        guard case let .fileReferenceResolved(path, directory) = result
+        else { throw URLError(.badServerResponse) }
+        return ConversationMediaAccess.ResolvedFile(
+            path: path, isDirectory: directory,
+            line: markdownFileTarget(source: source, cwd: cwd, surface: .mobile)?.line
+        )
+    }
+}
+
+/// History and row presentation
+extension ThreadScreen {
+    func restoreReadingPosition(_ target: ConversationScrollObserver.Target?) {
+        switch target {
+        case let .point(point): scrollPosition.scrollTo(point: point)
+        case let .row(id): scrollPosition.scrollTo(id: id, anchor: .top)
+        case nil: break
+        }
+    }
+
+    var mediaAccess: ConversationMediaAccess {
+        model.mediaAccess { openedDirectory = $0 }
     }
 
     func historyControl(_ control: HistoryControl, session: SessionRef) -> some View {
@@ -68,14 +74,9 @@ extension ThreadScreen {
                     let request = controller.captureReadingPosition()
                     isFollowingLatest = false
                     model.loadOlderHistory(session) { succeeded, turns, hasMore in
-                        if let point = controller.historyLoaded(
-                            request,
-                            succeeded: succeeded,
-                            turnCount: turns,
-                            hasMoreHistory: hasMore
-                        ) {
-                            scrollPosition.scrollTo(point: point)
-                        }
+                        restoreReadingPosition(controller.historyLoaded(
+                            request, succeeded: succeeded, turnCount: turns, hasMoreHistory: hasMore
+                        ))
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -134,16 +135,8 @@ extension ThreadScreen {
                 timestampMs: row.timestampMs,
                 fork: turnId
                     .map { id in { model.forkAndOpen(through: id) { _ in } } },
-                forking: turnId
-                    .flatMap { turn in model.selectedThreadId.map { model.snapshot.operationRunning(key: .fork(
-                        session: $0,
-                        turn: turn
-                    )) } } ?? false,
-                forkError: turnId
-                    .flatMap { turn in model.selectedThreadId.flatMap { model.snapshot.operationError(key: .fork(
-                        session: $0,
-                        turn: turn
-                    )) } }
+                forking: turnId.map { model.conversationContext.forkPhase(turn: $0) == .running } ?? false,
+                forkError: turnId.flatMap { model.conversationContext.forkError(turn: $0) }
             ).equatable()
         case let (.activityHeader(activity), _): activityHeader(activity)
         case (let .activity(_, turnId), let item?): activityItem(item, turnId: turnId)

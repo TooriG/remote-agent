@@ -167,16 +167,16 @@ fn write_value(path: &Path, value: impl Serialize) -> std::io::Result<()> {
 
 /// Add the most recently saved copies that `snapshot` does not hold yet.
 pub fn restore(directory: &Path, snapshot: &mut Snapshot) {
-    if snapshot.threads.is_none()
-        && let Some(list) = read_list(directory, &snapshot.storage_scope)
+    if snapshot.lists.threads.is_none()
+        && let Some(list) = read_list(directory, &snapshot.connection.storage_scope)
     {
-        snapshot.list_query = list.query;
-        snapshot.threads = Some(list.threads);
-        snapshot.project_threads = list.projects;
-        snapshot.expanded_projects = list.expanded;
-        snapshot.unconfirmed_lists = Arc::new(
+        snapshot.lists.list_query = list.query;
+        snapshot.lists.threads = Some(list.threads);
+        snapshot.lists.project_threads = list.projects;
+        snapshot.lists.expanded_projects = list.expanded;
+        snapshot.lists.unconfirmed_lists = Arc::new(
             std::iter::once(OperationKey::SessionList)
-                .chain(snapshot.project_threads.keys().map(|project_id| {
+                .chain(snapshot.lists.project_threads.keys().map(|project_id| {
                     OperationKey::ProjectList {
                         project_id: project_id.clone(),
                     }
@@ -198,7 +198,7 @@ pub fn restore(directory: &Path, snapshot: &mut Snapshot) {
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
     files.sort_by_key(|file| std::cmp::Reverse(file.0));
-    let conversations = Arc::make_mut(&mut snapshot.conversations);
+    let conversations = Arc::make_mut(&mut snapshot.sessions.conversations);
     for (_, path) in files.into_iter().take(RESTORED) {
         if let Some(thread) = read(&path) {
             let id = thread.id.clone().expect("read copies have IDs");
@@ -222,20 +222,20 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
         tokio::time::sleep(Duration::from_millis(500)).await;
         let snapshot = updates.borrow_and_update().clone();
         let mut writing = false;
-        if snapshot.connected
-            && !snapshot.unconfirmed_lists.contains(&OperationKey::SessionList)
-            && snapshot.list_query.search_term.trim().is_empty()
+        if snapshot.connection.connected
+            && !snapshot.lists.unconfirmed_lists.contains(&OperationKey::SessionList)
+            && snapshot.lists.list_query.search_term.trim().is_empty()
             // A pending or failed search reset still holds the previous query's rows.
-            && !snapshot.operations.contains_key(&OperationKey::SessionList)
-            && let Some(threads) = &snapshot.threads
+            && !snapshot.operations.get(&OperationKey::SessionList).is_some()
+            && let Some(threads) = &snapshot.lists.threads
         {
             let list = ListCopy {
                 format: FORMAT,
-                storage_scope: snapshot.storage_scope.clone(),
-                query: snapshot.list_query.clone(),
+                storage_scope: snapshot.connection.storage_scope.clone(),
+                query: snapshot.lists.list_query.clone(),
                 threads: threads.clone(),
-                projects: snapshot.project_threads.clone(),
-                expanded: snapshot.expanded_projects.clone(),
+                projects: snapshot.lists.project_threads.clone(),
+                expanded: snapshot.lists.expanded_projects.clone(),
             };
             if saved_list
                 .as_ref()
@@ -253,6 +253,7 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
             }
         }
         let changed: Vec<_> = snapshot
+            .sessions
             .conversations
             .iter()
             .filter(|(id, thread)| {
@@ -319,12 +320,15 @@ mod tests {
 
     fn snapshot(threads: impl IntoIterator<Item = Thread>) -> Arc<Snapshot> {
         Arc::new(Snapshot {
-            conversations: Arc::new(
-                threads
-                    .into_iter()
-                    .map(|thread| (thread.id.clone().unwrap(), Arc::new(thread)))
-                    .collect(),
-            ),
+            sessions: crate::state::Sessions {
+                conversations: Arc::new(
+                    threads
+                        .into_iter()
+                        .map(|thread| (thread.id.clone().unwrap(), Arc::new(thread)))
+                        .collect(),
+                ),
+                ..Default::default()
+            },
             ..Default::default()
         })
     }
@@ -332,7 +336,7 @@ mod tests {
     fn restored(directory: &Path) -> BTreeMap<SessionRef, Arc<Thread>> {
         let mut snapshot = Snapshot::default();
         restore(directory, &mut snapshot);
-        snapshot.conversations.as_ref().clone()
+        snapshot.sessions.conversations.as_ref().clone()
     }
 
     fn name(directory: &Path) -> Option<String> {
@@ -358,9 +362,9 @@ mod tests {
         let mut child = thread("project chat", 1, TurnStatus::Completed);
         child.project_id = ProjectMembership::Assigned("p".into());
         let mut state = (*snapshot([standalone.clone(), child.clone()])).clone();
-        state.storage_scope = "volume".into();
-        state.connected = true;
-        state.threads = Some(page(
+        state.connection.storage_scope = "volume".into();
+        state.connection.connected = true;
+        state.lists.threads = Some(page(
             vec![standalone],
             vec![Project {
                 id: "p".into(),
@@ -368,14 +372,18 @@ mod tests {
                 ..Default::default()
             }],
         ));
-        state.project_threads = Arc::new(BTreeMap::from([("p".into(), page(vec![child], vec![]))]));
-        state.expanded_projects = Arc::new(BTreeMap::from([("p".into(), 5)]));
+        state.lists.project_threads =
+            Arc::new(BTreeMap::from([("p".into(), page(vec![child], vec![]))]));
+        state.lists.expanded_projects = Arc::new(BTreeMap::from([("p".into(), 5)]));
         Arc::new(state)
     }
 
     fn restored_state(directory: &Path, scope: &str) -> Snapshot {
         let mut snapshot = Snapshot {
-            storage_scope: scope.into(),
+            connection: crate::state::Connection {
+                storage_scope: scope.into(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         restore(directory, &mut snapshot);
@@ -388,7 +396,7 @@ mod tests {
             if state
                 .thread_list()
                 .is_some_and(|list| list.threads.first().is_some_and(|row| row.title == title))
-                && state.conversations.len() == 2
+                && state.sessions.conversations.len() == 2
             {
                 return;
             }
@@ -424,7 +432,7 @@ mod tests {
         saving.await.unwrap();
 
         let offline = restored_state(directory.path(), "volume");
-        assert!(!offline.connected);
+        assert!(!offline.connection.connected);
         let list = offline.thread_list().unwrap();
         assert_eq!(list.threads[0].title, "saved chat");
         assert!(
@@ -435,7 +443,9 @@ mod tests {
         assert_eq!(list.projects[0].name, "Project");
         assert_eq!(list.projects[0].threads[0].title, "project chat");
         assert!(
-            offline.threads.as_ref().unwrap().data[0].turns.is_none(),
+            offline.lists.threads.as_ref().unwrap().data[0]
+                .turns
+                .is_none(),
             "list records do not duplicate conversation bodies"
         );
 
@@ -462,16 +472,17 @@ mod tests {
 
         // A lower revision from a restarted Host must replace the saved rows.
         let fresh = listed("fresh chat");
-        let mut response = fresh.threads.as_ref().unwrap().as_ref().clone();
+        let mut response = fresh.lists.threads.as_ref().unwrap().as_ref().clone();
         response.revision = 1;
-        op::ListSessions::new((*connected.list_query).clone()).apply(&mut connected, response);
+        op::ListSessions::new((*connected.lists.list_query).clone())
+            .apply(&mut connected, response);
         assert_eq!(
             connected.thread_list().unwrap().threads[0].title,
             "fresh chat"
         );
 
         // Reopening a held project shows its rows and refreshes them.
-        Arc::make_mut(&mut connected.expanded_projects).clear();
+        Arc::make_mut(&mut connected.lists.expanded_projects).clear();
         let (opened, _) = reduce(
             &connected,
             Event::Intent(Intent::SetProjectExpanded {
@@ -492,19 +503,19 @@ mod tests {
         );
         let path = directory.path().join("list.cache");
         std::fs::write(&path, b"damaged list").unwrap();
-        Arc::make_mut(&mut selected.drafts).insert(
+        Arc::make_mut(&mut selected.input.drafts).insert(
             "draft".into(),
             Arc::new(crate::state::Draft {
                 text: "keep this".into(),
                 ..Default::default()
             }),
         );
-        selected.threads = None;
+        selected.lists.threads = None;
         restore(directory.path(), &mut selected);
         assert!(!path.exists());
         assert!(selected.thread_list().is_none());
-        assert_eq!(selected.drafts[&"draft".into()].text, "keep this");
-        assert_eq!(selected.conversations.len(), 2);
+        assert_eq!(selected.input.drafts[&"draft".into()].text, "keep this");
+        assert_eq!(selected.sessions.conversations.len(), 2);
         clear(directory.path());
         assert!(restored(directory.path()).is_empty());
     }
@@ -523,10 +534,10 @@ mod tests {
         list_written(directory.path(), "saved chat").await;
         let mut next = (*listed("not the full live list")).clone();
         match state {
-            "search" => Arc::make_mut(&mut next.list_query).search_term = "filtered".into(),
-            "offline" => next.connected = false,
+            "search" => Arc::make_mut(&mut next.lists.list_query).search_term = "filtered".into(),
+            "offline" => next.connection.connected = false,
             _ => {
-                Arc::make_mut(&mut next.operations).insert(
+                next.operations.insert(
                     OperationKey::SessionList,
                     op::OperationState {
                         generation: 1,
@@ -621,9 +632,10 @@ mod tests {
         std::fs::write(&damaged, b"not a copy").unwrap();
         let mut snapshot = Snapshot::default();
         let held = thread("held", 3, TurnStatus::Completed);
-        Arc::make_mut(&mut snapshot.conversations).insert(held.id.clone().unwrap(), Arc::new(held));
+        Arc::make_mut(&mut snapshot.sessions.conversations)
+            .insert(held.id.clone().unwrap(), Arc::new(held));
         restore(directory, &mut snapshot);
-        let conversations = &snapshot.conversations;
+        let conversations = &snapshot.sessions.conversations;
         assert_eq!(conversations.len(), 2);
         assert_eq!(
             conversations

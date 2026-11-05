@@ -48,13 +48,13 @@ struct Preferences {
 impl Preferences {
     fn capture(snapshot: &Snapshot) -> Self {
         Self {
-            models: snapshot.model_preferences.clone(),
+            models: snapshot.catalog.model_preferences.clone(),
             editor: EditorPreferences::capture(snapshot),
         }
     }
     fn apply(&self, snapshot: &mut Snapshot) {
-        snapshot.model_preferences = self.models.clone();
-        snapshot.preferred_editor = self.editor.preferred;
+        snapshot.catalog.model_preferences = self.models.clone();
+        snapshot.files.preferred_editor = self.editor.preferred;
     }
 }
 struct DeviceState {
@@ -319,7 +319,7 @@ impl Persistence {
                 _ = tokio::time::sleep(std::time::Duration::from_millis(250)), if dirty => None,
             };
             if let Some(next) = next {
-                let immediate = !next.list_unchanged(&previous);
+                let immediate = !next.list_source().equivalent(&previous.list_source());
                 previous = next;
                 dirty = true;
                 if !immediate {

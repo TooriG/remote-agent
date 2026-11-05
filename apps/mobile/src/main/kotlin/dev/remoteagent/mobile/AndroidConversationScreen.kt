@@ -34,8 +34,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -46,23 +44,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.remoteagent.core.ActivityPresentation
+import dev.remoteagent.core.ComposerPresentation
+import dev.remoteagent.core.ConversationContext
 import dev.remoteagent.core.ConversationRow
 import dev.remoteagent.core.ConversationRowContent
-import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Interrupt
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ReadItem
 import dev.remoteagent.core.Respond
-import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.activityIsExpanded
-import dev.remoteagent.core.shouldLoadHistory
 import java.util.UUID
 import kotlinx.coroutines.launch
 
 @Composable
 internal fun ThreadDetailScreen(
-    snapshot: Snapshot,
+    context: ConversationContext,
     projection: ConversationProjection?,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     older: (() -> Unit)?,
@@ -70,14 +67,21 @@ internal fun ThreadDetailScreen(
     scrollToTopRequest: Int = 0,
     composer: @Composable (() -> Unit) -> Unit,
 ) {
-    val threadId = snapshot.navigation().threadId
-    var recoveryExpanded by remember(threadId, snapshot.navigation().draftKey) { mutableStateOf(false) }
+    val threadId = context.navigation().threadId
+    var recoveryExpanded by remember(threadId, context.navigation().draftKey) { mutableStateOf(false) }
     val listState = rememberLazyListState()
     var activityExpansion by remember(threadId) { mutableStateOf(emptyMap<String, String>()) }
     var following by remember(threadId) { mutableStateOf(true) }
-    ObserveFollowing(listState, snapshot, following, { following = it }, older, scrollToTopRequest)
+    ObserveFollowing(listState, projection, following) { following = it }
+    ObserveHistoryPrefetch(listState, context.history(), following, older)
+    LaunchedEffect(scrollToTopRequest) {
+        if (scrollToTopRequest > 0) {
+            following = false
+            listState.scrollToItem(0)
+        }
+    }
     Column(modifier.fillMaxSize()) {
-        ErrorNotices(snapshot, ErrorScope.Conversation(snapshot.navigation().draftKey), perform)
+        ErrorNotices(context.notices(), perform)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
@@ -85,21 +89,19 @@ internal fun ThreadDetailScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                historyControl(threadId, threadId?.let(snapshot::historyControl), perform)
-                threadId?.let(snapshot::conversation)?.historyNotice()?.let { notice ->
+                historyControl(threadId, context.history(), perform)
+                context.historyNotice()?.let { notice ->
                     item(key = "history:read-state") { Text(LocalUiLanguage.current.text(notice)) }
                 }
                 val renderRow: @Composable (ConversationRow) -> Unit = { row ->
                     ConversationContent(
                         row,
                         threadId,
-                        snapshot.navigation().cwd,
+                        context.navigation().cwd,
                         perform,
                         forkPhase =
                             (row.content as? ConversationRowContent.Response)?.forkTurnId?.let { turn ->
-                                threadId?.let {
-                                    snapshot.operationPhase(dev.remoteagent.core.OperationKey.Fork(it, turn))
-                                }
+                                context.forkPhase(turn)
                             },
                         activityHeader = { activity ->
                             ActivityHeader(activity, activityExpansion[activity.id]) { choice ->
@@ -112,7 +114,7 @@ internal fun ThreadDetailScreen(
                     )
                 }
                 conversationRows(projection?.rows.orEmpty(), activityExpansion, renderRow)
-                pendingInputs(projection?.queued.orEmpty(), snapshot.navigation().cwd, perform, recoveryExpanded) {
+                pendingInputs(projection?.queued.orEmpty(), context.navigation().cwd, perform, recoveryExpanded) {
                     recoveryExpanded = it
                 }
                 conversationRows(projection?.sessionRows.orEmpty(), activityExpansion, renderRow)
@@ -243,18 +245,20 @@ private fun ActivityHeader(
 
 @Composable
 internal fun ThreadComposer(
-    snapshot: Snapshot,
+    composer: ComposerPresentation,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     onSend: () -> Unit,
+    settings: @Composable (dev.remoteagent.core.ModelRef?, () -> Unit) -> Unit,
     attach: @Composable ((Boolean) -> Unit) -> Unit,
 ) {
     val language = LocalUiLanguage.current
-    val navigation = snapshot.navigation()
-    val draft = snapshot.draft(navigation.draftKey)
-    val sending = snapshot.operationRunning(dev.remoteagent.core.OperationKey.Submission(navigation.draftKey))
+    val controls = composer.controls()
+    val navigation = controls.navigation
+    val draft = composer.draft()
+    val sending = controls.sending
     var uploading by remember(navigation.draftKey) { mutableStateOf(false) }
-    val inputUnavailable = navigation.threadId?.let(snapshot::conversation)?.inputUnavailableReason()
-    val activeTurn = navigation.threadId?.let(snapshot::conversation)?.activeTurnId()
+    val inputUnavailable = controls.unavailable
+    val activeTurn = controls.runningTurn
     Surface(
         Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("conversation.composer"),
         shape = RoundedCornerShape(28.dp),
@@ -263,17 +267,15 @@ internal fun ThreadComposer(
         Column(Modifier.padding(8.dp)) {
             inputUnavailable?.let { Text(it) }
             DraftAttachments(draft.attachments, navigation.draftKey, perform)
-            ComposerTextInput(snapshot, perform)
+            ComposerTextInput(composer, perform)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 attach { uploading = it }
-                ModelPickerButton(snapshot, perform, Modifier.weight(1f))
-                VoiceInputButton(snapshot, perform, enabled = inputUnavailable == null && !sending)
+                ModelPickerButton(composer, perform, Modifier.weight(1f), settings)
+                VoiceInputButton(composer, perform, enabled = inputUnavailable == null && !sending)
                 if (navigation.threadId != null && activeTurn != null) {
                     ComposerStopButton(
                         Interrupt(navigation.threadId!!, activeTurn),
-                        snapshot.operationPhase(
-                            dev.remoteagent.core.OperationKey.Interrupt(navigation.threadId!!, activeTurn)
-                        ),
+                        controls.interruptPhase,
                         perform,
                     )
                 } else
@@ -283,7 +285,7 @@ internal fun ThreadComposer(
                             perform(Intent.Submit(navigation.threadId, UUID.randomUUID().toString())) {}
                         },
                         enabled =
-                            snapshot.modelProviderForDraft(navigation.draftKey) != null &&
+                            controls.provider != null &&
                                 inputUnavailable == null &&
                                 !sending &&
                                 !uploading &&
@@ -364,55 +366,3 @@ internal fun ConversationHeader(title: String?, showThreads: () -> Unit, scrollT
         }
     }
 }
-
-@Composable
-private fun ObserveFollowing(
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    snapshot: Snapshot,
-    following: Boolean,
-    follow: (Boolean) -> Unit,
-    older: (() -> Unit)?,
-    scrollToTopRequest: Int = 0,
-) {
-    LaunchedEffect(scrollToTopRequest) {
-        if (scrollToTopRequest > 0) {
-            follow(false)
-            listState.scrollToItem(0)
-        }
-    }
-    LaunchedEffect(snapshot) {
-        if (following) {
-            withFrameNanos {}
-            listState.scrollToLatest()
-        }
-    }
-    LaunchedEffect(snapshot, following, older) {
-        val hasMore = snapshot.navigation().threadId?.let(snapshot::conversation)?.hasMoreHistory() == true
-        snapshotFlow {
-            val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-            shouldLoadHistory(
-                hasMore,
-                older == null || snapshot.navigation().threadId?.let(snapshot::historyControl)?.error != null,
-                viewportHeight > 0 &&
-                    listState.firstVisibleItemIndex == 0 &&
-                    listState.firstVisibleItemScrollOffset < viewportHeight * HISTORY_PREFETCH_FRACTION,
-                !listState.canScrollForward,
-                following,
-            )
-        }
-            .collect { needed -> if (needed) older?.invoke() }
-    }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to !listState.canScrollForward }
-            .collect { (scrolling, bottom) -> if (scrolling) follow(bottom) }
-    }
-}
-
-private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToLatest() {
-    val last = layoutInfo.totalItemsCount - 1
-    if (last < 0) return
-    scrollToItem(last)
-    scroll { scrollBy(layoutInfo.visibleItemsInfo.lastOrNull()?.size?.toFloat() ?: 0f) }
-}
-
-private const val HISTORY_PREFETCH_FRACTION = 0.6

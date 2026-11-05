@@ -1,107 +1,73 @@
 import AgentCore
+import Observation
 import SwiftUI
 
 @MainActor
-final class SideChatRequest: ObservableObject {
+@Observable
+final class SideChatRequest {
     let id = UUID()
     let text: String
     let host: String
     let originalThreadId: SessionRef
-    let originalConversation: ConversationPresentation?
     let cwd: String
-    private(set) var threadId: SessionRef?
+    @ObservationIgnored private let session: ClientSession
+    @ObservationIgnored private let provider: ProviderKind?
+    private(set) var chat: ConversationModel?
+    private(set) var preparing = false
+    private(set) var error: ErrorText?
     private var draftInitialized = false
-    private var transition: Task<Void, Never>?
-    @Published private(set) var preparing = true
-    @Published private(set) var error: ErrorText?
 
-    init(text: String, host: String, originalThreadId: SessionRef,
-         originalConversation: ConversationPresentation?, cwd: String) {
+    init(text: String, host: String, originalThreadId: SessionRef, cwd: String,
+         session: ClientSession, provider: ProviderKind?) {
         self.text = text
         self.host = host
         self.originalThreadId = originalThreadId
-        self.originalConversation = originalConversation
         self.cwd = cwd
+        self.session = session
+        self.provider = provider
     }
 
-    func activate(_ active: Bool, model: AppViewModel) {
-        if active {
-            preparing = true
-        }
-        let previous = transition
-        transition = Task {
-            await previous?.value
-            guard model.screen == .thread, model.selectedProfileId == host,
-                  model.sideChatRequest?.id == id,
-                  model.selectedThreadId == originalThreadId || model.selectedThreadId == threadId else { return }
-            if active {
-                await prepare(model)
-            } else {
-                await restoreOriginal(model)
-            }
-        }
-    }
-
-    private func prepare(_ model: AppViewModel) async {
-        if model.notice == error?.plainText {
-            model.notice = nil
-        }
+    func prepare() async {
+        guard !preparing else { return }
+        preparing = true
         error = nil
+        defer { preparing = false }
         do {
-            if let threadId {
-                _ = try await model.outcome(for: .readThread(ReadThread(threadId: threadId, open: true)))
+            let model: ConversationModel
+            if let chat {
+                model = chat
             } else {
-                guard let provider = model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey) else {
-                    throw NSError(
-                        domain: "Bex",
-                        code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "利用可能なエージェントを選択してください。"]
-                    )
-                }
-                let result = try await model.outcome(for: .createSession(CreateSession(
-                    provider: provider,
-                    cwd: cwd,
-                    model: nil,
-                    initialInput: nil
-                )))
-                guard case let .startedThread(id) = result else { throw CocoaError(.coderInvalidValue) }
-                threadId = id
+                let store = try await session.ready()
+                let pane = try await store.openPane(cwd: cwd)
+                model = ConversationModel(host: host, session: session, pane: pane)
+                chat = model
             }
-            guard model.selectedProfileId == host, model.sideChatRequest?.id == id, let threadId else { return }
+            if model.selectedThreadId == nil {
+                guard let provider = provider ?? model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)
+                else {
+                    throw NSError(domain: "Bex", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "利用可能なエージェントを選択してください。"])
+                }
+                _ = try await model.outcome(for: .createSession(CreateSession(
+                    provider: provider, cwd: cwd, model: nil, initialInput: nil
+                )))
+            }
             if !draftInitialized {
                 if !text.isEmpty {
-                    _ = try await model.outcome(for: .setDraftText(
-                        threadId: .session(session: threadId), text: AppViewModel.selectionQuote(text)
-                    ))
+                    model.draft = ConversationModel.selectionQuote(text)
                 }
                 draftInitialized = true
             }
-            guard model.screen == .thread, model.selectedProfileId == host,
-                  model.sideChatRequest?.id == id else { return }
             model.composerFocusRequest = UUID()
         } catch {
-            self.error = model.snapshot.error() ?? errorText(error: error.localizedDescription)
-            await restoreOriginal(model)
+            if !Task.isCancelled {
+                self.error = errorText(error: error.localizedDescription)
+            }
         }
-        preparing = false
-    }
-
-    private func restoreOriginal(_ model: AppViewModel) async {
-        guard model.screen == .thread, model.selectedProfileId == host,
-              model.sideChatRequest?.id == id, model.selectedThreadId == threadId else { return }
-        do {
-            _ = try await model.outcome(for: .readThread(ReadThread(threadId: originalThreadId, open: true)))
-            model.persist()
-        } catch { model.notice = error.localizedDescription }
     }
 }
 
-extension AppViewModel {
-    var isShowingSideChat: Bool {
-        guard let request = sideChatRequest else { return false }
-        return selectedProfileId == request.host && selectedThreadId == request.threadId
-    }
-
+extension ConversationModel {
     func addSelectionToChat(_ text: String) {
         let quote = Self.selectionQuote(text)
         draft = draft.isEmpty ? quote : draft + "\n\n" + quote
@@ -113,9 +79,10 @@ extension AppViewModel {
     }
 
     func askSelectionInSideChat(_ text: String) {
-        guard !isShowingSideChat, let host = selectedProfileId, let thread = selectedThreadId else { return }
+        guard let thread = selectedThreadId else { return }
         sideChatRequest = SideChatRequest(text: text, host: host, originalThreadId: thread,
-                                          originalConversation: conversation, cwd: selectedDirectory)
+                                          cwd: selectedDirectory, session: session,
+                                          provider: snapshot.modelProviderForDraft(threadId: coreDraftKey))
     }
 }
 
@@ -130,8 +97,8 @@ extension ThreadScreen {
 }
 
 struct ConversationSideChat: View {
-    @ObservedObject var model: AppViewModel
-    @ObservedObject var request: SideChatRequest
+    let request: SideChatRequest
+    let environment: ConversationEnvironment
 
     var body: some View {
         VStack(spacing: 0) {
@@ -140,14 +107,14 @@ struct ConversationSideChat: View {
             } else if let error = request.error {
                 VStack(spacing: 16) {
                     ErrorTextView(text: error).foregroundStyle(.red)
-                    Button("再試行") { request.activate(true, model: model) }
+                    Button("再試行") { Task { await request.prepare() } }
                 }.padding()
-            } else {
-                ThreadScreen(model: model, conversation: model.conversation, isSideChat: true)
+            } else if let chat = request.chat {
+                ThreadScreen(model: chat, environment: environment,
+                             conversation: chat.conversation, isSideChat: true)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { model.sideChatRequest = request; request.activate(true, model: model) }
-        .onDisappear { request.activate(false, model: model) }
+        .task { await request.prepare() }
     }
 }

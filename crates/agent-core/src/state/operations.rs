@@ -16,10 +16,10 @@ macro_rules! no_input {
 }
 
 macro_rules! rpc_operation {
-    ($parent:ident.$field:ident) => {
+    ($group:ident.$parent:ident.$field:ident) => {
         rpc_operation!();
         fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-            Arc::make_mut(&mut snapshot.$parent).$field = Some(Arc::new(output));
+            Arc::make_mut(&mut snapshot.$group.$parent).$field = Some(Arc::new(output));
             Vec::new()
         }
     };
@@ -48,6 +48,9 @@ pub enum Intent {
         action: crate::presentation::files::FileTreeAction,
     },
     DismissError {
+        id: ErrorId,
+    },
+    RecoverError {
         id: ErrorId,
     },
     ManageCodexCli(ManageCodexCli),
@@ -199,6 +202,10 @@ pub enum Intent {
         thread_id: DraftKey,
         text: String,
         cursor: u32,
+    },
+    AppendTranscript {
+        thread_id: DraftKey,
+        text: String,
     },
     InsertInvocation {
         thread_id: DraftKey,
@@ -414,6 +421,16 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     fn scheduling(&self) -> Scheduling {
         Scheduling::Concurrent
     }
+    /// Host and session caches outlive the pane that requested them. Only
+    /// results that select or replace a pane's content follow its navigation.
+    fn navigation_bound(&self) -> bool {
+        !matches!(
+            self.scheduling(),
+            Scheduling::LatestHostState(_)
+                | Scheduling::LatestList(_)
+                | Scheduling::LatestProject(_)
+        )
+    }
     fn run(
         &self,
         input: Self::Input,
@@ -454,6 +471,9 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
         Outcome::Applied
     }
 }
+
+mod states;
+pub use states::OperationStates;
 
 mod permissions;
 pub use permissions::*;

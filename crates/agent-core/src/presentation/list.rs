@@ -11,7 +11,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashSet},
 };
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ProjectSummary {
     pub host_id: String,
@@ -90,7 +90,7 @@ fn coordinator_url(project_id: &str) -> Option<String> {
     (!id.is_empty() && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'))
         .then(|| format!("https://claude.ai/code/project/chan_{id}"))
 }
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadSummary {
     pub host_id: String,
@@ -102,7 +102,7 @@ pub struct ThreadSummary {
     pub unread: bool,
     pub worktree_status: Option<crate::models::WorktreeStatus>,
 }
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadList {
     pub loading_projects: bool,
@@ -115,7 +115,200 @@ pub struct ThreadList {
     pub has_more_projects: bool,
 }
 
+/// Only the data consumed by list presentation. Conversation bodies and
+/// operation generations are deliberately absent from its equality contract.
+pub(crate) struct ListSource<'a> {
+    lists: &'a crate::state::Lists,
+    accounts: &'a Option<std::sync::Arc<agent_protocol::operations::Accounts>>,
+    conversations: &'a std::sync::Arc<
+        BTreeMap<crate::session::SessionRef, std::sync::Arc<crate::models::Thread>>,
+    >,
+    operations: &'a crate::state::Operations,
+    storage_scope: &'a str,
+    connected: bool,
+}
+impl<'a> ListSource<'a> {
+    pub(crate) fn new(
+        lists: &'a crate::state::Lists,
+        accounts: &'a Option<std::sync::Arc<agent_protocol::operations::Accounts>>,
+        conversations: &'a std::sync::Arc<
+            BTreeMap<crate::session::SessionRef, std::sync::Arc<crate::models::Thread>>,
+        >,
+        operations: &'a crate::state::Operations,
+        storage_scope: &'a str,
+        connected: bool,
+    ) -> Self {
+        Self {
+            lists,
+            accounts,
+            conversations,
+            operations,
+            storage_scope,
+            connected,
+        }
+    }
+    fn listed_threads(&self) -> impl Iterator<Item = &crate::models::Thread> {
+        self.lists
+            .threads
+            .iter()
+            .chain(self.lists.project_threads.values())
+            .flat_map(|page| &page.data)
+    }
+    fn thread_metadata(&self, id: &crate::session::SessionRef) -> Option<&crate::models::Thread> {
+        self.conversations.get(id).map(AsRef::as_ref).or_else(|| {
+            self.listed_threads()
+                .find(|thread| thread.id.as_ref() == Some(id))
+        })
+    }
+    fn project_preference(
+        &self,
+        project: &str,
+    ) -> Option<&crate::state::projects::ProjectPreferences> {
+        self.lists
+            .project_preferences
+            .get(self.storage_scope)?
+            .get(project)
+    }
+    fn operation_running(&self, key: crate::state::operations::OperationKey) -> bool {
+        self.operations
+            .get(&key)
+            .is_some_and(|state| state.phase == crate::state::operations::OperationPhase::Running)
+    }
+    pub(crate) fn equivalent(&self, other: &Self) -> bool {
+        use crate::state::Same;
+        self.lists.threads.same(&other.lists.threads)
+            && self
+                .lists
+                .project_threads
+                .same(&other.lists.project_threads)
+            && self
+                .lists
+                .expanded_projects
+                .same(&other.lists.expanded_projects)
+            && self.lists.list_query.same(&other.lists.list_query)
+            && self.lists.activity.same(&other.lists.activity)
+            && self
+                .lists
+                .project_preferences
+                .same(&other.lists.project_preferences)
+            && self
+                .lists
+                .archived_scopes
+                .same(&other.lists.archived_scopes)
+            && self.lists.recent_chats == other.lists.recent_chats
+            && self.accounts.same(other.accounts)
+            && self.storage_scope == other.storage_scope
+            && self.connected == other.connected
+            && (self.lists.task_activity.same(&other.lists.task_activity)
+                || self.waiting_sessions() == other.waiting_sessions())
+            && self.same_phases(other)
+            && self.same_shortcuts(other)
+    }
+    fn same_phases(&self, other: &Self) -> bool {
+        use crate::models::ListPart;
+        use crate::state::operations::OperationKey as K;
+        if crate::state::Same::same(self.operations, other.operations) {
+            return true;
+        }
+        [
+            K::SessionList,
+            K::SessionPage {
+                part: ListPart::Projects,
+            },
+            K::SessionPage {
+                part: ListPart::Chats,
+            },
+        ]
+        .into_iter()
+        .chain(
+            self.lists
+                .threads
+                .iter()
+                .flat_map(|page| &page.projects)
+                .map(|project| K::ProjectList {
+                    project_id: project.id.clone(),
+                }),
+        )
+        .all(|key| {
+            self.operations.get(&key).map(|state| &state.phase)
+                == other.operations.get(&key).map(|state| &state.phase)
+        })
+    }
+    fn same_shortcuts(&self, other: &Self) -> bool {
+        if std::sync::Arc::ptr_eq(self.conversations, other.conversations) {
+            return true;
+        }
+        self.lists
+            .project_preferences
+            .get(self.storage_scope)
+            .into_iter()
+            .flat_map(|preferences| preferences.values())
+            .flat_map(|preferences| &preferences.placed_chats)
+            .all(|chat| {
+                match (
+                    self.thread_metadata(&chat.id),
+                    other.thread_metadata(&chat.id),
+                ) {
+                    (Some(a), Some(b)) => list_metadata(a) == list_metadata(b),
+                    (None, None) => true,
+                    _ => false,
+                }
+            })
+    }
+}
+fn list_metadata(thread: &crate::models::Thread) -> impl PartialEq + '_ {
+    (
+        &thread.name,
+        &thread.preview,
+        thread.status,
+        thread.updated_at,
+        &thread.parent_id,
+        &thread.project_id,
+        thread.worktree_status,
+        thread.list_stale,
+    )
+}
+
 impl Snapshot {
+    pub(crate) fn list_source(&self) -> ListSource<'_> {
+        ListSource::new(
+            &self.lists,
+            &self.catalog.account.accounts,
+            &self.sessions.conversations,
+            &self.operations,
+            &self.connection.storage_scope,
+            self.connection.connected,
+        )
+    }
+}
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
+    /// The selected folder is separate from the provider's execution directory.
+    pub fn selected_directory(&self) -> String {
+        let thread = self
+            .pane
+            .navigation
+            .thread_id
+            .as_ref()
+            .and_then(|id| self.thread_metadata(id));
+        if thread.is_some_and(|thread| {
+            thread.project_id == (crate::models::ProjectMembership::Unassigned {})
+        }) {
+            String::new()
+        } else {
+            self.pane.navigation.cwd.clone()
+        }
+    }
+
+    pub fn thread_list(&self) -> Option<ThreadList> {
+        self.list_source().thread_list()
+    }
+    pub fn recent_thread_list(&self) -> Option<ThreadList> {
+        self.list_source().recent_thread_list()
+    }
+}
+
+impl ListSource<'_> {
     fn list_error_providers(&self, list: &crate::models::ThreadList) -> Vec<String> {
         list.provider_errors
             .iter()
@@ -124,7 +317,7 @@ impl Snapshot {
                 // An unused login provider is not a partial-list failure.
                 // Keep errors visible until account discovery has completed.
                 !matches!(provider.as_str(), "codex" | "claude")
-                    || self.account.accounts.as_ref().is_none_or(|accounts| {
+                    || self.accounts.as_ref().is_none_or(|accounts| {
                         accounts
                             .accounts
                             .iter()
@@ -135,8 +328,9 @@ impl Snapshot {
             .collect()
     }
 
-    pub(crate) fn waiting_sessions(&self) -> &[crate::session::SessionRef] {
-        self.task_activity
+    fn waiting_sessions(&self) -> &[crate::session::SessionRef] {
+        self.lists
+            .task_activity
             .as_ref()
             .map_or(&[], |state| state.waiting.as_slice())
     }
@@ -147,7 +341,7 @@ impl Snapshot {
         additional_queries: usize,
     ) -> (ThreadList, ChatPlacements<'_>) {
         let waiting = self.waiting_sessions();
-        let search = self.list_query.search_term.to_lowercase();
+        let search = self.lists.list_query.search_term.to_lowercase();
         let project_ids: HashSet<_> = list
             .projects
             .iter()
@@ -155,7 +349,7 @@ impl Snapshot {
             .collect();
         let errors = self.list_error_providers(list);
         let notice = (!errors.is_empty()).then(|| format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.join("、")));
-        let preferences = self.project_preferences.get(&self.storage_scope);
+        let preferences = self.lists.project_preferences.get(self.storage_scope);
         let mut projects = Vec::new();
         let mut hidden_projects = Vec::new();
         for project in &list.projects {
@@ -171,8 +365,8 @@ impl Snapshot {
                 projects.push((
                     project,
                     prefs,
-                    self.project_threads.get(&project.id),
-                    self.expanded_projects.contains_key(&project.id),
+                    self.lists.project_threads.get(&project.id),
+                    self.lists.expanded_projects.contains_key(&project.id),
                 ));
             }
         }
@@ -206,6 +400,7 @@ impl Snapshot {
         let metadata = if shortcut_queries >= 128
             && self.conversations.len().saturating_mul(2) < shortcut_queries
             && self
+                .lists
                 .project_threads
                 .values()
                 .fold(list.data.len(), |count, page| {
@@ -214,7 +409,7 @@ impl Snapshot {
                 >= 128
         {
             Some(crate::state::index_missing_metadata(
-                &self.conversations,
+                self.conversations,
                 self.listed_threads(),
                 projects
                     .iter()
@@ -238,8 +433,8 @@ impl Snapshot {
                             .as_ref()
                             .is_none_or(|id| placements.get(id).is_none())
                 }),
-                &self.activity.active,
-                &self.activity.unread,
+                &self.lists.activity.active,
+                &self.lists.activity.unread,
                 waiting,
                 // The filter has already resolved these rows as standalone.
                 &HashSet::new(),
@@ -315,8 +510,8 @@ impl Snapshot {
                             summary.threads = if !has_archive_filter {
                                 thread_summaries(
                                     data,
-                                    &self.activity.active,
-                                    &self.activity.unread,
+                                    &self.lists.activity.active,
+                                    &self.lists.activity.unread,
                                     waiting,
                                     &project_ids,
                                     None,
@@ -330,7 +525,7 @@ impl Snapshot {
                                             thread.id.as_ref(),
                                             task_active(
                                                 thread.id.as_ref().and_then(|id| {
-                                                    self.activity.active.get(id).copied()
+                                                    self.lists.activity.active.get(id).copied()
                                                 }),
                                                 thread.status,
                                             ),
@@ -338,8 +533,8 @@ impl Snapshot {
                                             false,
                                         )
                                     }),
-                                    &self.activity.active,
-                                    &self.activity.unread,
+                                    &self.lists.activity.active,
+                                    &self.lists.activity.unread,
                                     waiting,
                                     &project_ids,
                                     None,
@@ -394,7 +589,7 @@ impl Snapshot {
                                         thread.id.as_ref(),
                                         task_active(
                                             thread.id.as_ref().and_then(|id| {
-                                                self.activity.active.get(id).copied()
+                                                self.lists.activity.active.get(id).copied()
                                             }),
                                             thread.status,
                                         ),
@@ -424,8 +619,8 @@ impl Snapshot {
                             0..0,
                             thread_summaries(
                                 placed.iter().map(AsRef::as_ref),
-                                &self.activity.active,
-                                &self.activity.unread,
+                                &self.lists.activity.active,
+                                &self.lists.activity.unread,
                                 waiting,
                                 &project_ids,
                                 Some(&project.id),
@@ -442,28 +637,12 @@ impl Snapshot {
     }
 }
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
-impl Snapshot {
-    /// The selected folder is separate from the provider's execution directory.
-    pub fn selected_directory(&self) -> String {
-        let thread = self
-            .navigation
-            .thread_id
-            .as_ref()
-            .and_then(|id| self.thread_metadata(id));
-        if thread.is_some_and(|thread| {
-            thread.project_id == (crate::models::ProjectMembership::Unassigned {})
-        }) {
-            String::new()
-        } else {
-            self.navigation.cwd.clone()
-        }
-    }
-
+impl ListSource<'_> {
     /// Recent top-level chats across standalone and project pages, regardless of expansion.
     pub fn recent_thread_list(&self) -> Option<ThreadList> {
-        let source = self.threads.as_deref()?;
+        let source = self.lists.threads.as_deref()?;
         let additional_queries = self
+            .lists
             .project_threads
             .values()
             .fold(source.data.len(), |queries, page| {
@@ -476,7 +655,7 @@ impl Snapshot {
         for thread in source
             .data
             .iter()
-            .chain(self.project_threads.values().flat_map(|p| &p.data))
+            .chain(self.lists.project_threads.values().flat_map(|p| &p.data))
         {
             let Some(id) = &thread.id else { continue };
             let placement = placements.get(id);
@@ -488,7 +667,7 @@ impl Snapshot {
                             prefs.archived_before,
                             Some(&prefs.archived_ids),
                             Some(id),
-                            task_active(self.activity.active.get(id).copied(), thread.status),
+                            task_active(self.lists.activity.active.get(id).copied(), thread.status),
                             thread.updated_at,
                             placement.is_some(),
                         )
@@ -513,13 +692,13 @@ impl Snapshot {
                 .total_cmp(&a.updated_at.unwrap_or(0.0))
                 .then_with(|| a.id.cmp(&b.id))
         });
-        let limit = self.list_query.limit as usize;
+        let limit = self.lists.list_query.limit as usize;
         list.has_more |= rows.len() > limit;
         rows.truncate(limit);
         list.threads = thread_summaries(
             rows.into_iter(),
-            &self.activity.active,
-            &self.activity.unread,
+            &self.lists.activity.active,
+            &self.lists.activity.unread,
             waiting,
             &project_ids,
             None,
@@ -541,7 +720,7 @@ impl Snapshot {
     }
 
     pub fn thread_list(&self) -> Option<ThreadList> {
-        let list = self.threads.as_deref()?;
+        let list = self.lists.threads.as_deref()?;
         Some(self.list_projection(list, true, 0).0)
     }
 }
@@ -640,7 +819,7 @@ mod tests {
     #[case("Bex", "BX")]
     #[case("日本語プロジェクト", "日ト")]
     #[case("", "PR")]
-    #[case(" !!! ", "PR")]
+    #[case(" ! ", "PR")]
     fn project_names_receive_shared_monograms(#[case] name: &str, #[case] monogram: &str) {
         let project = Project {
             name: name.into(),
@@ -667,12 +846,15 @@ mod tests {
 
     fn snapshot_list(data: serde_json::Value) -> Snapshot {
         Snapshot {
-            threads: Some(std::sync::Arc::new(
-                serde_json::from_value(json!({
-                    "data":data,"projects":[{"id":"project","name":"Project","roots":[]}],
-                    "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
-                .unwrap(),
-            )),
+            lists: crate::state::Lists {
+                threads: Some(std::sync::Arc::new(
+                    serde_json::from_value(json!({
+                        "data":data,"projects":[{"id":"project","name":"Project","roots":[]}],
+                        "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
+                    .unwrap(),
+                )),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -694,9 +876,10 @@ mod tests {
             {"id":root}, {"id":other}, {"id":placed}
         ]));
         let page = snapshot_list(json!([{"id":project,"projectId":"project"}]))
+            .lists
             .threads
             .unwrap();
-        Arc::make_mut(&mut state.project_threads).insert("project".into(), page);
+        Arc::make_mut(&mut state.lists.project_threads).insert("project".into(), page);
         state = reduce(
             &state,
             Event::Intent(Intent::MoveChatToProject {
@@ -749,8 +932,8 @@ mod tests {
                     assert!(row.active);
                 }
             }
-            assert!(state.conversations.is_empty());
-            assert!(state.subscriptions.is_empty());
+            assert!(state.sessions.conversations.is_empty());
+            assert!(state.sessions.subscriptions.is_empty());
         }
     }
 
@@ -768,8 +951,8 @@ mod tests {
                 {"id":{"provider":"codex","id":"agent"},"parentId":{"provider":"codex","id":"project-chat"},"projectId":"project","updatedAt":40}
             ],"projects":[],"limit":5,"hasMore":false,"hasMoreProjects":false,"projectPages":{}
         })).unwrap();
-        Arc::make_mut(&mut snapshot.project_threads).insert("project".into(), Arc::new(page));
-        Arc::make_mut(&mut snapshot.list_query).limit = 2;
+        Arc::make_mut(&mut snapshot.lists.project_threads).insert("project".into(), Arc::new(page));
+        Arc::make_mut(&mut snapshot.lists.list_query).limit = 2;
         let list = snapshot.recent_thread_list().unwrap();
         assert!(!list.projects[0].expanded);
         assert_eq!(
@@ -785,7 +968,7 @@ mod tests {
                 .all(|t| t.project_id.as_deref() == Some("project"))
         );
         assert!(list.has_more);
-        Arc::make_mut(&mut snapshot.list_query).limit = 10;
+        Arc::make_mut(&mut snapshot.lists.list_query).limit = 10;
         let list = snapshot.recent_thread_list().unwrap();
         assert_eq!(list.threads.len(), 4);
         assert!(!list.has_more);
@@ -845,7 +1028,7 @@ mod tests {
     #[test]
     fn returned_project_header_replaces_branding_while_preserving_loaded_tasks() {
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut snapshot.expanded_projects).insert("project".into(), 5);
+        Arc::make_mut(&mut snapshot.lists.expanded_projects).insert("project".into(), 5);
         ListSessions::new(Default::default()).apply(
             &mut snapshot,
             serde_json::from_value(json!({
@@ -893,14 +1076,14 @@ mod tests {
     ) {
         let mut snapshot = snapshot_list(json!([]));
         let errors = json!({"codex":{"message":"offline"},"claude":{"message":"offline"}});
-        Arc::make_mut(snapshot.threads.as_mut().unwrap()).provider_errors =
+        Arc::make_mut(snapshot.lists.threads.as_mut().unwrap()).provider_errors =
             Some(serde_json::from_value(errors).unwrap());
-        Arc::make_mut(&mut snapshot.project_threads)
-            .insert("project".into(), snapshot.threads.clone().unwrap());
+        Arc::make_mut(&mut snapshot.lists.project_threads)
+            .insert("project".into(), snapshot.lists.threads.clone().unwrap());
         if !root_errors {
-            Arc::make_mut(snapshot.threads.as_mut().unwrap()).provider_errors = None;
+            Arc::make_mut(snapshot.lists.threads.as_mut().unwrap()).provider_errors = None;
         }
-        Arc::make_mut(&mut snapshot.expanded_projects).insert("project".into(), 5);
+        Arc::make_mut(&mut snapshot.lists.expanded_projects).insert("project".into(), 5);
         // Exercise login and logout with the same already-loaded list.
         for providers in [logged_in, &[], logged_in] {
             let previous = Arc::new(snapshot.clone());
@@ -919,7 +1102,7 @@ mod tests {
             let recent = snapshot.recent_thread_list().unwrap();
             // Mobile clients cache this projection using the publication flag.
             if previous_list.as_ref() != Some(&list) {
-                assert!(snapshot.changes(previous).list);
+                assert!(!snapshot.list_source().equivalent(&previous.list_source()));
             }
             if providers.is_empty() {
                 assert!(list.notice.is_none());
@@ -954,10 +1137,10 @@ mod tests {
             &mut snapshot,
             serde_json::from_value(json!({"accounts":[],"selected":{}})).unwrap(),
         );
-        let page = Arc::make_mut(snapshot.threads.as_mut().unwrap());
+        let page = Arc::make_mut(snapshot.lists.threads.as_mut().unwrap());
         page.provider_errors = Some(Default::default());
         assert!(snapshot.thread_list().unwrap().notice.is_none());
-        Arc::make_mut(snapshot.threads.as_mut().unwrap()).provider_errors =
+        Arc::make_mut(snapshot.lists.threads.as_mut().unwrap()).provider_errors =
             Some(serde_json::from_value(json!({"deepseek":{"message":"offline"}})).unwrap());
         assert!(
             snapshot
@@ -1004,7 +1187,7 @@ mod tests {
                 .title
                 .contains("未確認")
         );
-        assert!(snapshot.error.is_none());
+        assert!(snapshot.pane.error.is_none());
     }
     #[rstest::rstest]
     fn list_preserves_worktree_status_alongside_activity_after_serialization_and_refresh(
@@ -1018,7 +1201,7 @@ mod tests {
         status: Option<models::WorktreeStatus>,
     ) {
         let mut snapshot = Snapshot::default();
-        std::sync::Arc::make_mut(&mut snapshot.activity)
+        std::sync::Arc::make_mut(&mut snapshot.lists.activity)
             .active
             .insert(
                 agent_protocol::session::SessionRef {
@@ -1028,7 +1211,7 @@ mod tests {
                 active,
             );
         if unread {
-            std::sync::Arc::make_mut(&mut snapshot.activity)
+            std::sync::Arc::make_mut(&mut snapshot.lists.activity)
                 .unread
                 .insert(agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,

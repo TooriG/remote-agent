@@ -138,7 +138,7 @@ impl FileMetadataCache {
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     pub fn file_metadata(&self, path: String) -> Option<FilePathMetadata> {
-        self.workspace.file_metadata.get(&path).cloned()
+        self.files.workspace.file_metadata.get(&path).cloned()
     }
 }
 

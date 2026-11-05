@@ -2,7 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct SwiftUIRoot: View {
-    @ObservedObject var model: AppViewModel
+    let model: AppViewModel
 
     var body: some View {
         NavigationStack(path: Binding<[AppScreen]>(
@@ -45,18 +45,27 @@ struct SwiftUIRoot: View {
                 }
                 .navigationDestination(for: AppScreen.self) { screen in
                     switch screen {
-                    case .thread: ConversationDestination(model: model)
+                    case .thread:
+                        if let chat = model.chat {
+                            ConversationDestination(model: chat, environment: ConversationEnvironment(
+                                profiles: model.profiles, hostName: model.selectedProfileName,
+                                list: model.list, connecting: model.isConnecting,
+                                selectHost: model.openNewThread(on:)
+                            )).id(chat.host)
+                        }
                     default: EmptyView()
                     }
                 }
                 .navigationBarTitleDisplayMode(.inline)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            ErrorNotices(model: model, scope: .application).padding(.horizontal)
+            ErrorNotices(notices: model.notices[.application] ?? [], perform: { model.perform($0) },
+                         reconnect: model.isConnected ? nil : { model.connect() }, reconnecting: model.isConnecting)
+                .padding(.horizontal)
         }
         .onChange(of: model.screen) { screen in
             if screen != .thread {
-                model.sideChatRequest = nil
+                model.chat?.sideChatRequest = nil
             }
         }
     }
