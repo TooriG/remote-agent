@@ -552,6 +552,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         LoadHostName, LoadHostManagement, LoadModels, ReadModelSettings,
         Respond, Transcribe, UploadAttachment, PairRemoteHost,
     ], {
+        Intent::RefreshModels => return (next, op::refresh_models()),
         Intent::SetPreferredEditor { editor } => next.preferred_editor = Some(editor),
         Intent::EnsureFileMetadata { paths, now_ms } => {
             let effects = op::ensure_file_metadata(&mut next, paths, now_ms);
@@ -1256,7 +1257,7 @@ impl Snapshot {
         }
         // The Host catalog can change while a mobile client is backgrounded.
         // Keep cached choices visible until the fresh catalog arrives.
-        effects.push(Effect::execute(op::LoadModels {}));
+        effects.extend(op::refresh_models());
         if self.account.accounts.is_none() {
             effects.push(Effect::execute(op::ListAccounts {}));
         }

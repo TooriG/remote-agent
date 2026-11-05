@@ -1883,7 +1883,11 @@ mod tests {
     #[test]
     fn scheduler_coalesces_latest_reads_until_completion() {
         let mut queue = Scheduler::default();
-        let latest = || queued(op::Scheduling::LatestHostState(op::OperationKey::Models));
+        let latest = || {
+            queued(op::Scheduling::LatestHostState(op::OperationKey::Models {
+                provider: agent_protocol::session::ProviderKind::Codex,
+            }))
+        };
         let Admission::Run(first) = queue.admit(latest(), &Snapshot::default(), 0) else {
             panic!("initial read must run")
         };
@@ -1997,8 +2001,15 @@ mod tests {
     #[test]
     fn scheduler_ignores_superseded_and_unobserved_reads() {
         let mut queue = Scheduler::default();
-        let mut scheduled = queued(op::Scheduling::LatestHostState(op::OperationKey::Models));
-        scheduled.scope.operation = Some((op::OperationKey::Models, 1));
+        let mut scheduled = queued(op::Scheduling::LatestHostState(op::OperationKey::Models {
+            provider: agent_protocol::session::ProviderKind::Codex,
+        }));
+        scheduled.scope.operation = Some((
+            op::OperationKey::Models {
+                provider: agent_protocol::session::ProviderKind::Codex,
+            },
+            1,
+        ));
         assert!(matches!(
             queue.admit(scheduled, &Snapshot::default(), 0),
             Admission::Unobserved(_)
@@ -2727,12 +2738,15 @@ mod model_reconnection_tests {
         assert_eq!(
             effects
                 .iter()
-                .filter(|effect| effect.operation.key() == Some(op::OperationKey::Models))
+                .filter(|effect| effect.operation.key()
+                    == Some(op::OperationKey::Models {
+                        provider: agent_protocol::session::ProviderKind::Codex
+                    }))
                 .count(),
             1
         );
         use op::Operation;
-        op::LoadModels {}.apply(
+        op::LoadModels { provider: agent_protocol::session::ProviderKind::Codex }.apply(
             &mut next,
             agent_protocol::operations::ModelPage {
                 data: serde_json::from_value(serde_json::json!([

@@ -178,6 +178,7 @@ pub struct RenameSession {
 
 #[derive(Debug, Serialize, Clone, Deserialize)]
 pub struct ListModels {
+    pub provider: crate::session::ProviderKind,
     pub limit: usize,
     pub cursor: Option<String>,
 }
@@ -185,7 +186,7 @@ pub struct ListModels {
 pub struct ReadModelSettings {
     pub model: crate::models::ModelRef,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPage {
     pub data: Vec<crate::models::Model>,

@@ -19,7 +19,6 @@ struct ModelSettingsScreen: View {
     let close: () -> Void
     @State private var search = ""
     @State private var providerOverride: ProviderKind?
-    @State private var loadingModels = false
 
     private var provider: ProviderKind? {
         providerOverride ?? model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)
@@ -90,8 +89,7 @@ struct ModelSettingsScreen: View {
         }
         .onAppear {
             model.perform(.listAccounts(ListAccounts()))
-            loadingModels = true
-            model.perform(.loadModels(LoadModels())) { _ in loadingModels = false }
+            model.perform(.refreshModels)
         }
         .onChange(of: model.selectedProfileId) { _ in
             providerOverride = nil
@@ -135,7 +133,7 @@ struct ModelSettingsScreen: View {
     private var modelSection: some View {
         let choices = model.snapshot.modelsMatching(provider: provider, query: search)
         if choices.isEmpty {
-            AppText(loadingModels ? "モデルを読み込み中…" : "利用可能なモデルがありません")
+            AppText(model.snapshot.modelsLoading(provider: provider) ? "モデルを読み込み中…" : "利用可能なモデルがありません")
                 .foregroundStyle(.secondary)
         }
         ForEach(choices, id: \.model) { choice in

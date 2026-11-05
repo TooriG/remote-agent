@@ -1363,6 +1363,7 @@
       {
         "method": "host/model/list",
         "params": {
+          "provider": "codex",
           "limit": 100
         },
         "response": {
@@ -1396,6 +1397,7 @@
       {
         "method": "host/model/list",
         "params": {
+          "provider": "codex",
           "limit": 100,
           "cursor": "page-2"
         },
@@ -1499,6 +1501,7 @@
       {
         "method": "host/model/list",
         "params": {
+          "provider": "codex",
           "limit": 100
         },
         "response": {
@@ -1532,6 +1535,7 @@
       {
         "method": "host/model/list",
         "params": {
+          "provider": "codex",
           "limit": 100,
           "cursor": "loop"
         },

@@ -245,6 +245,7 @@ mod tests {
         Future { nested: Value },
         #[serde(rename = "host/model/list")]
         List {
+            provider: crate::session::ProviderKind,
             #[serde(default)]
             include_hidden: bool,
             cursor: Option<String>,
@@ -266,12 +267,13 @@ mod tests {
 
         #[test]
         fn independently_updated_peers_use_names_not_positions(limit in 0usize..1000, cursor in proptest::option::of(".{0,50}"), hidden in any::<bool>()) {
-            let newer = NewClient::List { include_hidden: hidden, cursor: cursor.clone(), limit };
+            let newer = NewClient::List { provider: crate::session::ProviderKind::Codex, include_hidden: hidden, cursor: cursor.clone(), limit };
             let decoded: Call = decode(&encode(&newer).unwrap()).unwrap();
             prop_assert!(matches!(&decoded, Call::ListModels(params) if params.limit == limit && params.cursor == cursor));
-            let NewClient::List { include_hidden, cursor: actual_cursor, limit: actual_limit } = decode(&encode(decoded).unwrap()).unwrap() else {
+            let NewClient::List { include_hidden, cursor: actual_cursor, limit: actual_limit, provider } = decode(&encode(decoded).unwrap()).unwrap() else {
                 return Err(TestCaseError::fail("method changed when the peer reordered its enum"));
             };
+            prop_assert_eq!(provider, crate::session::ProviderKind::Codex);
             prop_assert!(!include_hidden);
             prop_assert_eq!(actual_cursor, cursor);
             prop_assert_eq!(actual_limit, limit);
@@ -282,7 +284,7 @@ mod tests {
     fn request_names_and_missing_optional_fields_are_wire_contracts() {
         let call: Call = decode(
             &encode(json!({
-                "method":"host/model/list", "limit":10
+                "method":"host/model/list", "provider":"codex", "limit":10
             }))
             .unwrap(),
         )
@@ -290,6 +292,7 @@ mod tests {
         assert!(matches!(
             call,
             Call::ListModels(crate::operations::ListModels {
+                provider: crate::session::ProviderKind::Codex,
                 limit: 10,
                 cursor: None
             })

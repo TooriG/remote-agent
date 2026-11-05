@@ -3,6 +3,23 @@
 use std::{io, path::Path};
 use tokio::process::Command;
 
+/// Standalone processes must not inherit a launcher's blocked shutdown or
+/// child-exit signals. Call before creating runtime or worker threads.
+#[cfg(unix)]
+pub fn reset_signal_mask() -> io::Result<()> {
+    // SAFETY: initialize a local signal set and change only the calling thread.
+    let error = unsafe {
+        let mut signals = std::mem::zeroed();
+        libc::sigemptyset(&mut signals);
+        libc::pthread_sigmask(libc::SIG_SETMASK, &signals, std::ptr::null_mut())
+    };
+    if error == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(error))
+    }
+}
+
 pub fn command(program: &Path) -> io::Result<Command> {
     let mut command = supervisor_command()?;
     command.arg(program);
