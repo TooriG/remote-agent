@@ -138,7 +138,7 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
                       let attributes = layout.layoutAttributesForItem(at: path) else { return nil }
                 return ConversationListLayout.Anchor(id: id,
                                                      displacement: attributes.frame.minY - collectionView.contentOffset
-                                                         .y)
+                                                         .y - collectionView.adjustedContentInset.top)
             }.first
     }
 
@@ -203,11 +203,13 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
 
     private func didLayoutCollectionView() {
         guard active else { return }
-        applyPending()
-        positionViewport()
-        if !following, layout.anchor == nil {
+        // Edge requests move the viewport before UIKit updates its visible cells.
+        // Capture only the cells from a completed layout before applying those requests.
+        if !following, requestedEdge == nil, layout.anchor == nil {
             captureAnchor(allowed: indices)
         }
+        applyPending()
+        positionViewport()
         publishVisibility()
     }
 
@@ -314,6 +316,7 @@ final class ConversationListController: UIViewController, UICollectionViewDelega
         if scrollView.panGestureRecognizer.translation(in: scrollView).y < 0, latestIsVisible() {
             scroll.following = true
             following = true
+            layout.anchor = nil
             targetContentOffset.pointee.y = layout.bottomOffset(in: scrollView)
         }
     }

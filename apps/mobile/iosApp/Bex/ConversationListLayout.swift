@@ -5,6 +5,7 @@ import UIKit
 final class ConversationListLayout: UICollectionViewFlowLayout {
     struct Anchor {
         let id: ConversationList.RowID
+        /// Relative to the usable viewport, so UIKit's automatic safe-area offset adjustment preserves the anchor.
         let displacement: CGFloat
     }
 
@@ -68,7 +69,8 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
         guard let collectionView else { return proposedContentOffset }
         if let anchor, let path = indexPath(anchor.id), let attributes = layoutAttributesForItem(at: path) {
             return CGPoint(x: proposedContentOffset.x,
-                           y: clamped(attributes.frame.minY - anchor.displacement, in: collectionView))
+                           y: clamped(attributes.frame.minY - anchor.displacement
+                               - collectionView.adjustedContentInset.top, in: collectionView))
         }
         return super.targetContentOffset(forProposedContentOffset: proposedContentOffset)
     }

@@ -238,6 +238,8 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         update(ids, header: 60)
         await layout(controller)
         let reading = position(1, in: controller)
+        let listLayout = controller.collectionView.collectionViewLayout as? ConversationListLayout
+        let originalAnchor = String(describing: listLayout?.anchor)
         // Core can publish the completed history control before the background row projection finishes.
         update(ids, header: 8)
         await layout(controller)
@@ -246,9 +248,13 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         await layout(controller)
         check(abs(position(51, in: controller) - reading) < 1,
               "Staged history must retain the original anchor even if its interim offset was clamped: "
-                  + "before=\(reading), after=\(position(51, in: controller)), \(geometry(controller.collectionView))")
+                  + "before=\(reading), after=\(position(51, in: controller)), "
+                  + "original=\(originalAnchor), current=\(String(describing: listLayout?.anchor)), "
+                  + geometry(controller.collectionView))
         controller.collectionView.bounds.size.width -= 40
         await layout(controller)
-        check(abs(position(51, in: controller) - reading) < 1, "Resizing must preserve a detached reader")
+        check(abs(position(51, in: controller) - reading) < 1,
+              "Resizing must preserve a detached reader: before=\(reading), "
+                  + "after=\(position(51, in: controller)), \(geometry(controller.collectionView))")
     }
 }
