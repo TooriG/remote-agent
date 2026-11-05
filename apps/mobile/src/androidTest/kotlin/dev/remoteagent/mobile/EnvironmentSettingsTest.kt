@@ -7,7 +7,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import dev.remoteagent.core.Snapshot
+import dev.remoteagent.core.Presentation
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -23,7 +23,7 @@ class EnvironmentSettingsTest {
             MaterialTheme {
                 EnvironmentSettingsScreen(
                     HostProfile("server", "Development server", ""),
-                    Snapshot.empty(),
+                    Presentation.empty().settings(),
                     { host, enabled -> changes += host to enabled },
                     { _, _ -> },
                     { closed++ },

@@ -83,6 +83,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
     private var publication = Presentation.empty()
+    @Volatile
     var snapshot = Snapshot.empty()
         private set
 
@@ -635,7 +636,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.AppScreenContent(
                 ?.let { profile ->
                     EnvironmentSettingsScreen(
                         profile,
-                        model.snapshot,
+                        model.settings,
                         model::setConnectionEnabled,
                         model::perform,
                         model::showHosts,

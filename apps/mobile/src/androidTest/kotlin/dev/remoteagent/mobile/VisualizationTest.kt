@@ -90,7 +90,13 @@ class VisualizationTest {
             compose.setContent {
                 MaterialTheme {
                     if (visible.value)
-                        ThreadDetailFixture(model.snapshot, model.conversation, model::perform, null, composer = {})
+                        ThreadDetailScreen(
+                            model.conversationContext,
+                            model.conversation,
+                            model::perform,
+                            null,
+                            composer = {},
+                        )
                 }
             }
             fun verify(name: String) {

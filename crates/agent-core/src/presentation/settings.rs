@@ -162,6 +162,9 @@ impl SettingsPresentation {
     pub fn connection_enabled(&self) -> bool {
         self.connection_enabled
     }
+    pub fn connection_status_label(&self) -> String {
+        super::connections::status_label(self.connected, self.connection_enabled)
+    }
     pub fn account_login_error(&self, provider: ProviderKind) -> Option<ErrorText> {
         self.login_errors.get(&provider).cloned()
     }

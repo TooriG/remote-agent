@@ -3,6 +3,17 @@ use crate::{models::Model, session::ProviderKind, state::Snapshot};
 use agent_protocol::operations::Accounts;
 use serde_json::{Map, Value};
 
+pub(super) fn status_label(connected: bool, enabled: bool) -> String {
+    if !enabled {
+        "オフ"
+    } else if connected {
+        "接続済み"
+    } else {
+        "未接続"
+    }
+    .into()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum AgentAvailability {
@@ -69,14 +80,7 @@ impl Snapshot {
     }
 
     pub fn connection_status_label(&self) -> String {
-        if self.connection.connection_disabled {
-            "オフ"
-        } else if self.connection.connected {
-            "接続済み"
-        } else {
-            "未接続"
-        }
-        .into()
+        status_label(self.connection.connected, self.connection_enabled())
     }
 
     pub fn provider_enabled(&self, provider: ProviderKind) -> bool {

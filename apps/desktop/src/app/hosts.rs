@@ -248,10 +248,11 @@ impl Hosts {
         });
     }
     fn receive(&mut self, update: Update, window: &mut Window, cx: &mut Context<Self>) {
-        if let Update::Background(host, _) | Update::List(host, _, _) = &update {
-            if host != "local" && !self.choices().iter().any(|choice| &choice.id == host) {
-                return;
-            }
+        if let Update::Background(host, _) | Update::List(host, _, _) = &update
+            && host != "local"
+            && !self.choices().iter().any(|choice| &choice.id == host)
+        {
+            return;
         }
         let refresh_hosts = matches!(
             &update,

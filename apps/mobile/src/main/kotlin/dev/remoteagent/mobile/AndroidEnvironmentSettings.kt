@@ -31,12 +31,10 @@ import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Account
 import dev.remoteagent.core.AccountLogin
 import dev.remoteagent.core.CancelAccountLogin
-import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListAccounts
 import dev.remoteagent.core.LogoutAccount
 import dev.remoteagent.core.ManageCodexCli
-import dev.remoteagent.core.OperationKey
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.ReadAccountLogin
@@ -45,7 +43,7 @@ import dev.remoteagent.core.ReadHostSoftware
 import dev.remoteagent.core.ReadProviderSettings
 import dev.remoteagent.core.SelectAccount
 import dev.remoteagent.core.SetProviderEnabled
-import dev.remoteagent.core.Snapshot
+import dev.remoteagent.core.SettingsPresentation
 import dev.remoteagent.core.StartAccountLogin
 import dev.remoteagent.core.SubmitAccountLogin
 import kotlinx.coroutines.delay
@@ -55,7 +53,7 @@ private const val ACCOUNT_LOGIN_POLL_INTERVAL_MILLIS = 2000L
 @Composable
 internal fun EnvironmentSettingsScreen(
     profile: HostProfile,
-    snapshot: Snapshot,
+    settings: SettingsPresentation,
     setEnabled: (String, Boolean) -> Unit,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     back: () -> Unit,
@@ -63,8 +61,8 @@ internal fun EnvironmentSettingsScreen(
     val language = LocalUiLanguage.current
     var provider by remember(profile.id) { mutableStateOf<ProviderKind?>(null) }
     BackHandler(provider != null) { provider = null }
-    LaunchedEffect(profile.id, snapshot.connected()) {
-        if (snapshot.connected()) {
+    LaunchedEffect(profile.id, settings.connected()) {
+        if (settings.connected()) {
             perform(Intent.ReadHostSoftware(ReadHostSoftware())) {}
             perform(Intent.ReadProviderSettings(ReadProviderSettings())) {}
         }
@@ -75,41 +73,41 @@ internal fun EnvironmentSettingsScreen(
     ) {
         TextButton(onClick = { if (provider == null) back() else provider = null }) { Text(language.text("戻る")) }
         Text(profile.name, style = MaterialTheme.typography.headlineMedium)
-        ErrorNotices(snapshot.errorNotices(ErrorScope.Settings), perform)
+        ErrorNotices(settings.notices(), perform)
         if (provider == null) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text(language.text("接続"))
-                    Text(language.text(snapshot.connectionStatusLabel()), style = MaterialTheme.typography.bodySmall)
+                    Text(language.text(settings.connectionStatusLabel()), style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(
-                    snapshot.connectionEnabled(),
+                    settings.connectionEnabled(),
                     { setEnabled(profile.id, it) },
                     Modifier.testTag("environment.enabled"),
                 )
             }
-            HostSoftwareSettings(snapshot)
-            ProviderSettingsList(snapshot, { provider = it }, perform)
+            HostSoftwareSettings(settings)
+            ProviderSettingsList(settings, { provider = it }, perform)
         } else {
             val selected = provider ?: return@Column
             Text(
-                snapshot.connectionSetup().agents.first { it.provider == selected }.name,
+                settings.connectionSetup().agents.first { it.provider == selected }.name,
                 style = MaterialTheme.typography.titleLarge,
             )
-            ProviderSettingsContent(snapshot, selected, perform)
+            ProviderSettingsContent(settings, selected, perform)
         }
     }
 }
 
 @Composable
 private fun ProviderSettingsList(
-    snapshot: Snapshot,
+    settings: SettingsPresentation,
     choose: (ProviderKind) -> Unit,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
     val language = LocalUiLanguage.current
     Text(language.text("プロバイダー"), style = MaterialTheme.typography.titleMedium)
-    snapshot.connectionSetup().agents.forEach { agent ->
+    settings.connectionSetup().agents.forEach { agent ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton(onClick = { choose(agent.provider) }, modifier = Modifier.weight(1f)) {
                 Column(Modifier.fillMaxWidth()) {
@@ -120,28 +118,25 @@ private fun ProviderSettingsList(
             Switch(
                 agent.enabled,
                 { perform(Intent.SetProviderEnabled(SetProviderEnabled(agent.provider, it))) {} },
-                enabled =
-                    snapshot.connected() &&
-                        snapshot.providerSettingsLoaded() &&
-                        !snapshot.operationRunning(OperationKey.ProviderSettings),
+                enabled = settings.connected() && settings.providerSettingsLoaded() && !settings.providerSettingsBusy(),
                 modifier = Modifier.testTag("provider.enabled.${agent.provider}"),
             )
         }
     }
     TextButton(
         onClick = { perform(Intent.ReadProviderSettings(ReadProviderSettings())) {} },
-        enabled = snapshot.connected(),
+        enabled = settings.connected(),
     ) {
         Text(language.text("状態を確認"))
     }
 }
 
 @Composable
-private fun HostSoftwareSettings(snapshot: Snapshot) {
+private fun HostSoftwareSettings(settings: SettingsPresentation) {
     val language = LocalUiLanguage.current
     val context = LocalContext.current
     Text("Bex Host", style = MaterialTheme.typography.titleMedium)
-    snapshot.hostSoftware()?.let { software ->
+    settings.hostSoftware()?.let { software ->
         Text(software.version)
         if (software.build != 0uL) Text("${language.text("ビルド")}: ${software.build}")
         Text(software.revision, style = MaterialTheme.typography.bodySmall)
@@ -160,34 +155,34 @@ private fun HostSoftwareSettings(snapshot: Snapshot) {
 
 @Composable
 private fun ProviderSettingsContent(
-    snapshot: Snapshot,
+    settings: SettingsPresentation,
     provider: ProviderKind,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
-    LaunchedEffect(provider, snapshot.connected()) {
-        if (snapshot.connected()) {
+    LaunchedEffect(provider, settings.connected()) {
+        if (settings.connected()) {
             perform(Intent.ListAccounts(ListAccounts())) {}
             if (provider == ProviderKind.CODEX) perform(Intent.ManageCodexCli(ManageCodexCli(false))) {}
             if (provider == ProviderKind.DEEP_SEEK) perform(Intent.ReadDshCredentials(ReadCredentials())) {}
         }
     }
-    val login = snapshot.accountLogin()?.takeIf { it.provider == provider }
-    if (provider == ProviderKind.DEEP_SEEK) CredentialSettings(snapshot, perform)
-    else if (login != null) AccountLoginSettings(login, snapshot.connected(), perform)
-    else AccountSettings(snapshot, provider, perform)
-    ProviderRuntimeSettings(snapshot, provider, perform)
+    val login = settings.accountLogin()?.takeIf { it.provider == provider }
+    if (provider == ProviderKind.DEEP_SEEK) CredentialSettings(settings, perform)
+    else if (login != null) AccountLoginSettings(login, settings.connected(), perform)
+    else AccountSettings(settings, provider, perform)
+    ProviderRuntimeSettings(settings, provider, perform)
 }
 
 @Composable
 private fun AccountSettings(
-    snapshot: Snapshot,
+    settings: SettingsPresentation,
     provider: ProviderKind,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
     val language = LocalUiLanguage.current
     var signingOut by remember(provider) { mutableStateOf<Account?>(null) }
     Text(language.text("アカウント"), style = MaterialTheme.typography.titleMedium)
-    snapshot
+    settings
         .accounts()
         ?.accounts
         ?.filter { it.provider == provider }
@@ -196,9 +191,9 @@ private fun AccountSettings(
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         onClick = { perform(Intent.SelectAccount(SelectAccount(provider, account.id))) {} },
-                        enabled = snapshot.connected(),
+                        enabled = settings.connected(),
                     ) {
-                        val mark = if (snapshot.accountIsSelected(provider, account.id)) "✓ " else ""
+                        val mark = if (settings.accountIsSelected(provider, account.id)) "✓ " else ""
                         Text(mark + (account.email ?: account.id))
                     }
                     account.planType?.let { Text(it) }
@@ -206,18 +201,18 @@ private fun AccountSettings(
                         usage.windows.forEach { window -> Text("${window.label}: ${window.remainingPercent}%") }
                         usage.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     }
-                    TextButton(onClick = { signingOut = account }, enabled = snapshot.connected()) {
+                    TextButton(onClick = { signingOut = account }, enabled = settings.connected()) {
                         Text(language.text("サインアウト"))
                     }
                 }
             }
         }
-    TextButton(onClick = { perform(Intent.ListAccounts(ListAccounts())) {} }, enabled = snapshot.connected()) {
+    TextButton(onClick = { perform(Intent.ListAccounts(ListAccounts())) {} }, enabled = settings.connected()) {
         Text(language.text("再取得"))
     }
     TextButton(
         onClick = { perform(Intent.StartAccountLogin(StartAccountLogin(provider))) {} },
-        enabled = snapshot.connected(),
+        enabled = settings.connected(),
     ) {
         Text(language.text("アカウントを追加"))
     }
@@ -286,7 +281,7 @@ private fun AccountLoginSettings(
 
 @Composable
 private fun ProviderRuntimeSettings(
-    snapshot: Snapshot,
+    settings: SettingsPresentation,
     provider: ProviderKind,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
@@ -296,9 +291,9 @@ private fun ProviderRuntimeSettings(
         return
     }
     Text("Codex CLI", style = MaterialTheme.typography.titleMedium)
-    val status = snapshot.codexCliStatus()
+    val status = settings.codexCliStatus()
     status?.version?.let { Text(it) }
-    val enabled = snapshot.connected() && !snapshot.operationRunning(OperationKey.CodexCli)
+    val enabled = settings.connected() && !settings.codexCliBusy()
     TextButton(onClick = { perform(Intent.ManageCodexCli(ManageCodexCli(false))) {} }, enabled = enabled) {
         Text(language.text("状態を確認"))
     }
