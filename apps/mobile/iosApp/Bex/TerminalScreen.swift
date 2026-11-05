@@ -35,6 +35,11 @@ private struct NativeTerminalView: UIViewRepresentable {
         view.terminalDelegate = context.coordinator
         view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         view.accessibilityIdentifier = "terminal.screen"
+        // Reuse SwiftTerm's recognizer and timing for direct word selection.
+        for case let gesture as UILongPressGestureRecognizer in view.gestureRecognizers ?? [] {
+            gesture.removeTarget(view, action: nil)
+            gesture.addTarget(view, action: #selector(HostTerminalView.selectTextOnLongPress(_:)))
+        }
         return view
     }
 
@@ -126,6 +131,16 @@ private struct NativeTerminalView: UIViewRepresentable {
 private final class HostTerminalView: SwiftTerm.TerminalView {
     @TaskLocal private nonisolated static var isPasting = false
     var copyTitle = "コピー"
+
+    @objc func selectTextOnLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        // Seed the selection position through SwiftTerm's public menu API.
+        // Reopening the menu must preserve any existing selection range.
+        showStandardContextMenu(at: gesture.location(in: self))
+        if !hasActiveSelection {
+            select(nil)
+        }
+    }
 
     @objc func editMenu(for _: UITextRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
         // Terminal selection belongs to the emulator, while UITextInput's range
