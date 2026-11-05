@@ -33,3 +33,9 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 filter = 'test(=operation_corpus)'
 threads-required = "num-test-threads"
+
+# Preparation observes five-second stage deadlines while Git creates a checkout.
+# Keep competing filesystem and provider fixtures out of that budget on Windows.
+[[profile.default.overrides]]
+filter = 'test(=host_rpc::service::preparation::tests::preparation_publishes_worktree_setup_only_when_it_creates_a_checkout)'
+threads-required = "num-test-threads"

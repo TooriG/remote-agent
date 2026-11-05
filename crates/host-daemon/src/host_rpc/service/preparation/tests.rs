@@ -119,6 +119,7 @@ async fn preparation_publishes_worktree_setup_only_when_it_creates_a_checkout() 
             else {
                 unreachable!()
             };
+            assert_eq!(preparation.status, PreparationStatus::Preparing);
             stages.push(preparation.stage);
             if preparation.stage == PreparationStage::Provider {
                 break;
