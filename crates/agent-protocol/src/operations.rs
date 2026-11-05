@@ -382,12 +382,10 @@ pub enum ListDecorationScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadListDecorations {
     pub scope: ListDecorationScope,
-    pub projects: Vec<(String, Vec<String>)>,
     pub threads: Vec<(crate::session::SessionRef, String, Option<String>)>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListDecorations {
-    pub icons: std::collections::BTreeMap<String, Option<String>>,
     pub statuses: Vec<(
         crate::session::SessionRef,
         Option<crate::models::WorktreeStatus>,

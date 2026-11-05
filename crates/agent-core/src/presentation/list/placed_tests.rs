@@ -281,8 +281,6 @@ fn project_preferences_keep_pinned_section_order_ties_and_hidden_labels() {
         ]
     );
     assert_eq!(list.projects[0].name, "Pinned custom");
-    assert_eq!(list.projects[0].monogram, "PD");
-    assert_eq!(list.projects[0].icon_color, 0x60a5fa);
     assert!(list.projects[0].pinned);
     assert_eq!(list.projects[0].section.as_deref(), Some("z"));
     assert_eq!(list.projects[3].section.as_deref(), Some(""));
@@ -290,8 +288,6 @@ fn project_preferences_keep_pinned_section_order_ties_and_hidden_labels() {
     assert_eq!(list.hidden_projects.len(), 1);
     assert_eq!(list.hidden_projects[0].id, "hidden");
     assert_eq!(list.hidden_projects[0].name, "Hidden custom");
-    assert_eq!(list.hidden_projects[0].monogram, "HN");
-    assert_eq!(list.hidden_projects[0].icon_color, 0xf472b6);
     assert!(!list.hidden_projects[0].pinned);
     assert_eq!(list.hidden_projects[0].section, None);
 }

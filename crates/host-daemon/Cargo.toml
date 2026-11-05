@@ -17,8 +17,7 @@ directories = "6"
 uuid = { version = "1", features = ["v4", "serde"] }
 clap = { version = "4.6", features = ["derive"] }
 base64.workspace = true
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico", "webp"] }
-resvg = { version = "0.49.0", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 regex = "1"
 memchr = "2"
 codex-app-server = { path = "../codex-app-server" }

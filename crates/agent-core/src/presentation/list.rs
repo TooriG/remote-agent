@@ -6,7 +6,6 @@ use crate::{
         projects::{ChatPlacements, project_chat_visible},
     },
 };
-use base64::Engine;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -20,9 +19,6 @@ pub struct ProjectSummary {
     /// The native coordinator lives on Claude, separately from local worker sessions.
     pub coordinator_url: Option<String>,
     pub roots: Vec<ProjectRoot>,
-    pub icon_png: Option<Vec<u8>>,
-    pub monogram: String,
-    pub icon_color: u32,
     pub pinned: bool,
     pub section: Option<String>,
     pub chats_archived: bool,
@@ -34,46 +30,12 @@ pub struct ProjectSummary {
 }
 
 fn project_summary(project: &Project, display_name: &str) -> ProjectSummary {
-    let name = project.name.trim();
-    let mut words = name
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|word| !word.is_empty());
-    let monogram = words
-        .next()
-        .map(|word| {
-            let first = word.chars().next().unwrap();
-            let second = word
-                .chars()
-                .skip(1)
-                .find(|c| c.is_numeric())
-                .or_else(|| words.next_back().and_then(|last| last.chars().next()))
-                .unwrap_or_else(|| word.chars().next_back().unwrap());
-            format!("{first}{second}")
-                .to_uppercase()
-                .chars()
-                .take(2)
-                .collect()
-        })
-        .unwrap_or_else(|| "PR".into());
-    const COLORS: [u32; 8] = [
-        0x60a5fa, 0xa78bfa, 0xf472b6, 0xfb923c, 0xfbbf24, 0x4ade80, 0x2dd4bf, 0x38bdf8,
-    ];
-    let index = name
-        .to_lowercase()
-        .chars()
-        .fold(0, |index, c| (index * 31 + c as usize) % COLORS.len());
     ProjectSummary {
         host_id: String::new(),
         id: project.id.clone(),
         name: display_name.to_owned(),
         coordinator_url: coordinator_url(&project.id),
         roots: project.roots.clone(),
-        icon_png: project
-            .favicon_png
-            .as_ref()
-            .and_then(|png| base64::engine::general_purpose::STANDARD.decode(png).ok()),
-        monogram,
-        icon_color: COLORS[index],
         pinned: false,
         section: None,
         chats_archived: false,
@@ -634,37 +596,6 @@ mod tests {
         }
     }
 
-    #[rstest::rstest]
-    #[case("remote-agent", "RA")]
-    #[case("t3code", "T3")]
-    #[case("Bex", "BX")]
-    #[case("日本語プロジェクト", "日ト")]
-    #[case("", "PR")]
-    #[case(" !!! ", "PR")]
-    fn project_names_receive_shared_monograms(#[case] name: &str, #[case] monogram: &str) {
-        let project = Project {
-            name: name.into(),
-            ..Default::default()
-        };
-        let summary = project_summary(&project, &project.name);
-        assert_eq!(summary.monogram, monogram);
-        assert!(summary.icon_png.is_none());
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn project_identity_is_bounded_and_ignores_surrounding_whitespace(name in ".{0,80}") {
-            let project = |name| Project { name, ..Default::default() };
-            let plain_project = project(name);
-            let padded_project = project(format!(" \t{}\n ", plain_project.name));
-            let plain = project_summary(&plain_project, &plain_project.name);
-            let padded = project_summary(&padded_project, &padded_project.name);
-            proptest::prop_assert_eq!(plain.monogram.chars().count(), 2);
-            proptest::prop_assert_eq!(plain.monogram, padded.monogram);
-            proptest::prop_assert_eq!(plain.icon_color, padded.icon_color);
-        }
-    }
-
     fn snapshot_list(data: serde_json::Value) -> Snapshot {
         Snapshot {
             threads: Some(std::sync::Arc::new(
@@ -843,42 +774,31 @@ mod tests {
     }
 
     #[test]
-    fn returned_project_header_replaces_branding_while_preserving_loaded_tasks() {
+    fn returned_project_header_replaces_name_while_preserving_loaded_tasks() {
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.expanded_projects).insert("project".into(), 5);
         ListSessions::new(Default::default()).apply(
             &mut snapshot,
             serde_json::from_value(json!({
                 "data":[{"id":{"provider":"codex","id":"task"},"projectId":"project"}],
-                "projects":[{"id":"project","name":"Old project","roots":[],"faviconPng":"BAUG"}],
+                "projects":[{"id":"project","name":"Old project","roots":[]}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{"project":{"limit":5,"hasMore":false}},"limit":5
             }))
             .unwrap(),
         );
-        for icon in [Some("AQID"), None] {
-            ListSessions::new(Default::default()).apply(&mut snapshot, serde_json::from_value(json!({
+        ListSessions::new(Default::default()).apply(
+            &mut snapshot,
+            serde_json::from_value(json!({
                 "data":[],
-                "projects":[{"id":"project","name":"Renamed project","roots":[],"faviconPng":icon}],
+                "projects":[{"id":"project","name":"Renamed project","roots":[]}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
-            })).unwrap());
-            crate::state::operations::ReadListDecorations {
-                scope: agent_protocol::operations::ListDecorationScope::Root { part: None },
-                projects: vec![],
-                threads: vec![],
-            }
-            .apply(
-                &mut snapshot,
-                agent_protocol::operations::ListDecorations {
-                    icons: [("project".into(), icon.map(str::to_owned))].into(),
-                    statuses: vec![],
-                },
-            );
-            let list = snapshot.thread_list().unwrap();
-            let project = &list.projects[0];
-            assert_eq!(project.name, "Renamed project");
-            assert_eq!(project.icon_png, icon.map(|_| vec![1, 2, 3]));
-            assert_eq!(project.threads[0].id.id, "task");
-        }
+            }))
+            .unwrap(),
+        );
+        let list = snapshot.thread_list().unwrap();
+        let project = &list.projects[0];
+        assert_eq!(project.name, "Renamed project");
+        assert_eq!(project.threads[0].id.id, "task");
     }
 
     #[rstest::rstest]
