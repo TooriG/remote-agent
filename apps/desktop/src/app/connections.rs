@@ -32,13 +32,20 @@ impl Desktop {
         let remotes = &snapshot.connection.management.remotes;
         let mut hosts = vec!["local".to_string()];
         hosts.extend(remotes.iter().map(|host| host.id.clone()));
-        hosts.extend(
-            platform::wsl_distributions()
-                .await
-                .map_err(|error| error.to_string())?
-                .into_iter()
-                .map(|distro| format!("wsl:{distro}")),
-        );
+        // WSL is optional on Windows; ordinary saved destinations restore independently.
+        if saved
+            .host_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("wsl:"))
+        {
+            hosts.extend(
+                platform::wsl_distributions()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .map(|distro| format!("wsl:{distro}")),
+            );
+        }
         let selection = resolve_connection_selection(hosts, saved.host_id, saved.all);
         let remote = match selection.host_id.as_deref() {
             Some(id) if id.starts_with("wsl:") => Some(
