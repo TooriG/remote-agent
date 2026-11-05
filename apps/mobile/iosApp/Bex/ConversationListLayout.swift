@@ -26,7 +26,9 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
 
     override func prepare() {
         if let collectionView {
-            let width = max(1, collectionView.bounds.width - sectionInset.left - sectionInset.right)
+            let insets = collectionView.adjustedContentInset
+            let width = max(1, collectionView.bounds.width - insets.left - insets.right
+                - sectionInset.left - sectionInset.right)
             if estimatedItemSize.width != width {
                 estimatedItemSize = CGSize(width: width, height: 100)
             }

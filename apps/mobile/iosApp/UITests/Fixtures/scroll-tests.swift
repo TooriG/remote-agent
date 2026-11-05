@@ -181,11 +181,15 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         let path = IndexPath(item: 0, section: 0)
         let wide = view.layoutAttributesForItem(at: path)!.size
         check(wide.height > view.bounds.height, "Wrapped text must measure beyond the viewport without clipping")
+        view.contentInset.left = 24
+        view.contentInset.right = 24
         view.bounds.size.width /= 2
         await layout(controller)
         let narrow = view.layoutAttributesForItem(at: path)!.size
         check(narrow.width < wide.width && narrow.height > wide.height,
               "A width change must remeasure the SwiftUI row with its new explicit width")
+        check(abs(narrow.width - (view.bounds.width - view.adjustedContentInset.left
+                - view.adjustedContentInset.right - 32)) < 1, "Native safe-area insets must be outside the row margins")
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
                   - view.layoutAttributesForItem(at: path)!.frame.maxY - 6) < 1,
         "Following must survive width changes in a long message")
@@ -217,5 +221,8 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         await layout(controller)
         check(abs(position(51, in: controller) - reading) < 1,
               "Staged history must retain the original anchor even if its interim offset was clamped")
+        controller.collectionView.bounds.size.width -= 40
+        await layout(controller)
+        check(abs(position(51, in: controller) - reading) < 1, "Resizing must preserve a detached reader")
     }
 }
