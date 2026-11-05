@@ -50,9 +50,8 @@ pub(super) fn without_repeated_generated_images(
                     );
                 }
             }
-            ConversationRowContent::Response { item, .. }
-                if item.data.kind == "imageGeneration" =>
-            {
+            // Grouping exposes only assistant text and generated images as responses.
+            ConversationRowContent::Response { item, .. } => {
                 return item.data.body.is_some()
                     || item.data.image_sources.is_empty()
                     || !item
