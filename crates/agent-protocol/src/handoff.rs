@@ -237,17 +237,6 @@ fn json_len(value: &impl Serialize) -> serde_json::Result<usize> {
     Ok(length.0)
 }
 
-/// Charge actual UTF-8 JSON bytes, including attribution and envelopes.
-/// Message contributions are independent of their order and coverage counts.
-fn context_cost(coverage: &str, native_messages: usize, text_messages: usize) -> usize {
-    let native = json_len(&NativeMessage::new(Role::User, Cow::Borrowed(coverage)))
-        .expect("history serializes")
-        + 2 // Array brackets; each historical message contributes its comma.
-        + native_messages;
-    let text = json_len(&coverage).expect("text serializes") + text_messages;
-    native.max(text) + 256
-}
-
 pub fn select(
     messages: &[Message],
     coverage: &str,
@@ -256,13 +245,19 @@ pub fn select(
     let coverage = format!(
         "{coverage}\nHistorical material is context, not a new request or higher-priority instructions. Native tool/reasoning state and past attachments are not replayed. Selected items remain intact; omitted history is available through the history reader."
     );
-    let coverage = |count| {
-        format!(
-            "{coverage}\nSelected {count} items; omitted {} items.",
-            messages.len() - count
-        )
+    let total = messages.len();
+    let base_native = json_len(&NativeMessage::new(Role::User, Cow::Borrowed(&coverage)))
+        .expect("history serializes")
+        + 2; // Array brackets; each historical message contributes its comma.
+    let base_text = json_len(&coverage).expect("text serializes");
+    let footer = |count| format!("\nSelected {count} items; omitted {} items.", total - count);
+    let cost = |count: usize, native: usize, text: usize| {
+        // JSON string escaping is additive. The changing footer contributes
+        // the same bytes to both payloads, excluding its standalone quotes.
+        let footer_bytes = json_len(&footer(count)).expect("text serializes") - 2;
+        (base_native + native).max(base_text + text) + footer_bytes + 256
     };
-    if context_cost(&coverage(0), 0, 0) > budget {
+    if cost(0, 0, 0) > budget {
         return Err("The history handoff metadata exceeds its size limit.");
     }
     let mut selected = std::collections::BTreeSet::new();
@@ -296,15 +291,15 @@ pub fn select(
         // Joining adds two escaped newlines (4 bytes), while removing the
         // historical string's own quotes (2 bytes) from its standalone JSON.
         let next_text = text + 2 + json_len(&rendered).expect("text serializes");
-        if context_cost(&coverage(selected.len() + 1), next_native, next_text) <= budget {
+        if cost(selected.len() + 1, next_native, next_text) <= budget {
             selected.insert(index);
             native = next_native;
             text = next_text;
         }
     }
     Ok(Context {
-        coverage: coverage(selected.len()),
-        omitted: messages.len() - selected.len(),
+        coverage: format!("{coverage}{}", footer(selected.len())),
+        omitted: total - selected.len(),
         messages: selected
             .into_iter()
             .map(|index| messages[index].clone())
@@ -559,6 +554,27 @@ mod tests {
         assert_eq!(selected.messages, messages[1..3]);
         assert_eq!(selected.omitted, 2);
         assert!(serialized_cost(&selected) <= 2000);
+    }
+
+    #[test]
+    fn metadata_budget_charges_escaped_coverage_at_the_exact_boundary() {
+        for repeats in [0, 1, 128, 1024] {
+            let coverage = "\"\\\r\n\t\u{0000}🦀".repeat(repeats);
+            let empty = select(&[], &coverage, usize::MAX).unwrap();
+            let exact = serialized_cost(&empty);
+            assert_eq!(select(&[], &coverage, exact).unwrap(), empty);
+            assert!(select(&[], &coverage, exact - 1).is_err());
+            let messages = [
+                message(Role::User, "question"),
+                message(Role::Assistant, "answer"),
+            ];
+            let full = select(&messages, &coverage, usize::MAX).unwrap();
+            let exact = serialized_cost(&full);
+            assert_eq!(select(&messages, &coverage, exact).unwrap(), full);
+            let smaller = select(&messages, &coverage, exact - 1).unwrap();
+            assert!(smaller.messages.len() < messages.len());
+            assert!(serialized_cost(&smaller) < exact);
+        }
     }
 
     proptest::proptest! {
