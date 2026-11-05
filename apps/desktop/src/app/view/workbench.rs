@@ -25,7 +25,7 @@ struct WorkbenchModel {
     review_files: Vec<String>,
     editor: FileEditorModel,
     review: Option<(u64, u64, usize)>,
-    agents: Vec<AgentSummary>,
+    agents: Arc<Vec<AgentSummary>>,
     resource: Option<AnyView>,
     resource_message: &'static str,
     file_search: Entity<InputState>,
@@ -458,9 +458,9 @@ impl Desktop {
                 .flatten()
                 .map(|review| (review.additions, review.deletions, review.files.len())),
             agents: if kind == Panel::Agents {
-                self.snapshot.agent_panel()
+                self.publication.agents.clone()
             } else {
-                Vec::new()
+                Arc::default()
             },
             file_search: self.file_search.clone(),
             focus: self.panel_focus.clone(),

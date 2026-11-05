@@ -199,6 +199,9 @@ pub enum TerminalPhase {
     Failed(String),
 }
 impl TerminalPhase {
+    pub fn accepts_input(&self) -> bool {
+        matches!(self, Self::Starting | Self::Running)
+    }
     pub fn label(&self) -> String {
         match self {
             Self::Starting => "起動中".into(),
@@ -562,21 +565,18 @@ impl Snapshot {
             })
     }
     pub fn terminal_view(&self, handle: String) -> Option<TerminalView> {
-        self.terminals.get(&handle).map(|terminal| TerminalView {
-            status: match terminal.phase {
-                TerminalPhase::Starting | TerminalPhase::Running => None,
-                _ => Some(terminal.phase.label()),
-            },
-            loading: matches!(terminal.phase, TerminalPhase::Starting),
-            accepts_input: matches!(
-                terminal.phase,
-                TerminalPhase::Starting | TerminalPhase::Running
-            ),
-            output: terminal
-                .output
-                .iter()
-                .map(|chunk| (**chunk).clone())
-                .collect(),
+        self.terminals
+            .get(&handle)
+            .map(|terminal| crate::presentation::terminals::view(terminal))
+    }
+    pub fn terminal_accepts_input(&self, handle: String) -> bool {
+        self.terminals
+            .get(&handle)
+            .is_some_and(|terminal| terminal.phase.accepts_input())
+    }
+    pub fn terminals(&self) -> Arc<crate::presentation::terminals::Terminals> {
+        Arc::new(crate::presentation::terminals::Terminals {
+            states: self.terminals.clone(),
         })
     }
 

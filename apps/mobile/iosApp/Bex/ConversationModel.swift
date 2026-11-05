@@ -16,7 +16,9 @@ final class ConversationModel {
     private(set) var conversationContext = Presentation.empty().conversationContext()
     private(set) var composer = Presentation.empty().composer()
     private(set) var files = AgentCore.Snapshot.empty().files()
+    private(set) var terminals = Terminals.empty()
     private(set) var conversation: ConversationPresentation?
+    private(set) var agents: [AgentSummary] = []
     var notice: String?
     var sideChatRequest: SideChatRequest?
     var composerFocusRequest: UUID?
@@ -101,7 +103,13 @@ final class ConversationModel {
         if changes.context {
             conversationContext = value.conversationContext()
         }
+        if changes.agents {
+            agents = value.agents()
+        }
         let nextFiles = next.files()
+        if changes.groups.terminals {
+            terminals = next.terminals()
+        }
         if !nextFiles.unchanged(other: files) {
             files = nextFiles
         }

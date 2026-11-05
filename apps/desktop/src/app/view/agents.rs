@@ -152,8 +152,10 @@ mod tests {
                 Arc::new(serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"child"},"parentId":{"provider":"codex","id":"parent"},"name":"Review","status":"running"})).unwrap())
             );
             Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id = Some(parent.clone());
+            Arc::make_mut(&mut snapshot.pane).observed_agents = Some(parent.clone());
             Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key = parent.clone().into();
             Arc::make_mut(&mut snapshot.input.drafts).insert(parent.into(),Arc::new(Draft { text:"Keep my draft".into(),..Default::default() }));
+            desktop.project_fixture();
             desktop
         });
         window.simulate_resize(size(px(1600.), px(900.)));
@@ -189,6 +191,7 @@ mod tests {
             );
             assert_eq!(snapshot.agent_panel()[0].key, child);
             assert!(!snapshot.agent_panel()[0].active);
+            desktop.project_fixture();
             cx.notify();
         });
         window.run_until_parked();

@@ -18,6 +18,7 @@ pub struct Presentation {
     pub conversation: Option<Arc<RenderedConversation>>,
     pub composer: Arc<super::composer::ComposerPresentation>,
     pub context: Arc<super::context::ConversationContext>,
+    pub agents: Arc<Vec<super::agents::AgentSummary>>,
 }
 
 #[derive(Clone, Copy)]
@@ -33,6 +34,7 @@ pub struct PresentationChanges {
     pub attachments: bool,
     pub sources: bool,
     pub context: bool,
+    pub agents: bool,
     pub reconnected: bool,
 }
 
@@ -46,6 +48,7 @@ impl Presentation {
             conversation: None,
             composer,
             context,
+            agents: super::agents::empty(),
         })
     }
 
@@ -91,12 +94,14 @@ impl Presentation {
             &snapshot,
             previous.map(|previous| &previous.context),
         );
+        let agents = super::agents::project(&snapshot, previous);
         Arc::new(Self {
             snapshot,
             list,
             conversation,
             composer,
             context,
+            agents,
         })
     }
 
@@ -120,6 +125,14 @@ impl Presentation {
             && snapshot.pane.navigation.draft_key == content.snapshot.pane.navigation.draft_key
             && snapshot.pane.navigation.thread_id == content.snapshot.pane.navigation.thread_id;
         Arc::new(Self {
+            agents: if same_conversation
+                && snapshot.pane.observed_agents == content.snapshot.pane.observed_agents
+                && snapshot.pane.observed_agents.is_some()
+            {
+                content.agents.clone()
+            } else {
+                super::agents::empty()
+            },
             composer: super::composer::ComposerPresentation::project(
                 &snapshot,
                 Some(&content.composer),
@@ -158,12 +171,16 @@ impl Presentation {
     pub fn thread_list(&self) -> Option<ThreadList> {
         self.list.as_deref().cloned()
     }
+    pub fn agents(&self) -> Vec<super::agents::AgentSummary> {
+        self.agents.as_ref().clone()
+    }
     pub fn changes(&self, previous: Arc<Self>) -> PresentationChanges {
         use crate::state::Same;
         let list = !self.list.same(&previous.list);
         let conversation = !self.conversation.same(&previous.conversation);
         let composer = !self.composer.equivalent(&previous.composer);
         let context = self.context.as_ref() != previous.context.as_ref();
+        let agents = !self.agents.same(&previous.agents);
         let groups = self.snapshot.changes_from(&previous.snapshot);
         let sources = self
             .conversation
@@ -180,7 +197,7 @@ impl Presentation {
                 |(a, b)| !a.same(b),
             );
         PresentationChanges {
-            changed: groups.any || list || conversation || composer || context,
+            changed: groups.any || list || conversation || composer || context || agents,
             groups,
             list,
             models: !self
@@ -194,6 +211,7 @@ impl Presentation {
             attachments: self.composer.draft.attachments != previous.composer.draft.attachments,
             sources,
             context,
+            agents,
             reconnected: self.snapshot.connection.connected
                 && self.snapshot.connection.connection_generation
                     != previous.snapshot.connection.connection_generation,
