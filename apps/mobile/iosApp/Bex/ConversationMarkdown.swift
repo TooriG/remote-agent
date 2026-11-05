@@ -11,7 +11,9 @@ struct ConversationMarkdown: View {
     var textIdentifier: String = "message.assistant-text"
     @State private var linkTarget: String?
     @State private var linkError: String?
+    @State private var sharedPath: String?
     var body: some View {
+        let shareFailure = media.presentation.shareFailure
         VStack(alignment: .leading, spacing: 14) {
             ForEach(blocks) { part in
                 if let path = part.visualizationPath {
@@ -33,8 +35,8 @@ struct ConversationMarkdown: View {
                     )
                 }
             }
-            if let linkError {
-                AppText(linkError).font(.caption).foregroundColor(.red)
+            if let error = linkError ?? (shareFailure?.path == sharedPath ? shareFailure?.message : nil) {
+                AppText(error).font(.caption).foregroundColor(.red)
             }
         }
         .font(.system(size: 18))
@@ -75,6 +77,8 @@ struct ConversationMarkdown: View {
     }
 
     private func shareFile(_ path: String) {
+        sharedPath = path
+        linkError = nil
         media.presentation.share(path, download: media.download)
     }
 

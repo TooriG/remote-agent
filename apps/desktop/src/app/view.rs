@@ -1199,6 +1199,79 @@ mod cache_tests {
     }
 
     #[gpui::test]
+    fn native_commands_use_the_bound_pane_without_notifying_the_window(cx: &mut TestAppContext) {
+        let (runtime, app_runtime) = init(cx);
+        let store = runtime
+            .block_on(async { Arc::new(agent_core::store::Store::offline(Snapshot::default())) });
+        let session = runtime.block_on(async { StoreSession::new(store.clone(), app_runtime) });
+        let key = store.snapshot().pane.navigation.draft_key.clone();
+        let (desktop, window) = cx.add_window_view(|window, cx| {
+            let mut view = Desktop::new(
+                Mode::Fixture {
+                    remote: None,
+                    cwd: "/fixture".into(),
+                },
+                window,
+                cx,
+            );
+            view.session = Some(session);
+            view.accept_snapshot(window, cx);
+            // Bind every native resource, including the currently closed workbench.
+            view.publish_views(window, cx);
+            view
+        });
+        window.run_until_parked();
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _observation = window.update(|_, cx| {
+            let notifications = notifications.clone();
+            cx.observe(&desktop, move |_, _| {
+                notifications.set(notifications.get() + 1)
+            })
+        });
+        let mut updates = store.subscribe();
+        for owner in 0..3 {
+            let text = format!("Native command from owner {owner}");
+            let intent = Intent::SetDraftText {
+                thread_id: key.clone(),
+                text: text.clone(),
+            };
+            window.update(|_, cx| {
+                desktop.update(cx, |view, cx| match owner {
+                    0 => view
+                        .composer_view
+                        .read(cx)
+                        .content
+                        .read(cx)
+                        .dispatch(intent),
+                    1 => view.conversation.read(cx).dispatch(intent),
+                    _ => view.workbench_view.read(cx).dispatch(intent),
+                })
+            });
+            runtime.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    updates.wait_for(|snapshot| {
+                        snapshot
+                            .input
+                            .drafts
+                            .get(&key)
+                            .is_some_and(|draft| draft.text == text)
+                    }),
+                )
+                .await
+                .expect("the bound pane must receive the command")
+                .unwrap();
+            });
+            window.run_until_parked();
+            assert_eq!(
+                notifications.get(),
+                0,
+                "native commands must not notify Desktop observers"
+            );
+        }
+    }
+
+    #[gpui::test]
     fn typing_streaming_and_animation_rebuild_only_the_affected_views(cx: &mut TestAppContext) {
         let (runtime, _) = init(cx);
         let session = SessionRef {

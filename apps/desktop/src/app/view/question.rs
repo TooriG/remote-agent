@@ -275,14 +275,13 @@ impl super::composer::ComposerContent {
                                     }),
                             ),
                     )
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(ComposerAction::Dispatch(Intent::AnswerQuestion {
+                    .on_click(cx.listener(move |view, _, _, _| {
+                        view.dispatch(Intent::AnswerQuestion {
                             request_id: request_id.clone(),
                             action: QuestionAction::Choose {
                                 choice_id: choice_id.clone(),
                             },
-                        }));
-                        cx.notify();
+                        });
                     })),
             );
         }
@@ -302,11 +301,11 @@ impl super::composer::ComposerContent {
                 "question-back",
                 language.text("前へ"),
                 cx,
-                move |_, _, cx| {
-                    cx.emit(ComposerAction::Dispatch(Intent::AnswerQuestion {
+                move |view, _, _| {
+                    view.dispatch(Intent::AnswerQuestion {
                         request_id: request_id.clone(),
                         action: QuestionAction::Back,
-                    }))
+                    })
                 },
             )
             .debug_selector(|| "question-back".into())
@@ -321,12 +320,11 @@ impl super::composer::ComposerContent {
             .h(px(32.))
             .px_4()
             .disabled(!question.can_advance)
-            .on_click(cx.listener(move |_, _, _, cx| {
-                cx.emit(ComposerAction::Dispatch(Intent::AnswerQuestion {
+            .on_click(cx.listener(move |view, _, _, _| {
+                view.dispatch(Intent::AnswerQuestion {
                     request_id: request_id.clone(),
                     action: QuestionAction::Advance,
-                }));
-                cx.notify();
+                });
             }));
         back.into_iter().chain([advance])
     }

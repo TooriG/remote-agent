@@ -52,11 +52,9 @@ pub(in crate::app) enum WorkbenchAction {
     Download(String),
     Save,
     Reload(String),
-    Edit(DraftKey, String),
     RefreshReview,
     Review(String),
     Notice(errors::NoticeAction),
-    Dispatch(Intent),
     Tree(
         agent_core::presentation::files::FileTreeKey,
         agent_core::presentation::files::FileTreeAction,
@@ -81,6 +79,7 @@ impl EventEmitter<WorkbenchAction> for WorkbenchView {}
 
 pub(in crate::app) struct WorkbenchView {
     desktop: WeakEntity<Desktop>,
+    pane: Option<Arc<agent_core::store::Pane>>,
     _explorer: Subscription,
     model: Option<WorkbenchModel>,
     titles: BTreeMap<u64, String>,
@@ -101,6 +100,7 @@ impl WorkbenchView {
             .detach();
         Self {
             desktop: desktop.downgrade(),
+            pane: None,
             _explorer: cx.observe(explorer, |_, _, cx| cx.notify()),
             model: None,
             titles: BTreeMap::new(),
@@ -109,6 +109,12 @@ impl WorkbenchView {
             projections: 0,
             #[cfg(test)]
             renders: 0,
+        }
+    }
+
+    pub(super) fn dispatch(&self, intent: Intent) {
+        if let Some(pane) = &self.pane {
+            drop(pane.dispatch(intent));
         }
     }
 
@@ -191,14 +197,9 @@ impl Desktop {
             Reload(path) => {
                 self.open_file(path.clone(), None, true, cx);
             }
-            Edit(draft, text) => self.dispatch(Intent::SetDraftText {
-                thread_id: draft.clone(),
-                text: text.clone(),
-            }),
             RefreshReview => self.refresh_review(),
             Review(path) => self.open_review(Some(path), cx),
             Notice(action) => self.notice_action(action.clone(), window, cx),
-            Dispatch(intent) => self.dispatch(intent.clone()),
             Tree(key, action) => {
                 if !self
                     .file_browser
@@ -345,8 +346,10 @@ impl Desktop {
             cx.notify();
         }
         let model = self.workbench_model(window.viewport_size().width, cx);
-        self.workbench_view
-            .update(cx, |view, cx| view.set_model(model, cx));
+        self.workbench_view.update(cx, |view, cx| {
+            view.pane = self.session.as_ref().map(|session| session.pane.clone());
+            view.set_model(model, cx);
+        });
     }
 
     fn workbench_model(&self, width: Pixels, cx: &App) -> Option<WorkbenchModel> {
@@ -777,7 +780,7 @@ impl WorkbenchView {
                                 "ai-edit",
                                 language.text("AI に編集を依頼"),
                                 cx,
-                                move |_, _, cx| { if let Some(text) = &edit { cx.emit(WorkbenchAction::Edit(draft.clone(), text.clone())); } },
+                                move |view, _, _| { if let Some(text) = &edit { view.dispatch(Intent::SetDraftText { thread_id: draft.clone(), text: text.clone() }); } },
                             )
                             .icon(IconName::Bot),
                         ),

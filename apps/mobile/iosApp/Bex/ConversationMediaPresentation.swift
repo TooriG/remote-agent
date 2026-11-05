@@ -8,13 +8,19 @@ import SwiftUI
         let html: String
     }
 
+    struct ShareFailure {
+        let path: String
+        let message: String
+    }
+
     var image: SharedFile?
     var sharedFile: SharedFile?
     var visualization: Visualization?
-    var error: String?
+    var imageError: String?
+    private(set) var shareFailure: ShareFailure?
     @ObservationIgnored private var pending: Task<Void, Never>?
 
-    deinit {
+    isolated deinit {
         pending?.cancel()
         for url in [image?.url, sharedFile?.url].compactMap(\.self) {
             try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
@@ -22,17 +28,23 @@ import SwiftUI
     }
 
     func openImage(_ data: Data) {
-        load { try await writeConversationImage(data) } present: { self.image = SharedFile(url: $0) }
+        imageError = nil
+        load { try await writeConversationImage(data) } present: {
+            self.image = SharedFile(url: $0)
+        } failed: { self.imageError = $0 }
     }
 
     func share(_ path: String, download: @escaping @MainActor (String) async throws -> URL) {
-        load { try await download(path) } present: { self.sharedFile = SharedFile(url: $0) }
+        shareFailure = nil
+        load { try await download(path) } present: {
+            self.sharedFile = SharedFile(url: $0)
+        } failed: { self.shareFailure = ShareFailure(path: path, message: $0) }
     }
 
     private func load(_ operation: @escaping @MainActor () async throws -> URL,
-                      present: @escaping @MainActor (URL) -> Void) {
+                      present: @escaping @MainActor (URL) -> Void,
+                      failed: @escaping @MainActor (String) -> Void) {
         guard pending == nil else { return }
-        error = nil
         pending = Task {
             defer {
                 if !Task.isCancelled {
@@ -48,7 +60,7 @@ import SwiftUI
                 present(url)
             } catch {
                 if !Task.isCancelled {
-                    self.error = error.localizedDescription
+                    failed(error.localizedDescription)
                 }
             }
         }
@@ -64,13 +76,18 @@ import SwiftUI
         sharedFile = nil
     }
 
-    func reset() {
+    func cancelPending() {
         pending?.cancel()
         pending = nil
+    }
+
+    func reset() {
+        cancelPending()
         closeImage()
         closeShare()
         visualization = nil
-        error = nil
+        imageError = nil
+        shareFailure = nil
     }
 
     private func remove(_ file: SharedFile?) {
@@ -101,12 +118,12 @@ struct ConversationMediaPresenter: ViewModifier {
                         }
                 }
             }
-            .alert("エラー", isPresented: Binding(get: { presentation.error != nil }, set: {
+            .alert("画像を開けません", isPresented: Binding(get: { presentation.imageError != nil }, set: {
                 if !$0 {
-                    presentation.error = nil
+                    presentation.imageError = nil
                 }
             })) {
-                Button("OK") { presentation.error = nil }
-            } message: { AppText(presentation.error ?? "") }
+                Button("OK") { presentation.imageError = nil }
+            } message: { AppText(presentation.imageError ?? "") }
     }
 }

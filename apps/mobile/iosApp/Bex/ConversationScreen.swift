@@ -26,6 +26,7 @@ struct ThreadScreen: View {
     var body: some View {
         chatContent
             .modifier(ConversationMediaPresenter(presentation: mediaPresentation))
+            .onDisappear(perform: mediaPresentation.cancelPending)
             .onChange(of: model.draftKey) {
                 expandedItemIds.removeAll()
                 activityExpansionOverrides.removeAll()

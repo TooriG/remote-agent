@@ -377,7 +377,6 @@ impl Desktop {
                 |view, _, action: &view::composer::ComposerAction, window, cx| {
                     use view::composer::ComposerAction::*;
                     match action {
-                        Dispatch(intent) => view.dispatch(intent.clone()),
                         NewChat(cwd) => view.new_chat(cwd.clone(), window, cx),
                         PickFolder => view.pick_folder(),
                         Send => view.send(cx),

@@ -22,7 +22,6 @@ pub(in crate::app) struct ConversationModel {
 }
 
 pub(in crate::app) enum ConversationAction {
-    Dispatch(Intent),
     Detail(TurnId, ItemId),
     Download(String),
     Edit(String),
@@ -37,6 +36,7 @@ pub(in crate::app) enum ConversationAction {
 
 pub(in crate::app) struct ConversationView {
     desktop: WeakEntity<Desktop>,
+    pane: Option<Arc<agent_core::store::Pane>>,
     model: ConversationModel,
     metadata: agent_core::presentation::files::FileMetadataCache,
     media: Entity<Media>,
@@ -59,6 +59,7 @@ impl ConversationView {
             .detach();
         Self {
             desktop: desktop.downgrade(),
+            pane: None,
             model: ConversationModel::default(),
             metadata: Default::default(),
             timeline: Timeline::new(),
@@ -68,6 +69,11 @@ impl ConversationView {
             projections: 0,
             #[cfg(test)]
             renders: 0,
+        }
+    }
+    pub(super) fn dispatch(&self, intent: Intent) {
+        if let Some(pane) = &self.pane {
+            drop(pane.dispatch(intent));
         }
     }
     pub(in crate::app) fn sync(
@@ -190,6 +196,7 @@ impl Desktop {
             .cloned()
             .collect();
         self.conversation.update(cx, |view, cx| {
+            view.pane = self.session.as_ref().map(|session| session.pane.clone());
             view.sync(
                 model,
                 rendered,
@@ -208,7 +215,6 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         match action {
-            ConversationAction::Dispatch(intent) => self.dispatch(intent.clone()),
             ConversationAction::Detail(turn, item) => self.detail(turn.clone(), item.clone()),
             ConversationAction::Download(path) => self.download(path.clone()),
             ConversationAction::Edit(text) => {
@@ -899,9 +905,7 @@ impl ConversationView {
                                     .insert(toggle.clone(), status.clone());
                             }
                             if !expanded && let Some(params) = &load_items {
-                                cx.emit(ConversationAction::Dispatch(Intent::LoadTurnItems(
-                                    params.clone(),
-                                )));
+                                view.dispatch(Intent::LoadTurnItems(params.clone()));
                             }
                             view.timeline.pause_tail();
                             view.timeline
@@ -1254,10 +1258,8 @@ impl ConversationView {
                 "retry-preparation",
                 language.text("再試行"),
                 cx,
-                move |_, _, cx| {
-                    cx.emit(ConversationAction::Dispatch(Intent::RetryPreparation(
-                        retry.clone(),
-                    )));
+                move |view, _, _| {
+                    view.dispatch(Intent::RetryPreparation(retry.clone()));
                 },
             ));
         }
@@ -1752,9 +1754,7 @@ impl ConversationView {
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     if let Some(thread_id) = view.model.session.as_ref().cloned() {
                                         view.timeline.pause_tail();
-                                        cx.emit(ConversationAction::Dispatch(Intent::ReadOlder {
-                                            thread_id,
-                                        }));
+                                        view.dispatch(Intent::ReadOlder { thread_id });
                                         cx.notify();
                                     }
                                 })),

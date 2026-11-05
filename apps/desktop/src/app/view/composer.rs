@@ -187,11 +187,8 @@ impl ComposerContent {
                     menu = menu.item(
                         PopupMenuItem::new(language.text("さらにプロジェクトを読み込む")).on_click(
                             move |_, _, cx| {
-                                let _ = target.update(cx, |s, _| {
-                                    if let Some(pane) = &s.pane {
-                                        drop(pane.dispatch(Intent::ExpandProjects));
-                                    }
-                                });
+                                let _ = target
+                                    .update(cx, |view, _| view.dispatch(Intent::ExpandProjects));
                             },
                         ),
                     );
@@ -256,12 +253,12 @@ impl ComposerContent {
                     vec![file.name.to_string()],
                 ),
                 cx,
-                move |_, _, cx| {
+                move |view, _, cx| {
                     cx.stop_propagation();
-                    cx.emit(ComposerAction::Dispatch(Intent::RemoveAttachment {
+                    view.dispatch(Intent::RemoveAttachment {
                         draft_key: key.clone(),
                         index: i as u32,
-                    }));
+                    });
                 },
             )
             .debug_selector(move || format!("attachment-remove-{i}"))
@@ -326,12 +323,12 @@ impl ComposerContent {
                 Icon::default().path("icons/stop.svg"),
                 language.text("停止"),
                 cx,
-                move |_, _, cx| {
+                move |view, _, _| {
                     if let Some(thread_id) = &stop_session {
-                        cx.emit(ComposerAction::Dispatch(Intent::Interrupt(op::Interrupt {
+                        view.dispatch(Intent::Interrupt(op::Interrupt {
                             thread_id: thread_id.clone(),
                             turn_id: id.clone(),
-                        })));
+                        }));
                     }
                 },
             )
@@ -741,7 +738,6 @@ pub(in crate::app) struct ComposerContent {
     pub(in crate::app) renders: usize,
 }
 pub(in crate::app) enum ComposerAction {
-    Dispatch(Intent),
     NewChat(String),
     PickFolder,
     Send,
@@ -803,6 +799,11 @@ impl ComposerView {
     }
 }
 impl ComposerContent {
+    pub(super) fn dispatch(&self, intent: Intent) {
+        if let Some(pane) = &self.pane {
+            drop(pane.dispatch(intent));
+        }
+    }
     pub(in crate::app) fn set_controls_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if let Some(model) = &mut self.model
             && model.controls_enabled != enabled
@@ -1565,12 +1566,24 @@ mod composer_tests {
                 "the remove button must paint above the image loading pulse"
             );
         });
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let _observation = window.update(|_, cx| {
+            let notifications = notifications.clone();
+            cx.observe(&desktop, move |_, _| {
+                notifications.set(notifications.get() + 1)
+            })
+        });
         window.simulate_click(remove, Modifiers::default());
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 assert!(view.media.read(cx).gallery.is_none())
             })
         });
+        assert_eq!(
+            notifications.get(),
+            0,
+            "removing an attachment must not notify Desktop observers"
+        );
         let snapshot = store_handle.unwrap().snapshot();
         let draft = &snapshot.input.drafts[&draft_key.unwrap()];
         assert!(draft.attachments.is_empty());

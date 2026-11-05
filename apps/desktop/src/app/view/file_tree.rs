@@ -367,13 +367,13 @@ fn file_tree_row(
             row.on_drag(drag, |drag, _, _, cx| {
                 cx.stop_propagation();
                 let drag = drag.clone();
-                let _ = drag.owner.update(cx, |_, cx| {
-                    cx.emit(WorkbenchAction::Dispatch(Intent::FileTree {
+                let _ = drag.owner.update(cx, |view, _| {
+                    view.dispatch(Intent::FileTree {
                         key: drag.key.clone(),
                         action: FileTreeAction::DragStart {
                             path: drag.primary.clone(),
                         },
-                    }));
+                    });
                 });
                 cx.new(|cx| {
                     let owner = drag.owner.clone();
@@ -381,12 +381,11 @@ fn file_tree_row(
                     let paths = drag.paths.clone();
                     cx.on_release(move |_, cx| {
                         cx.defer(move |cx| {
-                            let _ = owner.update(cx, |_, cx| {
-                                cx.emit(WorkbenchAction::Dispatch(Intent::FileTree {
+                            let _ = owner.update(cx, |view, _| {
+                                view.dispatch(Intent::FileTree {
                                     key,
                                     action: FileTreeAction::DragEnd { paths },
-                                }));
-                                cx.notify();
+                                });
                             });
                         })
                     })
