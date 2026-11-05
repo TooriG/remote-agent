@@ -154,16 +154,18 @@ mod tests {
 
     #[test]
     fn catalog_prefers_the_largest_matching_appearance_and_ignores_tinted_images() {
-        let root = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        // Match resolve(), including the verbatim path prefix used on Windows.
+        let root = directory.path().canonicalize().unwrap();
         let path = Path::new("App/Assets.xcassets/AppIcon.appiconset");
-        std::fs::create_dir_all(root.path().join(path)).unwrap();
-        std::fs::write(root.path().join(path).join("Contents.json"), serde_json::json!({"images":[
+        std::fs::create_dir_all(root.join(path)).unwrap();
+        std::fs::write(root.join(path).join("Contents.json"), serde_json::json!({"images":[
             {"filename":"small.png","size":"16x16","scale":"2x"},
             {"filename":"large.png","size":"1024x1024"},
             {"filename":"dark.png","size":"1024x1024","appearances":[{"appearance":"luminosity","value":"dark"}]},
             {"filename":"tinted.png","size":"1024x1024","appearances":[{"appearance":"luminosity","value":"tinted"}]}
         ]}).to_string()).unwrap();
-        let source = catalog(root.path(), path).unwrap();
+        let source = catalog(&root, path).unwrap();
         assert_eq!(
             source.light,
             [path.join("large.png"), path.join("small.png")]
