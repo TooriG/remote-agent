@@ -242,8 +242,8 @@ extension LaunchUITests {
     }
 
     func openModelChoices(_ app: XCUIApplication) {
-        if app.navigationBars["アカウント"].exists {
-            app.navigationBars["アカウント"].buttons["BackButton"].tap()
+        if app.buttons["model.account.add"].exists {
+            app.navigationBars.buttons["BackButton"].firstMatch.tap()
         }
         XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 15))
     }
