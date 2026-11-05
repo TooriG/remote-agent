@@ -14,7 +14,7 @@ pub struct TaskActivityState {
     pub revision: u64,
     pub display: TaskActivityDisplay,
     pub statuses: Vec<(crate::session::SessionRef, crate::models::SessionStatus)>,
-    /// Root conversations awaiting a response, including requests from descendants.
+    /// User conversations awaiting a response; subagent requests are excluded.
     pub waiting: Vec<crate::session::SessionRef>,
     pub unread: Vec<(crate::session::SessionRef, crate::ids::TurnId)>,
 }
