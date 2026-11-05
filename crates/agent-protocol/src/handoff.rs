@@ -198,11 +198,9 @@ pub fn select(
     );
     let mut selected = std::collections::BTreeSet::new();
     let make = |selected: &std::collections::BTreeSet<usize>| Context {
-        messages: messages
+        messages: selected
             .iter()
-            .enumerate()
-            .filter(|(i, _)| selected.contains(i))
-            .map(|(_, message)| message.clone())
+            .map(|index| messages[*index].clone())
             .collect(),
         coverage: format!(
             "{coverage}\nSelected {} items; omitted {} items.",
@@ -224,6 +222,12 @@ pub fn select(
         .flatten()
         .chain((0..messages.len()).rev())
     {
+        let message = &messages[index];
+        // JSON escaping and envelopes cannot shorten the original UTF-8 body
+        // or its attribution, so this item cannot fit even by itself.
+        if message.text.len().saturating_add(message.source.len()) > budget {
+            continue;
+        }
         if selected.insert(index) && make(&selected).cost() > budget {
             selected.remove(&index);
         }
@@ -382,6 +386,88 @@ mod tests {
         assert_eq!(selected.omitted, 1);
         assert!(selected.cost() <= 2000);
         assert!(select(&messages, "coverage", 0).is_err());
+    }
+
+    #[test]
+    fn selection_keeps_fitting_messages_and_exact_budget_boundaries() {
+        let fitting = Message {
+            role: Role::User,
+            text: "a".repeat(700),
+            source: "origin".repeat(20),
+        };
+        let one = std::slice::from_ref(&fitting);
+        for oversized in [
+            Message {
+                role: Role::Assistant,
+                text: "a".repeat(16_000),
+                source: "source".into(),
+            },
+            Message {
+                role: Role::Assistant,
+                text: "small".into(),
+                source: "source".repeat(3000),
+            },
+            Message {
+                role: Role::Assistant,
+                text: "🦀".repeat(600),
+                source: "source".into(),
+            },
+            Message {
+                role: Role::Assistant,
+                text: "\u{0000}".repeat(400),
+                source: String::new(),
+            },
+            Message {
+                role: Role::Assistant,
+                text: "a".repeat(2000),
+                source: String::new(),
+            },
+        ] {
+            let selected = select(&[fitting.clone(), oversized], "reader", 2000).unwrap();
+            assert_eq!(selected.messages.as_slice(), one);
+            assert_eq!(selected.omitted, 1);
+            assert!(selected.cost() <= 2000);
+        }
+        let full = select(one, "reader", usize::MAX).unwrap();
+        let exact = full.cost();
+        assert_eq!(full.messages.as_slice(), one);
+        assert_eq!(
+            select(one, "reader", exact).unwrap().messages.as_slice(),
+            one
+        );
+        assert!(
+            select(one, "reader", exact - 1)
+                .unwrap()
+                .messages
+                .is_empty()
+        );
+        let escaped = Message {
+            role: Role::Assistant,
+            text: "\"\\\r\n\t🦀".repeat(25),
+            source: "turn=\"起点\"".into(),
+        };
+        let escaped_one = std::slice::from_ref(&escaped);
+        assert_eq!(
+            select(escaped_one, "reader", 2000)
+                .unwrap()
+                .messages
+                .as_slice(),
+            escaped_one,
+        );
+        assert!(select(one, &"metadata".repeat(1000), 2000).is_err());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn generous_budget_retains_all_messages_and_attribution(
+            data in proptest::collection::vec((proptest::prelude::any::<bool>(),".{0,120}",".{0,40}"),0..12),
+            coverage in ".{0,60}",
+        ) {
+            let messages: Vec<_>=data.into_iter().map(|(assistant,text,source)|Message {role:if assistant {Role::Assistant}else{Role::User},text,source}).collect();
+            let selected=select(&messages,&coverage,1_000_000).unwrap();
+            proptest::prop_assert_eq!(&selected.messages,&messages);
+            proptest::prop_assert_eq!(selected.omitted,0);
+        }
     }
 
     proptest::proptest! {

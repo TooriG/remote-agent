@@ -1,4 +1,4 @@
-//! Device registrations and dismissal state are persisted by their Host owner.
+//! Device registrations and pending push starts are persisted by their Host owner.
 use super::client::ResultKind;
 use agent_protocol::live_activity::{
     PushEnvironment, RegisterLiveActivity, TASK_ACTIVITY_DISMISS_SECONDS, TaskActivityDisplay,
@@ -135,11 +135,22 @@ impl Registry {
         Ok(())
     }
     pub fn unregister(&mut self, owner: &str, activity: &str) {
-        self.entries
-            .remove(&(owner.to_owned(), Some(activity.to_owned())));
-        // Dismissal suppresses another start until all tasks finish, including across a Host restart.
+        let Some(entry) = self
+            .entries
+            .remove(&(owner.to_owned(), Some(activity.to_owned())))
+        else {
+            return;
+        };
+        // Completion already rearmed the start token; a late end must preserve its replacement.
+        if !entry.content.display.ongoing {
+            return;
+        }
+        // A removed activity is no longer evidence that this device still has a display.
         if let Some(start) = self.entries.get_mut(&(owner.to_owned(), None)) {
-            start.started = true;
+            start.started = false;
+            start.due = start.sent_at + 1;
+            start.retry_delay = 0;
+            start.urgent = true;
             self.generation += 1;
             start.generation = self.generation;
         }
@@ -168,7 +179,17 @@ impl Registry {
         self.generation != previous
     }
     pub fn deliveries(&mut self, now: u64) -> Vec<Delivery> {
-        self.entries.retain(|_, entry| entry.expires > now);
+        let expired: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.expires <= now)
+            .filter_map(|((owner, activity), _)| {
+                activity.as_ref().map(|id| (owner.clone(), id.clone()))
+            })
+            .collect();
+        for (owner, activity) in expired {
+            self.unregister(&owner, &activity);
+        }
         let active_owners: std::collections::HashSet<_> = self
             .entries
             .iter()
@@ -234,7 +255,11 @@ impl Registry {
                 && delivery.activity.is_some()
                 && !self.entries[&key].content.display.ongoing)
         {
-            self.entries.remove(&key);
+            if let Some(activity) = &delivery.activity {
+                self.unregister(&delivery.owner, activity);
+            } else {
+                self.entries.remove(&key);
+            }
         } else if let Some(entry) = self.entries.get_mut(&key) {
             if result == ResultKind::Retry {
                 entry.retry_delay = (entry.retry_delay * 2).clamp(10, 300);
@@ -260,6 +285,14 @@ mod tests {
             activity_id: Some(activity.into()),
             allow_start: false,
             token: vec![token; 32],
+            environment: PushEnvironment::Sandbox,
+        }
+    }
+    fn start_params() -> RegisterLiveActivity {
+        RegisterLiveActivity {
+            activity_id: None,
+            allow_start: true,
+            token: vec![1; 32],
             environment: PushEnvironment::Sandbox,
         }
     }
@@ -496,14 +529,12 @@ mod tests {
         assert!(registry.entries.is_empty());
     }
     #[test]
-    fn push_start_retries_latest_state_and_dismissal_survives_restart_until_idle() {
+    fn push_start_retries_latest_state_and_recovers_a_removed_activity_after_restart() {
         let mut registry = Registry {
             host_id: "host".into(),
             ..Default::default()
         };
-        let mut start = params("unused", 1);
-        start.activity_id = None;
-        start.allow_start = true;
+        let mut start = start_params();
         registry
             .register("phone", &start, "PC", display(1, 0, 0), 100)
             .unwrap();
@@ -527,19 +558,26 @@ mod tests {
         let bytes = Zeroizing::new(serde_json::to_vec(&registry).unwrap());
         let mut restarted: Registry = serde_json::from_slice(&bytes).unwrap();
         restarted.update(display(2, 0, 0), 200);
-        assert!(restarted.deliveries(200).is_empty());
+        let replacement = restarted.deliveries(200).remove(0);
+        assert_eq!(aps(&replacement)["event"], "start");
+        assert_eq!(
+            aps(&replacement)["content-state"]["display"]["current"]["total"],
+            2
+        );
+        assert!(replacement.urgent);
+        restarted.complete(&replacement, ResultKind::Accepted, 200);
         start.token = vec![3; 32];
         restarted
             .register("phone", &start, "PC", display(2, 0, 0), 201)
             .unwrap();
         assert!(
             restarted.deliveries(201).is_empty(),
-            "rotation cannot override dismissal"
+            "rotation cannot duplicate an accepted start"
         );
         restarted.update(display(0, 0, 1), 202);
         assert!(
             restarted.deliveries(202).is_empty(),
-            "unknown state cannot reset dismissal"
+            "unknown state cannot start another activity"
         );
         restarted.update(display(0, 0, 0), 203);
         assert!(
@@ -550,10 +588,100 @@ mod tests {
         assert_eq!(aps(&restarted.deliveries(204).remove(0))["event"], "start");
     }
     #[test]
+    fn expired_activities_recover_without_waiting_for_tasks_to_finish() {
+        for reaches_lifetime in [false, true] {
+            let mut registry = Registry::default();
+            registry
+                .register("phone", &start_params(), "PC", display(1, 0, 0), 100)
+                .unwrap();
+            let start = registry.deliveries(100).remove(0);
+            registry.complete(&start, ResultKind::Accepted, 100);
+            registry
+                .register("phone", &params("activity", 2), "PC", display(1, 0, 0), 101)
+                .unwrap();
+            let update = registry.deliveries(101).remove(0);
+            registry.complete(&update, ResultKind::Accepted, 101);
+            let now = if reaches_lifetime {
+                101 + LIFETIME
+            } else {
+                102
+            };
+            if !reaches_lifetime {
+                registry.complete(&update, ResultKind::Expired, now);
+            }
+            let replacement = registry.deliveries(now);
+            assert_eq!(replacement.len(), 1);
+            assert_eq!(aps(&replacement[0])["event"], "start");
+            assert!(replacement[0].urgent);
+            registry.complete(&replacement[0], ResultKind::Accepted, now);
+            registry.unregister("phone", "activity");
+            assert!(
+                registry.deliveries(now + 60).is_empty(),
+                "a late unregister cannot duplicate the replacement"
+            );
+        }
+    }
+    #[test]
+    fn removing_one_device_activity_preserves_other_activities_and_start_permission() {
+        let mut registry = Registry::default();
+        registry
+            .register("phone", &start_params(), "PC", display(1, 0, 0), 100)
+            .unwrap();
+        for (owner, activity) in [("phone", "first"), ("phone", "second"), ("other", "other")] {
+            registry
+                .register(owner, &params(activity, 2), "PC", display(1, 0, 0), 100)
+                .unwrap();
+        }
+        registry.unregister("phone", "first");
+        let deliveries = registry.deliveries(100);
+        assert_eq!(deliveries.len(), 2);
+        assert!(
+            deliveries
+                .iter()
+                .all(|delivery| delivery.activity.is_some())
+        );
+        let mut disabled = start_params();
+        disabled.allow_start = false;
+        registry
+            .register("phone", &disabled, "PC", display(1, 0, 0), 101)
+            .unwrap();
+        registry.unregister("phone", "second");
+        assert!(
+            registry
+                .deliveries(101)
+                .iter()
+                .all(|delivery| delivery.owner == "other")
+        );
+    }
+    #[test]
+    fn a_delayed_end_cannot_duplicate_a_newer_push_start() {
+        let mut registry = Registry::default();
+        registry
+            .register("phone", &start_params(), "PC", display(1, 0, 0), 100)
+            .unwrap();
+        let first = registry.deliveries(100).remove(0);
+        registry.complete(&first, ResultKind::Accepted, 100);
+        registry
+            .register("phone", &params("activity", 2), "PC", display(1, 0, 0), 101)
+            .unwrap();
+        registry.update(display(0, 0, 0), 102);
+        let end = registry.deliveries(102).remove(0);
+        assert_eq!(aps(&end)["event"], "end");
+        registry.update(display(1, 0, 0), 103);
+        let replacement = registry
+            .deliveries(103)
+            .into_iter()
+            .find(|delivery| delivery.activity.is_none())
+            .unwrap();
+        registry.complete(&replacement, ResultKind::Accepted, 103);
+        registry.complete(&end, ResultKind::Accepted, 104);
+        assert!(registry.deliveries(104).is_empty());
+    }
+    #[test]
     fn start_requires_permission_and_an_existing_activity_suppresses_duplicates() {
         let mut registry = Registry::default();
-        let mut start = params("unused", 1);
-        start.activity_id = None;
+        let mut start = start_params();
+        start.allow_start = false;
         registry
             .register("phone", &start, "PC", display(1, 0, 0), 100)
             .unwrap();
