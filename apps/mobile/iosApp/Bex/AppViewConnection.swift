@@ -37,6 +37,8 @@ extension AppViewModel {
                 if selectedProfileId == profile.id {
                     publish(owner.snapshot())
                     notice = nil
+                } else {
+                    liveActivities.resendTokens(hostID: profile.id)
                 }
             } catch {
                 session.store()?.recordConnectionEvent(

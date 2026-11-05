@@ -56,11 +56,6 @@ final class TaskLiveActivities {
     private var pending: Input?
     private var previous: Input?
     private var worker: Task<Void, Never>?
-    /// User dismissal lasts until this host's active task set becomes empty.
-    private var started = Set(UserDefaults.standard.stringArray(forKey: "taskActivityStartedHosts") ?? []) {
-        didSet { UserDefaults.standard.set(Array(started), forKey: "taskActivityStartedHosts") }
-    }
-
     fileprivate let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "dev.remoteagent.mobile.ios",
         category: "LiveActivity"
@@ -92,7 +87,7 @@ final class TaskLiveActivities {
                 if duplicate {
                     await activity.end(nil, dismissalPolicy: .immediate)
                 } else {
-                    started.insert(activity.attributes.hostID); observe(activity)
+                    observe(activity)
                 }
             }
         }
@@ -111,14 +106,18 @@ final class TaskLiveActivities {
     }
 
     func resendTokens(hostID: String) {
-        startRegistration = nil
         if let input = pending ?? previous {
-            registerStartToken(
-                hostID: hostID,
-                token: Activity<TaskActivityAttributes>.pushToStartToken,
-                connected: input.connected,
-                foreground: input.foreground
-            )
+            if input.hostID == hostID {
+                registerStartToken(
+                    hostID: hostID,
+                    token: Activity<TaskActivityAttributes>.pushToStartToken,
+                    connected: input.connected,
+                    foreground: input.foreground,
+                    force: true
+                )
+            } else if let token = Activity<TaskActivityAttributes>.pushToStartToken {
+                sendStartToken(hostID: hostID, token: token, allow: false)
+            }
         }
         for activity in Activity<TaskActivityAttributes>.activities where activity.attributes.hostID == hostID {
             if let token = tokens[activity.id] {
@@ -127,12 +126,23 @@ final class TaskLiveActivities {
         }
     }
 
-    private func registerStartToken(hostID: String?, token: Data?, connected: Bool, foreground: Bool) {
+    private func registerStartToken(hostID: String?, token: Data?, connected: Bool, foreground: Bool,
+                                    force: Bool = false) {
+        if let previous = startRegistration, previous.hostID != hostID {
+            if previous.allow {
+                sendStartToken(hostID: previous.hostID, token: previous.token, allow: false)
+            }
+            startRegistration = nil
+        }
         guard connected, let hostID, let token else { return }
         let allow = !foreground && ActivityAuthorizationInfo().areActivitiesEnabled
         let registration = StartRegistration(hostID: hostID, token: token, allow: allow)
-        guard startRegistration != registration else { return }
+        guard force || startRegistration != registration else { return }
         startRegistration = registration
+        sendStartToken(hostID: hostID, token: token, allow: allow)
+    }
+
+    private func sendStartToken(hostID: String, token: Data, allow: Bool) {
         output.yield(.intent(hostID: hostID, intent: .registerLiveActivity(RegisterLiveActivity(
             activityId: nil, allowStart: allow, token: token, environment: pushEnvironment
         ))))
@@ -179,9 +189,6 @@ final class TaskLiveActivities {
             for await state in activity.activityStateUpdates {
                 guard !Task.isCancelled else { break }
                 if state == .ended || state == .dismissed {
-                    if state == .ended {
-                        self?.started.remove(activity.attributes.hostID)
-                    }
                     self?.retire(activity)
                     break
                 }
@@ -196,6 +203,9 @@ final class TaskLiveActivities {
         tokens.removeValue(forKey: activity.id)
         output.yield(.intent(hostID: activity.attributes.hostID,
                              intent: .unregisterLiveActivity(UnregisterLiveActivity(activityId: activity.id))))
+        if let input = pending ?? previous {
+            enqueue(input)
+        }
     }
 
     func synchronize(hostID: String?, hostName: String, connected: Bool, foreground: Bool,
@@ -204,13 +214,18 @@ final class TaskLiveActivities {
                           state: display.map { .init(display: .init($0),
                                                      hostName: String(hostName.unicodeScalars.prefix(120))) })
         guard input != (pending ?? previous) else { return }
+        enqueue(input)
+    }
+
+    private func enqueue(_ input: Input) {
         pending = input
         guard worker == nil else { return }
         worker = Task { [weak self] in
             while let self, let input = pending {
                 pending = nil
-                await apply(input)
+                // Lifecycle callbacks must see this input while ActivityKit suspends apply().
                 previous = input
+                await apply(input)
             }
             self?.worker = nil
         }
@@ -249,10 +264,8 @@ final class TaskLiveActivities {
             where activity.activityState == .active || activity.activityState == .stale {
             observe(activity)
             let host = activity.attributes.hostID
-            started.insert(host)
             guard host == input.hostID else {
                 await activity.end(nil, dismissalPolicy: .immediate)
-                started.remove(host)
                 continue
             }
             // No initial reply yet: preserve this host's existing activity.
@@ -266,17 +279,15 @@ final class TaskLiveActivities {
             }
         }
         guard let state = input.state, input.connected, let host = input.hostID else { return }
-        if !state.display.ongoing {
-            started.remove(host)
-        }
         guard state.display.canStart,
               input.foreground, ActivityAuthorizationInfo().areActivitiesEnabled,
-              !started.contains(host) else { return }
+              !Activity<TaskActivityAttributes>.activities.contains(where: {
+                  $0.attributes.hostID == host && ($0.activityState == .active || $0.activityState == .stale)
+              }) else { return }
         do {
             let activity = try Activity.request(attributes: TaskActivityAttributes(hostID: host),
                                                 content: content(state),
                                                 pushType: .token)
-            started.insert(host)
             observe(activity)
         } catch {
             logger.error("Could not start task activity: \(error.localizedDescription)")
