@@ -5,7 +5,7 @@ use crate::{
     models::Turn,
 };
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 
 pub const DEFAULT_BUDGET: usize = 16_000;
 const EXCERPT_CHARS: usize = 4_000;
@@ -32,16 +32,18 @@ pub struct Page {
     pub next_offset: Option<usize>,
 }
 
-pub fn page(messages: &[Message], offset: usize, limit: usize, text_offset: usize) -> Page {
-    let end = offset
-        .saturating_add(limit.clamp(1, 20))
-        .min(messages.len());
+pub fn page(
+    messages: impl IntoIterator<Item = impl Borrow<Message>>,
+    offset: usize,
+    limit: usize,
+    text_offset: usize,
+) -> Page {
+    let mut messages = messages.into_iter().enumerate().skip(offset);
     let items = messages
-        .iter()
-        .enumerate()
-        .take(end)
-        .skip(offset)
+        .by_ref()
+        .take(limit.clamp(1, 20))
         .map(|(position, message)| {
+            let message = message.borrow();
             let start = if position == offset { text_offset } else { 0 };
             let mut chars = message.text.chars().skip(start);
             let text = chars.by_ref().take(EXCERPT_CHARS).collect();
@@ -58,10 +60,11 @@ pub fn page(messages: &[Message], offset: usize, limit: usize, text_offset: usiz
             }
         })
         .collect();
+    let next_offset = messages.next().map(|(position, _)| position);
     Page {
         history_read_state: None,
         items,
-        next_offset: (end < messages.len()).then_some(end),
+        next_offset,
     }
 }
 
@@ -80,12 +83,11 @@ pub enum Role {
 }
 
 impl Message {
-    pub fn from_turn(turn: &Turn) -> Vec<Self> {
-        let mut messages: Vec<_> = turn
-            .items
+    pub fn from_turn(turn: &Turn) -> impl Iterator<Item = Self> + '_ {
+        turn.items
             .iter()
             .flatten()
-            .filter_map(|item| {
+            .filter_map(move |item| {
                 let (role, text) = match item.body() {
                     ItemBody::UserMessage { text, content } => (
                         Role::User,
@@ -133,15 +135,11 @@ impl Message {
                     ),
                 })
             })
-            .collect();
-        if let Some(error) = &turn.error {
-            messages.push(Self {
+            .chain(turn.error.iter().map(move |error| Self {
                 role: Role::Assistant,
                 text: format!("Previous turn failed: {}", error.message),
                 source: format!("turn={}, status={:?}", turn.id, turn.status),
-            });
-        }
-        messages
+            }))
     }
 
     fn render(&self) -> String {
@@ -326,7 +324,8 @@ mod tests {
                 ..Default::default()
             }),
             ..Default::default()
-        });
+        })
+        .collect::<Vec<_>>();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, Role::Assistant);
         assert!(messages[0].text.contains("connection reset"));
@@ -417,6 +416,238 @@ mod tests {
         let capped = page(&many, 0, usize::MAX, 0);
         assert_eq!(capped.items.len(), 20);
         assert_eq!(capped.next_offset, Some(20));
+    }
+
+    #[test]
+    fn retrieval_stops_after_the_requested_page_and_one_lookahead() {
+        let messages = (0..).map(|index| {
+            assert!(index < 24, "the page must not consume the rest of history");
+            message(Role::Assistant, &format!("message {index}"))
+        });
+        let output = page(messages, 3, 20, 1);
+        assert_eq!(output.next_offset, Some(23));
+        assert_eq!(output.items.len(), 20);
+        for (index, excerpt) in output.items.iter().enumerate() {
+            assert_eq!(excerpt.position, index + 3);
+            assert_eq!(excerpt.message.role, Role::Assistant);
+            assert_eq!(excerpt.message.source, "source");
+            assert_eq!(
+                excerpt.message.text,
+                if index == 0 {
+                    "essage 3".into()
+                } else {
+                    format!("message {}", index + 3)
+                }
+            );
+            assert_eq!(excerpt.next_text_offset, None);
+        }
+    }
+
+    #[test]
+    fn retrieval_cursors_match_message_boundaries_for_owned_and_borrowed_inputs() {
+        let messages: Vec<_> = (0..25)
+            .map(|index| message(Role::User, &format!("message {index}")))
+            .collect();
+        for offset in [0, 1, 19, 20, 21, 24, 25, 26, usize::MAX] {
+            for (limit, count) in [(0, 1), (1, 1), (20, 20), (21, 20), (usize::MAX, 20)] {
+                let remaining = messages.get(offset..).unwrap_or_default();
+                let expected = &remaining[..remaining.len().min(count)];
+                let borrowed = page(&messages, offset, limit, 0);
+                assert_eq!(borrowed.items.len(), expected.len());
+                for (index, (excerpt, message)) in borrowed.items.iter().zip(expected).enumerate() {
+                    assert_eq!(&excerpt.message, message);
+                    assert_eq!(excerpt.position, offset + index);
+                }
+                assert_eq!(
+                    borrowed.next_offset,
+                    if remaining.len() > count {
+                        Some(offset + count)
+                    } else {
+                        None
+                    }
+                );
+                let owned = page(messages.iter().cloned(), offset, limit, 0);
+                assert_eq!(
+                    serde_json::to_value(owned).unwrap(),
+                    serde_json::to_value(borrowed).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn turn_pages_count_only_retained_messages_and_put_the_failure_last() {
+        use crate::items::Item;
+        use std::sync::Arc;
+        let item = |id: &str, body| Arc::new(Item::new(id.into(), Default::default(), body));
+        let turn = Turn {
+            id: "turn".into(),
+            status: crate::execution::TurnStatus::Failed,
+            items: Some(vec![
+                item(
+                    "question",
+                    ItemBody::UserMessage {
+                        text: Some("question".into()),
+                        content: vec![],
+                    },
+                ),
+                item(
+                    "hidden",
+                    ItemBody::Reasoning {
+                        content: vec!["private".into()],
+                        summary: vec![],
+                    },
+                ),
+                item(
+                    "empty",
+                    ItemBody::UserMessage {
+                        text: Some(String::new()),
+                        content: vec![MessagePart::Text {
+                            text: "unused".into(),
+                        }],
+                    },
+                ),
+                item(
+                    "parts",
+                    ItemBody::UserMessage {
+                        text: None,
+                        content: vec![
+                            MessagePart::Text {
+                                text: String::new(),
+                            },
+                            MessagePart::Text {
+                                text: String::new(),
+                            },
+                        ],
+                    },
+                ),
+                item(
+                    "answer",
+                    ItemBody::AssistantText {
+                        text: "answer".into(),
+                        phase: Default::default(),
+                    },
+                ),
+                item(
+                    "empty-plan",
+                    ItemBody::Plan {
+                        text: String::new(),
+                    },
+                ),
+            ]),
+            error: Some(crate::execution::ExecutionError {
+                message: "failure".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let messages: Vec<_> = Message::from_turn(&turn).collect();
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            ["question", "\n", "answer", "Previous turn failed: failure"]
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.role)
+                .collect::<Vec<_>>(),
+            [Role::User, Role::User, Role::Assistant, Role::Assistant]
+        );
+        assert_eq!(
+            messages[0].source,
+            "turn=turn, item=question, status=Failed"
+        );
+        assert_eq!(messages[3].source, "turn=turn, status=Failed");
+        let middle = page(Message::from_turn(&turn), 1, 2, 0);
+        assert_eq!(middle.items[0].message, messages[1]);
+        assert_eq!(middle.items[1].message, messages[2]);
+        assert_eq!(middle.next_offset, Some(3));
+        let last = page(Message::from_turn(&turn), 3, 1, 0);
+        assert_eq!(last.items.len(), 1);
+        assert_eq!(last.items[0].position, 3);
+        assert_eq!(last.items[0].message, messages[3]);
+        assert_eq!(last.next_offset, None);
+    }
+
+    #[test]
+    fn turn_history_keeps_commands_file_paths_and_plans_intact() {
+        use crate::items::{FileChange, FileChangeKind, Item};
+        use std::sync::Arc;
+        let bodies = [
+            ItemBody::CommandExecution {
+                command: "printf '🦀'".into(),
+                cwd: Some("ignored workspace".into()),
+                output: "stdout\nstderr".into(),
+                exit_code: Some(17),
+            },
+            ItemBody::CommandExecution {
+                command: String::new(),
+                cwd: None,
+                output: String::new(),
+                exit_code: None,
+            },
+            ItemBody::FileChange {
+                changes: vec!["src/a.rs", "資料/🦀.txt"]
+                    .into_iter()
+                    .map(|path| FileChange {
+                        path: path.into(),
+                        kind: FileChangeKind::Unknown,
+                        diff: Some("ignored diff".into()),
+                        proposal: None,
+                    })
+                    .collect(),
+                output: "ignored output".into(),
+            },
+            ItemBody::FileChange {
+                changes: vec![],
+                output: String::new(),
+            },
+            ItemBody::Plan {
+                text: "1. inspect\n2. 🦀".into(),
+            },
+        ];
+        let turn = Turn {
+            id: "operations".into(),
+            status: crate::execution::TurnStatus::Completed,
+            items: Some(
+                bodies
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, body)| {
+                        Arc::new(Item::new(
+                            format!("item-{index}").into(),
+                            Default::default(),
+                            body,
+                        ))
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        let messages: Vec<_> = Message::from_turn(&turn).collect();
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Command: printf '🦀'\nExit code: Some(17)\nstdout\nstderr",
+                "Command: \nExit code: None\n",
+                "File changes: src/a.rs, 資料/🦀.txt",
+                "File changes: ",
+                "1. inspect\n2. 🦀",
+            ]
+        );
+        for (index, message) in messages.iter().enumerate() {
+            assert_eq!(message.role, Role::Assistant);
+            assert_eq!(
+                message.source,
+                format!("turn=operations, item=item-{index}, status=Completed")
+            );
+        }
     }
 
     proptest::proptest! {

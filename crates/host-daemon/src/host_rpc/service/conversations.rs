@@ -52,10 +52,9 @@ impl HostRpcService {
             .turns
             .iter()
             .flatten()
-            .flat_map(|turn| agent_protocol::handoff::Message::from_turn(turn))
-            .collect::<Vec<_>>();
+            .flat_map(|turn| agent_protocol::handoff::Message::from_turn(turn));
         let mut page = agent_protocol::handoff::page(
-            &messages,
+            messages,
             params.offset,
             params.limit,
             params.text_offset,

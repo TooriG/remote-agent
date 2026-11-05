@@ -1003,7 +1003,6 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
         items: Some(items),
         ..Default::default()
     })
-    .into_iter()
     .map(|message| message.text)
     .collect::<Vec<_>>();
     assert_eq!(texts, ["Original task", "answer original"]);
@@ -1946,8 +1945,10 @@ async fn round_trip_reuses_native_sessions_transfers_only_missing_history_and_re
         handoff::Message::from_turn(&Turn {
             items: Some(vec![Arc::new(detail.item)]),
             ..Default::default()
-        })[0]
-            .text,
+        })
+        .next()
+        .unwrap()
+        .text,
         "Review the implementation"
     );
     let fork: ThreadResponse = call(
@@ -2157,8 +2158,10 @@ async fn large_saved_history_and_new_requests_reach_the_same_native_session_for_
             let visible = history(&host, client.id(), &root).await;
             assert_eq!(visible.thread.active_provider, Some(provider));
             assert_eq!(visible.thread.turns.as_ref().unwrap().len(), 3);
-            let original = handoff::Message::from_turn(&visible.thread.turns.as_ref().unwrap()[0]);
-            assert_eq!(original[0].text, history_text);
+            let original = handoff::Message::from_turn(&visible.thread.turns.as_ref().unwrap()[0])
+                .next()
+                .unwrap();
+            assert_eq!(original.text, history_text);
         }
     }
 }
