@@ -180,10 +180,10 @@ pub fn from_peer(
 pub async fn connect(
     snapshot: &Snapshot,
 ) -> ((Client, agent_transport::framing::Reader), Reader, Writer) {
-    let host = Endpoint::bind(Identity::generate(), Relays::Disabled)
+    let host = Endpoint::bind(Identity::generate(), Relays::Loopback)
         .await
         .unwrap();
-    let client = Endpoint::bind(Identity::generate(), Relays::Disabled)
+    let client = Endpoint::bind(Identity::generate(), Relays::Loopback)
         .await
         .unwrap();
     let trust = Trust {
