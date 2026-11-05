@@ -293,8 +293,7 @@ extension LaunchUITests {
         )
         captureScreen(app, named: "Completed activity loaded")
         command.tap()
-        // Activity headers now leave the accessibility tree when virtualized.
-        // Scroll back to the real control before collapsing its work rows.
+        // Long command output can move the activity header above the viewport.
         for _ in 0 ..< 10 {
             if activity.exists, activity.isHittable {
                 break
