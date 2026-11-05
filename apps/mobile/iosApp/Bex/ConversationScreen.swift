@@ -104,7 +104,7 @@ struct ThreadScreen: View {
                 let turnCount = thread.source.turnCount()
                 let hasMoreHistory = history?.hasMore ?? false
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 12) {
                         if let session = thread.id, let history {
                             historyControl(history, session: session)
                         }
@@ -112,15 +112,6 @@ struct ThreadScreen: View {
                             conversationRow(row)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .id(row.id)
-                                .background(GeometryReader { geometry in
-                                    Color.clear.preference(
-                                        key: ConversationRowFrames.self,
-                                        value: ConversationRowLayout(
-                                            turns: turnCount, more: hasMoreHistory,
-                                            frames: [row.id: geometry.frame(in: .named("conversation-viewport"))]
-                                        )
-                                    )
-                                })
                                 .overlay(alignment: .bottom) {
                                     if row.id == lastRowId, let latestBoundary {
                                         latestBoundaryMarker(latestBoundary)
@@ -132,13 +123,6 @@ struct ThreadScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
                 }
-                .coordinateSpace(name: "conversation-viewport")
-                .onPreferenceChange(ConversationRowFrames.self) { layout in
-                    restoreReadingPosition(scrollController.historyDidLayout(
-                        turnCount: layout.turns, hasMoreHistory: layout.more,
-                        rows: layout.frames, viewport: scrollController.viewport
-                    ))
-                }
                 // Keep the scroll view's identity off introspection's marker views.
                 .accessibilityIdentifier("task.detail")
                 .accessibilityValue(threadAccessibilityValue(thread))
@@ -146,9 +130,23 @@ struct ThreadScreen: View {
                     scrollController.onScrollToTop = { followLatest.wrappedValue = false }
                     scrollController.attach(to: scroll)
                 }
-                // Stable row identities preserve native text state while history is realized lazily.
+                // Measure loaded rows; native text views draw only within the viewport.
                 .scrollPosition($scrollPosition, anchor: .bottom)
-                // Lazy height estimates must not feed repeated imperative scroll requests back into layout.
+                .onScrollGeometryChange(for: ConversationHistoryLayout.self) { geometry in
+                    ConversationHistoryLayout(contentHeight: geometry.contentSize.height,
+                                              insets: geometry.contentInsets,
+                                              offset: geometry.contentOffset,
+                                              turnCount: turnCount, hasMoreHistory: hasMoreHistory)
+                } action: { _, layout in
+                    if let point = scrollController.historyDidLayout(
+                        turnCount: layout.turnCount, hasMoreHistory: layout.hasMoreHistory,
+                        contentHeight: layout.contentHeight, contentOffset: layout.offset,
+                        scrollOrigin: CGPoint(x: layout.insets.leading, y: layout.insets.top)
+                    ) {
+                        scrollPosition.scrollTo(point: point)
+                    }
+                }
+                // Native anchoring follows growth and keyboard resizing without repeated scroll requests.
                 .defaultScrollAnchor(isFollowingLatest ? .bottom : nil, for: .sizeChanges)
                 .defaultScrollAnchor(.bottom, for: .alignment)
                 // Tail updates preserve a detached reader.
@@ -214,6 +212,14 @@ struct ThreadScreen: View {
                                  isSideChat: isSideChat, openTools: openTools)
         }
     }
+}
+
+private struct ConversationHistoryLayout: Equatable {
+    let contentHeight: CGFloat
+    let insets: EdgeInsets
+    let offset: CGPoint
+    let turnCount: UInt64
+    let hasMoreHistory: Bool
 }
 
 /// Conversation navigation
@@ -341,26 +347,4 @@ extension ThreadScreen {
 
 private func conversationTitleText(_ title: String?, fallback: LocalizedStringKey) -> Text {
     title.map { Text(verbatim: $0) } ?? Text(fallback)
-}
-
-struct ConversationRowLayout: Equatable {
-    var turns: UInt64 = 0
-    var more = false
-    var frames: [String: CGRect] = [:]
-}
-
-private struct ConversationRowFrames: PreferenceKey {
-    static var defaultValue: ConversationRowLayout {
-        ConversationRowLayout()
-    }
-
-    static func reduce(value: inout ConversationRowLayout, nextValue: () -> ConversationRowLayout) {
-        let next = nextValue()
-        guard !next.frames.isEmpty else { return }
-        if value.turns != next.turns || value.more != next.more {
-            value = next
-        } else {
-            value.frames.merge(next.frames) { _, next in next }
-        }
-    }
 }

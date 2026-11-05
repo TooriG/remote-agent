@@ -54,14 +54,6 @@ extension ConversationModel {
 
 /// History and row presentation
 extension ThreadScreen {
-    func restoreReadingPosition(_ target: ConversationScrollObserver.Target?) {
-        switch target {
-        case let .point(point): scrollPosition.scrollTo(point: point)
-        case let .row(id): scrollPosition.scrollTo(id: id, anchor: .top)
-        case nil: break
-        }
-    }
-
     var mediaAccess: ConversationMediaAccess {
         model.mediaAccess { openedDirectory = $0 }
     }
@@ -74,9 +66,11 @@ extension ThreadScreen {
                     let request = controller.captureReadingPosition()
                     isFollowingLatest = false
                     model.loadOlderHistory(session) { succeeded, turns, hasMore in
-                        restoreReadingPosition(controller.historyLoaded(
+                        if let point = controller.historyLoaded(
                             request, succeeded: succeeded, turnCount: turns, hasMoreHistory: hasMore
-                        ))
+                        ) {
+                            scrollPosition.scrollTo(point: point)
+                        }
                     }
                 } label: {
                     HStack(spacing: 12) {
