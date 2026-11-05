@@ -144,17 +144,16 @@ private final class HostTerminalView: SwiftTerm.TerminalView, UIGestureRecognize
     }
 
     @objc func selectTextOnLongPress(_ gesture: UILongPressGestureRecognizer) {
-        // Finish the touch before changing selection, so UIKit's gesture
-        // completion cannot replace the selection with its initial edit menu.
         guard gesture.state == .ended else { return }
         // Seed the selection position through SwiftTerm's public menu API.
         // Reopening the menu must preserve any existing selection range.
+        let needsSelection = !hasActiveSelection
         showStandardContextMenu(at: gesture.location(in: self))
-        if !hasActiveSelection {
+        if needsSelection {
+            // Match tapping Select: dismiss the initial menu before SwiftTerm
+            // selects the word and asynchronously presents its Copy menu.
+            UIMenuController.shared.hideMenu()
             select(nil)
-            // The menu was presented before selection. Refresh its enabled
-            // actions now so it offers Copy without another tap on Select.
-            UIMenuController.shared.update()
         }
     }
 
