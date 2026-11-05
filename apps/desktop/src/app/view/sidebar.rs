@@ -1,5 +1,13 @@
 use super::*;
 
+fn source_scope(host: &str, current: &str) -> String {
+    if host.is_empty() {
+        current.into()
+    } else {
+        host.into()
+    }
+}
+
 #[derive(Clone)]
 enum SidebarDragKind {
     Project(String),
@@ -57,6 +65,7 @@ pub(super) enum SidebarRow {
     Heading(String),
     Error(agent_core::presentation::error::ErrorText),
     Project {
+        host: String,
         id: String,
         name: String,
         icon: Option<agent_core::presentation::list::ProjectIconImages>,
@@ -145,6 +154,7 @@ impl SidebarRow {
                     .into_any_element()
             }
             Self::Project {
+                host,
                 id: project_id,
                 name,
                 icon,
@@ -187,7 +197,14 @@ impl SidebarRow {
                 let target = desktop.clone();
                 let menu_id = project_id.clone();
                 let menu_owner = desktop.clone();
-                let selector = format!("project-{project_id}");
+                let selector = if host.is_empty() {
+                    format!("project-{project_id}")
+                } else {
+                    format!("project-{host}-{project_id}")
+                };
+                let toggle_host = host.clone();
+                let drop_host = host.clone();
+                let new_host = host.clone();
                 let drag = SidebarDrag {
                     scope: scope.clone(),
                     label: name.clone(),
@@ -229,12 +246,12 @@ impl SidebarRow {
                         cx.stop_propagation();
                         let after = bounds.get().is_some_and(|bounds| window.mouse_position().y > bounds.center().y);
                         let _ = drop_owner.update(cx, |desktop, cx| {
-                            if desktop.snapshot.connection.storage_scope != drag.scope { return; }
+                            if drop_host.is_empty() && desktop.snapshot.connection.storage_scope != drag.scope { return; }
                             let intent = match &drag.kind {
                                 SidebarDragKind::Project(id) => Intent::ReorderProject { project_id: id.clone(), target_id: drop_target.clone(), after },
                                 SidebarDragKind::Chat(id) => Intent::MoveChatToProject { thread_id: id.clone(), project_id: drop_target.clone() },
                             };
-                            desktop.dispatch(intent);
+                            desktop.dispatch_host(&drop_host, intent, cx);
                             cx.notify();
                         });
                     })
@@ -267,10 +284,10 @@ impl SidebarRow {
                             })
                             .on_click(move |_, _, cx| {
                                 let _ = target.update(cx, |desktop, cx| {
-                                    desktop.dispatch(Intent::SetProjectExpanded {
+                                    desktop.dispatch_host(&toggle_host, Intent::SetProjectExpanded {
                                         project_id: project_id.clone(),
                                         expanded: !expanded,
-                                    });
+                                    }, cx);
                                     cx.notify();
                                 });
                             })),
@@ -282,7 +299,7 @@ impl SidebarRow {
                                 .invisible()
                                 .group_hover(group, |style| style.visible())
                                 .child(super::project_management::project_menu_button(
-                                    menu_id, menu_owner,
+                                    host, menu_id, menu_owner,
                                 ))
                                 .child(
                                     Button::new("new-project-chat")
@@ -295,7 +312,7 @@ impl SidebarRow {
                                         .on_click(move |_, window, cx| {
                                             cx.stop_propagation();
                                             let _ = desktop.update(cx, |desktop, cx| {
-                                                desktop.new_chat(root.clone(), window, cx);
+                                                desktop.navigate_host(&new_host, Intent::NewChat { cwd: root.clone() }, window, cx);
                                                 cx.notify();
                                             });
                                         }),
@@ -334,6 +351,10 @@ impl SidebarItem for SidebarEntry {
 pub(in crate::app) struct Conversations {
     list: Option<Arc<agent_core::presentation::list::ThreadList>>,
     selected: Option<SessionRef>,
+    host: String,
+    all: bool,
+    connections: Vec<(String, String)>,
+    connected_hosts: std::collections::BTreeSet<String>,
     storage_scope: String,
     connected: bool,
     /// Folders can only be picked on this computer.
@@ -342,9 +363,19 @@ pub(in crate::app) struct Conversations {
     errors: Vec<super::errors::ErrorRow>,
 }
 
+impl Conversations {
+    fn is_selected(&self, id: &SessionRef, host: &str) -> bool {
+        self.selected.as_ref() == Some(id) && (host.is_empty() || host == self.host)
+    }
+}
+
 impl PartialEq for Conversations {
     fn eq(&self, other: &Self) -> bool {
         self.list.as_ref().map(Arc::as_ptr) == other.list.as_ref().map(Arc::as_ptr)
+            && self.host == other.host
+            && self.all == other.all
+            && self.connections == other.connections
+            && self.connected_hosts == other.connected_hosts
             && self.selected == other.selected
             && self.storage_scope == other.storage_scope
             && self.connected == other.connected
@@ -357,8 +388,15 @@ impl PartialEq for Conversations {
 impl Desktop {
     pub(in crate::app) fn sidebar_model(&self) -> Conversations {
         Conversations {
-            list: self.publication.list.clone(),
+            list: self
+                .connection_list
+                .clone()
+                .or_else(|| self.publication.list.clone()),
             selected: self.selected().cloned(),
+            host: self.connection_id(),
+            all: self.connection_selection.all,
+            connections: self.connection_names.clone(),
+            connected_hosts: self.connected_hosts.clone(),
             storage_scope: self.snapshot.connection.storage_scope.clone(),
             connected: self.snapshot.connection.connected,
             local: self.remote.is_none(),
@@ -410,7 +448,10 @@ impl SidebarView {
 }
 
 pub(in crate::app) enum SidebarAction {
-    NewChat(String),
+    NewChat(String, String),
+    OpenChat(String, SessionRef),
+    Connection(Option<String>),
+    List(Option<String>, Intent),
     Settings(SettingsPage),
     Refresh,
     DismissLocal(op::ErrorId),
@@ -439,10 +480,17 @@ impl SidebarView {
         }
     }
     fn new_chat(&self, cwd: String, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(SidebarAction::NewChat(cwd));
+        cx.emit(SidebarAction::NewChat(String::new(), cwd));
     }
-    fn open_chat(&self, id: SessionRef, _: &mut Window, _: &mut Context<Self>) {
-        self.dispatch(Intent::ReadThread(op::ReadThread::open(id)));
+    fn open_chat(&self, host: String, id: SessionRef, _: &mut Window, cx: &mut Context<Self>) {
+        if host.is_empty() || host == self.model.host {
+            self.dispatch(Intent::ReadThread(op::ReadThread::open(id)));
+        } else {
+            cx.emit(SidebarAction::OpenChat(host, id));
+        }
+    }
+    fn dispatch_list(&self, host: Option<String>, intent: Intent, cx: &mut Context<Self>) {
+        cx.emit(SidebarAction::List(host, intent));
     }
     pub(in crate::app::view) fn open_settings(&self, page: SettingsPage, cx: &mut Context<Self>) {
         cx.emit(SidebarAction::Settings(page));
@@ -518,12 +566,14 @@ impl SidebarView {
             }
             let id = project.id.clone();
             let expanded = project.expanded;
+            let host = project.host_id.clone();
             let new_root = project
                 .roots
                 .first()
                 .map(|root| root.path.clone())
                 .unwrap_or_default();
             projects.push(SidebarRow::Project {
+                host: project.host_id.clone(),
                 id: id.clone(),
                 name: project.name.clone(),
                 icon: project.icon.clone(),
@@ -531,13 +581,17 @@ impl SidebarView {
                 color: project.icon_color,
                 root: new_root,
                 expanded,
-                connected: model.connected,
-                scope: model.storage_scope.clone(),
+                connected: if project.host_id.is_empty() {
+                    model.connected
+                } else {
+                    model.connected_hosts.contains(&project.host_id)
+                },
+                scope: source_scope(&project.host_id, &model.storage_scope),
                 desktop: desktop.clone(),
             });
             if expanded {
                 for thread in &project.threads {
-                    let selected = model.selected.as_ref() == Some(&thread.id);
+                    let selected = model.is_selected(&thread.id, &thread.host_id);
                     projects.push(Self::draggable_chat(
                         &model.storage_scope,
                         thread,
@@ -553,21 +607,30 @@ impl SidebarView {
                     projects.push(
                         SidebarMenuItem::new(language.text("再試行"))
                             .on_click(cx.listener(move |s, _, _, cx| {
-                                s.dispatch(Intent::RefreshProject {
-                                    project_id: retry_id.clone(),
-                                });
+                                s.dispatch_list(
+                                    Some(host.clone()),
+                                    Intent::RefreshProject {
+                                        project_id: retry_id.clone(),
+                                    },
+                                    cx,
+                                );
                                 cx.notify();
                             }))
                             .into(),
                     );
                 }
                 if project.has_more {
+                    let host = project.host_id.clone();
                     let mut more = SidebarMenuItem::new(language.text("もっと表示する"))
                         .icon(Icon::empty().size_4())
                         .on_click(cx.listener(move |s, _, _, cx| {
-                            s.dispatch(Intent::ExpandThreadList {
-                                project_id: Some(id.clone()),
-                            });
+                            s.dispatch_list(
+                                Some(host.clone()),
+                                Intent::ExpandThreadList {
+                                    project_id: Some(id.clone()),
+                                },
+                                cx,
+                            );
                             cx.notify();
                         }));
                     if project.loading {
@@ -580,7 +643,7 @@ impl SidebarView {
         if list.as_ref().is_some_and(|page| page.has_more_projects) {
             let mut more = SidebarMenuItem::new(language.text("もっとプロジェクトを表示"))
                 .on_click(cx.listener(|s, _, _, cx| {
-                    s.dispatch(Intent::ExpandProjects);
+                    s.dispatch_list(None, Intent::ExpandProjects, cx);
                     cx.notify();
                 }));
             if list.as_ref().is_some_and(|page| page.loading_projects) {
@@ -596,6 +659,7 @@ impl SidebarView {
         if let Some(list) = &list {
             for project in &list.hidden_projects {
                 let id = project.id.clone();
+                let host = project.host_id.clone();
                 projects.push(
                     SidebarMenuItem::new(agent_core::localization::localized_ui_format(
                         language,
@@ -603,10 +667,14 @@ impl SidebarView {
                         vec![project.name.clone()],
                     ))
                     .on_click(cx.listener(move |s, _, _, cx| {
-                        s.dispatch(Intent::SetProjectHidden {
-                            project_id: id.clone(),
-                            hidden: false,
-                        });
+                        s.dispatch_list(
+                            Some(host.clone()),
+                            Intent::SetProjectHidden {
+                                project_id: id.clone(),
+                                hidden: false,
+                            },
+                            cx,
+                        );
                         cx.notify();
                     }))
                     .into(),
@@ -633,7 +701,7 @@ impl SidebarView {
                 page.threads
                     .iter()
                     .map(|thread| {
-                        let selected = model.selected.as_ref() == Some(&thread.id);
+                        let selected = model.is_selected(&thread.id, &thread.host_id);
                         Self::draggable_chat(
                             &model.storage_scope,
                             thread,
@@ -646,7 +714,7 @@ impl SidebarView {
         if list.as_ref().is_some_and(|page| page.has_more) {
             let mut more = SidebarMenuItem::new(language.text("もっと表示する")).on_click(
                 cx.listener(|s, _, _, cx| {
-                    s.dispatch(Intent::ExpandThreadList { project_id: None });
+                    s.dispatch_list(None, Intent::ExpandThreadList { project_id: None }, cx);
                     cx.notify();
                 }),
             );
@@ -665,6 +733,7 @@ impl SidebarView {
                 v_flex()
                     .w_full()
                     .gap_3()
+                    .child(Self::connection_menu(model, cx))
                     .child(Self::project_errors(&model.errors, cx))
                     .when_some(
                         list.as_ref().and_then(|list| list.notice.clone()),
@@ -738,6 +807,57 @@ impl SidebarView {
                     }),
             )
     }
+    fn connection_menu(model: &Conversations, cx: &Context<Self>) -> AnyElement {
+        let owner = cx.entity().downgrade();
+        let choices = model.connections.clone();
+        let selected = model.host.clone();
+        let all = model.all;
+        let language = crate::localization::language(cx);
+        let label = if all {
+            language.text("すべての接続先").to_owned()
+        } else {
+            choices
+                .iter()
+                .find(|(id, _)| id == &selected)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| language.text("このPC").into())
+        };
+        Button::new("sidebar-connections")
+            .label(label)
+            .dropdown_caret(true)
+            .ghost()
+            .w_full()
+            .debug_selector(|| "sidebar-connections".into())
+            .dropdown_menu(move |mut menu, _, _| {
+                let target = owner.clone();
+                menu = menu
+                    .item(
+                        PopupMenuItem::new(language.text("すべての接続先"))
+                            .checked(all)
+                            .on_click(move |_, _, cx| {
+                                let _ = target
+                                    .update(cx, |_, cx| cx.emit(SidebarAction::Connection(None)));
+                            }),
+                    )
+                    .separator();
+                for (id, name) in &choices {
+                    let target = owner.clone();
+                    let id = id.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(name.clone())
+                            .checked(!all && selected == id)
+                            .on_click(move |_, _, cx| {
+                                let _ = target.update(cx, |_, cx| {
+                                    cx.emit(SidebarAction::Connection(Some(id.clone())))
+                                });
+                            }),
+                    );
+                }
+                menu
+            })
+            .into_any_element()
+    }
+
     fn project_errors(rows: &[super::errors::ErrorRow], cx: &Context<Self>) -> Div {
         errors::error_list(
             rows,
@@ -762,7 +882,7 @@ impl SidebarView {
         SidebarRow::Chat {
             item: Box::new(item),
             drag: SidebarDrag {
-                scope: scope.into(),
+                scope: source_scope(&thread.host_id, scope),
                 label: thread.title.clone(),
                 kind: SidebarDragKind::Chat(thread.id.clone()),
             },
@@ -776,6 +896,7 @@ impl SidebarView {
     ) -> SidebarMenuItem {
         let language = crate::localization::language(cx);
         let id = thread.id.clone();
+        let host = thread.host_id.clone();
         let active = thread.active;
         let unread = thread.unread;
         let worktree = thread.worktree_status.map(|status| match status {
@@ -819,7 +940,7 @@ impl SidebarView {
                     })
             })
             .on_click(cx.listener(move |view, _, window, cx| {
-                view.open_chat(id.clone(), window, cx);
+                view.open_chat(host.clone(), id.clone(), window, cx);
                 cx.notify();
             }))
     }

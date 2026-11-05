@@ -1,6 +1,7 @@
 use agent_core::state::operations as op;
 mod clipboard;
 mod completions;
+mod connections;
 mod dictation;
 mod files;
 mod forms;
@@ -50,6 +51,7 @@ use view::media::Media;
 
 struct ProjectEditor {
     id: String,
+    host: String,
     scope: String,
     name: Entity<InputState>,
     section: Entity<InputState>,
@@ -67,7 +69,15 @@ enum OperationCompletion {
     FileReference(Box<files::ReferenceRequest>),
 }
 enum Update {
-    InitialHost(Result<Option<RemoteHost>, String>),
+    InitialHost(
+        Result<
+            (
+                agent_core::presentation::connection_list::ConnectionSelection,
+                Option<RemoteHost>,
+            ),
+            String,
+        >,
+    ),
     Connected(Result<(StoreSession, bool), String>),
     Snapshot,
     Completed(OperationCompletion, Result<Outcome, String>),
@@ -146,6 +156,10 @@ pub(crate) struct Desktop {
     connecting: bool,
     local_shell: bool,
     remote: Option<RemoteHost>,
+    connection_selection: agent_core::presentation::connection_list::ConnectionSelection,
+    connection_list: Option<Arc<agent_core::presentation::list::ThreadList>>,
+    connection_names: Vec<(String, String)>,
+    connected_hosts: std::collections::BTreeSet<String>,
     hosts: Option<Entity<Hosts>>,
     app_updates: Option<Entity<crate::updates::Updates>>,
     side_chat_mode: bool,
@@ -478,7 +492,7 @@ impl Desktop {
                     if value.as_ref() != view.snapshot.lists.list_query.search_term {
                         let mut query = (*view.snapshot.lists.list_query).clone();
                         query.search_term = value.to_string();
-                        view.dispatch(Intent::ListSessions(op::ListSessions::new(query)));
+                        view.dispatch_list(Intent::ListSessions(op::ListSessions::new(query)), cx);
                     }
                 }
             }),
@@ -492,6 +506,7 @@ impl Desktop {
                         HostEvent::Enabled(remote, enabled) => {
                             view.set_connection_enabled(remote.clone(), *enabled)
                         }
+                        HostEvent::ListsChanged => view.rebuild_connection_list(cx),
                         HostEvent::Failed(error) => view.set_error(error.clone()),
                         HostEvent::Removed(id) => {
                             let removed = view.runtime.sessions.remove(id);
@@ -510,11 +525,10 @@ impl Desktop {
         }
         if let Some(updates) = &app_updates {
             subscriptions.push(cx.observe(updates, |_, _, cx| cx.notify()));
-            subscriptions.push(
-                cx.subscribe(updates, |view, _, _: &crate::updates::RefreshThreads, _| {
-                    view.refresh_threads()
-                }),
-            );
+            subscriptions.push(cx.subscribe(
+                updates,
+                |view, _, _: &crate::updates::RefreshThreads, cx| view.refresh_threads(cx),
+            ));
         }
         let mut view = Self {
             session: None,
@@ -528,6 +542,13 @@ impl Desktop {
             local_shell: false,
             pending_project: None,
             remote,
+            connection_selection: agent_core::presentation::connection_list::ConnectionSelection {
+                host_id: Some("local".into()),
+                all: false,
+            },
+            connection_list: None,
+            connected_hosts: Default::default(),
+            connection_names: vec![("local".into(), language.text("このPC").into())],
             hosts,
             app_updates,
             side_chat_mode,
@@ -586,7 +607,25 @@ impl Desktop {
                 window,
                 |view, _, action: &view::SidebarAction, window, cx| {
                     match action {
-                        view::SidebarAction::NewChat(cwd) => view.new_chat(cwd.clone(), window, cx),
+                        view::SidebarAction::NewChat(host, cwd) => view.navigate_host(
+                            host,
+                            Intent::NewChat { cwd: cwd.clone() },
+                            window,
+                            cx,
+                        ),
+                        view::SidebarAction::OpenChat(host, id) => view.navigate_host(
+                            host,
+                            Intent::ReadThread(op::ReadThread::open(id.clone())),
+                            window,
+                            cx,
+                        ),
+                        view::SidebarAction::Connection(host) => {
+                            view.select_connection(host.clone(), cx)
+                        }
+                        view::SidebarAction::List(host, intent) => match host {
+                            Some(host) => view.dispatch_host(host, intent.clone(), cx),
+                            None => view.dispatch_list(intent.clone(), cx),
+                        },
                         view::SidebarAction::Settings(page) => {
                             view.open_settings(*page, window, cx);
                             if *page == SettingsPage::Connections
@@ -595,7 +634,7 @@ impl Desktop {
                                 hosts.update(cx, |hosts, _| hosts.refresh());
                             }
                         }
-                        view::SidebarAction::Refresh => view.refresh_threads(),
+                        view::SidebarAction::Refresh => view.refresh_threads(cx),
                         view::SidebarAction::DismissLocal(op::ErrorId::Application { message })
                             if view.local_errors.get(&ErrorScope::Projects) == Some(message) =>
                         {
@@ -617,20 +656,12 @@ impl Desktop {
                 move |result| (0, Update::Connected(result.map(|session| (session, local)))),
                 |_| (0, Update::Snapshot),
             ));
-        } else if cfg!(windows) && !side_chat_mode {
-            view.connecting = true;
-            let connections = view.runtime.connections.clone();
+        } else if !side_chat_mode {
+            let runtime = view.runtime.clone();
             view.effect(
-                async move {
-                    connections
-                        .initial_environment()
-                        .await
-                        .map_err(|error| format!("{error:#}"))
-                },
+                async move { Self::restore_connections(runtime).await },
                 Update::InitialHost,
             );
-        } else if !side_chat_mode {
-            view.connect(None, None);
         }
         cx.notify();
         view
@@ -669,12 +700,6 @@ impl Desktop {
                     session
                         .pane
                         .dispatch(Intent::AddProject(op::AddProject { cwd }))
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
-                {
-                    connections
-                        .remember_environment(remote.as_ref())
                         .await
                         .map_err(|error| error.to_string())?;
                 }
@@ -785,7 +810,13 @@ impl Desktop {
             return;
         }
         match update {
-            Update::InitialHost(result) => self.initial_host(result),
+            Update::InitialHost(result) => {
+                self.initial_host(result);
+                if let (Some(hosts), Some(remote)) = (&self.hosts, &self.remote) {
+                    hosts.update(cx, |hosts, _| hosts.track_remote(remote));
+                }
+                self.rebuild_connection_list(cx);
+            }
             Update::Connected(result) => {
                 self.connecting = false;
                 match result {
@@ -1207,7 +1238,11 @@ impl Desktop {
         self.close_file_browser();
         let previous = self.session.take();
         self.remote = remote;
+        self.connection_selection.host_id = Some(self.connection_id());
+        self.save_connection_selection();
+        self.rebuild_connection_list(cx);
         self.snapshot = Arc::default();
+        self.publication = agent_core::presentation::view::Presentation::empty();
         self.pending_quote = None;
         self.pending_explanation = None;
         self.editor.text.pending = None;
@@ -1222,7 +1257,7 @@ impl Desktop {
         self.composer
             .input
             .update(cx, |input, cx| input.set_value(value, window, cx));
-        self.connect(previous, Some(true));
+        self.connect(previous, None);
     }
     fn send(&mut self, cx: &Context<Self>) {
         if !self.snapshot.connection.connected || self.busy > 0 {
@@ -1321,10 +1356,13 @@ impl Desktop {
         cx.notify();
     }
 
-    fn refresh_threads(&self) {
-        self.dispatch(Intent::ListSessions(op::ListSessions::new(
-            (*self.snapshot.lists.list_query).clone(),
-        )));
+    fn refresh_threads(&self, cx: &App) {
+        self.dispatch_list(
+            Intent::ListSessions(op::ListSessions::new(
+                (*self.snapshot.lists.list_query).clone(),
+            )),
+            cx,
+        );
     }
     fn refresh_review(&self) {
         if !self.snapshot.selected_directory().is_empty() {
@@ -1510,14 +1548,27 @@ impl Desktop {
             Update::Folder,
         );
     }
-    fn initial_host(&mut self, result: Result<Option<RemoteHost>, String>) {
+    fn initial_host(
+        &mut self,
+        result: Result<
+            (
+                agent_core::presentation::connection_list::ConnectionSelection,
+                Option<RemoteHost>,
+            ),
+            String,
+        >,
+    ) {
         self.connecting = false;
         match result {
-            Ok(remote) => {
+            Ok((selection, remote)) => {
+                self.connection_selection = selection;
                 self.remote = remote;
                 self.connect(None, None);
             }
-            Err(error) => self.set_error(error),
+            Err(error) => {
+                self.connect(None, None);
+                self.set_error(error);
+            }
         }
     }
     fn add_selected_project(

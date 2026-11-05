@@ -132,49 +132,6 @@ async fn bootstrap(distro: &str, allow_upgrade: bool) -> anyhow::Result<LocalCli
 }
 
 impl Connections {
-    pub(crate) async fn initial_environment(&self) -> anyhow::Result<Option<RemoteHost>> {
-        use agent_core::persistence::LocalEnvironment;
-        let path = state_dir()
-            .map_err(anyhow::Error::msg)?
-            .join("local-environment.json");
-        let preference = tokio::task::spawn_blocking(move || match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(anyhow::Error::from),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(LocalEnvironment::Native)
-            }
-            Err(error) => Err(error.into()),
-        })
-        .await??;
-        match preference {
-            LocalEnvironment::Native => Ok(None),
-            LocalEnvironment::Wsl { distro } => Ok(Some(self.wsl_host(&distro).await?)),
-        }
-    }
-
-    pub(crate) async fn remember_environment(
-        &self,
-        remote: Option<&RemoteHost>,
-    ) -> anyhow::Result<()> {
-        use agent_core::persistence::LocalEnvironment;
-        if !cfg!(windows) {
-            return Ok(());
-        }
-        let preference = match remote {
-            None => LocalEnvironment::Native,
-            Some(remote) => match remote.id.strip_prefix("wsl:") {
-                Some(distro) => LocalEnvironment::Wsl {
-                    distro: distro.into(),
-                },
-                None => return Ok(()),
-            },
-        };
-        let path = state_dir()
-            .map_err(anyhow::Error::msg)?
-            .join("local-environment.json");
-        tokio::task::spawn_blocking(move || agent_local_host::save_private_json(&path, &preference))
-            .await?
-    }
-
     pub(crate) async fn wsl_host(&self, distro: &str) -> anyhow::Result<RemoteHost> {
         let mut hosts = self.wsl.lock().await;
         let distro = match hosts.keys().find(|name| name.eq_ignore_ascii_case(distro)) {

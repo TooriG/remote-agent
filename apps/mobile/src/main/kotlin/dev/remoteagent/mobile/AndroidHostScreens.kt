@@ -69,31 +69,31 @@ internal data class HostConnectionState(val enabled: Boolean, val label: String)
 
 @Composable
 internal fun ProfilesScreen(
-    profiles: List<HostProfile>,
-    states: Map<String, HostConnectionState>,
+    profiles: List<Pair<HostProfile, HostConnectionState?>>,
     setEnabled: (String, Boolean) -> Unit,
     remove: (String) -> Unit,
+    open: (String) -> Unit,
     pair: () -> Unit,
 ) {
     val language = LocalUiLanguage.current
     var removing by remember { mutableStateOf<HostProfile?>(null) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
         item { Button(onClick = pair) { Text(language.text("PCを追加")) } }
-        items(profiles, key = { it.id }) { profile ->
+        items(profiles, key = { it.first.id }) { (profile, state) ->
             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(profile.name)
+                            TextButton(onClick = { open(profile.id) }) { Text(profile.name) }
                             Text(
-                                language.text(states[profile.id]?.label ?: "読み込み中…"),
+                                language.text(state?.label ?: "読み込み中…"),
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
                         Switch(
-                            checked = states[profile.id]?.enabled == true,
+                            checked = state?.enabled == true,
                             onCheckedChange = { setEnabled(profile.id, it) },
-                            enabled = states.containsKey(profile.id),
+                            enabled = state != null,
                             modifier =
                                 Modifier.testTag("connection.enabled.${profile.id}").semantics {
                                     contentDescription = profile.name

@@ -1,7 +1,7 @@
 //! A list scope never replaces the last concrete destination used for a task.
 use super::list::ThreadList;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ConnectionSelection {
     pub host_id: Option<String>,
@@ -134,6 +134,28 @@ mod tests {
                 host_id: None,
                 all: false
             }
+        );
+    }
+
+    #[test]
+    fn saved_all_scope_restores_the_last_concrete_destination() {
+        let saved = ConnectionSelection {
+            host_id: Some("server".into()),
+            all: true,
+        };
+        let bytes = serde_json::to_vec(&saved).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            serde_json::json!({"host_id":"server","all":true})
+        );
+        let restored: ConnectionSelection = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            resolve_connection_selection(
+                vec!["local".into(), "server".into()],
+                restored.host_id,
+                restored.all
+            ),
+            saved
         );
     }
 
