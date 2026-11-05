@@ -1636,9 +1636,7 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         let snapshot = (*store.snapshot()).clone();
         drop(store); endpoint.close().await; fixture.close().await.unwrap();
         let fixture = start().await.unwrap();
-        let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, snapshot, None, "Fixture device").await.unwrap();
-        store.dispatch(Intent::LoadModels(op::LoadModels { provider: ProviderKind::Codex })).await.unwrap();
+        let (store, endpoint) = connect(&fixture, snapshot).await;
         let logged_out = store.snapshot();
         assert!(logged_out.models.is_empty(), "logged-out Claude and unavailable Codex must not expose models");
         assert!(logged_out.model_errors.contains_key("codex"), "the catalog must retain the unavailable provider's error");
