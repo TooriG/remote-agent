@@ -73,6 +73,11 @@
 		F70000000000000000000004 /* TaskActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000013; };
 		F70000000000000000000005 /* TaskActivityExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = F70000000000000000000010; settings = {ATTRIBUTES = (RemoveHeadersOnCopy,); }; };
 		F11E00000000000000000003 /* FileIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11E00000000000000000004 /* FileIcon.swift */; };
+		C0DE00000000000000000A01 /* ConversationAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000A02 /* ConversationAttachments.swift */; };
+		C0DE00000000000000000A03 /* ConversationComposerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000A04 /* ConversationComposerInput.swift */; };
+		C0DE00000000000000000A05 /* ConversationMediaPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000A06 /* ConversationMediaPicker.swift */; };
+		C0DE00000000000000000A07 /* ConversationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000A08 /* ConversationModel.swift */; };
+		C0DE00000000000000000A09 /* WorkspaceDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000A0A /* WorkspaceDetails.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -147,6 +152,11 @@
 		F70000000000000000000013 /* TaskActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityWidget.swift; sourceTree = "<group>"; };
 		F70000000000000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		F11E00000000000000000004 /* FileIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIcon.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000A02 /* ConversationAttachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationAttachments.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000A04 /* ConversationComposerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationComposerInput.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000A06 /* ConversationMediaPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMediaPicker.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000A08 /* ConversationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationModel.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000A0A /* WorkspaceDetails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceDetails.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -209,6 +219,11 @@
 				A10000000000000000000017 /* SwiftUIRoot.swift */,
 				5DCF44CEC164E07252AA639F /* ErrorNotices.swift */,
 				8550A6EE10FA45896134CE4D /* ConversationComposer.swift */,
+				C0DE00000000000000000A02 /* ConversationAttachments.swift */,
+				C0DE00000000000000000A04 /* ConversationComposerInput.swift */,
+				C0DE00000000000000000A06 /* ConversationMediaPicker.swift */,
+				C0DE00000000000000000A08 /* ConversationModel.swift */,
+				C0DE00000000000000000A0A /* WorkspaceDetails.swift */,
 				4134613DBAED1B9229F23DE5 /* ConversationMediaImport.swift */,
 				109E523F621AEB123226918A /* ConversationHistory.swift */,
 				C0DE00000000000000000802 /* ConversationScrollObserver.swift */,
@@ -396,6 +411,11 @@
 				A10000000000000000000006 /* SwiftUIRoot.swift in Sources */,
 				36EC1BF85BB52BB71505A303 /* ErrorNotices.swift in Sources */,
 				D9577A51AE685A04BA449953 /* ConversationComposer.swift in Sources */,
+				C0DE00000000000000000A01 /* ConversationAttachments.swift in Sources */,
+				C0DE00000000000000000A03 /* ConversationComposerInput.swift in Sources */,
+				C0DE00000000000000000A05 /* ConversationMediaPicker.swift in Sources */,
+				C0DE00000000000000000A07 /* ConversationModel.swift in Sources */,
+				C0DE00000000000000000A09 /* WorkspaceDetails.swift in Sources */,
 				110EFBD84D6039D2705F2B1F /* ConversationMediaImport.swift in Sources */,
 				556D7396D1777928A463D2DF /* ConversationHistory.swift in Sources */,
 				C0DE00000000000000000801 /* ConversationScrollObserver.swift in Sources */,
