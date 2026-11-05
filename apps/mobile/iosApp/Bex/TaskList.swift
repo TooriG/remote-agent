@@ -179,6 +179,8 @@ struct ThreadsScreen: View {
                 .listSectionSeparator(.hidden)
             }
         }
+        // Keep the list identifier from propagating to the connection overlay.
+        .accessibilityIdentifier("tasks.list")
         .overlay {
             if model.profiles.isEmpty {
                 TaskConnectionEmptyState(connect: model.openPairing)
@@ -197,7 +199,6 @@ struct ThreadsScreen: View {
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 52)
         .background(Color(UIColor.systemBackground))
-        .accessibilityIdentifier("tasks.list")
         .searchable(text: $search, placement: .toolbar, prompt: "チャットを検索")
         .refreshable { model.refreshTaskList() }
         .task(id: "\(model.allProfiles):\(model.selectedProfileId ?? ""):\(search)") {
