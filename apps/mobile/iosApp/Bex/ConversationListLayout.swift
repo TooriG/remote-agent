@@ -32,6 +32,11 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
                 - sectionInset.left - sectionInset.right)
             if estimatedItemSize.width != width {
                 estimatedItemSize = CGSize(width: width, height: 100)
+                // A new estimate alone retains offscreen cells' previously measured widths.
+                let context = UICollectionViewFlowLayoutInvalidationContext()
+                context.invalidateFlowLayoutDelegateMetrics = true
+                context.invalidateFlowLayoutAttributes = true
+                super.invalidateLayout(with: context)
             }
         }
         super.prepare()

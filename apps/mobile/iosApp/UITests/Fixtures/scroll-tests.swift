@@ -256,5 +256,12 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         check(abs(position(51, in: controller) - reading) < 1,
               "Resizing must preserve a detached reader: before=\(reading), "
                   + "after=\(position(51, in: controller)), \(geometry(controller.collectionView))")
+        let view = controller.collectionView
+        let width = view.bounds.width - view.adjustedContentInset.left - view.adjustedContentInset.right - 32
+        check((0 ..< view.numberOfItems(inSection: 0)).allSatisfy {
+            guard let attributes = view.layoutAttributesForItem(at: IndexPath(item: $0, section: 0))
+            else { return false }
+            return abs(attributes.size.width - width) < 1
+        }, "Resizing must replace offscreen rows' cached widths as well as the visible row widths")
     }
 }
