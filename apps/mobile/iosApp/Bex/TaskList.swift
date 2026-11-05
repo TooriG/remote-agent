@@ -227,6 +227,7 @@ struct ThreadsScreen: View {
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                     .accessibilityLabel("Bex")
             }
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .bottomBar) {
                 Button { model.openNewThread(cwd: "") } label: {
                     Image(systemName: "square.and.pencil")

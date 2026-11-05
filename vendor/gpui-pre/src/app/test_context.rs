@@ -1019,6 +1019,11 @@ impl VisualTestContext {
         self.simulate_window_resize(self.window, size)
     }
 
+    /// Query the platform's registered caption hit test at the current pointer.
+    pub fn window_control_area(&self) -> Option<crate::WindowControlArea> {
+        self.cx.test_window(self.window).hit_test_window_control()
+    }
+
     /// Simulates a change in whether the platform is presenting this window.
     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
         self.simulate_window_visibility_change(self.window, visibility);

@@ -110,8 +110,16 @@ fn sidebar_header(expanded: bool, cx: &Context<Desktop>) -> Div {
     h_flex()
         .h(px(crate::WINDOW_HEADER_HEIGHT))
         .flex_shrink_0()
-        .pl(px(88.))
+        .pl(px(if cfg!(target_os = "windows") {
+            12.
+        } else {
+            88.
+        }))
         .gap_2()
+        .when(
+            cfg!(target_os = "windows"),
+            crate::window_chrome::drag_region,
+        )
         .child(
             img("icons/icon.png")
                 .size(px(22.))
@@ -122,17 +130,21 @@ fn sidebar_header(expanded: bool, cx: &Context<Desktop>) -> Div {
             header.w_full().pr_3().child(div().flex_1())
         })
         .child(
-            Button::new(id)
-                .debug_selector(move || id.into())
-                .icon(icon)
-                .small()
-                .ghost()
-                .tooltip(label)
-                .accessibility_label(label)
-                .on_click(cx.listener(move |desktop, _, _, cx| {
-                    desktop.sidebar = !expanded;
-                    cx.notify();
-                })),
+            div()
+                .when(cfg!(target_os = "windows"), |button| button.occlude())
+                .child(
+                    Button::new(id)
+                        .debug_selector(move || id.into())
+                        .icon(icon)
+                        .small()
+                        .ghost()
+                        .tooltip(label)
+                        .accessibility_label(label)
+                        .on_click(cx.listener(move |desktop, _, _, cx| {
+                            desktop.sidebar = !expanded;
+                            cx.notify();
+                        })),
+                ),
         )
 }
 
@@ -194,17 +206,34 @@ impl Render for Desktop {
                 .bg(rgb(appearance::BACKGROUND))
                 .text_color(rgb(appearance::FOREGROUND))
                 .text_size(px(14.))
-                .child(gallery);
+                .child(gallery)
+                .when(
+                    cfg!(target_os = "windows") && !self.side_chat_mode,
+                    |content| crate::window_chrome::screen(content, "bex", window),
+                );
         }
         if self.import_projects || (self.onboarding && self.tab == Tab::Chat) {
-            return self.onboarding_view(window, cx);
+            return self.onboarding_view(window, cx).when(
+                cfg!(target_os = "windows") && !self.side_chat_mode,
+                |content| crate::window_chrome::screen(content, "bex", window),
+            );
         }
         let main = if self.project_editor.is_some() {
-            self.project_editor_view(cx)
+            let editor = self.project_editor_view(cx);
+            if cfg!(target_os = "windows") && !self.side_chat_mode {
+                crate::window_chrome::screen(
+                    editor,
+                    crate::localization::language(cx).text("プロジェクトを編集"),
+                    window,
+                )
+                .into_any_element()
+            } else {
+                editor
+            }
         } else {
             match self.tab {
                 Tab::Chat => self.conversation_content(window.viewport_size().width, cx),
-                Tab::Settings => self.settings(cx),
+                Tab::Settings => self.settings(window, cx),
             }
         };
         h_flex()

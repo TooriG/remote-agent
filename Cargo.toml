@@ -69,7 +69,7 @@ url = "2.5.8"
 zeroize = "1.9.1"
 
 [patch.crates-io]
-# Retain nested caches and expose current-frame state for activity overlays.
+# Retain nested caches, native caption hitboxes, and current-frame overlay state.
 gpui-pre = { path = "vendor/gpui-pre" }
 # UDP rebind recovery: https://github.com/n0-computer/net-tools/pull/235
 netwatch = { git = "https://github.com/ttizze/net-tools", rev = "1d54cca14f47ebfa20a75234e8a08351d9f5a8d4" }

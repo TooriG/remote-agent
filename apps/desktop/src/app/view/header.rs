@@ -5,6 +5,7 @@ struct HeaderModel {
     title: String,
     sidebar: bool,
     panel_open: bool,
+    panel_bottom: bool,
     details: bool,
     details_popover: bool,
 }
@@ -53,7 +54,8 @@ impl Render for HeaderView {
                 self.model
                     .as_ref()
                     .map(|model| {
-                        Desktop::render_header(model, width, render_owner, cx).into_any_element()
+                        Desktop::render_header(model, width, render_owner, window, cx)
+                            .into_any_element()
                     })
                     .unwrap_or_else(|| div().into_any_element())
             })
@@ -62,7 +64,8 @@ impl Render for HeaderView {
 }
 impl Desktop {
     fn header_model(&self, language: agent_core::localization::UiLanguage) -> HeaderModel {
-        let panel_open = self.panels.get(self.panel_scope()).open;
+        let panel = self.panels.get(self.panel_scope());
+        let panel_open = panel.open;
         let title = self
             .thread()
             .and_then(|thread| thread.name.as_deref())
@@ -83,6 +86,7 @@ impl Desktop {
             title,
             sidebar: self.sidebar,
             panel_open,
+            panel_bottom: panel.layout == PanelLayout::Bottom,
             details: self.details,
             details_popover: self.details_popover,
         }
@@ -107,6 +111,7 @@ impl Desktop {
         model: &HeaderModel,
         width: Pixels,
         render_owner: EntityId,
+        window: &Window,
         cx: &Context<Self>,
     ) -> Div {
         let mut header = h_flex()
@@ -126,6 +131,9 @@ impl Desktop {
                     .min_w_0()
                     .text_sm()
                     .text_ellipsis()
+                    .when(cfg!(target_os = "windows"), |title| {
+                        crate::window_chrome::drag_region(title.h_full().flex().items_center())
+                    })
                     .child(model.title.clone()),
             )
             .child({
@@ -140,5 +148,9 @@ impl Desktop {
             .when(!model.panel_open, |header| {
                 header.child(Self::panel_toggle(false, cx))
             })
+            .when(
+                cfg!(target_os = "windows") && (!model.panel_open || model.panel_bottom),
+                |header| crate::window_chrome::header(header, window),
+            )
     }
 }

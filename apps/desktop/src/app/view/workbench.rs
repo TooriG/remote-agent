@@ -97,7 +97,7 @@ impl WorkbenchView {
 }
 
 impl Render for WorkbenchView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         {
             self.renders += 1;
@@ -107,7 +107,7 @@ impl Render for WorkbenchView {
             .update(cx, |_, cx| {
                 self.model
                     .as_ref()
-                    .map(|model| Desktop::render_workbench(model, render_owner, cx))
+                    .map(|model| Desktop::render_workbench(model, render_owner, window, cx))
                     .unwrap_or_else(|| div().into_any_element())
             })
             .unwrap_or_else(|_| div().into_any_element())
@@ -633,6 +633,7 @@ impl Desktop {
     fn render_workbench(
         model: &WorkbenchModel,
         render_owner: EntityId,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
@@ -792,6 +793,12 @@ impl Desktop {
                     .debug_selector(|| "back-side-chat".into()),
                 )
             });
+        let toolbar = toolbar.when(
+            cfg!(target_os = "windows")
+                && !model.side_chat_mode
+                && (model.standalone || layout == PanelLayout::Right),
+            |toolbar| crate::window_chrome::header(toolbar, window),
+        );
         let body =
             match kind {
                 Panel::Home => {

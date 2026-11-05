@@ -1071,6 +1071,7 @@ pub(crate) struct PrepaintStateIndex {
 #[derive(Clone, Default)]
 pub(crate) struct PaintIndex {
     scene_index: usize,
+    window_control_hitboxes_index: usize,
     #[cfg(any(test, feature = "test-support"))]
     debug_bounds_index: usize,
     mouse_listeners_index: usize,
@@ -1104,6 +1105,9 @@ impl PaintIndex {
     fn relocated(&self, previous: &Self, current: &Self) -> Self {
         Self {
             scene_index: self.scene_index - previous.scene_index + current.scene_index,
+            window_control_hitboxes_index: self.window_control_hitboxes_index
+                - previous.window_control_hitboxes_index
+                + current.window_control_hitboxes_index,
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds_index: self.debug_bounds_index - previous.debug_bounds_index
                 + current.debug_bounds_index,
@@ -4365,6 +4369,7 @@ impl Window {
     pub(crate) fn paint_index(&self) -> PaintIndex {
         PaintIndex {
             scene_index: self.next_frame.scene.len(),
+            window_control_hitboxes_index: self.next_frame.window_control_hitboxes.len(),
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds_index: self.next_frame.debug_bounds_records.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
@@ -4378,6 +4383,15 @@ impl Window {
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
         let current = self.paint_index();
+        // Caption and drag regions must survive cached frames, just like the
+        // hitboxes replayed by reuse_prepaint. Otherwise a visible title bar
+        // stops receiving native window actions after an unrelated redraw.
+        self.next_frame.window_control_hitboxes.extend(
+            self.rendered_frame.window_control_hitboxes[range.start.window_control_hitboxes_index
+                ..range.end.window_control_hitboxes_index]
+                .iter()
+                .cloned(),
+        );
         for key in &self.rendered_frame.accessed_element_states
             [range.start.accessed_element_states_index..range.end.accessed_element_states_index]
         {
