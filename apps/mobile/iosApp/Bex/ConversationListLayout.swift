@@ -46,6 +46,10 @@ final class ConversationListLayout: UICollectionViewCompositionalLayout {
 
     override var collectionViewContentSize: CGSize {
         var size = super.collectionViewContentSize
+        if let view = collectionView {
+            let insets = view.adjustedContentInset
+            size.width = max(0, view.bounds.width - insets.left - insets.right)
+        }
         size.height += alignment
         return size
     }

@@ -259,6 +259,9 @@ extension ConversationScrollTests {
         "Horizontal inset changes must remeasure rows without resizing the viewport: \(inset), \(geometry(view))")
         check(abs(inset.minX - view.contentOffset.x - view.adjustedContentInset.left - 16) < 1,
               "The leading row margin must follow the native horizontal inset")
+        check(abs(view.contentSize.width + view.adjustedContentInset.left
+                  + view.adjustedContentInset.right - view.bounds.width) < 1,
+        "A vertical conversation must not gain horizontal scroll range from its insets")
         view.bounds.size.width /= 2
         await layout(controller)
         let narrow = view.layoutAttributesForItem(at: path)!.size
