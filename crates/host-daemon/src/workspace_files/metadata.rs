@@ -109,7 +109,8 @@ fn header_mime(bytes: &[u8]) -> Option<&'static str> {
     if !bytes.starts_with(b"#!") {
         return None;
     }
-    let text = String::from_utf8_lossy(bytes);
+    let end = memchr::memchr(b'\n', bytes).unwrap_or(bytes.len());
+    let line = String::from_utf8_lossy(&bytes[..end]);
     static INTERPRETERS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         [
             (r"(?-u:\bpython[0-9.]*\b)", "text/x-python"),
@@ -120,10 +121,9 @@ fn header_mime(bytes: &[u8]) -> Option<&'static str> {
         .map(|(pattern, mime)| (Regex::new(pattern).unwrap(), mime))
         .into()
     });
-    let line = text.split('\n').next().unwrap_or_default();
     INTERPRETERS
         .iter()
-        .find_map(|(regex, mime)| regex.is_match(line).then_some(*mime))
+        .find_map(|(regex, mime)| regex.is_match(&line).then_some(*mime))
 }
 
 #[cfg(test)]
@@ -266,6 +266,8 @@ mod tests {
             (&b"SQLite format 3\0"[..], "application/vnd.sqlite3"),
             (&b"#!/usr/bin/python3.13"[..], "text/x-python"),
             (&b"#!\xffpython3"[..], "text/x-python"),
+            (&b"#!python\xf0\nruby"[..], "text/x-python"),
+            (&b"#!env\xe2\x80\xa8python"[..], "text/x-python"),
             (&b"#!/usr/bin/env node"[..], "text/javascript"),
             (&b"#!/usr/bin/ruby"[..], "text/x-ruby"),
             (&b"#!/bin/zsh"[..], "text/x-shellscript"),
@@ -287,6 +289,7 @@ mod tests {
             &b"#!notpython"[..],
             &b"#!env\npython"[..],
             &b"\xff\xfe#!python"[..],
+            &b"#!\xf0\x90\npython"[..],
         ] {
             assert_eq!(header_mime(bytes), None);
         }
