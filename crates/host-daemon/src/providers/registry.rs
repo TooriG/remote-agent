@@ -2,7 +2,11 @@
 //! across all of them. One provider's failure never hides the others.
 use super::{Agent, Backend, Failure, Identity};
 use crate::dictation::Dictation;
-use agent_protocol::{composer::ComposerCatalog, operations as op, session::ProviderKind};
+use agent_protocol::{
+    composer::{ComposerCandidate, ComposerCatalog},
+    operations as op,
+    session::ProviderKind,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     path::Path,
@@ -13,6 +17,21 @@ use std::{
 // Finish discovery before the client's request deadline, even when a native
 // provider is still initializing. Healthy providers must remain usable.
 const MODEL_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn ordered_candidates(mut candidates: Vec<ComposerCandidate>) -> Vec<ComposerCandidate> {
+    let key = |candidate: &ComposerCandidate| {
+        (
+            candidate.invocation.name.to_lowercase(),
+            candidate.invocation.path.clone(),
+            candidate.invocation.provider,
+        )
+    };
+    if candidates.len() > 1 && !candidates.iter().map(key).is_sorted() {
+        candidates.sort_by_cached_key(key);
+    }
+    candidates.dedup_by(|a, b| a.invocation == b.invocation);
+    candidates
+}
 
 pub(crate) struct Registry {
     agents: HashMap<ProviderKind, Arc<dyn Agent>>,
@@ -130,17 +149,7 @@ impl Registry {
             catalog.candidates.extend(result.candidates);
             catalog.errors.extend(result.errors);
         }
-        catalog.candidates.sort_by(|a, b| {
-            a.invocation
-                .name
-                .to_lowercase()
-                .cmp(&b.invocation.name.to_lowercase())
-                .then(a.invocation.path.cmp(&b.invocation.path))
-                .then(a.invocation.provider.cmp(&b.invocation.provider))
-        });
-        catalog
-            .candidates
-            .dedup_by(|a, b| a.invocation == b.invocation);
+        catalog.candidates = ordered_candidates(catalog.candidates);
         catalog
     }
 
@@ -297,6 +306,49 @@ fn canonical_storage_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_candidates_keep_unicode_name_path_provider_order_and_stable_ties() {
+        use ProviderKind::{Claude, Codex};
+        use agent_protocol::composer::{
+            Invocation,
+            InvocationKind::{Plugin, Skill},
+        };
+        let candidate =
+            |provider, kind, name: &str, path: &str, description: &str| ComposerCandidate {
+                invocation: Invocation {
+                    provider,
+                    kind,
+                    name: name.into(),
+                    path: path.into(),
+                },
+                description: description.into(),
+            };
+        let candidates = vec![
+            candidate(Codex, Skill, "Beta", "/b", "beta"),
+            candidate(Claude, Skill, "alpha", "/a", "claude"),
+            candidate(Codex, Skill, "ALPHA", "/z", "uppercase"),
+            candidate(Codex, Skill, "alpha", "/a", "first alpha"),
+            candidate(Codex, Skill, "alpha", "/a", "ignored adjacent duplicate"),
+            candidate(Codex, Plugin, "alpha", "/a", "different kind"),
+            candidate(Codex, Skill, "alpha", "/a", "kept separated duplicate"),
+            candidate(Codex, Skill, "Alpha", "/a", "different original case"),
+            candidate(Codex, Skill, "ístanbul", "/a", "accent"),
+            candidate(Codex, Skill, "İ", "/a", "unicode uppercase"),
+            candidate(Codex, Skill, "i\u{307}", "/a", "unicode lowercase"),
+        ];
+        let expected = [3, 5, 6, 7, 1, 2, 0, 9, 10, 8]
+            .into_iter()
+            .map(|index| candidates[index].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_candidates(candidates), expected);
+        assert_eq!(ordered_candidates(expected.clone()), expected);
+        assert_eq!(ordered_candidates(Vec::new()), Vec::new());
+        assert_eq!(
+            ordered_candidates(vec![expected[0].clone()]),
+            vec![expected[0].clone()]
+        );
+    }
 
     #[tokio::test]
     async fn startup_errors_stay_ordered_and_account_errors_keep_their_provider() {
