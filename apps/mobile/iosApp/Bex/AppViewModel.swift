@@ -100,7 +100,7 @@ final class AppViewModel: ObservableObject {
 
     func activateProfile(_ id: String) {
         guard profiles.contains(where: { $0.id == id }) else { return }
-        if selectedProfileId == id, session === sessions.session(host: id) {
+        if selectedProfileId == id, session != nil {
             return
         }
         screen = .threads
@@ -218,6 +218,9 @@ final class AppViewModel: ObservableObject {
                     connections.removeValue(forKey: id)?.cancel()
                     observations.removeValue(forKey: id)?.cancel()
                     sessions.adopt(host: id, session: owner)
+                    if selectedProfileId == id {
+                        session = nil
+                    }
                     guard !Task.isCancelled else { return }
                     profiles = paired
                     pairingInvitation = nil

@@ -198,7 +198,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     private fun activateProfile(id: String) {
-        if (session != null && connectionSelection.hostId == id && session === sessions.session(id)) return
+        if (session != null && connectionSelection.hostId == id) return
         screen = Screen.Threads
         val storage = repository.sessionStorage(id)
         val selected = sessions.open(id, storage, storage)
@@ -277,6 +277,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                     observations.remove(id)?.cancel()
                     connections.remove(id)?.cancel()
                     sessions.adopt(id, store)
+                    if (connectionSelection.hostId == id) session = null
                     if (!isActive) return@launch
                     profiles = paired
                     pairingConnection = null
