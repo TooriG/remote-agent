@@ -16,14 +16,11 @@ pub(crate) const MUTED: u32 = 0xa6a6a6;
 pub(crate) const ACCENT: u32 = 0x346bf1;
 
 #[cfg(target_os = "windows")]
-pub(crate) fn style_native_titlebar(window: &gpui_kit::Window) {
+pub(crate) fn style_native_window_frame(window: &gpui_kit::Window) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
         Foundation::HWND,
-        Graphics::Dwm::{
-            DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
-            DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
-        },
+        Graphics::Dwm::{DWMWA_BORDER_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute},
     };
 
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
@@ -33,14 +30,11 @@ pub(crate) fn style_native_titlebar(window: &gpui_kit::Window) {
         return;
     };
     let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
-    // Native Windows chrome does not inherit the GPUI theme. Explicit colors
-    // keep the system accent color out of the app's monochrome title bar.
+    // The caption is app-drawn; the system still owns the outer window border.
     let colorref = |rgb: u32| ((rgb & 0xff) << 16) | (rgb & 0xff00) | ((rgb >> 16) & 0xff);
     for (attribute, value) in [
         (DWMWA_USE_IMMERSIVE_DARK_MODE, 1u32),
-        (DWMWA_CAPTION_COLOR, colorref(BACKGROUND)),
         (DWMWA_BORDER_COLOR, colorref(BORDER)),
-        (DWMWA_TEXT_COLOR, colorref(FOREGROUND)),
     ] {
         // SAFETY: the live window owns HWND; each attribute takes a four-byte
         // BOOL or COLORREF, and DWM copies the value during this call.

@@ -14,6 +14,7 @@ mod platform;
 mod store_session;
 mod terminal;
 mod updates;
+mod window_chrome;
 use futures_util::FutureExt;
 use gpui_kit::{component::Root, *};
 const WINDOW_HEADER_HEIGHT: f32 = 44.;
@@ -45,7 +46,7 @@ fn open_main_window(cx: &mut App) {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("bex".into()),
-                    appears_transparent: !cfg!(target_os = "windows"),
+                    appears_transparent: true,
                     traffic_light_position: Some(point(
                         px(14.),
                         px((WINDOW_HEADER_HEIGHT - 14.) / 2.),
@@ -57,7 +58,7 @@ fn open_main_window(cx: &mut App) {
                 #[cfg(target_os = "macos")]
                 browser::native::init(window, cx);
                 #[cfg(target_os = "windows")]
-                appearance::style_native_titlebar(window);
+                appearance::style_native_window_frame(window);
                 let desktop = cx.new(|cx| app::Desktop::new(app::Mode::Main, window, cx));
                 let content = cx.new(|cx| activity::ActivityWindow::new(desktop, window, cx));
                 cx.new(|cx| Root::new(content, window, cx))

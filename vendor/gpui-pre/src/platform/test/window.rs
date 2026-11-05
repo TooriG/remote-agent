@@ -144,6 +144,14 @@ impl TestWindow {
         }
     }
 
+    pub(crate) fn hit_test_window_control(&self) -> Option<WindowControlArea> {
+        // The callback re-enters the app and may access the test window.
+        let mut callback = self.0.lock().hit_test_window_control_callback.take()?;
+        let area = callback();
+        self.0.lock().hit_test_window_control_callback = Some(callback);
+        area
+    }
+
     pub fn simulate_scheduled_frame(&self) -> bool {
         let callback = {
             let mut state = self.0.lock();
