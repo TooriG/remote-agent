@@ -35,11 +35,15 @@ private struct NativeTerminalView: UIViewRepresentable {
         view.terminalDelegate = context.coordinator
         view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         view.accessibilityIdentifier = "terminal.screen"
-        // Reuse SwiftTerm's recognizer and timing for direct word selection.
+        // Replace SwiftTerm's menu-only long press with direct word selection.
         for case let gesture as UILongPressGestureRecognizer in view.gestureRecognizers ?? [] {
-            gesture.removeTarget(view, action: nil)
-            gesture.addTarget(view, action: #selector(HostTerminalView.selectTextOnLongPress(_:)))
+            view.removeGestureRecognizer(gesture)
         }
+        let longPress = UILongPressGestureRecognizer(
+            target: view, action: #selector(HostTerminalView.selectTextOnLongPress(_:))
+        )
+        longPress.minimumPressDuration = 0.7
+        view.addGestureRecognizer(longPress)
         return view
     }
 
