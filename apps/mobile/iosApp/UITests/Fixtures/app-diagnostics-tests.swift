@@ -2,7 +2,21 @@ import Foundation
 import UIKit
 
 @main
-struct AppDiagnosticsTests {
+@MainActor
+final class AppDiagnosticsTests: UIResponder, UIApplicationDelegate {
+    func application(_: UIApplication, didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        Task {
+            do {
+                try await Self.run()
+                exit(0)
+            } catch {
+                fputs("FAIL: \(error)\n", stderr)
+                exit(1)
+            }
+        }
+        return true
+    }
+
     static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
         guard condition() else {
             fputs("FAIL: \(message)\n", stderr)
@@ -46,7 +60,7 @@ struct AppDiagnosticsTests {
         await first.flush()
         let before = try records(file)
         check(before.compactMap { $0["event"] as? String } == ["launchStarted", "profilesLoaded"],
-              "Persist startup milestones without a Host, Store, or main run loop")
+              "Persist startup milestones without a Host or Store")
         check(before.last?["value"] as? Int == 2, "Retain numeric measurements")
         check(
             Set(before[0].keys) == Set([
@@ -124,7 +138,7 @@ struct AppDiagnosticsTests {
               "A logging error must neither crash the app nor disable later logging")
     }
 
-    @MainActor static func checkView(_ directory: URL) async throws {
+    static func checkView(_ directory: URL) async throws {
         let journal = AppDiagnostics(directory: directory)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
         let view = AppDiagnosticUIView(diagnostics: journal)
@@ -144,7 +158,7 @@ struct AppDiagnosticsTests {
               "Record attachment and the first nonempty layout, without flooding on later layouts")
     }
 
-    @MainActor static func main() async throws {
+    static func run() async throws {
         checkResponsiveness()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
