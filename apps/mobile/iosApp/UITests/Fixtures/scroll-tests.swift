@@ -252,6 +252,13 @@ extension ConversationScrollTests {
               "Wrapped text must measure its contents while a horizontal scroller keeps its ideal height: \(wide)")
         view.contentInset.left = 24
         view.contentInset.right = 24
+        await layout(controller)
+        let inset = view.layoutAttributesForItem(at: path)!.frame
+        check(abs(inset.width - (view.bounds.width - view.adjustedContentInset.left
+                - view.adjustedContentInset.right - 32)) < 1,
+        "Horizontal inset changes must remeasure rows without resizing the viewport: \(inset), \(geometry(view))")
+        check(abs(inset.minX - view.contentOffset.x - view.adjustedContentInset.left - 16) < 1,
+              "The leading row margin must follow the native horizontal inset")
         view.bounds.size.width /= 2
         await layout(controller)
         let narrow = view.layoutAttributesForItem(at: path)!.size

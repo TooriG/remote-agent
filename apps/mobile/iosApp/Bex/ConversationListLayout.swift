@@ -6,15 +6,32 @@ final class ConversationListLayout: UICollectionViewCompositionalLayout {
     private var alignment: CGFloat = 0
 
     static func make() -> ConversationListLayout {
-        let size = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .estimated(100))
-        let item = NSCollectionLayoutItem(layoutSize: size)
-        let group = NSCollectionLayoutGroup.vertical(layoutSize: size, subitems: [item])
-        let section = NSCollectionLayoutSection(group: group)
-        section.interGroupSpacing = 12
-        section.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
         let configuration = UICollectionViewCompositionalLayoutConfiguration()
         configuration.contentInsetsReference = .none
-        return ConversationListLayout(section: section, configuration: configuration)
+        // The compositional container omits UIScrollView's explicit horizontal insets.
+        // Read the actual viewport when UIKit requests a section, including after a resize.
+        weak var owner: ConversationListLayout?
+        let layout = ConversationListLayout(sectionProvider: { _, environment in
+            let width: CGFloat
+            if let view = owner?.collectionView {
+                let insets = view.adjustedContentInset
+                width = view.bounds.width - insets.left - insets.right
+            } else {
+                width = environment.container.effectiveContentSize.width
+            }
+            let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1), heightDimension: .estimated(100)
+            ))
+            let group = NSCollectionLayoutGroup.vertical(layoutSize: NSCollectionLayoutSize(
+                widthDimension: .absolute(max(1, width - 32)), heightDimension: .estimated(100)
+            ), subitems: [item])
+            let section = NSCollectionLayoutSection(group: group)
+            section.interGroupSpacing = 12
+            section.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
+            return section
+        }, configuration: configuration)
+        owner = layout
+        return layout
     }
 
     override func prepare() {
