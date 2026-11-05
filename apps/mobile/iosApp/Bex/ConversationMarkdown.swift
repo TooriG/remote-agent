@@ -10,10 +10,11 @@ struct ConversationMarkdown: View {
     @ScaledMetric(relativeTo: .body) private var tableColumnWidth = 160.0
     var textIdentifier: String = "message.assistant-text"
     @State private var linkTarget: String?
-    @State private var linkError: String?
     @State private var sharedPath: String?
     var body: some View {
         let shareFailure = media.presentation.shareFailure
+        let linkFailure = media.presentation.linkFailure
+        let linkError = linkFailure?.path == linkTarget ? linkFailure?.message : nil
         VStack(alignment: .leading, spacing: 14) {
             ForEach(blocks) { part in
                 if let path = part.visualizationPath {
@@ -48,37 +49,17 @@ struct ConversationMarkdown: View {
             guard markdownFileTarget(source: url.absoluteString, cwd: media.cwd, surface: .mobile) != nil else {
                 return .systemAction
             }
-            linkError = nil
             linkTarget = url.absoluteString
+            sharedPath = nil
+            media.presentation.openLink(url.absoluteString, resolve: media.resolve,
+                                        openDirectory: media.openDirectory, openFile: media.openFile)
             return .handled
         })
-        .task(id: linkTarget) {
-            guard let target = linkTarget else { return }
-            defer {
-                if !Task.isCancelled, linkTarget == target {
-                    linkTarget = nil
-                }
-            }
-            do {
-                linkError = nil
-                let entry = try await media.resolve(target)
-                try Task.checkCancellation()
-                if entry.isDirectory {
-                    media.openDirectory(entry.path)
-                    return
-                }
-                media.openFile(entry.path, entry.line)
-            } catch {
-                if !Task.isCancelled {
-                    linkError = error.localizedDescription
-                }
-            }
-        }
     }
 
     private func shareFile(_ path: String) {
         sharedPath = path
-        linkError = nil
+        linkTarget = nil
         media.presentation.share(path, download: media.download)
     }
 

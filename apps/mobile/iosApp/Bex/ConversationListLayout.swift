@@ -72,8 +72,9 @@ final class ConversationListLayout: UICollectionViewFlowLayout {
             let viewport = collectionView.bounds.height - insets.top - insets.bottom
             let height = collectionViewContentSize.height - sectionInset.top + delta
             let alignment = max(6, viewport - height) - sectionInset.top
-            let above = originalAttributes.frame.maxY <= collectionView.contentOffset.y
-                + collectionView.adjustedContentInset.top
+            let above = anchor.flatMap { indexPath($0.id) }.map { originalAttributes.indexPath < $0 }
+                ?? (originalAttributes.frame.maxY <= collectionView.contentOffset.y
+                    + collectionView.adjustedContentInset.top)
             context.contentOffsetAdjustment.y = alignment + (above ? delta : 0)
         }
         return context

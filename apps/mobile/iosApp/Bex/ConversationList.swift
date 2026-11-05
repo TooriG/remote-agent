@@ -95,19 +95,24 @@ final class ConversationListController: UICollectionViewController {
                 accessibilityValue: String, row: @escaping (Int) -> AnyView) {
         loadViewIfNeeded()
         layout.following = following
+        if following {
+            layout.anchor = nil
+        }
         if self.request != request {
             self.request = request
             requestedEdge = request?.edge
+            layout.anchor = nil
         }
         collectionView.accessibilityValue = accessibilityValue
         pending = Source(ids: ids, row: row)
         applyPending()
     }
 
-    private func captureAnchor() {
+    private func captureAnchor(allowed: [ConversationList.RowID: Int]) {
         layout.anchor = collectionView.indexPathsForVisibleItems.sorted()
             .compactMap { path -> ConversationListLayout.Anchor? in
                 guard let id = data.itemIdentifier(for: path), case .message = id,
+                      allowed[id] != nil,
                       let attributes = layout.layoutAttributesForItem(at: path) else { return nil }
                 return ConversationListLayout.Anchor(id: id,
                                                      displacement: attributes.frame.minY - collectionView.contentOffset
@@ -118,11 +123,16 @@ final class ConversationListController: UICollectionViewController {
     private func applyPending() {
         guard !applying, let pending, collectionView.bounds.width > 32, collectionView.bounds.height > 0 else { return }
         self.pending = nil
-        captureAnchor()
         let changed = source.ids != pending.ids
+        let nextIndices = changed
+            ? Dictionary(uniqueKeysWithValues: pending.ids.enumerated().map { ($0.element, $0.offset) }) : indices
+        if !layout.following, requestedEdge == nil,
+           layout.anchor.flatMap({ nextIndices[$0.id] }) == nil {
+            captureAnchor(allowed: nextIndices)
+        }
         source = pending
         if changed {
-            indices = Dictionary(uniqueKeysWithValues: source.ids.enumerated().map { ($0.element, $0.offset) })
+            indices = nextIndices
             applying = true
             var snapshot = NSDiffableDataSourceSnapshot<Int, ConversationList.RowID>()
             snapshot.appendSections([0])
@@ -146,7 +156,6 @@ final class ConversationListController: UICollectionViewController {
                 show(cell, id: id)
             }
         }
-        layout.anchor = nil
         scrollToRequestedEdge()
         publishVisibility()
     }
@@ -172,6 +181,9 @@ final class ConversationListController: UICollectionViewController {
         super.viewDidLayoutSubviews()
         applyPending()
         scrollToRequestedEdge()
+        if !layout.following, layout.anchor == nil {
+            captureAnchor(allowed: indices)
+        }
         publishVisibility()
     }
 
@@ -218,8 +230,30 @@ final class ConversationListController: UICollectionViewController {
         }
     }
 
-    override func scrollViewDidScroll(_: UIScrollView) {
+    override func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        if !applying, !layout.following,
+           scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
+            captureAnchor(allowed: indices)
+        }
         publishVisibility()
+    }
+
+    override func scrollViewDidEndDecelerating(_: UIScrollView) {
+        if !layout.following {
+            captureAnchor(allowed: indices)
+        }
+    }
+
+    override func scrollViewDidEndScrollingAnimation(_: UIScrollView) {
+        if !layout.following {
+            captureAnchor(allowed: indices)
+        }
+    }
+
+    override func scrollViewDidScrollToTop(_: UIScrollView) {
+        if !layout.following {
+            captureAnchor(allowed: indices)
+        }
     }
 
     override func scrollViewWillBeginDragging(_: UIScrollView) {

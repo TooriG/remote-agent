@@ -12,6 +12,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
             await checkFollowingTallRows()
             await checkWrappedRows()
             await checkShortHistory()
+            await checkStagedHistory()
             print("Native conversation recycling and scroll tests passed")
             exit(0)
         }
@@ -90,6 +91,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         check(abs(position(0, in: controller) - reading) < 1, "An unchanged page must not move the reader")
         view.scrollToItem(at: IndexPath(item: 500, section: 0), at: .top, animated: false)
         await layout(controller)
+        controller.scrollViewDidEndDecelerating(view)
         let anchor = position(500, in: controller)
         let older = (0 ..< 50).map { ConversationList.RowID.message("older-\($0)") }
         let prepended = older + ids
@@ -187,5 +189,33 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
                   - view.layoutAttributesForItem(at: path)!.frame.maxY - 6) < 1,
         "Following must survive width changes in a long message")
+    }
+
+    private func checkStagedHistory() async {
+        let scroll = ConversationScrollState()
+        let controller = ConversationListController(scroll: scroll)
+        mount(controller)
+        let messages = (0 ..< 20).map { ConversationList.RowID.message("current-\($0)") }
+        func update(_ ids: [ConversationList.RowID], header: CGFloat) {
+            controller.update(ids: ids, following: scroll.following, request: scroll.request,
+                              accessibilityValue: "") { index in
+                AnyView(Text("Message").frame(height: index == 0 ? header : 72))
+            }
+        }
+        let ids = [ConversationList.RowID.history] + messages
+        update(ids, header: 60)
+        await layout(controller)
+        scroll.goTo(.top)
+        update(ids, header: 60)
+        await layout(controller)
+        let reading = position(1, in: controller)
+        // Core can publish the completed history control before the background row projection finishes.
+        update(ids, header: 8)
+        await layout(controller)
+        let older = (0 ..< 50).map { ConversationList.RowID.message("older-\($0)") }
+        update([.history] + older + messages, header: 8)
+        await layout(controller)
+        check(abs(position(51, in: controller) - reading) < 1,
+              "Staged history must retain the original anchor even if its interim offset was clamped")
     }
 }

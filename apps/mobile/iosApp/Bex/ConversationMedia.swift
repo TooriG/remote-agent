@@ -75,6 +75,7 @@ struct ConversationImage: View {
     @State private var error: String?
     private struct LoadID: Equatable {
         let host: String?
+        let cwd: String
         let source: SessionImage
     }
 
@@ -99,7 +100,7 @@ struct ConversationImage: View {
                 ConversationImageSkeleton()
             }
         }
-        .task(id: LoadID(host: media.host, source: source)) {
+        .task(id: LoadID(host: media.host, cwd: media.cwd, source: source)) {
             image = nil; original = nil; error = nil
             do {
                 let loaded = try await loadConversationImage(source, media: media)

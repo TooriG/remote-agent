@@ -8,7 +8,7 @@ import SwiftUI
         let html: String
     }
 
-    struct ShareFailure {
+    struct FileFailure {
         let path: String
         let message: String
     }
@@ -17,7 +17,8 @@ import SwiftUI
     var sharedFile: SharedFile?
     var visualization: Visualization?
     var imageError: String?
-    private(set) var shareFailure: ShareFailure?
+    private(set) var shareFailure: FileFailure?
+    private(set) var linkFailure: FileFailure?
     @ObservationIgnored private var pending: Task<Void, Never>?
 
     isolated deinit {
@@ -38,13 +39,41 @@ import SwiftUI
         shareFailure = nil
         load { try await download(path) } present: {
             self.sharedFile = SharedFile(url: $0)
-        } failed: { self.shareFailure = ShareFailure(path: path, message: $0) }
+        } failed: { self.shareFailure = FileFailure(path: path, message: $0) }
+    }
+
+    func openLink(_ target: String,
+                  resolve: @escaping @MainActor (String) async throws -> ConversationMediaAccess.ResolvedFile,
+                  openDirectory: @escaping @MainActor (String) -> Void,
+                  openFile: @escaping @MainActor (String, UInt32?) -> Void) {
+        linkFailure = nil
+        perform {
+            let entry = try await resolve(target)
+            try Task.checkCancellation()
+            if entry.isDirectory {
+                openDirectory(entry.path)
+            } else {
+                openFile(entry.path, entry.line)
+            }
+        } failed: { self.linkFailure = FileFailure(path: target, message: $0) }
     }
 
     private func load(_ operation: @escaping @MainActor () async throws -> URL,
                       present: @escaping @MainActor (URL) -> Void,
                       failed: @escaping @MainActor (String) -> Void) {
-        guard pending == nil else { return }
+        perform({
+            let url = try await operation()
+            guard !Task.isCancelled else {
+                try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+                return
+            }
+            present(url)
+        }, failed: failed)
+    }
+
+    private func perform(_ operation: @escaping @MainActor () async throws -> Void,
+                         failed: @escaping @MainActor (String) -> Void) {
+        cancelPending()
         pending = Task {
             defer {
                 if !Task.isCancelled {
@@ -52,12 +81,7 @@ import SwiftUI
                 }
             }
             do {
-                let url = try await operation()
-                guard !Task.isCancelled else {
-                    try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-                    return
-                }
-                present(url)
+                try await operation()
             } catch {
                 if !Task.isCancelled {
                     failed(error.localizedDescription)
@@ -88,6 +112,7 @@ import SwiftUI
         visualization = nil
         imageError = nil
         shareFailure = nil
+        linkFailure = nil
     }
 
     private func remove(_ file: SharedFile?) {
