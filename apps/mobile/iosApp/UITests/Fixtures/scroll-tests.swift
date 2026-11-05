@@ -10,6 +10,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         Task {
             await checkRecyclingAndAnchoring()
             await checkFollowingTallRows()
+            await checkWrappedRows()
             await checkShortHistory()
             print("Native conversation recycling and scroll tests passed")
             exit(0)
@@ -163,5 +164,28 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         await layout(replacement)
         check(replacement.collectionView.numberOfItems(inSection: 0) == 1,
               "Navigation must discard the previous conversation's pending source and anchors")
+    }
+
+    private func checkWrappedRows() async {
+        let scroll = ConversationScrollState()
+        let controller = ConversationListController(scroll: scroll)
+        mount(controller)
+        controller.update(ids: [.message("wrapped")], following: true, request: nil, accessibilityValue: "") { _ in
+            AnyView(Text(String(repeating: "A message wraps at the actual cell width. ", count: 100))
+                .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true))
+        }
+        await layout(controller)
+        let view = controller.collectionView!
+        let path = IndexPath(item: 0, section: 0)
+        let wide = view.layoutAttributesForItem(at: path)!.size
+        check(wide.height > view.bounds.height, "Wrapped text must measure beyond the viewport without clipping")
+        view.bounds.size.width /= 2
+        await layout(controller)
+        let narrow = view.layoutAttributesForItem(at: path)!.size
+        check(narrow.width < wide.width && narrow.height > wide.height,
+              "A width change must remeasure the SwiftUI row with its new explicit width")
+        check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
+                  - view.layoutAttributesForItem(at: path)!.frame.maxY - 6) < 1,
+        "Following must survive width changes in a long message")
     }
 }

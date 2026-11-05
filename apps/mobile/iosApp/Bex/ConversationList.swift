@@ -54,6 +54,7 @@ final class ConversationListController: UICollectionViewController {
     private let scroll: ConversationScrollState
     private let layout = ConversationListLayout()
     private var source = Source(ids: [], row: { _ in AnyView(EmptyView()) })
+    private var indices: [ConversationList.RowID: Int] = [:]
     private var pending: Source?
     private var applying = false
     private var active = true
@@ -81,10 +82,10 @@ final class ConversationListController: UICollectionViewController {
         collectionView.selfSizingInvalidation = .enabledIncludingConstraints
         collectionView.accessibilityIdentifier = "task.detail"
         collectionView.register(ConversationListCell.self, forCellWithReuseIdentifier: "row")
-        data = UICollectionViewDiffableDataSource(collectionView: collectionView) { [weak self] view, path, _ in
+        data = UICollectionViewDiffableDataSource(collectionView: collectionView) { [weak self] view, path, id in
             guard let cell = view.dequeueReusableCell(withReuseIdentifier: "row", for: path)
                 as? ConversationListCell else { preconditionFailure("Unexpected conversation cell type") }
-            self?.show(cell, at: path)
+            self?.show(cell, id: id)
             return cell
         }
         layout.indexPath = { [weak self] id in self?.data.indexPath(for: id) }
@@ -121,6 +122,7 @@ final class ConversationListController: UICollectionViewController {
         let changed = source.ids != pending.ids
         source = pending
         if changed {
+            indices = Dictionary(uniqueKeysWithValues: source.ids.enumerated().map { ($0.element, $0.offset) })
             applying = true
             var snapshot = NSDiffableDataSourceSnapshot<Int, ConversationList.RowID>()
             snapshot.appendSections([0])
@@ -139,8 +141,9 @@ final class ConversationListController: UICollectionViewController {
     private func refreshVisibleRows() {
         guard active else { return }
         for path in collectionView.indexPathsForVisibleItems {
-            if let cell = collectionView.cellForItem(at: path) as? ConversationListCell {
-                show(cell, at: path)
+            if let cell = collectionView.cellForItem(at: path) as? ConversationListCell,
+               let id = data.itemIdentifier(for: path) {
+                show(cell, id: id)
             }
         }
         layout.anchor = nil
@@ -148,15 +151,15 @@ final class ConversationListController: UICollectionViewController {
         publishVisibility()
     }
 
-    private func show(_ cell: ConversationListCell, at path: IndexPath) {
-        guard source.ids.indices.contains(path.item) else { return }
-        cell.show(AnyView(source.row(path.item).id(source.ids[path.item])), parent: self)
+    private func show(_ cell: ConversationListCell, id: ConversationList.RowID) {
+        guard let index = indices[id] else { cell.unmount(); return }
+        cell.show(AnyView(source.row(index).id(id)), parent: self)
     }
 
     override func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell,
                                  forItemAt indexPath: IndexPath) {
-        if let cell = cell as? ConversationListCell, !cell.isMounted {
-            show(cell, at: indexPath)
+        if let cell = cell as? ConversationListCell, !cell.isMounted, let id = data.itemIdentifier(for: indexPath) {
+            show(cell, id: id)
         }
     }
 
@@ -207,6 +210,7 @@ final class ConversationListController: UICollectionViewController {
         active = false
         pending = nil
         source = Source(ids: [], row: { _ in AnyView(EmptyView()) })
+        indices.removeAll()
         visibilityUpdate?.cancel()
         visibilityUpdate = nil
         for cell in collectionView.visibleCells {

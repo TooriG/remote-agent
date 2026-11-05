@@ -153,11 +153,9 @@ final class ConversationListCell: UICollectionViewCell {
         guard let attributes = layoutAttributes.copy() as? UICollectionViewLayoutAttributes else {
             return layoutAttributes
         }
-        let size = contentView.systemLayoutSizeFitting(
-            CGSize(width: attributes.size.width, height: UIView.layoutFittingCompressedSize.height),
-            withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel
-        )
-        attributes.size.height = max(1, ceil(size.height))
+        guard let host else { return attributes }
+        let proposal = CGSize(width: attributes.size.width, height: .greatestFiniteMagnitude)
+        attributes.size.height = max(1, ceil(host.sizeThatFits(in: proposal).height))
         return attributes
     }
 }
