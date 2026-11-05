@@ -170,10 +170,10 @@ pub fn restore(directory: &Path, snapshot: &mut Snapshot) {
     if snapshot.lists.threads.is_none()
         && let Some(mut list) = read_list(directory, &snapshot.connection.storage_scope)
     {
-        // Cached rows can appear immediately, but project pagination starts
-        // from the first page on each launch.
-        let project_limit = ListQuery::default().project_limit;
-        Arc::make_mut(&mut list.query).project_limit = project_limit;
+        // Cached rows can appear immediately, but every list starts from its
+        // first page on each launch, including previously expanded tasks.
+        let query = ListQuery::default();
+        let project_limit = query.project_limit;
         let threads = Arc::make_mut(&mut list.threads);
         threads.has_more_projects |= threads.projects.len() > project_limit as usize;
         threads.projects.truncate(project_limit as usize);
@@ -187,7 +187,18 @@ pub fn restore(directory: &Path, snapshot: &mut Snapshot) {
             .retain(|id, _| visible.contains(id.as_str()));
         Arc::make_mut(&mut list.projects).retain(|id, _| visible.contains(id.as_str()));
         Arc::make_mut(&mut list.expanded).retain(|id, _| visible.contains(id.as_str()));
-        snapshot.lists.list_query = list.query;
+        for page in
+            std::iter::once(&mut list.threads).chain(Arc::make_mut(&mut list.projects).values_mut())
+        {
+            let page = Arc::make_mut(page);
+            page.limit = query.limit;
+            page.has_more |= page.data.len() > query.limit as usize;
+            page.data.truncate(query.limit as usize);
+        }
+        for limit in Arc::make_mut(&mut list.expanded).values_mut() {
+            *limit = query.limit;
+        }
+        snapshot.lists.list_query = Arc::new(query);
         snapshot.lists.threads = Some(list.threads);
         snapshot.lists.project_threads = list.projects;
         snapshot.lists.expanded_projects = list.expanded;
@@ -618,6 +629,110 @@ mod tests {
 
         let (expanded, _) = reduce(&connected, Event::Intent(Intent::ExpandProjects));
         assert_eq!(expanded.lists.list_query.project_limit, 15);
+    }
+
+    #[rstest::rstest]
+    #[case(0, false)]
+    #[case(4, false)]
+    #[case(5, false)]
+    #[case(5, true)]
+    #[case(6, false)]
+    #[case(15, false)]
+    #[case(25, true)]
+    fn cached_task_pagination_restarts_at_five(
+        #[case] count: u32,
+        #[case] has_more: bool,
+        #[values(false, true)] expanded: bool,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let rows = |project: ProjectMembership| {
+            (0..count)
+                .map(|index| Thread {
+                    id: Some(
+                        SessionRef::new(ProviderKind::Codex, format!("task-{index}")).unwrap(),
+                    ),
+                    name: Some(format!("Task {index}")),
+                    project_id: project.clone(),
+                    ..Default::default()
+                })
+                .collect()
+        };
+        let mut saved = (*listed("saved chat")).clone();
+        Arc::make_mut(&mut saved.lists.list_query).limit = count.max(5);
+        let root = Arc::make_mut(saved.lists.threads.as_mut().unwrap());
+        root.data = rows(ProjectMembership::Unassigned {});
+        root.limit = count.max(5);
+        root.has_more = has_more;
+        let project = Arc::make_mut(
+            Arc::make_mut(&mut saved.lists.project_threads)
+                .get_mut("p")
+                .unwrap(),
+        );
+        project.data = rows(ProjectMembership::Assigned("p".into()));
+        project.limit = count.max(5);
+        project.has_more = has_more;
+        saved.lists.expanded_projects = Arc::new(
+            expanded
+                .then_some(("p".into(), count.max(5)))
+                .into_iter()
+                .collect(),
+        );
+        ListCopy {
+            format: FORMAT,
+            storage_scope: "volume".into(),
+            query: saved.lists.list_query,
+            threads: saved.lists.threads.unwrap(),
+            projects: saved.lists.project_threads,
+            expanded: saved.lists.expanded_projects,
+        }
+        .write(&directory.path().join("list.cache"))
+        .unwrap();
+
+        let offline = restored_state(directory.path(), "volume");
+        assert_eq!(*offline.lists.list_query, ListQuery::default());
+        for page in std::iter::once(offline.lists.threads.as_ref().unwrap())
+            .chain(offline.lists.project_threads.values())
+        {
+            assert_eq!(page.limit, 5);
+            assert_eq!(page.data.len(), count.min(5) as usize);
+            assert_eq!(page.has_more, has_more || count > 5);
+            for (index, row) in page.data.iter().enumerate() {
+                assert_eq!(row.name.as_deref(), Some(format!("Task {index}").as_str()));
+            }
+        }
+        let (connected, _) = reduce(&offline, Event::Connected);
+        let query = op::ListSessions::new((*connected.lists.list_query).clone())
+            .capture(&connected)
+            .unwrap();
+        assert_eq!(query.limit, 5);
+        assert_eq!(
+            query.project_limits.unwrap(),
+            expanded.then_some(("p".into(), 5)).into_iter().collect()
+        );
+        let (opened, _) = reduce(
+            &connected,
+            Event::Intent(Intent::SetProjectExpanded {
+                project_id: "p".into(),
+                expanded: true,
+            }),
+        );
+        let project = &opened.thread_list().unwrap().projects[0];
+        assert!(project.expanded);
+        assert_eq!(project.threads.len(), count.min(5) as usize);
+        assert_eq!(project.has_more, has_more || count > 5);
+
+        let (more, _) = reduce(
+            &opened,
+            Event::Intent(Intent::ExpandThreadList {
+                project_id: Some("p".into()),
+            }),
+        );
+        assert_eq!(more.lists.expanded_projects["p"], 15);
+        let (more, _) = reduce(
+            &more,
+            Event::Intent(Intent::ExpandThreadList { project_id: None }),
+        );
+        assert_eq!(more.lists.list_query.limit, 15);
     }
 
     #[rstest::rstest]
