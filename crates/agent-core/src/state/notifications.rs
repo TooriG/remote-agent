@@ -490,16 +490,30 @@ impl Snapshot {
                     crate::models::SessionStatus::Idle => Some(false),
                     _ => None,
                 };
-                if self.activity.active.get(id).copied() != active {
+                let current = self.activity.active.get(id).copied();
+                if current != active {
                     let activity = Arc::make_mut(&mut self.activity);
-                    if let Some(active) = active {
-                        activity.active.insert(id.clone(), active);
-                    } else {
-                        activity.active.remove(id);
+                    match (current, active) {
+                        (Some(_), Some(active)) => *activity.active.get_mut(id).unwrap() = active,
+                        (None, Some(active)) => {
+                            activity.active.insert(id.clone(), active);
+                        }
+                        (_, None) => {
+                            activity.active.remove(id);
+                        }
                     }
                 }
             }
-            if !state.statuses.is_empty() {
+            if !state.statuses.is_empty()
+                && (self
+                    .threads
+                    .as_ref()
+                    .is_some_and(|page| !page.data.is_empty())
+                    || self
+                        .project_threads
+                        .values()
+                        .any(|page| !page.data.is_empty()))
+            {
                 let statuses: BTreeMap<_, _> = state
                     .statuses
                     .iter()
@@ -1407,6 +1421,80 @@ mod tests {
         );
     }
     #[test]
+    fn active_status_changes_preserve_other_providers_and_previous_snapshots() {
+        use crate::models::SessionStatus;
+        use agent_protocol::live_activity::{TaskActivityState, TaskActivitySummary};
+        let id = SessionRef::new(ProviderKind::Codex, "same".into()).unwrap();
+        let other = SessionRef::new(ProviderKind::Claude, "same".into()).unwrap();
+        for current in [None, Some(false), Some(true)] {
+            for status in [
+                SessionStatus::Unknown,
+                SessionStatus::Idle,
+                SessionStatus::Preparing,
+                SessionStatus::Running,
+            ] {
+                let mut state = Snapshot::default();
+                let activity = Arc::make_mut(&mut state.activity);
+                activity.active.insert(other.clone(), true);
+                if let Some(current) = current {
+                    activity.active.insert(id.clone(), current);
+                }
+                let (next, effects) = notification(
+                    &state,
+                    Notification::TaskActivity {
+                        state: TaskActivityState {
+                            revision: 1,
+                            waiting: vec![],
+                            unread: vec![],
+                            display: TaskActivitySummary::default().display(),
+                            statuses: vec![(id.clone(), status)],
+                        },
+                    },
+                );
+                let expected = match status {
+                    SessionStatus::Preparing | SessionStatus::Running => Some(true),
+                    SessionStatus::Idle => Some(false),
+                    _ => None,
+                };
+                assert!(effects.is_empty());
+                assert_eq!(next.activity.active.get(&id).copied(), expected);
+                assert!(next.activity.active[&other]);
+                assert_eq!(state.activity.active.get(&id).copied(), current);
+                assert_eq!(
+                    Arc::ptr_eq(&state.activity, &next.activity),
+                    current == expected
+                );
+                assert_eq!(
+                    next.task_activity.as_ref().unwrap().statuses,
+                    [(id.clone(), status)]
+                );
+            }
+        }
+        let mut state = Snapshot::default();
+        Arc::make_mut(&mut state.activity)
+            .active
+            .insert(id.clone(), false);
+        let (next, effects) = notification(
+            &state,
+            Notification::TaskActivity {
+                state: TaskActivityState {
+                    revision: 1,
+                    waiting: vec![],
+                    unread: vec![],
+                    display: TaskActivitySummary::default().display(),
+                    statuses: vec![
+                        (id.clone(), SessionStatus::Running),
+                        (id.clone(), SessionStatus::Idle),
+                    ],
+                },
+            },
+        );
+        assert!(effects.is_empty());
+        assert_eq!(next.activity.active, state.activity.active);
+        assert!(!next.activity.active[&id]);
+    }
+
+    #[test]
     fn activity_statuses_keep_page_metadata_last_duplicate_and_provider_identity() {
         use crate::models::SessionStatus;
         use agent_protocol::live_activity::{TaskActivityState, TaskActivitySummary};
@@ -1469,6 +1557,32 @@ mod tests {
             assert_eq!(next.threads.as_ref().unwrap().as_ref(), &expected);
             assert_eq!(next.project_threads["matching"].as_ref(), &expected);
             assert_eq!(next.project_threads["z-matching"].as_ref(), &expected);
+            let mut root_only = state.clone();
+            root_only.project_threads = Arc::default();
+            let (root_only, effects) = notification(
+                &root_only,
+                Notification::TaskActivity {
+                    state: incoming.clone(),
+                },
+            );
+            assert!(effects.is_empty());
+            assert_eq!(root_only.threads.as_ref().unwrap().as_ref(), &expected);
+            assert!(root_only.project_threads.is_empty());
+            let mut project_only = state.clone();
+            project_only.threads = None;
+            let (project_only, effects) = notification(
+                &project_only,
+                Notification::TaskActivity {
+                    state: incoming.clone(),
+                },
+            );
+            assert!(effects.is_empty());
+            assert!(project_only.threads.is_none());
+            assert_eq!(project_only.project_threads["matching"].as_ref(), &expected);
+            assert_eq!(
+                project_only.project_threads["z-matching"].as_ref(),
+                &expected
+            );
             assert!(Arc::ptr_eq(
                 &next.project_threads["a-unchanged"],
                 &unchanged
