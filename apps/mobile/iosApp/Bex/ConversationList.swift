@@ -49,6 +49,15 @@ struct ConversationList: UIViewControllerRepresentable {
 private final class ConversationCollectionView: UICollectionView {
     var didLayout: (() -> Void)?
 
+    override var bounds: CGRect {
+        didSet {
+            // Bounds invalidation alone reuses compositional sections with their previous absolute width.
+            if bounds.width != oldValue.width {
+                collectionViewLayout.invalidateLayout()
+            }
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         didLayout?()
