@@ -25,13 +25,13 @@ extension ConversationModel {
             openDirectory: { path in
                 guard self.coreDraftKey == draft else { return }
                 open(WorkspaceDestination(
-                    scope: self.snapshot.panelScope(host: host, draft: draft), directory: path
+                    scope: self.snapshot.panelScope(host: self.host, draft: draft), directory: path
                 ))
             },
             openFile: { path, line in
                 guard self.coreDraftKey == draft else { return }
                 open(WorkspaceDestination(
-                    scope: self.snapshot.panelScope(host: host, draft: draft), directory: cwd, filePath: path,
+                    scope: self.snapshot.panelScope(host: self.host, draft: draft), directory: cwd, filePath: path,
                     fileLine: line
                 ))
             }
