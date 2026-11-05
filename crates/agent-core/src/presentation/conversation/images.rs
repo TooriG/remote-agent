@@ -193,6 +193,46 @@ mod tests {
     }
 
     #[test]
+    fn deferred_user_input_starts_a_new_exchange_but_tool_activity_does_not() {
+        let deferred_user = Arc::new(serde_json::from_value(json!({
+            "id": "user", "status": "completed",
+            "body": {"deferred": {"summary": {"userMessage": {"text": "Next question", "content": []}}}}
+        })).unwrap());
+        let command = Arc::new(models::Item::new(
+            "command".into(),
+            models::ItemStatus::Completed,
+            models::ItemBody::CommandExecution {
+                command: "pwd".into(),
+                cwd: None,
+                output: String::new(),
+                exit_code: Some(0),
+            },
+        ));
+        for (activity, standalone) in [(deferred_user, true), (command, false)] {
+            let projected = project_conversation(
+                &Snapshot::default(),
+                thread(
+                    vec![
+                        image("phone", "/phone.png"),
+                        answer("Working on the next step", "commentary"),
+                        activity,
+                        answer("![phone](/phone.png)", "final"),
+                    ],
+                    models::TurnStatus::Running,
+                ),
+                &None,
+            );
+            assert!(
+                projected.turns[0]
+                    .rows
+                    .iter()
+                    .any(|row| matches!(row.content, ConversationRowContent::Activity { .. }))
+            );
+            assert_eq!(response_ids(&projected).contains(&"phone"), standalone);
+        }
+    }
+
+    #[test]
     fn all_embedded_results_replace_previews_across_live_commentary_segments() {
         for status in [models::TurnStatus::Running, models::TurnStatus::Completed] {
             let projected = project_conversation(
