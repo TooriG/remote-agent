@@ -314,13 +314,8 @@ extension ConversationListController: UICollectionViewDelegate {
         publishVisibility()
     }
 
-    func scrollViewDidChangeAdjustedContentInset(_ scrollView: UIScrollView) {
-        if let previous = lastLayout?.geometry.insets,
-           previous.left != scrollView.adjustedContentInset.left
-           || previous.right != scrollView.adjustedContentInset.right {
-            layout.invalidateLayout()
-        }
-        view.setNeedsLayout()
+    func scrollViewDidChangeAdjustedContentInset(_: UIScrollView) {
+        layout.invalidateLayout()
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {

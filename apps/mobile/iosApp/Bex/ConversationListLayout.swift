@@ -44,6 +44,12 @@ final class ConversationListLayout: UICollectionViewCompositionalLayout {
         alignment = max(0, viewport - super.collectionViewContentSize.height)
     }
 
+    override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
+        // Even a fixed-width section depends on viewport height because short histories align to its bottom.
+        super.shouldInvalidateLayout(forBoundsChange: newBounds)
+            || newBounds.height != collectionView?.bounds.height
+    }
+
     override var collectionViewContentSize: CGSize {
         var size = super.collectionViewContentSize
         if let view = collectionView {

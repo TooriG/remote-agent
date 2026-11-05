@@ -13,6 +13,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
             await checkDetachedTail()
             await checkFollowingTallRows()
             await checkWrappedRows()
+            await checkShortViewport()
             await checkShortHistory()
             await checkStagedHistory()
             guard failures == 0 else { exit(1) }
@@ -64,6 +65,34 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
 }
 
 extension ConversationScrollTests {
+    private func checkShortViewport() async {
+        let controller = ConversationListController(scroll: ConversationScrollState())
+        mount(controller)
+        controller.update(ids: [.message("short")], following: true, request: nil,
+                          accessibilityValue: "") { _ in AnyView(Text("Short answer").frame(height: 60)) }
+        await layout(controller)
+        let view = controller.collectionView
+        let path = IndexPath(item: 0, section: 0)
+        func bottomGap() -> CGFloat {
+            view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
+                - view.layoutAttributesForItem(at: path)!.frame.maxY
+        }
+        view.bounds.size.height -= 250
+        await layout(controller)
+        check(abs(bottomGap() - 6) < 1,
+              "A keyboard-sized height change must keep a short answer inside the viewport: \(geometry(view))")
+        check(
+            view.indexPathsForVisibleItems.contains(path),
+            "A short answer must remain materialized above the keyboard"
+        )
+        view.contentInset.bottom += 100
+        await layout(controller)
+        check(abs(bottomGap() - 6) < 1, "Vertical insets must re-align a short conversation")
+        view.bounds.size.height += 250
+        await layout(controller)
+        check(abs(bottomGap() - 6) < 1, "Restoring viewport height must restore the bottom alignment")
+    }
+
     private func checkRecyclingAndAnchoring() async {
         let scroll = ConversationScrollState()
         let controller = ConversationListController(scroll: scroll)
