@@ -84,9 +84,14 @@ impl Snapshot {
 
     pub fn models_matching(&self, provider: Option<ProviderKind>, query: String) -> Vec<Model> {
         let query = query.trim().to_lowercase();
-        self.models
+        let models = self
+            .models
             .iter()
-            .filter(|model| provider.is_none_or(|provider| model.model.provider == provider))
+            .filter(|model| provider.is_none_or(|provider| model.model.provider == provider));
+        if query.is_empty() {
+            return models.cloned().collect();
+        }
+        models
             .filter(|model| {
                 model.display_name.to_lowercase().contains(&query)
                     || model.model.id.to_lowercase().contains(&query)
@@ -445,6 +450,40 @@ mod tests {
                 proptest::prop_assert_eq!(&choices[0].model, &selected);
             }
             proptest::prop_assert_eq!(snapshot.models_matching(None, id).len(), 2);
+        }
+    }
+
+    #[test]
+    fn model_search_matches_display_names_ids_and_empty_queries_in_catalog_order() {
+        let snapshot = Snapshot {
+            models: Arc::new(serde_json::from_value(serde_json::json!([
+                {"id":"codex-first","model":{"provider":"codex","id":"MX-ID"},"displayName":"Visible 🦀", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                {"id":"claude","model":{"provider":"claude","id":"MX-ID"},"displayName":"İSTANBUL", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                {"id":"codex-last","model":{"provider":"codex","id":"other"},"displayName":"Visible Other", "settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
+            ])).unwrap()),
+            ..Default::default()
+        };
+        for (provider, query, indices) in [
+            (None, "", vec![0usize, 1, 2]),
+            (None, " \t\u{2003}", vec![0, 1, 2]),
+            (Some(ProviderKind::Codex), " \t\u{2003}", vec![0, 2]),
+            (None, " ViSiBlE ", vec![0, 2]),
+            (None, " MX-id ", vec![0, 1]),
+            (Some(ProviderKind::Codex), " MX-id ", vec![0]),
+            (None, " İSTANBUL ", vec![1]),
+            (None, "i\u{307}stanBUL", vec![1]),
+            (Some(ProviderKind::Codex), "İSTANBUL", vec![]),
+            (None, "missing", vec![]),
+        ] {
+            let expected: Vec<_> = indices
+                .into_iter()
+                .map(|index| snapshot.models[index].clone())
+                .collect();
+            assert_eq!(
+                snapshot.models_matching(provider, query.into()),
+                expected,
+                "query: {query:?}"
+            );
         }
     }
 
