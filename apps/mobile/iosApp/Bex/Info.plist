@@ -7,7 +7,7 @@
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>TaskURLScheme</key>
-    <string>bex</string>
+    <string>$(AGENT_TASK_URL_SCHEME)</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
@@ -38,7 +38,7 @@
             <key>CFBundleURLName</key>
             <string>$(PRODUCT_BUNDLE_IDENTIFIER).task</string>
             <key>CFBundleURLSchemes</key>
-            <array><string>bex</string></array>
+            <array><string>$(AGENT_TASK_URL_SCHEME)</string></array>
         </dict>
     </array>
     <key>NSAppTransportSecurity</key>

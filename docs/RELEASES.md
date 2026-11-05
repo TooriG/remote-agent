@@ -6,6 +6,30 @@ on iPhone, use the existing [BEX TestFlight public link](https://testflight.appl
 External TestFlight availability follows Apple's beta review and automatic tester
 notification. The GitHub job summary distinguishes submission from availability.
 
+The iPhone release candidate uses the production bundle ID,
+`dev.remoteagent.mobile.ios`, in both external TestFlight and the App Store.
+Installing its TestFlight build replaces the App Store version on that device.
+For development alongside the installed release, retain **BEX Dev** with the
+separate bundle ID `dev.remoteagent.mobile.ios.dev`, icon and `bex-dev` URL scheme.
+Its preferences, snapshots and default Keychain access group are separate. Pair
+it with the development Host explicitly. The automated release workflow builds
+the production app; BEX Dev is for parallel development.
+
+To archive BEX Dev, use the same iPhone build command with its configuration:
+
+```sh
+scripts/dev-env.sh just ios-archive \
+  "$PWD/target/release-dev/BexDev.xcarchive" "$PWD/target/release-dev/DerivedData" \
+  -xcconfig "$PWD/apps/mobile/iosApp/Config/Dev.xcconfig" \
+  DEVELOPMENT_TEAM=K65K9J8686
+```
+
+Apply the signing-keychain preflight before archiving. For direct device
+installation, select the Apple Development identity. If uploading a development
+build, increment its build number past existing BEX Dev uploads and use the
+BEX Dev App Store Connect record (`6820657007`). Production promotion always
+selects the production app's tested build.
+
 On macOS and Windows, select **Nightly** in Settings → Update channel to
 receive these candidates. **Stable** is the default. Returning to Stable waits
 for a newer stable build; it never automatically downgrades the installed app.
