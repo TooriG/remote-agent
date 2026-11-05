@@ -7,7 +7,7 @@ use crate::{
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct AgentSummary {
     pub key: String,
     pub title: String,
@@ -21,7 +21,6 @@ pub struct AgentSummary {
 
 type AgentEntries = BTreeMap<String, (SessionRef, Option<SessionRef>, AgentSummary)>;
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     pub fn agent_panel(&self) -> Vec<AgentSummary> {
         let Some(root) = self.pane.navigation.thread_id.as_ref() else {
@@ -117,6 +116,45 @@ impl Snapshot {
         }
         scoped_agents(root, entries)
     }
+}
+
+pub(super) fn empty() -> std::sync::Arc<Vec<AgentSummary>> {
+    use std::sync::{Arc, LazyLock};
+    static EMPTY: LazyLock<Arc<Vec<AgentSummary>>> = LazyLock::new(Arc::default);
+    EMPTY.clone()
+}
+
+pub(super) fn project(
+    snapshot: &Snapshot,
+    previous: Option<&super::view::Presentation>,
+) -> std::sync::Arc<Vec<AgentSummary>> {
+    use crate::state::Same;
+    use std::sync::Arc;
+    if snapshot.pane.observed_agents.is_none()
+        || snapshot.pane.observed_agents != snapshot.pane.navigation.thread_id
+    {
+        return empty();
+    }
+    if let Some(previous) = previous
+        && snapshot.pane.observed_agents == previous.snapshot.pane.observed_agents
+        && snapshot
+            .sessions
+            .conversations
+            .same(&previous.snapshot.sessions.conversations)
+        && snapshot
+            .lists
+            .activity
+            .same(&previous.snapshot.lists.activity)
+    {
+        return previous.agents.clone();
+    }
+    let agents = snapshot.agent_panel();
+    if let Some(previous) = previous
+        && agents == *previous.agents
+    {
+        return previous.agents.clone();
+    }
+    Arc::new(agents)
 }
 
 impl Snapshot {
@@ -280,6 +318,62 @@ mod tests {
             .unwrap(),
         ));
         snapshot
+    }
+
+    #[test]
+    fn projected_fleet_tracks_observation_and_activity_without_rebuilding_for_input() {
+        use crate::presentation::view::Presentation;
+        use crate::state::Draft;
+        let mut state = snapshot(serde_json::json!([
+            {"id":{"provider":"codex","id":"root"}},
+            {"id":{"provider":"codex","id":"child"},"parentId":{"provider":"codex","id":"root"},"name":"Review","status":"running"}
+        ]));
+        let hidden = Presentation::project(Arc::new(state.clone()), None);
+        assert!(hidden.agents.is_empty());
+        Arc::make_mut(&mut state.pane).observed_agents = Some(session("root"));
+        let opened = Presentation::project(Arc::new(state.clone()), Some(&hidden));
+        assert!(opened.changes(hidden).agents);
+        assert_eq!(opened.agents.len(), 1);
+        assert!(opened.agents[0].active);
+        let mut foreign = state.clone();
+        Arc::make_mut(&mut foreign.pane).observed_agents = Some(session("other"));
+        let foreign = Presentation::project(Arc::new(foreign), Some(&opened));
+        assert!(
+            foreign.agents.is_empty(),
+            "another conversation's observation cannot expose this fleet"
+        );
+        Arc::make_mut(&mut state.input.drafts).insert(
+            state.pane.navigation.draft_key.clone(),
+            Arc::new(Draft {
+                text: "typed".into(),
+                ..Default::default()
+            }),
+        );
+        let typed = Presentation::project(Arc::new(state.clone()), Some(&opened));
+        assert!(Arc::ptr_eq(&opened.agents, &typed.agents));
+        Arc::make_mut(
+            Arc::make_mut(&mut state.sessions.conversations)
+                .get_mut(&session("child"))
+                .unwrap(),
+        )
+        .preview = Some("A streaming preview".into());
+        let streamed = Presentation::project(Arc::new(state.clone()), Some(&typed));
+        assert!(Arc::ptr_eq(&typed.agents, &streamed.agents));
+        assert!(!streamed.changes(typed.clone()).agents);
+        Arc::make_mut(&mut state.lists.activity)
+            .active
+            .insert(session("child"), false);
+        let stopped = Presentation::project(Arc::new(state.clone()), Some(&typed));
+        assert!(stopped.changes(typed).agents);
+        assert!(!stopped.agents[0].active);
+        Arc::make_mut(&mut state.pane).observed_agents = None;
+        let closed = Presentation::current(Arc::new(state.clone()), &stopped);
+        assert!(
+            closed.agents.is_empty(),
+            "closing must not wait for the worker"
+        );
+        let projected = Presentation::project(Arc::new(state), Some(&closed));
+        assert!(!projected.changes(closed).agents);
     }
 
     #[test]

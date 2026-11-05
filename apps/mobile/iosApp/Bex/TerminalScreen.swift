@@ -9,7 +9,7 @@ struct TerminalScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            let terminal = model.snapshot.terminalView(handle: handle)
+            let terminal = model.terminals.view(handle: handle)
             if terminal?.loading ?? true {
                 ProgressView().accessibilityIdentifier("terminal.loading")
             } else if let status = terminal?.status {
@@ -98,7 +98,7 @@ private struct NativeTerminalView: UIViewRepresentable {
 
         func send(source _: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
             guard !dismantled, let session,
-                  session.snapshot().terminalView(handle: handle)?.acceptsInput == true else { return }
+                  session.snapshot().terminalAcceptsInput(handle: handle) else { return }
             dispatch(.writeTerminal(WriteTerminal(handle: handle, data: Data(data))))
         }
 
@@ -113,7 +113,7 @@ private struct NativeTerminalView: UIViewRepresentable {
                 if !started {
                     started = true
                     dispatch(.startTerminal(StartTerminal(handle: handle, cwd: cwd, size: size)))
-                } else if session.snapshot().terminalView(handle: handle)?.acceptsInput == true {
+                } else if session.snapshot().terminalAcceptsInput(handle: handle) {
                     dispatch(.resizeTerminal(ResizeTerminal(handle: handle, size: size)))
                 }
             }

@@ -360,12 +360,7 @@ impl Desktop {
         {
             self.publish_workspace(cx);
         }
-        let agents = self.panels.get(self.panel_scope()).kind() == Panel::Agents;
-        if shared
-            || changes.groups.files
-            || changes.groups.operations
-            || agents && changes.groups.sessions
-        {
+        if shared || changes.groups.files || changes.groups.operations || changes.agents {
             self.sync_surfaces(window, cx);
         }
     }

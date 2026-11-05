@@ -95,6 +95,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var files by mutableStateOf(Snapshot.empty().files())
         private set
 
+    var terminals by mutableStateOf(dev.remoteagent.core.Terminals.empty())
+        private set
+
     var fileLocation by mutableStateOf(FileLocation("", null))
         private set
 
@@ -461,6 +464,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         applicationNotices = next.errorNotices(ErrorScope.Application)
         projectNotices = next.errorNotices(ErrorScope.Projects)
         if (changes.groups.files || changes.groups.pane) files = next.files()
+        if (changes.groups.terminals) terminals = next.terminals()
         fileLocation = FileLocation(next.navigation().cwd, next.hostHomeDirectory())
         snapshot = next
         session?.persistenceError()?.let { notice = it }
@@ -673,8 +677,12 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
         }
         androidx.compose.foundation.layout.Row {
             FilesLauncher(model.files, model.fileLocation.cwd, model::perform)
-            TerminalLauncher(model.snapshot, model::perform)
-            BrowserLauncher(model.snapshot.navigation().threadId, model.connectionSelection.hostId, model::browser)
+            TerminalLauncher(model.terminals, model.conversationContext.navigation().cwd, model::perform)
+            BrowserLauncher(
+                model.conversationContext.navigation().threadId,
+                model.connectionSelection.hostId,
+                model::browser,
+            )
         }
         ThreadDetailScreen(
             model.conversationContext,

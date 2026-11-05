@@ -29,20 +29,21 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.KillTerminal
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ResizeTerminal
-import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.StartTerminal
 import dev.remoteagent.core.TerminalSize
+import dev.remoteagent.core.TerminalView
+import dev.remoteagent.core.Terminals
 import dev.remoteagent.core.WriteTerminal
 import dev.remoteagent.core.terminalHandle
 
 @Composable
 internal fun TerminalDialog(
-    snapshot: Snapshot,
+    terminals: Terminals,
+    cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     dismiss: () -> Unit,
 ) {
     val language = LocalUiLanguage.current
-    val cwd = snapshot.navigation().cwd
     val handle = remember(cwd) { terminalHandle(cwd) }
     var terminated by remember { mutableStateOf(false) }
     val currentPerform by rememberUpdatedState(perform)
@@ -52,7 +53,7 @@ internal fun TerminalDialog(
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize().imePadding()) {
             Column {
-                val terminal = snapshot.terminalView(handle)
+                val terminal = terminals.view(handle)
                 if (terminal?.loading != false) {
                     CircularProgressIndicator()
                 } else {
@@ -73,7 +74,7 @@ internal fun TerminalDialog(
                         Text(language.text("終了"))
                     }
                 }
-                TerminalBody(snapshot, handle, cwd, perform, Modifier.weight(1f))
+                TerminalBody(terminal, handle, cwd, perform, Modifier.weight(1f))
             }
         }
     }
@@ -81,7 +82,7 @@ internal fun TerminalDialog(
 
 @Composable
 private fun TerminalBody(
-    snapshot: Snapshot,
+    terminal: TerminalView?,
     handle: String,
     cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
@@ -116,10 +117,10 @@ private fun TerminalBody(
                     }
             },
             update = { view ->
-                val terminal = requireNotNull(nativeTerminal)
-                snapshot.terminalView(handle)?.output?.forEach { chunk ->
+                val native = requireNotNull(nativeTerminal)
+                terminal?.output?.forEach { chunk ->
                     if (
-                        terminal.feed(
+                        native.feed(
                             chunk.sequence.toLong(),
                             chunk.data,
                             chunk.resetSize?.cols?.toInt() ?: 0,
@@ -163,9 +164,9 @@ private fun TerminalKeys(terminal: NativeTerminal?) {
 }
 
 @Composable
-internal fun TerminalLauncher(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+internal fun TerminalLauncher(terminals: Terminals, cwd: String, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
     val language = LocalUiLanguage.current
     var visible by remember { mutableStateOf(false) }
     TextButton(onClick = { visible = true }) { Text(language.text("ターミナル")) }
-    if (visible) TerminalDialog(snapshot, perform) { visible = false }
+    if (visible) TerminalDialog(terminals, cwd, perform) { visible = false }
 }

@@ -71,7 +71,7 @@ class NativeTerminalTest {
             val visible = mutableStateOf(true)
             compose.setContent {
                 MaterialTheme {
-                    if (visible.value) TerminalDialog(model.snapshot, model::perform) { visible.value = false }
+                    if (visible.value) TerminalDialog(model.terminals, cwd, model::perform) { visible.value = false }
                 }
             }
             val device = UiDevice.getInstance(instrumentation)

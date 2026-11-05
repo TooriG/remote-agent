@@ -236,7 +236,9 @@ private struct WorkspaceToolsScreen: View {
         case .diff:
             WorkspaceDiffScreen(model: model, root: directory)
         case .agents:
-            WorkspaceAgentsScreen(agents: model.snapshot.agentPanel())
+            WorkspaceAgentsScreen(agents: model.agents)
+                .onAppear { model.perform(.watchAgents(threadId: model.selectedThreadId)) }
+                .onDisappear { model.perform(.watchAgents(threadId: nil)) }
         case .home:
             EmptyView()
         }
