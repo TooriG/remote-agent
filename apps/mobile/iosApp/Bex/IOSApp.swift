@@ -5,24 +5,15 @@ import SwiftUI
 struct IOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasBackgrounded = false
-    @StateObject private var model: AppViewModel
+    @StateObject private var model = AppViewModel()
     @AppStorage("bex.language") private var language = "ja"
-
-    init() {
-        AppDiagnostics.shared.start()
-        _model = StateObject(wrappedValue: AppViewModel())
-    }
 
     var body: some Scene {
         WindowGroup {
             SwiftUIRoot(model: model)
-                .background(AppDiagnosticView(active: scenePhase == .active))
                 .environment(\.locale, Locale(identifier: language))
-                .onAppear { AppDiagnostics.shared.record(.rootAppeared) }
-                .onDisappear { AppDiagnostics.shared.record(.rootDisappeared) }
                 .onOpenURL { model.openTaskActivity($0) }
                 .onChange(of: scenePhase) { phase in
-                    AppDiagnostics.shared.scene(phase)
                     model.synchronizeLiveActivities(foreground: phase == .active)
                     model.recordScene(phase == .active ? 1 : phase == .inactive ? 2 : 3)
                     switch phase {
@@ -38,7 +29,6 @@ struct IOSApp: App {
                         }
                         Task {
                             await model.persistBeforeBackground()
-                            await AppDiagnostics.shared.flush()
                             if backgroundTask !=
                                 .invalid {
                                 application.endBackgroundTask(backgroundTask); backgroundTask = .invalid

@@ -28,16 +28,12 @@ extension AppViewModel {
         }
         connections[profile.id] = Task { [weak self] in
             let started = ProcessInfo.processInfo.systemUptime
-            AppDiagnostics.shared.record(.restorationStarted)
             do {
                 let owner = try await session.ready()
-                AppDiagnostics.shared.record(.restorationReady)
-                AppDiagnostics.shared.record(.connectionStarted, value: afterForeground ? 1 : 0)
                 owner.recordConnectionEvent(phase: .uiConnectStart, value: afterForeground ? 1 : 0)
                 _ = try await session.resume(ticket: profile.ticket)
                 guard let self, !Task.isCancelled else { return }
                 let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1_000_000
-                AppDiagnostics.shared.record(.connectionReady, value: Int(elapsed / 1000))
                 owner.recordConnectionEvent(phase: .uiConnectReady, value: UInt64(elapsed))
                 if selectedProfileId == profile.id {
                     publish(owner.snapshot())
@@ -46,8 +42,6 @@ extension AppViewModel {
                     liveActivities.resendTokens(hostID: profile.id)
                 }
             } catch {
-                AppDiagnostics.shared.record(Task.isCancelled ? .connectionCancelled : .connectionFailed,
-                                             value: (error as NSError).code)
                 session.store()?.recordConnectionEvent(
                     phase: Task.isCancelled ? .uiConnectCancelled : .uiConnectFailed,
                     value: UInt64((ProcessInfo.processInfo.systemUptime - started) * 1_000_000)
