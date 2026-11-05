@@ -1297,7 +1297,7 @@ mod tests {
             assert!(window.debug_bounds("settings-close").unwrap().top() < scope.bottom());
             if page == SettingsPage::Worktrees {
                 let before = window.debug_bounds("settings-page-heading").unwrap();
-                window.simulate_event(gpui::ScrollWheelEvent {
+                window.simulate_event(gpui::ScrollEvent {
                     position: gpui::point(modal.right() - px(30.), modal.center().y),
                     delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-500.))),
                     touch_phase: gpui::TouchPhase::Moved,
