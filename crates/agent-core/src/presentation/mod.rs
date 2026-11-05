@@ -17,6 +17,7 @@ pub mod error;
 pub mod files;
 pub mod model_settings;
 pub mod permissions;
+pub mod settings;
 
 use crate::models::{
     ApprovalReviewStatus, AssistantPhase, AttachmentKind, Item, ItemBody, ToolKind, Turn,

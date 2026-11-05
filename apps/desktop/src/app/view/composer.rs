@@ -803,6 +803,14 @@ impl ComposerView {
     }
 }
 impl ComposerContent {
+    pub(in crate::app) fn set_controls_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if let Some(model) = &mut self.model
+            && model.controls_enabled != enabled
+        {
+            model.controls_enabled = enabled;
+            cx.notify();
+        }
+    }
     pub(in crate::app) fn set_folders(
         &mut self,
         folders: Vec<(String, String)>,

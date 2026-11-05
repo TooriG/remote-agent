@@ -59,7 +59,7 @@ internal enum class Screen {
     Conversation,
 }
 
-/** One core Snapshot feeds Compose; all business changes are queued typed intents. */
+/** Core presentations feed each surface; business changes are queued typed intents. */
 // The selected Store owns browser requests as well as conversation operations.
 @Suppress("TooManyFunctions")
 internal class AndroidAppModel(private val context: Context) : ViewModel() {
@@ -82,7 +82,10 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
     private var publication = Presentation.empty()
-    var snapshot by mutableStateOf(Snapshot.empty())
+    var snapshot = Snapshot.empty()
+        private set
+
+    var settings by mutableStateOf(Presentation.empty().settings())
         private set
 
     var conversationContext by mutableStateOf(Presentation.empty().conversationContext())
@@ -156,7 +159,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     private var attachmentTransfers = 0
     private val observations = mutableMapOf<String, Job>()
     val draftKey
-        get() = snapshot.navigation().draftKey
+        get() = conversationContext.navigation().draftKey
 
     val selectionKey
         get() = connectionSelection.hostId to draftKey
@@ -452,6 +455,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         if (changes.composer) composer = value.composer()
         if (changes.conversation) conversation = projectConversationRows(value.conversation(), conversation)
         publication = value
+        if (changes.settings) settings = value.settings()
         isConnected = next.connected()
         loadingThreads = next.operationRunning(OperationKey.SessionList)
         listQuery = next.listQuery()
@@ -676,7 +680,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
                 model::perform,
                 onSend,
                 settings = { selected, dismiss ->
-                    ModelPickerDialog(model.snapshot, selected, model::perform, dismiss)
+                    ModelPickerDialog(model.settings, selected, model::perform, dismiss)
                 },
             ) { transferState ->
                 AttachmentButton(model.selectionKey, model::attach, transferState)

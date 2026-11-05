@@ -18,13 +18,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import dev.remoteagent.core.CredentialControl
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.KeyUpdate
-import dev.remoteagent.core.OperationKey
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ReadCredentials
-import dev.remoteagent.core.Snapshot
+import dev.remoteagent.core.SettingsPresentation
 
 @Composable
-internal fun CredentialSettings(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+internal fun CredentialSettings(settings: SettingsPresentation, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
     val language = LocalUiLanguage.current
     var open by remember { mutableStateOf(false) }
     TextButton(
@@ -35,20 +34,20 @@ internal fun CredentialSettings(snapshot: Snapshot, perform: (Intent, (Result<Ou
     ) {
         Text(language.text("接続先のAPIキーを管理"))
     }
-    if (open) CredentialEditor(snapshot, perform) { open = false }
+    if (open) CredentialEditor(settings, perform) { open = false }
 }
 
 @Composable
 private fun CredentialEditor(
-    snapshot: Snapshot,
+    settings: SettingsPresentation,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     dismiss: () -> Unit,
 ) {
     val language = LocalUiLanguage.current
-    val controls = snapshot.credentialControls()
+    val controls = settings.credentialControls()
     var provider by remember { mutableStateOf(controls.first().provider) }
     val selected = controls.first { it.provider == provider }
-    val disabled = !snapshot.connected() || snapshot.operationRunning(OperationKey.DshCredentials)
+    val disabled = !settings.connected() || settings.credentialBusy()
     AlertDialog(
         onDismissRequest = dismiss,
         title = { Text(language.text("接続先のAPIキー")) },
@@ -60,7 +59,7 @@ private fun CredentialEditor(
                     }
                 }
                 CredentialActions(selected, disabled, perform)
-                snapshot.operationError(OperationKey.DshCredentials)?.let { ErrorTextView(it) }
+                settings.credentialError()?.let { ErrorTextView(it) }
             }
         },
         confirmButton = { TextButton(onClick = dismiss) { Text(language.text("完了")) } },

@@ -265,7 +265,12 @@ impl Desktop {
             if changed {
                 cx.notify();
             }
-            view.sync(self.snapshot.clone(), window, cx);
+            view.sync(
+                self.snapshot.clone(),
+                self.publication.settings.clone(),
+                window,
+                cx,
+            );
         });
     }
     // Fixtures inject immutable state at the same core projection boundary as Store.
@@ -1151,6 +1156,7 @@ mod cache_tests {
                         ..Default::default()
                     }),
                 );
+                desktop.project_fixture();
                 desktop
             });
             owner = Some(desktop.clone());
@@ -1169,6 +1175,7 @@ mod cache_tests {
                 ]))
                 .unwrap(),
             );
+            desktop.project_fixture();
             cx.notify();
         });
         window.run_until_parked();

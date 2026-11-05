@@ -83,7 +83,7 @@ extension ConversationModel {
             } else {
                 SideChatRequest(text: "", host: host, originalThreadId: original,
                                 cwd: directory, session: session,
-                                provider: snapshot.modelProviderForDraft(threadId: coreDraftKey))
+                                provider: settings.provider())
             }
             workbenchSideChats[id] = request
         }

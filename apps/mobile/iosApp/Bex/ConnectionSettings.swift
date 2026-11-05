@@ -53,7 +53,7 @@ struct EnvironmentSettingsScreen: View {
             }
             Section {
                 DisclosureGroup("バージョン情報") {
-                    if let software = model.snapshot.hostSoftware() {
+                    if let software = model.settings.hostSoftware() {
                         LabeledContent("バージョン") { Text(software.version) }
                         if software.build != 0 {
                             LabeledContent("ビルド") { Text("\(software.build)") }
@@ -95,7 +95,7 @@ struct ProviderSettingsScreen: View {
         Form {
             Section("適用範囲") {
                 SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
-                                    disabled: model.snapshot.accountLogin() != nil, select: model.activateProfile)
+                                    disabled: model.settings.accountLogin() != nil, select: model.activateProfile)
             }
             ErrorNotices(notices: model.notices[.settings] ?? [], perform: { model.perform($0) })
             ProviderSettingsSection(model: model)
@@ -116,7 +116,7 @@ struct ProviderSettingsSection: View {
             }
             .disabled(!model.isConnected)
             .accessibilityIdentifier("providers.refresh")
-            ForEach(model.snapshot.connectionSetup().agents, id: \.provider) { provider in
+            ForEach(model.settings.connectionSetup().agents, id: \.provider) { provider in
                 HStack(spacing: 16) {
                     NavigationLink {
                         if let chat = model.chat {
@@ -145,8 +145,8 @@ struct ProviderSettingsSection: View {
                     .labelsHidden()
                     .accessibilityLabel("\(provider.name)を使用")
                     .accessibilityIdentifier("provider.enabled.\(provider.provider.bexKey)")
-                    .disabled(!model.isConnected || !model.snapshot.providerSettingsLoaded() ||
-                        model.snapshot.operationRunning(key: .providerSettings))
+                    .disabled(!model.isConnected || !model.settings.providerSettingsLoaded() ||
+                        model.settings.providerSettingsBusy())
                 }
                 .buttonStyle(.borderless)
                 .padding(.vertical, 6)
@@ -174,8 +174,8 @@ struct ProviderRuntimeSection: View {
 
     var body: some View {
         if provider == .codex {
-            let status = model.snapshot.codexCliStatus()
-            let updating = model.snapshot.operationRunning(key: .codexCli)
+            let status = model.settings.codexCliStatus()
+            let updating = model.settings.codexCliBusy()
             Section {
                 if let version = status?.version {
                     Text(version).font(.subheadline.monospaced())

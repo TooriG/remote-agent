@@ -62,7 +62,7 @@ struct ComposerModelControls: View {
     @Binding var showingModelSettings: Bool
 
     var body: some View {
-        let controls = model.composer.controls().quick
+        let controls = model.composerControls.quick
         if let next = controls.toggleFastTo {
             Button { model.chooseServiceTier(next) } label: {
                 Image(systemName: controls.fast ? "bolt.fill" : "bolt")

@@ -21,7 +21,7 @@ struct ModelSettingsScreen: View {
     @State private var providerOverride: ProviderKind?
 
     private var provider: ProviderKind? {
-        providerOverride ?? model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)
+        providerOverride ?? model.settings.provider()
     }
 
     private var disabled: Bool {
@@ -30,13 +30,13 @@ struct ModelSettingsScreen: View {
 
     private var selectedAccount: Account? {
         model.accounts.first {
-            $0.provider == provider && model.snapshot.accountIsSelected(provider: $0.provider, id: $0.id)
+            $0.provider == provider && model.settings.accountIsSelected(provider: $0.provider, id: $0.id)
         }
     }
 
     var body: some View {
         Form {
-            ErrorNotices(notices: model.snapshot.errorNotices(scope: .settings), perform: { model.perform($0) })
+            ErrorNotices(notices: model.settings.notices(), perform: { model.perform($0) })
             Section("エージェント") {
                 Picker("エージェント", selection: Binding<ProviderKind?>(
                     get: { provider }, set: {
@@ -70,7 +70,7 @@ struct ModelSettingsScreen: View {
                 .accessibilityIdentifier("model.accounts.manage")
                 .disabled(provider == nil)
                 if let account = selectedAccount {
-                    WeeklyUsageView(windows: model.snapshot.accountWeeklyUsage(
+                    WeeklyUsageView(windows: model.settings.accountWeeklyUsage(
                         provider: account.provider, id: account.id
                     ))
                     .accessibilityIdentifier("model.account.usage")
@@ -101,7 +101,7 @@ struct ModelSettingsScreen: View {
 
     @ViewBuilder
     private var quickControls: some View {
-        let controls = model.snapshot.modelQuickControls(threadId: model.coreDraftKey)
+        let controls = model.settings.quickControls()
         if model.selectedModel?.provider == provider,
            !controls.efforts.isEmpty || controls.speedChoices.count > 1 {
             Section("応答") {
@@ -133,9 +133,9 @@ struct ModelSettingsScreen: View {
 
     @ViewBuilder
     private var modelSection: some View {
-        let choices = model.snapshot.modelsMatching(provider: provider, query: search)
+        let choices = model.settings.modelsMatching(provider: provider, query: search)
         if choices.isEmpty {
-            AppText(model.snapshot.modelsLoading(provider: provider) ? "モデルを読み込み中…" : "利用可能なモデルがありません")
+            AppText(model.settings.modelsLoading(provider: provider) ? "モデルを読み込み中…" : "利用可能なモデルがありません")
                 .foregroundStyle(.secondary)
         }
         ForEach(choices, id: \.model) { choice in
@@ -147,7 +147,7 @@ struct ModelSettingsScreen: View {
             .accessibilityValue(model.selectedModel == choice.model ? "選択中" : "")
             .disabled(disabled)
         }
-        ForEach(model.snapshot.modelErrorMessages(provider: provider), id: \.self) { error in
+        ForEach(model.settings.modelErrorMessages(provider: provider), id: \.self) { error in
             ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
                 .accessibilityIdentifier("model.error")
         }
@@ -156,7 +156,7 @@ struct ModelSettingsScreen: View {
     private func selectProvider(_ provider: ProviderKind) {
         providerOverride = provider
         search = ""
-        if let choice = model.snapshot.modelForProvider(threadId: model.coreDraftKey, provider: provider) {
+        if let choice = model.settings.modelForProvider(provider: provider) {
             model.chooseModel(choice)
         }
     }

@@ -5,6 +5,7 @@ import androidx.compose.ui.Modifier
 import dev.remoteagent.core.ComposerPresentation
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.SettingsPresentation
 import dev.remoteagent.core.Snapshot
 
 @Composable
@@ -14,7 +15,7 @@ internal fun ModelPickerFixture(
     modifier: Modifier = Modifier,
 ) {
     ModelPickerButton(ComposerPresentation.fromSnapshot(snapshot), perform, modifier) { selected, dismiss ->
-        ModelPickerDialog(snapshot, selected, perform, dismiss)
+        ModelPickerDialog(SettingsPresentation.fromSnapshot(snapshot), selected, perform, dismiss)
     }
 }
 
@@ -29,7 +30,9 @@ internal fun ComposerFixture(
         ComposerPresentation.fromSnapshot(snapshot),
         perform,
         onSend,
-        settings = { selected, dismiss -> ModelPickerDialog(snapshot, selected, perform, dismiss) },
+        settings = { selected, dismiss ->
+            ModelPickerDialog(SettingsPresentation.fromSnapshot(snapshot), selected, perform, dismiss)
+        },
         attach = attach,
     )
 }

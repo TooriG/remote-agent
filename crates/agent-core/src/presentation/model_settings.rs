@@ -6,6 +6,74 @@ use crate::{
 };
 use agent_protocol::operations::UsageWindow;
 
+pub(crate) fn current_model<'a>(
+    models: &'a [Model],
+    selected: Option<&ModelRef>,
+) -> Option<&'a Model> {
+    models.iter().find(|model| Some(&model.model) == selected)
+}
+
+pub(crate) fn error_messages(
+    errors: &serde_json::Map<String, serde_json::Value>,
+    provider: Option<ProviderKind>,
+) -> Vec<String> {
+    let provider = provider.map(ProviderKind::key);
+    errors
+        .iter()
+        .filter(|(key, _)| provider.is_none_or(|provider| provider == key.as_str()))
+        .map(|(provider, error)| {
+            let message = error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| error.to_string());
+            format!("{provider}: {message}")
+        })
+        .collect()
+}
+
+pub(crate) fn matching_models<'a>(
+    models: impl Iterator<Item = &'a Model>,
+    provider: Option<ProviderKind>,
+    query: &str,
+) -> Vec<Model> {
+    let query = query.trim().to_lowercase();
+    models
+        .filter(|model| provider.is_none_or(|provider| model.model.provider == provider))
+        .filter(|model| {
+            query.is_empty()
+                || model.display_name.to_lowercase().contains(&query)
+                || model.model.id.to_lowercase().contains(&query)
+        })
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn weekly_usage(
+    accounts: Option<&agent_protocol::operations::Accounts>,
+    provider: ProviderKind,
+    id: &str,
+) -> Vec<UsageWindow> {
+    accounts
+        .and_then(|accounts| {
+            accounts
+                .accounts
+                .iter()
+                .find(|account| account.provider == provider && account.id == id)
+        })
+        .and_then(|account| account.usage.as_ref())
+        .filter(|usage| usage.error.is_none())
+        .map(|usage| {
+            usage
+                .windows
+                .iter()
+                .filter(|window| window.label.contains("週間枠"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl Snapshot {
     pub(crate) fn draft_provider(
         &self,
@@ -93,21 +161,14 @@ impl Snapshot {
     }
 
     pub fn models_matching(&self, provider: Option<ProviderKind>, query: String) -> Vec<Model> {
-        let query = query.trim().to_lowercase();
-        let models = self.catalog.models.iter().filter(|model| {
-            self.provider_enabled(model.model.provider)
-                && provider.is_none_or(|provider| model.model.provider == provider)
-        });
-        if query.is_empty() {
-            return models.cloned().collect();
-        }
-        models
-            .filter(|model| {
-                model.display_name.to_lowercase().contains(&query)
-                    || model.model.id.to_lowercase().contains(&query)
-            })
-            .cloned()
-            .collect()
+        matching_models(
+            self.catalog
+                .models
+                .iter()
+                .filter(|model| self.provider_enabled(model.model.provider)),
+            provider,
+            &query,
+        )
     }
 
     pub(crate) fn allows_custom_codex_models(&self) -> bool {
@@ -166,27 +227,7 @@ impl Snapshot {
     /// Keep every weekly bucket (including model-specific limits); never turn
     /// an unavailable quota into a full or empty bar. Labels are Host-normalized.
     pub fn account_weekly_usage(&self, provider: ProviderKind, id: String) -> Vec<UsageWindow> {
-        self.catalog
-            .account
-            .accounts
-            .as_ref()
-            .and_then(|accounts| {
-                accounts
-                    .accounts
-                    .iter()
-                    .find(|account| account.provider == provider && account.id == id)
-            })
-            .and_then(|account| account.usage.as_ref())
-            .filter(|usage| usage.error.is_none())
-            .map(|usage| {
-                usage
-                    .windows
-                    .iter()
-                    .filter(|window| window.label.contains("週間枠"))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+        weekly_usage(self.catalog.account.accounts.as_deref(), provider, &id)
     }
 
     pub fn model_quick_controls(&self, thread_id: crate::state::DraftKey) -> ModelQuickControls {

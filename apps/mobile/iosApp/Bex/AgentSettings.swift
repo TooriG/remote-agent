@@ -23,11 +23,11 @@ struct ProviderAccountScreen: View {
     }
 
     private var agent: ConnectionAgent? {
-        model.snapshot.connectionSetup().agents.first { $0.provider == provider }
+        model.settings.connectionSetup().agents.first { $0.provider == provider }
     }
 
     private var login: AccountLogin? {
-        model.snapshot.accountLogin()
+        model.settings.accountLogin()
     }
 
     private var loginInProgress: Bool {
@@ -53,7 +53,7 @@ struct ProviderAccountScreen: View {
                     SettingsScopeFields(profiles: profiles, selectedProfileId: model.host,
                                         disabled: changingAccount || loginInProgress, select: selectProfile)
                 } else {
-                    Text(model.snapshot.hostName() ?? model.host)
+                    Text(model.settings.hostName() ?? model.host)
                 }
             }
             if let login {
@@ -140,9 +140,9 @@ struct ProviderAccountScreen: View {
 
 extension ProviderAccountScreen {
     private var credentialSection: some View {
-        let controls = model.snapshot.credentialControls()
+        let controls = model.settings.credentialControls()
         let selected = controls.first { $0.provider == credentialProvider }
-        let updating = model.snapshot.operationRunning(key: .dshCredentials)
+        let updating = model.settings.credentialBusy()
         return Section("接続先のAPIキー") {
             Picker("接続先", selection: $credentialProvider) {
                 ForEach(controls, id: \.provider) { route in Text(route.label).tag(route.provider) }
@@ -166,8 +166,7 @@ extension ProviderAccountScreen {
                 }
             }
             Button("設定状態を取得", action: refresh).disabled(updating || !model.isConnected)
-            if let error = model.snapshot
-                .operationError(key: .dshCredentials) {
+            if let error = model.settings.credentialError() {
                 ErrorTextView(text: error).font(.caption).foregroundStyle(.red)
             }
         }
@@ -176,7 +175,7 @@ extension ProviderAccountScreen {
     private var accountSection: some View {
         Section {
             ForEach(accounts, id: \.id) { account in
-                let selected = model.snapshot.accountIsSelected(provider: account.provider, id: account.id)
+                let selected = model.settings.accountIsSelected(provider: account.provider, id: account.id)
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 12) {
                         Button { chooseAccount(account.id) } label: {

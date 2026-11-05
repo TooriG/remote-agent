@@ -43,7 +43,7 @@ final class SideChatRequest {
                 chat = model
             }
             if model.selectedThreadId == nil {
-                guard let provider = provider ?? model.snapshot.modelProviderForDraft(threadId: model.coreDraftKey)
+                guard let provider = provider ?? model.settings.provider()
                 else {
                     throw NSError(domain: "Bex", code: 1,
                                   userInfo: [NSLocalizedDescriptionKey: "利用可能なエージェントを選択してください。"])

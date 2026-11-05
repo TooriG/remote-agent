@@ -283,8 +283,15 @@ impl Desktop {
                     cx.notify();
                 },
             ),
-            cx.observe(&preferences, |view, _, cx| {
-                view.sync_composer(cx);
+            cx.observe(&preferences, |view, preferences, cx| {
+                let enabled = preferences.read(cx).model_controls_enabled();
+                view.composer_view
+                    .read(cx)
+                    .content
+                    .clone()
+                    .update(cx, |content, cx| {
+                        content.set_controls_enabled(enabled, cx);
+                    });
                 if view.onboarding || view.import_projects {
                     cx.notify();
                 }

@@ -19,6 +19,7 @@ pub struct Presentation {
     pub composer: Arc<super::composer::ComposerPresentation>,
     pub context: Arc<super::context::ConversationContext>,
     pub agents: Arc<Vec<super::agents::AgentSummary>>,
+    pub settings: Arc<super::settings::SettingsPresentation>,
 }
 
 #[derive(Clone, Copy)]
@@ -35,6 +36,7 @@ pub struct PresentationChanges {
     pub sources: bool,
     pub context: bool,
     pub agents: bool,
+    pub settings: bool,
     pub reconnected: bool,
 }
 
@@ -42,6 +44,11 @@ impl Presentation {
     pub(crate) fn pending(snapshot: Arc<Snapshot>) -> Arc<Self> {
         let composer = super::composer::ComposerPresentation::project(&snapshot, None);
         let context = super::context::ConversationContext::project(&snapshot, None);
+        let settings = super::settings::SettingsPresentation::project(
+            &snapshot,
+            composer.controls.provider,
+            None,
+        );
         Arc::new(Self {
             snapshot,
             list: None,
@@ -49,6 +56,7 @@ impl Presentation {
             composer,
             context,
             agents: super::agents::empty(),
+            settings,
         })
     }
 
@@ -95,6 +103,11 @@ impl Presentation {
             previous.map(|previous| &previous.context),
         );
         let agents = super::agents::project(&snapshot, previous);
+        let settings = super::settings::SettingsPresentation::project(
+            &snapshot,
+            composer.controls.provider,
+            previous,
+        );
         Arc::new(Self {
             snapshot,
             list,
@@ -102,6 +115,7 @@ impl Presentation {
             composer,
             context,
             agents,
+            settings,
         })
     }
 
@@ -124,6 +138,13 @@ impl Presentation {
         let same_conversation = same_host
             && snapshot.pane.navigation.draft_key == content.snapshot.pane.navigation.draft_key
             && snapshot.pane.navigation.thread_id == content.snapshot.pane.navigation.thread_id;
+        let composer =
+            super::composer::ComposerPresentation::project(&snapshot, Some(&content.composer));
+        let settings = super::settings::SettingsPresentation::project(
+            &snapshot,
+            composer.controls.provider,
+            Some(content),
+        );
         Arc::new(Self {
             agents: if same_conversation
                 && snapshot.pane.observed_agents == content.snapshot.pane.observed_agents
@@ -133,10 +154,8 @@ impl Presentation {
             } else {
                 super::agents::empty()
             },
-            composer: super::composer::ComposerPresentation::project(
-                &snapshot,
-                Some(&content.composer),
-            ),
+            composer,
+            settings,
             context: super::context::ConversationContext::project(
                 &snapshot,
                 Some(&content.context),
@@ -174,6 +193,9 @@ impl Presentation {
     pub fn agents(&self) -> Vec<super::agents::AgentSummary> {
         self.agents.as_ref().clone()
     }
+    pub fn settings(&self) -> Arc<super::settings::SettingsPresentation> {
+        self.settings.clone()
+    }
     pub fn changes(&self, previous: Arc<Self>) -> PresentationChanges {
         use crate::state::Same;
         let list = !self.list.same(&previous.list);
@@ -181,6 +203,7 @@ impl Presentation {
         let composer = !self.composer.equivalent(&previous.composer);
         let context = self.context.as_ref() != previous.context.as_ref();
         let agents = !self.agents.same(&previous.agents);
+        let settings = !self.settings.equivalent(&previous.settings);
         let groups = self.snapshot.changes_from(&previous.snapshot);
         let sources = self
             .conversation
@@ -197,7 +220,13 @@ impl Presentation {
                 |(a, b)| !a.same(b),
             );
         PresentationChanges {
-            changed: groups.any || list || conversation || composer || context || agents,
+            changed: groups.any
+                || list
+                || conversation
+                || composer
+                || context
+                || agents
+                || settings,
             groups,
             list,
             models: !self
@@ -212,6 +241,7 @@ impl Presentation {
             sources,
             context,
             agents,
+            settings,
             reconnected: self.snapshot.connection.connected
                 && self.snapshot.connection.connection_generation
                     != previous.snapshot.connection.connection_generation,

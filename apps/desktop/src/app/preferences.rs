@@ -1,6 +1,7 @@
 //! Native settings forms and their asynchronous work belong to this owner.
 //! The window only opens/closes the surface and supplies immutable core state.
 use super::*;
+use agent_core::{presentation::settings::SettingsPresentation, state::Same};
 use view::{errors, settings::SettingsNavigation};
 
 pub(super) enum PreferencesEvent {
@@ -17,42 +18,36 @@ pub(super) enum Completion {
     RemoveWorktree,
 }
 
-#[derive(PartialEq)]
 struct DisplayInputs {
-    connection: agent_core::state::Connection,
-    catalog: agent_core::state::Catalog,
+    permission: Option<Arc<op::PermissionSettingsState>>,
     settings: Option<Arc<agent_protocol::models::WorktreeSettings>>,
     worktrees: Option<Arc<Vec<agent_protocol::models::Worktree>>>,
     cwd: String,
-    key: DraftKey,
-    provider: Option<agent_protocol::session::ProviderKind>,
-    model: Option<agent_protocol::models::ModelRef>,
-    effort: Option<String>,
-    tier: Option<String>,
-    operations: agent_core::state::Operations,
 }
 impl DisplayInputs {
-    fn from_snapshot(snapshot: &Snapshot) -> Self {
-        let key = &snapshot.pane.navigation.draft_key;
-        let draft = snapshot.input.drafts.get(key);
+    fn from_snapshot(
+        snapshot: &Snapshot,
+        provider: Option<agent_protocol::session::ProviderKind>,
+    ) -> Self {
         Self {
-            connection: snapshot.connection.clone(),
-            catalog: snapshot.catalog.clone(),
+            permission: provider
+                .and_then(|provider| snapshot.catalog.permission_settings.get(&provider).cloned()),
             settings: snapshot.files.workspace.settings.clone(),
             worktrees: snapshot.files.workspace.worktrees.clone(),
             cwd: snapshot.pane.navigation.cwd.clone(),
-            key: key.clone(),
-            provider: snapshot.model_provider_for_draft(key.clone()),
-            model: draft.and_then(|draft| draft.model.clone()),
-            effort: draft.and_then(|draft| draft.effort.clone()),
-            tier: draft.and_then(|draft| draft.service_tier.clone()),
-            operations: snapshot.operations.clone(),
         }
+    }
+    fn equivalent(&self, other: &Self) -> bool {
+        self.permission.same(&other.permission)
+            && self.settings.same(&other.settings)
+            && self.worktrees.same(&other.worktrees)
+            && self.cwd == other.cwd
     }
 }
 
 pub(super) struct Preferences {
     pub(super) snapshot: Arc<Snapshot>,
+    pub(super) metadata: Arc<SettingsPresentation>,
     pub(super) projects: Vec<(String, String)>,
     inputs: DisplayInputs,
     pub(super) pane: Option<Arc<agent_core::store::Pane>>,
@@ -113,7 +108,7 @@ impl Preferences {
                     .timer(std::time::Duration::from_secs(1))
                     .await;
                 if view
-                    .update(cx, |view: &mut Self, _| view.poll_account())
+                    .update(cx, |view: &mut Self, cx| view.poll_account(cx))
                     .is_err()
                 {
                     break;
@@ -171,8 +166,9 @@ impl Preferences {
         ];
         Self {
             snapshot: Arc::default(),
+            metadata: agent_core::presentation::view::Presentation::empty().settings(),
             projects: Vec::new(),
-            inputs: DisplayInputs::from_snapshot(&Snapshot::default()),
+            inputs: DisplayInputs::from_snapshot(&Snapshot::default(), None),
             pane: None,
             handle: cx.global::<Runtime>().handle.clone(),
             epoch: 0,
@@ -198,11 +194,13 @@ impl Preferences {
     pub(super) fn sync(
         &mut self,
         snapshot: Arc<Snapshot>,
+        metadata: Arc<SettingsPresentation>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let inputs = DisplayInputs::from_snapshot(&snapshot);
-        if self.snapshot.connection.epoch != snapshot.connection.epoch {
+        let inputs = DisplayInputs::from_snapshot(&snapshot, metadata.provider());
+        let reconnected = self.snapshot.connection.epoch != snapshot.connection.epoch;
+        if reconnected {
             self.epoch += 1;
             self.account.busy = false;
             self.account.polling = false;
@@ -236,10 +234,11 @@ impl Preferences {
             self.worktrees.show(settings, window, cx);
         }
         self.snapshot = snapshot;
-        if self.inputs != inputs {
+        if reconnected || !self.inputs.equivalent(&inputs) || !self.metadata.equivalent(&metadata) {
             self.inputs = inputs;
             cx.notify();
         }
+        self.metadata = metadata;
     }
     pub(super) fn bind(
         &mut self,
@@ -296,11 +295,11 @@ impl Preferences {
         }
     }
     pub(super) fn sync_from_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(snapshot) = self.pane.as_ref().and_then(|pane| pane.snapshot().ok()) {
-            self.sync(snapshot, window, cx);
+        if let Some(view) = self.pane.as_ref().and_then(|pane| pane.presentation().ok()) {
+            self.sync(view.snapshot.clone(), view.settings.clone(), window, cx);
         }
     }
-    fn poll_account(&mut self) {
+    fn poll_account(&mut self, cx: &mut Context<Self>) {
         if self.account.polling
             && !self.account.busy
             && self.snapshot.connection.connected
@@ -316,6 +315,7 @@ impl Preferences {
                 }),
                 Completion::Account,
             );
+            cx.notify();
         }
     }
     fn completed(
@@ -527,6 +527,9 @@ mod tests {
         });
         cx.run_until_parked();
         let desktop = desktop.unwrap();
+        let projections = desktop.read_with(cx, |view, cx| {
+            view.composer_view.read(cx).content.read(cx).projections
+        });
         let notifications = Rc::new(Cell::new(0));
         let count = notifications.clone();
         cx.update(|cx| {
@@ -553,6 +556,16 @@ mod tests {
         cx.run_until_parked();
         assert!(changes.get() > 0, "the field must notify its own controls");
         assert_eq!(
+            desktop.read_with(cx, |view, cx| view
+                .composer_view
+                .read(cx)
+                .content
+                .read(cx)
+                .projections),
+            projections,
+            "settings text must not rebuild the composer's model"
+        );
+        assert_eq!(
             notifications.get(),
             0,
             "settings input must not broadcast Desktop changes"
@@ -564,6 +577,18 @@ mod tests {
         let _runtime = runtime(cx);
         let (view, window) =
             cx.add_window_view(|window, cx| Preferences::new(None, None, window, cx));
+        let mut publication =
+            agent_core::presentation::view::Presentation::project(Arc::default(), None);
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.sync(
+                    publication.snapshot.clone(),
+                    publication.settings.clone(),
+                    window,
+                    cx,
+                )
+            })
+        });
         window.run_until_parked();
         let notifications = Rc::new(Cell::new(0));
         let count = notifications.clone();
@@ -594,8 +619,17 @@ mod tests {
                 }),
             );
             window.update(|window, cx| {
+                publication = agent_core::presentation::view::Presentation::project(
+                    Arc::new(snapshot.clone()),
+                    Some(&publication),
+                );
                 view.update(cx, |view, cx| {
-                    view.sync(Arc::new(snapshot.clone()), window, cx)
+                    view.sync(
+                        publication.snapshot.clone(),
+                        publication.settings.clone(),
+                        window,
+                        cx,
+                    )
                 })
             });
             window.run_until_parked();
@@ -608,7 +642,18 @@ mod tests {
                 }))
                 .unwrap(),
             );
-            view.update(cx, |view, cx| view.sync(Arc::new(snapshot), window, cx));
+            publication = agent_core::presentation::view::Presentation::project(
+                Arc::new(snapshot),
+                Some(&publication),
+            );
+            view.update(cx, |view, cx| {
+                view.sync(
+                    publication.snapshot.clone(),
+                    publication.settings.clone(),
+                    window,
+                    cx,
+                )
+            });
         });
         window.run_until_parked();
         assert!(
@@ -668,7 +713,9 @@ mod tests {
                 assert!(!view.account.polling);
                 let mut snapshot = (*view.snapshot).clone();
                 snapshot.connection.connected = true;
-                view.sync(Arc::new(snapshot), window, cx);
+                let snapshot = Arc::new(snapshot);
+                let metadata = SettingsPresentation::from_snapshot(snapshot.clone());
+                view.sync(snapshot, metadata, window, cx);
                 view.account_operation(Intent::StartAccountLogin(op::StartAccountLogin {
                     provider: agent_protocol::session::ProviderKind::Codex,
                 }));

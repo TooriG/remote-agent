@@ -8,7 +8,8 @@ import UIKit
 @Observable
 final class AppViewModel {
     @ObservationIgnored private(set) var publication = Presentation.empty()
-    private(set) var snapshot = AgentCore.Snapshot.empty()
+    @ObservationIgnored private(set) var snapshot = AgentCore.Snapshot.empty()
+    private(set) var settings = Presentation.empty().settings()
     private(set) var connectionStates: [String: HostConnectionState] = [:]
     private(set) var isConnected = false
     private(set) var loadingThreads = false
@@ -155,6 +156,7 @@ final class AppViewModel {
     private func resetPresentation() {
         notice = nil
         publication = Presentation.empty()
+        settings = publication.settings()
         snapshot = AgentCore.Snapshot.empty()
         isConnected = false
         loadingThreads = false
@@ -253,6 +255,9 @@ extension AppViewModel {
         }
         chat?.publish(value)
         publication = value
+        if changes.settings {
+            settings = value.settings()
+        }
         updateConnection(connected: next.connected(), loading: next.operationRunning(key: .sessionList))
         let scopes: [ErrorScope] = [.application, .projects, .settings, .workspace]
         let notices = Dictionary(uniqueKeysWithValues: scopes.map { ($0, next.errorNotices(scope: $0)) })

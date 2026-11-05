@@ -3,15 +3,15 @@ import Foundation
 
 extension ConversationModel {
     var accounts: [Account] {
-        snapshot.accounts()?.accounts ?? []
+        settings.accounts()?.accounts ?? []
     }
 
     var selectedModel: ModelRef? {
-        composer.draft().model
+        settings.selectedModel()
     }
 
     var currentModel: Model? {
-        composer.currentModel()
+        settings.currentModel()
     }
 
     func chooseModel(_ value: ModelRef) {

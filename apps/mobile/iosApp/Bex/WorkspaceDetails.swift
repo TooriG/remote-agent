@@ -12,7 +12,7 @@ struct WorkspaceDiffScreen: View {
         // first, so the view follows the snapshot rather than its own request.
         let review = model.files.review()
         Group {
-            if let error = model.snapshot.operationError(key: .workspaceReview) {
+            if let error = model.conversationContext.workspaceError() {
                 VStack {
                     AppNotice(text: error).padding()
                     Button("再試行", action: loadDiff).accessibilityIdentifier("files.diff.retry")

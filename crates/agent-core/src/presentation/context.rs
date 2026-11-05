@@ -26,12 +26,14 @@ pub struct ConversationContext {
     history_notice: Option<String>,
     notices: Vec<ErrorNotice>,
     forks: Vec<ForkControl>,
+    workspace_error: Option<super::error::ErrorText>,
 }
 
 impl ConversationContext {
     pub(crate) fn project(snapshot: &Snapshot, previous: Option<&Arc<Self>>) -> Arc<Self> {
         let session = snapshot.pane.navigation.thread_id.as_ref();
         let next = Self {
+            workspace_error: snapshot.operation_error(OperationKey::WorkspaceReview),
             navigation: snapshot.pane.navigation.as_ref().clone(),
             title: session.and_then(|id| {
                 snapshot
@@ -90,6 +92,9 @@ impl ConversationContext {
     }
     pub fn title(&self) -> Option<String> {
         self.title.clone()
+    }
+    pub fn workspace_error(&self) -> Option<super::error::ErrorText> {
+        self.workspace_error.clone()
     }
     pub fn home(&self) -> Option<String> {
         self.home.clone()

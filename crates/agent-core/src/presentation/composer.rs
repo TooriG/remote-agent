@@ -144,10 +144,7 @@ impl ComposerPresentation {
         self.controls.clone()
     }
     pub fn current_model(&self) -> Option<Model> {
-        self.models
-            .iter()
-            .find(|model| Some(&model.model) == self.draft.model.as_ref())
-            .cloned()
+        super::model_settings::current_model(&self.models, self.draft.model.as_ref()).cloned()
     }
     pub fn request_phase(&self, id: agent_protocol::ids::RequestId) -> Option<OperationPhase> {
         self.controls

@@ -6,10 +6,8 @@ use crate::{
     presentation::conversation::{
         ItemPresentation, RenderedConversation, RenderedItem, RenderedTurn,
     },
-    session::ProviderKind,
     state::{Draft, FileDraft, Navigation, Snapshot},
 };
-use agent_protocol::operations::{AccountLogin, Accounts};
 use std::sync::Arc;
 
 #[uniffi::export]
@@ -82,31 +80,6 @@ impl Snapshot {
             .conversations
             .get(&id)
             .map(|value| Arc::new(Thread(value.clone())))
-    }
-    pub fn accounts(&self) -> Option<Accounts> {
-        self.catalog.account.accounts.as_deref().cloned()
-    }
-    pub fn codex_cli_status(&self) -> Option<agent_protocol::operations::CodexCliStatus> {
-        self.catalog.account.codex_cli.as_deref().cloned()
-    }
-    pub fn host_software(&self) -> Option<agent_protocol::operations::HostSoftware> {
-        self.catalog.host_software.as_deref().cloned()
-    }
-    pub fn account_is_selected(&self, provider: ProviderKind, id: String) -> bool {
-        self.catalog
-            .account
-            .accounts
-            .as_ref()
-            .is_some_and(|accounts| {
-                accounts
-                    .accounts
-                    .iter()
-                    .find(|account| account.provider == provider && account.id == id)
-                    .is_some_and(|account| accounts.is_selected(account))
-            })
-    }
-    pub fn account_login(&self) -> Option<AccountLogin> {
-        self.catalog.account.login.as_deref().cloned()
     }
 }
 #[uniffi::export]

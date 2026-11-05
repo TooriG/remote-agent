@@ -51,7 +51,7 @@ struct ConversationComposer: View {
     }
 
     var composer: some View {
-        let controls = model.composer.controls()
+        let controls = model.composerControls
         let attachments = model.composer.draft().attachments
         let question = model.questionPrompt
         let runningTurnId = controls.runningTurn
@@ -238,7 +238,7 @@ struct ConversationComposer: View {
         .buttonStyle(ComposerActionButtonStyle())
         .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "文字起こしして送信" : "送信"))
         .disabled(!model.isConnected || (!model.isNewThread && !hasConversation) || model
-            .composer.controls().provider == nil || model
+            .composerControls.provider == nil || model
             .sending || model.transferring || preparingMedia || dictation.requestingPermission || model
             .transcribing ||
             (!dictation.isRecording && model.draft.trimmingCharacters(in: .whitespacesAndNewlines)

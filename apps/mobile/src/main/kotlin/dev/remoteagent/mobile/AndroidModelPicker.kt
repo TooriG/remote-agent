@@ -31,7 +31,7 @@ import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ModelRef
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ProviderKind
-import dev.remoteagent.core.Snapshot
+import dev.remoteagent.core.SettingsPresentation
 
 @Composable
 internal fun ModelPickerButton(
@@ -70,21 +70,21 @@ internal fun ModelPickerButton(
 
 @Composable
 internal fun ModelPickerDialog(
-    snapshot: Snapshot,
+    settings: SettingsPresentation,
     selected: ModelRef?,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     dismiss: () -> Unit,
 ) {
     val language = LocalUiLanguage.current
-    val key = snapshot.navigation().draftKey
+    val key = settings.draftKey()
     var query by remember(key) { mutableStateOf("") }
-    val choices = snapshot.modelsMatching(null, query)
+    val choices = settings.modelsMatching(null, query)
     AlertDialog(
         onDismissRequest = { dismiss() },
         title = { Text(language.text("モデルと実行設定")) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ErrorNotices(snapshot.errorNotices(dev.remoteagent.core.ErrorScope.Settings), perform)
+                ErrorNotices(settings.notices(), perform)
                 OutlinedTextField(
                     query,
                     { query = it },
@@ -115,13 +115,13 @@ internal fun ModelPickerDialog(
                 if (choices.isEmpty()) {
                     Text(
                         language.text(
-                            if (snapshot.modelsLoading(null)) "モデルを読み込み中…" else "モデルがありません。検索条件やPCとの接続を確認してください。"
+                            if (settings.modelsLoading(null)) "モデルを読み込み中…" else "モデルがありません。検索条件やPCとの接続を確認してください。"
                         )
                     )
                 }
-                ModelQuickSettings(snapshot, perform)
+                ModelQuickSettings(settings, perform)
                 if (selected?.provider == dev.remoteagent.core.ProviderKind.DEEP_SEEK)
-                    CredentialSettings(snapshot, perform)
+                    CredentialSettings(settings, perform)
             }
         },
         confirmButton = { TextButton(onClick = { dismiss() }) { Text(language.text("完了")) } },
@@ -129,10 +129,10 @@ internal fun ModelPickerDialog(
 }
 
 @Composable
-private fun ModelQuickSettings(snapshot: Snapshot, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
+private fun ModelQuickSettings(settings: SettingsPresentation, perform: (Intent, (Result<Outcome>) -> Unit) -> Unit) {
     val language = LocalUiLanguage.current
-    val key = snapshot.navigation().draftKey
-    val controls = snapshot.modelQuickControls(key)
+    val key = settings.draftKey()
+    val controls = settings.quickControls()
     if (controls.efforts.isNotEmpty()) {
         Text(language.text("推論量"), style = MaterialTheme.typography.labelLarge)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

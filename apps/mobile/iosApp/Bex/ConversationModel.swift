@@ -11,10 +11,12 @@ final class ConversationModel {
     @ObservationIgnored let session: ClientSession
     @ObservationIgnored private let pane: AgentPane?
     @ObservationIgnored private(set) var publication = Presentation.empty()
-    private(set) var snapshot = AgentCore.Snapshot.empty()
+    @ObservationIgnored private(set) var snapshot = AgentCore.Snapshot.empty()
+    private(set) var settings = Presentation.empty().settings()
     private(set) var isConnected = false
     private(set) var conversationContext = Presentation.empty().conversationContext()
     private(set) var composer = Presentation.empty().composer()
+    private(set) var composerControls = Presentation.empty().composer().controls()
     private(set) var files = AgentCore.Snapshot.empty().files()
     private(set) var terminals = Terminals.empty()
     private(set) var conversation: ConversationPresentation?
@@ -97,8 +99,14 @@ final class ConversationModel {
         let next = value.snapshot()
         migrateWorkbench(to: next)
         publication = value
+        if changes.settings {
+            settings = value.settings()
+        }
         if changes.composer {
             composer = value.composer()
+        }
+        if changes.composerControls {
+            composerControls = value.composer().controls()
         }
         if changes.context {
             conversationContext = value.conversationContext()
@@ -149,15 +157,15 @@ final class ConversationModel {
 
 extension ConversationModel {
     var sending: Bool {
-        composer.controls().sending
+        composerControls.sending
     }
 
     var transcribing: Bool {
-        composer.controls().transcribing
+        composerControls.transcribing
     }
 
     var interruptingTurnId: String? {
-        let controls = composer.controls()
+        let controls = composerControls
         return controls.interruptPhase == .running ? controls.runningTurn : nil
     }
 
@@ -284,11 +292,11 @@ extension ConversationModel {
     }
 
     var questionPrompt: QuestionPrompt? {
-        composer.controls().question
+        composerControls.question
     }
 
     var dockedRequest: Request? {
-        composer.controls().request
+        composerControls.request
     }
 
     func answerQuestion(_ requestId: String, _ action: QuestionAction) {

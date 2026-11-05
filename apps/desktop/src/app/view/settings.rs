@@ -86,9 +86,7 @@ impl Preferences {
                             .disabled(
                                 disabled
                                     || self.snapshot.catalog.provider_settings.is_none()
-                                    || self
-                                        .snapshot
-                                        .operation_running(op::OperationKey::ProviderSettings),
+                                    || self.metadata.provider_settings_busy(),
                             )
                             .on_click(cx.listener(move |view, enabled, _, cx| {
                                 view.dispatch(Intent::SetProviderEnabled(op::SetProviderEnabled {
@@ -452,7 +450,7 @@ impl Preferences {
                             ConnectionLayout::Settings,
                             self.remote.as_ref().map(|host| host.id.as_str()),
                             self.snapshot.connection.connected,
-                            self.snapshot.connection_enabled(),
+                            self.metadata.connection_enabled(),
                             agent_controls,
                             cx,
                         ))

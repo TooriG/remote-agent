@@ -12,7 +12,7 @@ pub enum AgentAvailability {
     Unavailable,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ConnectionAgent {
     pub provider: ProviderKind,
@@ -23,7 +23,7 @@ pub struct ConnectionAgent {
     pub error: Option<super::error::ErrorText>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ConnectionSetup {
     pub agents: Vec<ConnectionAgent>,

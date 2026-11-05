@@ -246,7 +246,7 @@ pub struct ProjectImportState {
 
 /// Identity of a published value. Shared allocations compare by pointer; small
 /// values compare by equality. Groups of state are "the same" when every field is.
-pub(crate) trait Same {
+pub trait Same {
     fn same(&self, other: &Self) -> bool;
 }
 impl<T: ?Sized> Same for Arc<T> {
@@ -584,20 +584,7 @@ impl Snapshot {
         &self,
         provider: Option<crate::session::ProviderKind>,
     ) -> Vec<String> {
-        let provider = provider.map(crate::session::ProviderKind::key);
-        self.catalog
-            .model_errors
-            .iter()
-            .filter(|(key, _)| provider.is_none_or(|provider| provider == key.as_str()))
-            .map(|(provider, error)| {
-                let message = error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| error.to_string());
-                format!("{provider}: {message}")
-            })
-            .collect()
+        crate::presentation::model_settings::error_messages(&self.catalog.model_errors, provider)
     }
 }
 

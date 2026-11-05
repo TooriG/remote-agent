@@ -76,7 +76,7 @@ struct WorktreeSettingsScreen: View {
         Form {
             Section("適用範囲") {
                 SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
-                                    disabled: busy || model.snapshot.accountLogin() != nil,
+                                    disabled: busy || model.settings.accountLogin() != nil,
                                     select: model.activateProfile,
                                     project: $project,
                                     projects: (model.list?.projects ?? []) + (model.list?.hiddenProjects ?? []))

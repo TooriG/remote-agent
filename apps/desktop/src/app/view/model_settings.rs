@@ -433,10 +433,7 @@ impl Preferences {
                             .child(error_view(&error_text(&error), language))
                     }),
             );
-        if let Some(error) = self
-            .snapshot
-            .operation_error(op::OperationKey::AccountLogin { provider })
-        {
+        if let Some(error) = self.metadata.account_login_error(provider) {
             body = body.child(
                 div()
                     .text_sm()
@@ -462,7 +459,7 @@ impl Preferences {
     fn codex_cli_controls(&self, disabled: bool, cx: &Context<Self>) -> Div {
         let language = crate::localization::language(cx);
         let cli = self.snapshot.catalog.account.codex_cli.as_deref();
-        let updating = self.snapshot.operation_running(op::OperationKey::CodexCli);
+        let updating = self.metadata.codex_cli_busy();
         v_flex().gap_4().mt_2()
             .child(div().text_lg().font_semibold().child("Codex CLI"))
             .child(settings_group().p_5().gap_4()
@@ -535,10 +532,7 @@ impl Preferences {
 
     fn credential_controls(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let disabled = !self.snapshot.connection.connected
-            || self
-                .snapshot
-                .operation_running(op::OperationKey::DshCredentials);
+        let disabled = !self.snapshot.connection.connected || self.metadata.credential_busy();
         let controls = self.snapshot.credential_controls();
         let selected = controls
             .iter()
@@ -660,10 +654,7 @@ impl Preferences {
                 .debug_selector(|| "dsh-openrouter-models".into()),
             );
         }
-        if let Some(error) = self
-            .snapshot
-            .operation_error(op::OperationKey::DshCredentials)
-        {
+        if let Some(error) = self.metadata.credential_error() {
             form = form.child(
                 div()
                     .text_sm()
@@ -1522,6 +1513,7 @@ mod tests {
                 if view.session.is_some() {
                     Arc::make_mut(&mut view.snapshot).connection.connected = true;
                 }
+                view.project_fixture();
                 view.publish_preferences(window, cx);
                 view.preferences.update(cx, |view, cx| {
                     v_flex()
