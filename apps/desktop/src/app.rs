@@ -488,15 +488,19 @@ impl Desktop {
                     match event {
                         HostEvent::Selected(remote) => view.switch_host(remote.clone(), window, cx),
                         HostEvent::Enabled(remote, enabled) => {
-                            view.set_connection_enabled(remote.clone(), *enabled, window, cx)
+                            view.set_connection_enabled(remote.clone(), *enabled)
                         }
                         HostEvent::Failed(error) => view.set_error(error.clone()),
-                        HostEvent::Removed(id)
-                            if view.remote.as_ref().is_some_and(|remote| &remote.id == id) =>
-                        {
-                            view.switch_host(None, window, cx)
+                        HostEvent::Removed(id) => {
+                            let removed = view.runtime.sessions.remove(id);
+                            view.effect(removed, |result| Update::LocalCompleted {
+                                scope: ErrorScope::Settings,
+                                result,
+                            });
+                            if view.remote.as_ref().is_some_and(|remote| &remote.id == id) {
+                                view.switch_host(None, window, cx);
+                            }
                         }
-                        _ => {}
                     }
                     cx.notify();
                 }),
@@ -1166,24 +1170,25 @@ impl Desktop {
             },
         );
     }
-    fn set_connection_enabled(
-        &mut self,
-        remote: Option<RemoteHost>,
-        enabled: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.remote != remote {
-            if enabled {
-                self.switch_host(remote, window, cx);
-            }
-        } else if enabled {
-            let previous = self.session.take();
-            self.connect(previous, Some(true));
-        } else {
-            self.dispatch(Intent::SetConnectionEnabled { enabled });
-        }
-        cx.notify();
+    fn set_connection_enabled(&mut self, remote: Option<RemoteHost>, enabled: bool) {
+        let runtime = self.runtime.clone();
+        self.effect(
+            async move {
+                runtime
+                    .sessions
+                    .open(
+                        remote.as_ref().map(|host| host.ticket.as_str()),
+                        runtime.clone(),
+                        Some(enabled),
+                    )
+                    .await?;
+                Ok(())
+            },
+            |result| Update::LocalCompleted {
+                scope: ErrorScope::Settings,
+                result,
+            },
+        );
     }
 
     fn switch_host(

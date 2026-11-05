@@ -148,21 +148,11 @@ struct ThreadScreen: View {
                 }
                 // Stable row identities preserve native text state while history is realized lazily.
                 .scrollPosition($scrollPosition, anchor: .bottom)
-                .onScrollGeometryChange(for: ConversationScrollLayout.self) { geometry in
-                    ConversationScrollLayout(contentHeight: geometry.contentSize.height,
-                                             containerHeight: geometry.containerSize.height,
-                                             insets: geometry.contentInsets,
-                                             offset: geometry.contentOffset)
-                } action: { previous, layout in
-                    if isFollowingLatest,
-                       previous.contentHeight != layout.contentHeight ||
-                       previous.containerHeight != layout.containerHeight || previous.insets != layout.insets {
-                        scrollPosition.scrollTo(edge: .bottom)
-                    }
-                }
+                // Lazy height estimates must not feed repeated imperative scroll requests back into layout.
+                .defaultScrollAnchor(isFollowingLatest ? .bottom : nil, for: .sizeChanges)
                 .defaultScrollAnchor(.bottom, for: .alignment)
                 // Tail updates preserve a detached reader.
-                .transaction(value: lastRowId) { transaction in
+                .transaction { transaction in
                     if !isFollowingLatest {
                         transaction.scrollContentOffsetAdjustmentBehavior = .disabled
                     }
@@ -224,14 +214,6 @@ struct ThreadScreen: View {
                                  isSideChat: isSideChat, openTools: openTools)
         }
     }
-}
-
-/// Observe position without publishing it as view state; follow the tail only when layout changes.
-private struct ConversationScrollLayout: Equatable {
-    let contentHeight: CGFloat
-    let containerHeight: CGFloat
-    let insets: EdgeInsets
-    let offset: CGPoint
 }
 
 /// Conversation navigation

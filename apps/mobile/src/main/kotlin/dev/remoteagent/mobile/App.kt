@@ -118,6 +118,8 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var profiles by mutableStateOf(emptyList<HostProfile>())
         private set
 
+    val connectionStates = mutableStateMapOf<String, HostConnectionState>()
+
     var connectionSelection by mutableStateOf(dev.remoteagent.core.ConnectionSelection(null, false))
         private set
 
@@ -133,7 +135,11 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         get() = conversationContext.history()?.loading == true
 
     val shouldReconnect: Boolean
-        get() = !isConnected && connectionSelection.hostId != null && screen != Screen.Pairing
+        get() =
+            !isConnected &&
+                connectionSelection.hostId != null &&
+                connectionStates[connectionSelection.hostId]?.enabled != false &&
+                screen != Screen.Pairing
 
     var list by mutableStateOf<ThreadList?>(null)
         private set
@@ -309,6 +315,68 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         if (!connections.containsKey(profile.id)) connect(profile, reconnect = true)
     }
 
+    fun setConnectionEnabled(host: String, enabled: Boolean) {
+        val selected = sessions.session(host) ?: return
+        if (!enabled) connections.remove(host)?.cancel()
+        try {
+            val receipt = selected.dispatch(Intent.SetConnectionEnabled(enabled))
+            connectionStates[host] = HostConnectionState(selected.snapshot())
+            scope.launch {
+                try {
+                    receipt.wait()
+                    selected.flush()
+                    if (profiles.none { it.id == host }) return@launch
+                    connectionStates[host] = HostConnectionState(selected.snapshot())
+                    if (enabled) profiles.firstOrNull { it.id == host }?.let { connect(it) }
+                } catch (error: AgentException) {
+                    notice = error.displayMessage()
+                }
+            }
+        } catch (error: AgentException) {
+            notice = error.displayMessage()
+        }
+    }
+
+    fun removeProfile(host: String) {
+        if (profiles.none { it.id == host }) return
+        profiles = profiles.filterNot { it.id == host }
+        repository.saveProfiles(profiles)
+        connections.remove(host)?.cancel()
+        observations.remove(host)?.cancel()
+        connectionStates.remove(host)
+        val previous = sessions.remove(host)
+        if (connectionSelection.hostId == host) {
+            session = null
+            owner = null
+            publish(Presentation.empty())
+        }
+        connectionSelection =
+            dev.remoteagent.core.resolveConnectionSelection(
+                profiles.map { it.id },
+                connectionSelection.hostId,
+                connectionSelection.all,
+            )
+        repository.selected = connectionSelection.hostId
+        repository.allHosts = connectionSelection.all
+        connectionSelection.hostId?.let(::activateProfile)
+        updateTaskList()
+        screen = Screen.Hosts
+        scope.launch {
+            try {
+                previous?.shutdown()
+            } catch (error: AgentException) {
+                notice = error.displayMessage()
+            }
+            try {
+                repository.removeHost(host)
+            } catch (error: java.security.GeneralSecurityException) {
+                notice = error.displayMessage()
+            } catch (error: IOException) {
+                notice = error.displayMessage()
+            }
+        }
+    }
+
     private fun connect(profile: HostProfile, reconnect: Boolean = false) {
         val storage = repository.sessionStorage(profile.id)
         val store = sessions.open(profile.id, storage, storage)
@@ -350,7 +418,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
                 var previous = store.presentation()
                 receiveHost(previous, host, true)
                 while (isActive) {
-                    val latest = store.nextPresentation(previous)
+                    store.nextPresentation(previous)
+                    // UI edits may acknowledge newer input before this notification resumes.
+                    val latest = store.presentation()
                     receiveHost(latest, host, latest.changes(previous).list)
                     previous = latest
                 }
@@ -361,6 +431,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     private fun receiveHost(next: Presentation, host: String, listChanged: Boolean) {
+        connectionStates[host] = HostConnectionState(next.snapshot())
         updateProfile(next.snapshot(), host)
         if (connectionSelection.hostId == host) {
             owner = session?.store()
@@ -533,7 +604,15 @@ private fun androidx.compose.foundation.layout.ColumnScope.AppScreenContent(
 ) {
     when (model.screen) {
         Screen.Pairing -> PairingScreen(model.busy, model::pair, model::showThreads, requestQrScan)
-        Screen.Hosts -> ProfilesScreen(model.profiles, model::selectConnection) { model.screen = Screen.Pairing }
+        Screen.Hosts ->
+            ProfilesScreen(
+                model.profiles,
+                model.connectionStates,
+                model::setConnectionEnabled,
+                model::removeProfile,
+            ) {
+                model.screen = Screen.Pairing
+            }
         Screen.Threads -> {
             ErrorNotices(model.projectNotices, model::perform)
             ThreadListScreen(

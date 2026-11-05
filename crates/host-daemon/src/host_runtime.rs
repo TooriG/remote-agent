@@ -407,6 +407,7 @@ impl HostRuntime {
                         .trust
                         .allowed
                         .iter()
+                        .filter(|id| **id != self.local_node)
                         .map(|id| HostDevice {
                             id: id.to_string(),
                             name: record.device_names.get(id).cloned(),
@@ -640,6 +641,16 @@ mod tests {
             id: tablet.to_string(),
             name: Some("My device".into())
         }));
+        assert_eq!(status.devices.len(), 2);
+        assert!(
+            credentials
+                .record
+                .lock()
+                .await
+                .trust
+                .allowed
+                .contains(&runtime.local_node)
+        );
 
         let reply = runtime
             .dispatch(

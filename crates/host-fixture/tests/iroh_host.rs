@@ -357,31 +357,15 @@ async fn concurrent_consumers_cannot_both_use_one_invitation() {
         let invitation: Invitation = local.peer.call(&op::CreateInvitation {}).await.unwrap();
         let first = fixture.connect(Identity::generate()).await.unwrap();
         let second = fixture.connect(Identity::generate()).await.unwrap();
-        let params = json!({"invitation":invitation.invitation});
-        let (a, b) = tokio::join!(
-            (async {
-                first
-                    .peer
-                    .call(&serde_json::from_value::<rpc::Pair>((params).clone()).unwrap())
-                    .await
-                    .map(|output| serde_json::to_value(output).unwrap())
-            }),
-            (async {
-                second
-                    .peer
-                    .call(&serde_json::from_value::<rpc::Pair>((params).clone()).unwrap())
-                    .await
-                    .map(|output| serde_json::to_value(output).unwrap())
-            })
-        );
+        let params = rpc::Pair {
+            invitation: invitation.invitation,
+        };
+        let (a, b) = tokio::join!(first.peer.call(&params), second.peer.call(&params));
         assert_ne!(a.is_ok(), b.is_ok());
-        let status = local
-            .peer
-            .call(&rpc::ReadHostStatus {})
-            .await
-            .map(|output| serde_json::to_value(output).unwrap())
-            .unwrap();
-        assert_eq!(status["devices"].as_array().unwrap().len(), 2);
+        let status = local.peer.call(&rpc::ReadHostStatus {}).await.unwrap();
+        let paired = if a.is_ok() { &first } else { &second };
+        assert_eq!(status.devices.len(), 1);
+        assert_eq!(status.devices[0].id, paired.endpoint.node_id().to_string());
         first.endpoint.close().await;
         second.endpoint.close().await;
         local.close().await;
@@ -2328,18 +2312,8 @@ async fn expired_invitation_is_rejected_by_daemon_and_remains_unconsumed() {
         );
         stranger.endpoint.close().await;
         let local = fixture.local().await.unwrap();
-        assert_eq!(
-            local
-                .peer
-                .call(&rpc::ReadHostStatus {})
-                .await
-                .map(|output| serde_json::to_value(output).unwrap())
-                .unwrap()["devices"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        let status = local.peer.call(&rpc::ReadHostStatus {}).await.unwrap();
+        assert!(status.devices.is_empty());
         local.close().await;
         fixture.close().await.unwrap();
     })

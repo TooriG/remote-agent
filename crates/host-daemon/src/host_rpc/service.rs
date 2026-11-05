@@ -1,6 +1,7 @@
 //! The Host's RPC entry point. Dispatch admits each call, then routes it to the
 //! owner of its resource; workflows that span owners live in the domain files.
 mod activity;
+mod capacity;
 mod conversations;
 mod model_selections;
 mod preparation;
@@ -56,6 +57,7 @@ struct ServiceInner {
     transcripts: Arc<super::transcripts::Transcripts>,
     imports: std::sync::Mutex<HashMap<agent_protocol::session::SessionRef, transcripts::Import>>,
     model_selections: model_selections::ModelSelections,
+    capacity: std::sync::Mutex<HashMap<agent_protocol::session::SessionRef, capacity::Run>>,
     history_scope: OnceLock<(std::path::PathBuf, bool)>,
     updating: std::sync::atomic::AtomicBool,
 }
@@ -81,6 +83,7 @@ impl HostRpcService {
                 ),
                 transcripts,
                 imports: Default::default(),
+                capacity: Default::default(),
                 model_selections: model_selections::ModelSelections::new(
                     projects.path().with_file_name("bex-model-selections.json"),
                 ),
@@ -721,7 +724,13 @@ impl HostRpcService {
                                 })
                                 .map_err(|error| error.to_string())
                                 .and_then(|(bindings, event)| {
-                                    event.map_or(Ok(()), |event| router.apply(event, &bindings))
+                                    event.map_or(Ok(()), |mut event| {
+                                        let service = Self {
+                                            inner: inner.clone(),
+                                        };
+                                        service.capacity_event(&mut event);
+                                        router.apply(event, &bindings)
+                                    })
                                 });
                             if let Some(applied) = event.applied {
                                 let _ = applied.send(result);

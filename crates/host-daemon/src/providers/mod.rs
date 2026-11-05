@@ -372,6 +372,19 @@ pub(crate) trait Agent: Identity {
         reload: bool,
         browser: Option<Value>,
     ) -> Result<op::SubmissionReceipt, Failure>;
+    /// Continue persisted native history without replaying a user message.
+    async fn continue_turn(
+        &self,
+        _id: &str,
+        _model: Option<&str>,
+        _effort: Option<&str>,
+        _service_tier: Option<&str>,
+    ) -> Result<op::SubmissionReceipt, Failure> {
+        Err(Failure::new(
+            "unsupported_operation",
+            "Native continuation is unavailable",
+        ))
+    }
     async fn interrupt(&self, id: &str, turn: &TurnId) -> Result<Empty, Failure>;
     async fn models(&self, params: &op::ListModels) -> Result<op::ModelPage, Failure>;
     async fn model_settings(

@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.util.Base64
@@ -34,6 +35,13 @@ internal class AndroidCredentialStore(context: Context, reference: String) {
         } finally {
             if (!saved) identity.fill(0)
         }
+    }
+
+    @Synchronized
+    fun remove() {
+        encryptedFile.delete()
+        if (encryptedFile.baseFile.exists()) throw IOException("保存した接続を削除できませんでした。")
+        KeyStore.getInstance(AndroidKeyStore).apply { load(null) }.deleteEntry(keyStoreAlias)
     }
 
     private fun encrypt(plaintext: ByteArray): ByteArray {

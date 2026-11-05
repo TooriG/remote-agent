@@ -1008,6 +1008,20 @@ impl Agent for Codex {
         };
         Ok(op::SubmissionReceipt { turn_id })
     }
+    async fn continue_turn(
+        &self,
+        id: &str,
+        model: Option<&str>,
+        effort: Option<&str>,
+        service_tier: Option<&str>,
+    ) -> Result<op::SubmissionReceipt, Failure> {
+        let reply: Value = self
+            .request("turn/start", &serde_json::json!({"threadId":id,"input":[],"model":model,"effort":effort,"serviceTierForTurn":service_tier}))
+            .await?;
+        Ok(op::SubmissionReceipt {
+            turn_id: Some(native_turn_id(reply["turn"]["id"].as_str())?),
+        })
+    }
     async fn interrupt(
         &self,
         id: &str,

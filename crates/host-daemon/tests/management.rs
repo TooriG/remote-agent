@@ -134,7 +134,7 @@ async fn headless_invitation_pairs_once_and_status_uses_the_running_host() {
         let output = command(&state).arg("status").output().await.unwrap();
         assert!(output.status.success());
         let status: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(status["devices"].as_array().unwrap().len(), 1);
+        assert!(status["devices"].as_array().unwrap().is_empty());
         peer.close().await;
         phone.close().await;
         host.kill().await.unwrap();

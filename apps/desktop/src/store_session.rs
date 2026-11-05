@@ -50,34 +50,81 @@ type HostEntry = Arc<tokio::sync::Mutex<Option<Arc<HostSession>>>>;
 /// Open Hosts outlive navigation and are shut down once when the app exits.
 #[derive(Default)]
 pub(crate) struct Sessions {
-    hosts: tokio::sync::Mutex<std::collections::BTreeMap<String, HostEntry>>,
+    hosts: Mutex<std::collections::BTreeMap<String, HostEntry>>,
+    local_node: std::sync::OnceLock<agent_transport::transport::NodeId>,
     stop: CancellationToken,
 }
 impl Sessions {
+    pub(crate) fn remove(
+        &self,
+        host: &str,
+    ) -> impl Future<Output = Result<(), String>> + Send + use<> {
+        let entry = self
+            .hosts
+            .lock()
+            .unwrap()
+            .entry(host.to_owned())
+            .or_default()
+            .clone();
+        let host = host.to_owned();
+        async move {
+            // A new pairing of this Host must wait for the old final save and
+            // cache cleanup before restoring the same files.
+            let mut entry = entry.lock().await;
+            if let Some(owner) = entry.take()
+                && let Some(closed) = owner.close()
+            {
+                closed.await.map_err(|error| error.to_string())?;
+            }
+            let copies = crate::platform::conversation_copies(&host)?;
+            tokio::task::spawn_blocking(move || agent_core::conversation_cache::clear(&copies))
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        }
+    }
+
+    pub(crate) fn store(&self, remote: Option<&str>) -> Option<Arc<Store>> {
+        let host = self.host_key(remote).ok()?;
+        let entry = self.hosts.lock().unwrap().get(&host)?.clone();
+        Some(entry.try_lock().ok()?.as_ref()?.store.clone())
+    }
+
+    fn host_key(&self, remote: Option<&str>) -> Result<String, String> {
+        let host = match remote {
+            Some(ticket) => {
+                let node = ticket
+                    .parse::<agent_transport::transport::Ticket>()
+                    .map_err(|error| error.to_string())?
+                    .node_id();
+                if self.local_node.get() == Some(&node) {
+                    "local".into()
+                } else {
+                    node.to_string()
+                }
+            }
+            None => "local".into(),
+        };
+        Ok(host)
+    }
+
     pub(crate) async fn open(
         &self,
         remote: Option<&str>,
         runtime: Runtime,
         enabled: Option<bool>,
     ) -> Result<StoreSession, String> {
-        let host = match remote {
-            Some(ticket) => {
-                let ticket = ticket
-                    .parse::<agent_transport::transport::Ticket>()
-                    .map_err(|error| error.to_string())?;
-                if matches!(crate::platform::discover_local_host().await,
-                    Ok(agent_local_host::LocalHost { state: agent_local_host::LocalHostState::Ready(local), .. })
-                        if local.node_id() == ticket.node_id())
-                {
-                    "local".into()
-                } else {
-                    ticket.node_id().to_string()
-                }
-            }
-            None => "local".into(),
-        };
+        if self.local_node.get().is_none()
+            && let Ok(agent_local_host::LocalHost {
+                state: agent_local_host::LocalHostState::Ready(local),
+                ..
+            }) = crate::platform::discover_local_host().await
+        {
+            let _ = self.local_node.set(local.node_id());
+        }
+        let host = self.host_key(remote)?;
         let entry = {
-            let mut hosts = self.hosts.lock().await;
+            let mut hosts = self.hosts.lock().unwrap();
             if self.stop.is_cancelled() {
                 return Err("sessions are closed".into());
             }
@@ -153,7 +200,7 @@ impl Sessions {
 
     pub(crate) async fn close(&self) {
         let hosts = {
-            let mut hosts = self.hosts.lock().await;
+            let mut hosts = self.hosts.lock().unwrap();
             self.stop.cancel();
             std::mem::take(&mut *hosts)
         };
@@ -409,12 +456,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connection_switches_address_the_owner_without_changing_its_panes() {
+        use agent_transport::transport::{Endpoint, Identity, Relays};
+        let runtime = runtime();
+        let endpoint = Endpoint::bind(Identity::generate(), Relays::Loopback)
+            .await
+            .unwrap();
+        let local_endpoint = Endpoint::bind(Identity::generate(), Relays::Loopback)
+            .await
+            .unwrap();
+        runtime
+            .sessions
+            .local_node
+            .set(local_endpoint.node_id())
+            .unwrap();
+        let ticket = endpoint.ticket().to_string();
+        let local = StoreSession::new(
+            Arc::new(Store::offline(Snapshot::default())),
+            runtime.clone(),
+        );
+        let remote = StoreSession::new(
+            Arc::new(Store::offline(Snapshot::default())),
+            runtime.clone(),
+        );
+        for (key, session) in [
+            ("local".to_owned(), &local),
+            (endpoint.node_id().to_string(), &remote),
+        ] {
+            runtime.sessions.hosts.lock().unwrap().insert(
+                key,
+                Arc::new(tokio::sync::Mutex::new(Some(session.host.clone()))),
+            );
+        }
+        local
+            .pane
+            .dispatch(Intent::NewChat {
+                cwd: "/local".into(),
+            })
+            .await
+            .unwrap();
+        remote
+            .pane
+            .dispatch(Intent::NewChat {
+                cwd: "/remote".into(),
+            })
+            .await
+            .unwrap();
+        let store = runtime.sessions.store(Some(&ticket)).unwrap();
+        assert!(Arc::ptr_eq(
+            &runtime
+                .sessions
+                .store(Some(&local_endpoint.ticket().to_string()))
+                .unwrap(),
+            &local.host.store
+        ));
+        store
+            .dispatch(Intent::SetConnectionEnabled { enabled: false })
+            .await
+            .unwrap();
+        assert!(
+            !runtime
+                .sessions
+                .store(Some(&ticket))
+                .unwrap()
+                .snapshot()
+                .connection_enabled()
+        );
+        assert!(
+            runtime
+                .sessions
+                .store(None)
+                .unwrap()
+                .snapshot()
+                .connection_enabled()
+        );
+        assert_eq!(local.pane.snapshot().unwrap().pane.navigation.cwd, "/local");
+        assert_eq!(
+            remote.pane.snapshot().unwrap().pane.navigation.cwd,
+            "/remote"
+        );
+        assert!(runtime.sessions.store(Some("invalid ticket")).is_none());
+        runtime
+            .sessions
+            .remove(&endpoint.node_id().to_string())
+            .await
+            .unwrap();
+        assert!(store.dispatch(Intent::ShowThreadList).await.is_err());
+        assert!(runtime.sessions.store(Some(&ticket)).is_none());
+        assert!(local.pane.snapshot().is_ok());
+        runtime.sessions.close().await;
+        assert!(runtime.sessions.store(Some(&ticket)).is_none());
+        endpoint.close().await;
+        local_endpoint.close().await;
+    }
+
+    #[tokio::test]
     async fn application_shutdown_closes_registered_hosts_and_prevents_reopening() {
         let runtime = runtime();
         let store = Arc::new(Store::offline(Snapshot::default()));
         let primary = StoreSession::new(store.clone(), runtime.clone());
         let side = primary.side("/side".into()).unwrap();
-        runtime.sessions.hosts.lock().await.insert(
+        runtime.sessions.hosts.lock().unwrap().insert(
             "local".into(),
             Arc::new(tokio::sync::Mutex::new(Some(primary.host.clone()))),
         );

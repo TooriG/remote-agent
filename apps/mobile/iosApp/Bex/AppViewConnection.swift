@@ -65,8 +65,10 @@ extension AppViewModel {
                 var previous = owner.presentation()
                 self?.receiveHost(previous, host: host, listChanged: true)
                 while !Task.isCancelled {
-                    let latest = try await owner.nextPresentation(previous: previous)
+                    _ = try await owner.nextPresentation(previous: previous)
                     guard let self, !Task.isCancelled else { return }
+                    // Main-actor edits may acknowledge newer input before this notification resumes.
+                    let latest = owner.presentation()
                     let changes = latest.changes(previous: previous)
                     receiveHost(latest, host: host, listChanged: changes.list)
                     if changes.reconnected {
