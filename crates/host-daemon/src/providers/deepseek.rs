@@ -862,19 +862,21 @@ impl Agent for DeepSeek {
         scope: SessionListScope<'_>,
         limit: u32,
     ) -> Result<SessionPage, Failure> {
+        let search = search.to_lowercase();
         let records = self.0.records.lock().await;
         let mut data: Vec<_> = records
             .iter()
             .filter(|(id, r)| {
                 !matches!(scope, SessionListScope::Descendants(_))
                     && cursor.as_ref().is_none_or(|c| *id > c)
-                    && format!(
-                        "{} {}",
-                        r.thread.name.as_deref().unwrap_or_default(),
-                        r.thread.preview.as_deref().unwrap_or_default()
-                    )
-                    .to_lowercase()
-                    .contains(&search.to_lowercase())
+                    && (search.is_empty()
+                        || format!(
+                            "{} {}",
+                            r.thread.name.as_deref().unwrap_or_default(),
+                            r.thread.preview.as_deref().unwrap_or_default()
+                        )
+                        .to_lowercase()
+                        .contains(&search))
             })
             .take(limit.max(1) as usize + 1)
             .map(|(_, r)| {
@@ -1375,6 +1377,138 @@ fn permission_choice(option: &Value) -> Option<Choice> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[tokio::test]
+    async fn conversation_search_keeps_unicode_whitespace_paging_and_saved_history() {
+        let root = tempfile::tempdir().unwrap();
+        let adapter = DeepSeek::load(root.path().join("missing-dsh"), root.path().join("records"))
+            .await
+            .unwrap();
+        let records = [
+            ("a", Some("ALPHA"), Some("βeta")),
+            ("b", Some("case"), Some("İSTANBUL")),
+            ("c", None, None),
+            ("d", Some("Alpha"), Some("tail")),
+        ]
+        .into_iter()
+        .map(|(id, name, preview)| {
+            (
+                id.to_owned(),
+                ThreadResponse {
+                    thread: Thread {
+                        id: Some(SessionRef {
+                            provider: PROVIDER,
+                            id: id.into(),
+                        }),
+                        name: name.map(str::to_owned),
+                        preview: preview.map(str::to_owned),
+                        cwd: Some(format!("/work/{id}")),
+                        git_branch: Some(format!("branch-{id}")),
+                        updated_at: Some(17.),
+                        status: SessionStatus::Idle,
+                        turns: Some(vec![Arc::new(Turn {
+                            id: format!("turn-{id}").into(),
+                            ..Default::default()
+                        })]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+        *adapter.0.records.lock().await = records.clone();
+        for scope in [SessionListScope::All, SessionListScope::Roots] {
+            for (query, ids) in [
+                ("", vec!["a", "b", "c", "d"]),
+                (" ", vec!["a", "b", "c", "d"]),
+                (" \t", vec![]),
+                (" ALPHA ", vec![]),
+                ("alpHA", vec!["a", "d"]),
+                ("ALPHA βE", vec!["a"]),
+                ("İSTANBUL", vec!["b"]),
+                ("i\u{307}staN", vec!["b"]),
+                ("missing", vec![]),
+            ] {
+                let result = Agent::list(&adapter, query, None, scope, 10).await.unwrap();
+                let actual = result
+                    .data
+                    .into_iter()
+                    .map(|row| {
+                        assert!(row.branch.is_none());
+                        assert!(row.thread.turns.is_none());
+                        row.thread
+                    })
+                    .collect::<Vec<_>>();
+                let expected = ids
+                    .into_iter()
+                    .map(|id| {
+                        let mut thread = records[id].thread.clone();
+                        thread.turns = None;
+                        thread
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, expected, "query={query:?}");
+                assert!(result.next_cursor.is_none());
+            }
+        }
+        for (query, cursor, scope, limit, ids, next) in [
+            (
+                "",
+                None,
+                SessionListScope::Roots,
+                2,
+                vec!["a", "b"],
+                Some("b"),
+            ),
+            (
+                "",
+                Some("b"),
+                SessionListScope::All,
+                2,
+                vec!["c", "d"],
+                None,
+            ),
+            ("", None, SessionListScope::All, 0, vec!["a"], Some("a")),
+            (
+                "alpha",
+                Some("a"),
+                SessionListScope::All,
+                u32::MAX,
+                vec!["d"],
+                None,
+            ),
+            ("", Some("z"), SessionListScope::All, 2, vec![], None),
+            (
+                "",
+                None,
+                SessionListScope::Descendants("a"),
+                2,
+                vec![],
+                None,
+            ),
+        ] {
+            let result = Agent::list(&adapter, query, cursor.map(str::to_owned), scope, limit)
+                .await
+                .unwrap();
+            assert_eq!(
+                result
+                    .data
+                    .iter()
+                    .map(|row| row.thread.id.as_ref().unwrap().id.as_str())
+                    .collect::<Vec<_>>(),
+                ids
+            );
+            assert_eq!(result.next_cursor.as_deref(), next);
+        }
+        for (id, record) in records {
+            assert_eq!(
+                Agent::open(&adapter, &id, usize::MAX, true).await.unwrap(),
+                record
+            );
+        }
+        adapter.shutdown().await;
+    }
 
     #[test]
     fn permission_options_keep_what_each_acp_kind_does() {
