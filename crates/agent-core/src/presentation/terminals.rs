@@ -2,6 +2,18 @@
 use crate::state::{Terminal, TerminalPhase, TerminalView};
 use std::{collections::BTreeMap, sync::Arc};
 
+/// Native views can briefly report a zero grid while being laid out.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn terminal_grid(cols: i32, rows: i32) -> Option<agent_protocol::operations::TerminalSize> {
+    if cols <= 0 || rows <= 0 {
+        return None;
+    }
+    Some(agent_protocol::operations::TerminalSize {
+        cols: cols.min(500) as u16,
+        rows: rows.min(250) as u16,
+    })
+}
+
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct Terminals {
     pub(crate) states: Arc<BTreeMap<String, Arc<Terminal>>>,
@@ -40,6 +52,23 @@ pub(crate) fn view(terminal: &Terminal) -> TerminalView {
 mod tests {
     use super::*;
     use crate::state::{Snapshot, TerminalOutput};
+
+    #[test]
+    fn native_grids_ignore_unlaid_out_views_and_fit_host_limits() {
+        for (cols, rows) in [(0, 1), (1, 0), (-1, 1), (1, -1), (i32::MIN, i32::MAX)] {
+            assert!(terminal_grid(cols, rows).is_none());
+        }
+        for (cols, rows, expected_cols, expected_rows) in [
+            (1, 1, 1, 1),
+            (500, 250, 500, 250),
+            (501, 20, 500, 20),
+            (80, 251, 80, 250),
+            (i32::MAX, i32::MAX, 500, 250),
+        ] {
+            let size = terminal_grid(cols, rows).unwrap();
+            assert_eq!((size.cols, size.rows), (expected_cols, expected_rows));
+        }
+    }
     #[test]
     fn terminal_resources_retain_their_output_and_state_across_other_updates() {
         let mut state = Snapshot::default();

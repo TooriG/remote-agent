@@ -103,11 +103,9 @@ private struct NativeTerminalView: UIViewRepresentable {
         }
 
         func sizeChanged(source _: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
-            guard !dismantled, !restoring, newCols > 0, newRows > 0 else { return }
-            let size = TerminalSize(
-                cols: UInt16(clamping: min(newCols, 500)),
-                rows: UInt16(clamping: min(newRows, 250))
-            )
+            guard !dismantled, !restoring,
+                  let size = terminalGrid(cols: Int32(clamping: newCols), rows: Int32(clamping: newRows))
+            else { return }
             Task { @MainActor in
                 guard !dismantled, let session else { return }
                 if !started {

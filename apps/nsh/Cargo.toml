@@ -37,6 +37,7 @@ objc2-core-foundation = "=0.3.2"
 objc2-ui-kit = { version = "=0.3.2", features = ["objc2-uniform-type-identifiers"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+libloading = "=0.8.9"
 security-framework = "=3.7.0"
 block2 = "=0.6.2"
 objc2-uniform-type-identifiers = "=0.3.2"

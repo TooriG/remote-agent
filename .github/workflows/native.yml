@@ -429,7 +429,7 @@ jobs:
           mkdir -p target/qa
           tar -I 'gzip -1' -cf target/qa/ios-runner.tar.gz -C target/debug xtask
           RUNNER
-      - name: Share the runner so Simulators can boot while the app builds
+      - name: Share the runner independently of the app binaries
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: iphone-test-runner-${{ github.run_attempt }}
@@ -516,14 +516,17 @@ jobs:
       - name: Build and package the native NSH Mac app
         run: |
           nix develop .#native --command bash -euo pipefail <<'BUILD'
+          bash apps/nsh/build-native.sh macos
           cargo build --locked -p agent-nsh --target aarch64-apple-darwin
           bash apps/nsh/package.sh macos
           BUILD
       - name: Build and package the native NSH iPhone app
         run: nix develop .#ios-build --command just nsh-ios-simulator
   iphone-tests:
-    needs: changes
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.iphone == 'true' }}
+    # A cold shared build can outlast the artifact receiver's deadline.
+    # Start consumers only after publication, outside the producer's Apple slot.
+    needs: [changes, iphone]
+    if: ${{ !cancelled() && needs.iphone.result == 'success' }}
     permissions:
       actions: read
       contents: read
@@ -532,18 +535,6 @@ jobs:
       tests: ${{ inputs.ios-tests || '' }}
       # workflow_dispatch numbers can arrive as strings at a reusable-workflow boundary.
       rounds: ${{ fromJSON(format('{0}', github.event_name == 'schedule' && 3 || inputs.ios-test-rounds || 1)) }}
-  iphone-pr-tests:
-    # PR Apple jobs share one slot. Wait for the producer before taking that
-    # slot, so a consumer cannot block the build whose artifact it awaits.
-    needs: [changes, iphone]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.iphone.result == 'success' }}
-    permissions:
-      actions: read
-      contents: read
-    uses: ./.github/workflows/iphone-acceptance.yml
-    with:
-      tests: ${{ inputs.ios-tests || '' }}
-      rounds: ${{ fromJSON(format('{0}', inputs.ios-test-rounds || 1)) }}
   wsl-runtime:
     permissions:
       contents: write
@@ -699,7 +690,7 @@ jobs:
     name: Retire replaced dependency caches
     # Each Cargo.lock change publishes new dependency caches; the replaced ones
     # would otherwise push the repository over its cache budget and evict live caches.
-    needs: [android, mac, iphone, iphone-tests, iphone-pr-tests, wsl-runtime, windows]
+    needs: [android, mac, iphone, iphone-tests, wsl-runtime, windows]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     # Cache maintenance must not invalidate successful client acceptance.
     continue-on-error: true

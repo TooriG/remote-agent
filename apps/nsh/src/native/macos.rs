@@ -278,7 +278,7 @@ fn menu_items(menu: &NSMenu, entries: &JsonValue, target: &ActionTarget) {
                 NSControlStateValueOff
             });
         }
-        item.setEnabled(true);
+        item.setEnabled(entry["enabled"].as_bool().unwrap_or(true));
         menu.addItem(&item);
     }
 }
@@ -488,6 +488,7 @@ impl NativeComponent for Toolbar {
 }
 
 pub fn register(components: &Components) {
+    super::terminal::register(components);
     components.register(
         "bex.preview",
         Rc::new(|cx| Box::new(super::preview_macos::Preview::new(cx))),

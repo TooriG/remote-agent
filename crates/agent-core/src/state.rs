@@ -229,7 +229,7 @@ pub struct Terminal {
     pub output: VecDeque<Arc<TerminalOutput>>,
     pub sequence: u64,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct TerminalView {
     pub status: Option<String>,

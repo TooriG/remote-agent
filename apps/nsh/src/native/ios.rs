@@ -131,6 +131,11 @@ fn menu_items(context: &ComponentContext, entries: &JsonValue) -> Vec<Retained<U
             } else {
                 let action = action(context, "select", entry["id"].as_str()?);
                 action.setTitle(&title);
+                action.setAttributes(if entry["enabled"].as_bool().unwrap_or(true) {
+                    UIMenuElementAttributes::empty()
+                } else {
+                    UIMenuElementAttributes::Disabled
+                });
                 action.setState(if entry["selected"].as_bool().unwrap_or(false) {
                     UIMenuElementState::On
                 } else {
@@ -478,6 +483,7 @@ impl NativeComponent for Toolbar {
 }
 
 pub fn register(components: &Components) {
+    super::terminal::register(components);
     components.register(
         "bex.preview",
         Rc::new(|cx| Box::new(super::preview_ios::Preview::new(cx))),

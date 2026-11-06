@@ -9,13 +9,14 @@ case "$platform" in
     *) printf 'Unsupported platform: %s\n' "$platform" >&2; exit 1 ;;
 esac
 bundle="${CARGO_TARGET_DIR:-$PWD/target}/nsh-preview/$platform/Bex NSH Preview.app"
-python3 - "$platform" "$bundle" "${CARGO_TARGET_DIR:-$PWD/target}/$rust_target/debug/agent-nsh" <<'PY'
+python3 - "$platform" "$bundle" "${CARGO_TARGET_DIR:-$PWD/target}/$rust_target/debug/agent-nsh" \
+    "${CARGO_TARGET_DIR:-$PWD/target}/nsh-preview-native/$platform/BexNshNative.framework" <<'PY'
 import pathlib
 import plistlib
 import shutil
 import sys
 
-platform, destination, executable = sys.argv[1:]
+platform, destination, executable, native = sys.argv[1:]
 bundle = pathlib.Path(destination)
 info = {
     "CFBundleIdentifier": "com.bex.nsh-preview",
@@ -47,6 +48,9 @@ else:
         CADisableMinimumFrameDurationOnPhone=True,
     )
 binary.parent.mkdir(parents=True, exist_ok=True)
+frameworks = contents / "Frameworks"
+frameworks.mkdir(parents=True, exist_ok=True)
+shutil.copytree(native, frameworks / "BexNshNative.framework", dirs_exist_ok=True)
 shutil.copytree("apps/mobile/file-icons", (resources if platform == "macos" else contents) / "file-icons", dirs_exist_ok=True)
 shutil.copy2(executable, binary)
 with (contents / "Info.plist").open("wb") as output:

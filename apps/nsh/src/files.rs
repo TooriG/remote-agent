@@ -1,5 +1,6 @@
-use crate::{Connection, client::Client, media::Preview, native};
+use crate::{Connection, client::Client, media::Preview, native, workbench::Workbench};
 use agent_core::{
+    panels::{PanelKind, PanelScope},
     presentation::files::{
         FileTreeAction, FileTreeKey, FileTreeSurface, file_preview_mime_type, file_tree_path,
         mobile_file_icon, mobile_file_open_request,
@@ -13,52 +14,80 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Browser {
-    pub root: Signal<Option<String>>,
-    pub file: Signal<Option<TextFile>>,
+    pub root: Memo<Option<String>>,
+    pub file: Memo<Option<TextFile>>,
+    workspace: Workbench,
+    target: Memo<(PanelScope, (bool, Option<u64>))>,
+    line: Signal<Option<(u64, Option<u32>)>>,
     preview: Preview,
     owner: Owner,
 }
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct TextFile {
+    pub id: u64,
     pub path: String,
     pub line: Option<u32>,
 }
 
 impl Browser {
     pub fn close(self) {
-        self.root.set(None);
-        self.file.set(None);
+        self.workspace.hide();
         self.preview.close();
     }
 
     pub fn show(self, path: String) {
         self.preview.close();
-        self.file.set(None);
-        self.root.set(Some(path));
+        self.workspace.open(PanelKind::Files, Some(path));
     }
 
     pub fn new(preview: Preview) -> Self {
-        let browser = Self {
-            root: signal(None),
-            file: signal(None),
-            preview,
-            owner: Owner::current(),
-        };
-        let connection = use_context::<Connection>().unwrap();
+        let workspace = use_context::<Workbench>().unwrap();
+        let line = signal(None::<(u64, Option<u32>)>);
+        let root = computed(move || {
+            workspace.state.with(|state| {
+                state
+                    .surfaces
+                    .iter()
+                    .rev()
+                    .find(|surface| surface.kind == PanelKind::Files)
+                    .and_then(|surface| surface.path.clone())
+            })
+        });
+        let file = computed(move || {
+            workspace.state.with(|state| {
+                let surface = state
+                    .selected()
+                    .filter(|surface| state.open && surface.kind == PanelKind::File)?;
+                Some(TextFile {
+                    id: surface.id,
+                    path: surface.path.clone()?,
+                    line: line
+                        .get()
+                        .filter(|(id, _)| *id == surface.id)
+                        .and_then(|(_, line)| line),
+                })
+            })
+        });
         let target = computed(move || {
             (
-                connection.host.get(),
-                connection
-                    .publication
-                    .with(|p| p.composer.controls.navigation.draft_key.clone()),
+                workspace.scope.get(),
+                workspace.state.with(|state| (state.open, state.active)),
             )
         });
         effect(move || {
             target.get();
-            browser.close();
+            preview.close();
         });
-        browser
+        Self {
+            root,
+            file,
+            workspace,
+            target,
+            line,
+            preview,
+            owner: Owner::current(),
+        }
     }
 
     pub fn open(
@@ -86,6 +115,7 @@ impl Browser {
             return;
         };
         let token = self.preview.begin();
+        let target = self.target.get_untracked();
         let resolve = client.request(&host, Intent::ResolveFileReference(request));
         self.owner.run(move || {
             spawn(async move {
@@ -94,7 +124,7 @@ impl Browser {
                     .await
                     .map_err(|reason| reason.to_string())
                     .and_then(|result| result.map_err(|reason| reason.to_string()));
-                if !self.preview.is_pending(token) {
+                if !self.preview.is_pending(token) || self.target.get_untracked() != target {
                     return;
                 }
                 match result {
@@ -119,21 +149,14 @@ impl Browser {
         });
     }
 
-    pub fn close_file(self) {
-        self.file.set(None);
-        self.preview.close();
-    }
-
     pub fn open_file(self, path: String, line: Option<u32>, host: String, client: Arc<Client>) {
         if file_preview_mime_type(path.clone()).is_some() {
             self.preview
                 .load(crate::media::receive(client.download(host, path)));
         } else {
             self.preview.close();
-            self.file.set(Some(TextFile {
-                path: path.clone(),
-                line,
-            }));
+            let id = self.workspace.open(PanelKind::File, Some(path.clone()));
+            self.line.set(Some((id, line)));
             client.dispatch(
                 &host,
                 Intent::ReadFile(agent_core::state::operations::ReadFile {
@@ -145,11 +168,11 @@ impl Browser {
     }
 }
 
-pub(crate) fn screen() -> impl Element {
+pub(crate) fn screen(id: u64) -> impl Element {
     let connection = use_context::<Connection>().unwrap();
     let browser = use_context::<Browser>().unwrap();
     let key = computed(move || FileTreeKey {
-        owner: "nsh-files".into(),
+        owner: format!("nsh-files-{id}"),
         root: browser.root.get().unwrap_or_default(),
     });
     let mounted = stored(None::<(String, FileTreeKey)>);
@@ -234,7 +257,6 @@ pub(crate) fn screen() -> impl Element {
     view().flex_1().gap_2().p_2()
         .child(text(move || key.with(|key| key.root.clone())).selectable(true).truncate().text_size(px(12.0)).w_full())
         .child(view().flex_row().items_center().gap_2()
-            .child(when(is_desktop, move || native::button("xmark", "ファイルを閉じる", move || browser.close()).w(px(44.0)).h(px(44.0))))
             .child(view().flex_1())
             .child(native::button("arrow.clockwise", "更新", move || send(FileTreeAction::Refresh)).w(px(44.0)).h(px(44.0)))
             .child(native::button("arrow.up.left.and.arrow.down.right", "すべてのフォルダーを展開", move || send(FileTreeAction::ToggleAll))

@@ -13,20 +13,16 @@ assert.ok(block, 'Native clients must define its changes selector');
 const selector = block[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
 const platforms = ['windows', 'android', 'iphone', 'mac'];
 
-test('main prepares iPhone consumers concurrently while PR consumers wait outside the shared Apple slot', () => {
+test('iPhone consumers require the successful shared build before occupying Apple slots', () => {
   const producer = workflow.match(/^  iphone:\n([\s\S]*?)(?=^  [\w-]+:)/m)?.[1];
   assert.match(producer, /name: iPhone build/);
-  const main = workflow.match(/^  iphone-tests:\n([\s\S]*?)(?=^  [\w-]+:)/m)?.[1];
-  const pr = workflow.match(/^  iphone-pr-tests:\n([\s\S]*?)(?=^  [\w-]+:)/m)?.[1];
-  assert.match(main, /needs: changes/);
-  assert.match(main, /github.event_name != 'pull_request'/);
-  assert.match(pr, /needs: \[changes, iphone\]/);
-  assert.match(pr, /github.event_name == 'pull_request'.*needs.iphone.result == 'success'/);
-  for (const consumer of [main, pr]) {
-    assert.match(consumer, /uses: .\/.github\/workflows\/iphone-acceptance.yml/);
-    assert.match(consumer, /actions: read/);
-    assert.match(consumer, /rounds: \$\{\{ fromJSON\(format\('\{0\}', /);
-  }
+  const consumer = workflow.match(/^  iphone-tests:\n([\s\S]*?)(?=^  [\w-]+:)/m)?.[1];
+  assert.match(consumer, /needs: \[changes, iphone\]/);
+  assert.match(consumer, /if: \$\{\{ !cancelled\(\) && needs.iphone.result == 'success' \}\}/);
+  assert.match(consumer, /uses: .\/.github\/workflows\/iphone-acceptance.yml/);
+  assert.match(consumer, /actions: read/);
+  assert.match(consumer, /rounds: \$\{\{ fromJSON\(format\('\{0\}', github.event_name == 'schedule' && 3/);
+  assert.doesNotMatch(workflow, /^  iphone-pr-tests:/m);
   assert.match(iphoneWorkflow, /github.event_name == 'pull_request' && 'pr'/);
   assert.match(iphoneWorkflow, /AGENT_IOS_TEST_ROUNDS: \$\{\{ inputs.rounds \}\}/);
   assert.match(iphoneWorkflow, /just conversation-ui --await-build/);

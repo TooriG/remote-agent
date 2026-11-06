@@ -283,6 +283,7 @@ dependencies = [
  "agent-protocol",
  "async-channel",
  "block2 0.6.2",
+ "libloading",
  "nsh-base",
  "nsh-core",
  "nsh-platform-ios",

@@ -66,13 +66,6 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(when(is_desktop, move || {
-                    native::button("xmark", "ファイルを閉じる", move || {
-                        browser.close_file()
-                    })
-                    .w(px(44.0))
-                    .h(px(44.0))
-                }))
                 .child(
                     text(move || path.get())
                         .truncate()
@@ -208,7 +201,7 @@ pub(crate) fn editors() -> impl Element {
     let browser = use_context::<Browser>().unwrap();
     view().flex_1().min_h_0().child(each(
         move || browser.file.get().into_iter().collect::<Vec<_>>(),
-        |target: &TextFile| target.path.clone(),
+        |target: &TextFile| target.id,
         |target, _| screen(target),
     ))
 }

@@ -19,7 +19,9 @@ mod requests;
 mod rich_text;
 mod shared;
 mod storage;
+mod terminal;
 mod threads;
+mod workbench;
 
 #[cfg(target_os = "ios")]
 pub use native::ios::register as register_ios;
@@ -107,6 +109,8 @@ pub fn App() -> impl IntoElement {
     provide_context(connection);
     let preview = media::Preview::new();
     provide_context(preview);
+    let workspace = workbench::Workbench::new();
+    provide_context(workspace);
     let files = files::Browser::new(preview);
     provide_context(files);
     let failure = signal(None::<String>);
@@ -152,9 +156,29 @@ pub fn App() -> impl IntoElement {
                     }
                     hosts.set(next);
                 }
-                client::Update::Presentation { host, value } => publications.update(|all| {
-                    all.insert(host, Shared(value));
-                }),
+                client::Update::Presentation { host, value } => {
+                    let before = publications.with_untracked(|all| {
+                        all.get(&host).map(|p| {
+                            p.snapshot
+                                .panel_scope(host.clone(), p.context.navigation().draft_key)
+                        })
+                    });
+                    if let Some(before) = before
+                        && let Some(session) =
+                            value.snapshot.submitted_session(before.draft.clone())
+                    {
+                        workspace.rekey(
+                            before,
+                            value.snapshot.panel_scope(
+                                host.clone(),
+                                agent_core::state::DraftKey::Session { session },
+                            ),
+                        );
+                    }
+                    publications.update(|all| {
+                        all.insert(host, Shared(value));
+                    });
+                }
                 client::Update::Error(reason) => failure.set(Some(reason)),
                 client::Update::Paired(result) => {
                     connection.pairing.set(false);
@@ -189,18 +213,7 @@ pub fn App() -> impl IntoElement {
         match action {
             "sidebar" => sidebar.update(|open| *open = !*open),
             "search" => searching.update(|open| *open = !*open),
-            "files" => {
-                let (cwd, home) = publication.with_untracked(|p| {
-                    (p.composer.controls.navigation.cwd.clone(), p.context.home())
-                });
-                if cwd.is_empty() {
-                    native::message("ファイル", "作業フォルダーのある会話を開いてください。");
-                } else {
-                    files.show(agent_core::presentation::markdown::file_host_path(
-                        cwd, home,
-                    ));
-                }
-            }
+            "files" | "terminal" => workbench::open_tool(action),
             "compose" => {
                 connection.dispatch(Intent::NewChat {
                     cwd: publication.with(|p| p.snapshot.pane.navigation.cwd.clone()),
@@ -241,7 +254,7 @@ pub fn App() -> impl IntoElement {
     let notices = move || {
         view()
             .child(notices::notices(
-                move || files.root.get().is_some() || files.file.get().is_some(),
+                move || workspace.state.with(|state| state.open),
                 move || settings.get(),
             ))
             .child(when(
@@ -281,9 +294,24 @@ pub fn App() -> impl IntoElement {
                             )
                             .child(native::search(query).w_full())
                             .child(list())
-                            .child(native::text_button(json!("ファイル"), move || {
-                                toolbar_action("files")
-                            }))
+                            .child(each(
+                                workbench::tools,
+                                |tool: &agent_core::panels::PanelTool| tool.key.clone(),
+                                move |tool, _| {
+                                    native::text_button(
+                                        move || json!(tool.with(|t| t.label.clone())),
+                                        move || {
+                                            toolbar_action(&tool.with_untracked(|t| t.key.clone()))
+                                        },
+                                    )
+                                    .prop(
+                                        "enabled",
+                                        move || {
+                                            json!(!account_locked.get() && tool.with(|t| t.enabled))
+                                        },
+                                    )
+                                },
+                            ))
                             .child(native::text_button(json!("環境"), move || {
                                 settings.set(true)
                             })),
@@ -296,22 +324,13 @@ pub fn App() -> impl IntoElement {
                         move || {
                             !settings.get()
                                 && !hosts.with(Vec::is_empty)
-                                && files.root.get().is_none()
-                                && files.file.get().is_none()
+                                && !workspace.state.with(|state| state.open)
                         },
                         content,
                     ))
                     .child(when(
-                        move || {
-                            !settings.get()
-                                && files.root.get().is_some()
-                                && files.file.get().is_none()
-                        },
-                        files::screen,
-                    ))
-                    .child(when(
-                        move || !settings.get() && files.file.get().is_some(),
-                        editor::editors,
+                        move || !settings.get() && workspace.state.with(|state| state.open),
+                        workbench::screen,
                     )),
             )
             .into_element();
@@ -319,11 +338,8 @@ pub fn App() -> impl IntoElement {
     let navigation = nsh_base::nav_stack().flex_1().child(each(
         move || {
             let mut stack = routes.get();
-            if files.root.get().is_some() {
+            if workspace.state.with(|state| state.open) {
                 stack.push(3);
-            }
-            if files.file.get().is_some() {
-                stack.push(4);
             }
             if settings.get() {
                 stack.push(2);
@@ -344,14 +360,17 @@ pub fn App() -> impl IntoElement {
                         native::menu(
                             "ellipsis",
                             "その他",
-                            native::choices(&["更新", "ファイル", "環境"]),
+                            move || {
+                                let mut entries = vec![json!({"id": "refresh", "title": "更新"})];
+                                entries.extend(workbench::tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "enabled": tool.enabled})));
+                                entries.push(json!({"id": "settings", "title": "環境"}));
+                                json!(entries)
+                            },
                             move |item| {
-                                if item == "更新" {
+                                if item == "refresh" {
                                     connection.dispatch(Intent::ShowThreadList);
-                                } else if item == "ファイル" {
-                                    toolbar_action("files");
                                 } else {
-                                    settings.set(true);
+                                    toolbar_action(item);
                                 }
                             },
                         )
@@ -384,23 +403,9 @@ pub fn App() -> impl IntoElement {
                         move || provider.set(None),
                     )),
                 3 => nsh_base::nav_page()
-                    .title("ファイル")
+                    .title(workbench::title)
                     .child(notices())
-                    .child(files::screen()),
-                4 => nsh_base::nav_page()
-                    .title(move || {
-                        files.file.with(|target| {
-                            target
-                                .as_ref()
-                                .map(|target| {
-                                    agent_core::presentation::markdown::file_basename(&target.path)
-                                        .to_owned()
-                                })
-                                .unwrap_or_default()
-                        })
-                    })
-                    .child(notices())
-                    .child(editor::editors()),
+                    .child(workbench::screen()),
                 _ => nsh_base::nav_page()
                     .title("Bex")
                     .header_back_title("戻る")
@@ -435,9 +440,6 @@ pub fn App() -> impl IntoElement {
                 }
                 if route.get_untracked() == 3 {
                     files.close();
-                }
-                if route.get_untracked() == 4 {
-                    files.close_file();
                 }
                 routes.update(|routes| routes.truncate(position.get_untracked()));
             })

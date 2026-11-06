@@ -45,6 +45,8 @@ mod list_macos;
 mod preview_ios;
 #[cfg(target_os = "macos")]
 mod preview_macos;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod terminal;
 
 pub fn image_extension(mime: &str) -> Option<String> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]

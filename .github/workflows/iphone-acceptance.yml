@@ -59,7 +59,7 @@ jobs:
           iphone-test-runner target/qa/ios-runner.tar.gz
       - name: Restore the runner independently of the app binaries
         run: tar -xpzf target/qa/ios-runner.tar.gz -C target/qa
-      - name: Prepare the Simulator while awaiting the app, then run acceptance
+      - name: Prepare the Simulator and run the shared app's acceptance tests
         run: |
           set -o pipefail
           if [[ -n "$AGENT_IOS_TESTS" ]]; then
