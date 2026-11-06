@@ -54,7 +54,7 @@ import SwiftUI
             } else if filePreviewMimeType(path: entry.path)?.hasPrefix("video/") == true {
                 let file = try await SharedFile(url: download(entry.path))
                 try Task.checkCancellation()
-                preview = file
+                self.preview = file
             } else {
                 openFile(entry.path, entry.line)
             }
