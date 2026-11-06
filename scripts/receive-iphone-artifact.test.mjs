@@ -1,0 +1,153 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { once } from 'node:events';
+
+function fixture(t, mode, kind = 'iphone-test-build') {
+  const root = mkdtempSync(join(tmpdir(), 'iphone-artifact-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  const log = join(root, 'commands');
+  const output = join(root, kind === 'iphone-test-build' ? 'ios-e2e.tar.gz' : 'ios-runner.tar.gz');
+  const gh = join(bin, 'gh');
+  writeFileSync(gh, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const mode = process.env.ARTIFACT_TEST_MODE;
+fs.appendFileSync(process.env.ARTIFACT_TEST_LOG, JSON.stringify(args) + '\\n');
+if (mode === 'api-error') process.exit(17);
+if (args[0] === 'api') {
+  if (args[1].includes('/artifacts?')) {
+    let artifacts = [{name: process.env.ARTIFACT_TEST_KIND + (mode === 'rerun-consumer' ? '-1' : '-2'), expired: false}];
+    if (['missing', 'waiting', 'failed'].includes(mode)) artifacts = [];
+    if (mode === 'stale') artifacts[0].name = process.env.ARTIFACT_TEST_KIND + '-1';
+    if (mode === 'expired') artifacts[0].expired = true;
+    if (mode === 'duplicate') artifacts.push(artifacts[0]);
+    console.log(JSON.stringify({artifacts}));
+  } else {
+    const running = ['ready', 'waiting', 'cancel-download'].includes(mode);
+    console.log(JSON.stringify({jobs: [{name: 'iPhone build', run_attempt: mode === 'rerun-consumer' ? 1 : 2, status: running ? 'in_progress' : 'completed', conclusion: mode === 'failed' ? 'failure' : 'success'}]}));
+  }
+} else {
+  const dir = args[args.indexOf('--dir') + 1];
+  fs.mkdirSync(dir, {recursive: true});
+  fs.writeFileSync(path.join(dir, mode === 'wrong-file' ? 'unexpected' : process.env.ARTIFACT_TEST_FILE), 'current build');
+  if (mode === 'download-error') process.exit(18);
+  if (mode === 'cancel-download') setInterval(() => {}, 1000);
+}
+`);
+  chmodSync(gh, 0o755);
+  function start(overrides = {}, timeout = '10') {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('./receive-iphone-artifact.mjs', import.meta.url)), kind, output, timeout], {
+      env: {
+        ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_REPOSITORY: 'fixture/repo',
+        GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '2',
+        ARTIFACT_TEST_MODE: mode, ARTIFACT_TEST_LOG: log, ARTIFACT_TEST_KIND: kind,
+        ARTIFACT_TEST_FILE: basename(output), ...overrides,
+      },
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const completed = once(child, 'close').then(([status, signal]) => ({status, signal, stdout, stderr}));
+    t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+    return {child, completed};
+  }
+  return {
+    root, log, output, start,
+    commands: () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : [],
+  };
+}
+
+test('runner and app artifacts can arrive before the producer finishes, from this exact run attempt', async t => {
+  for (const kind of ['iphone-test-runner', 'iphone-test-build']) {
+    await t.test(kind, async t => {
+      const f = fixture(t, 'ready', kind);
+      const result = await f.start().completed;
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(f.output, 'utf8'), 'current build');
+      const commands = f.commands();
+      assert.ok(commands.some(args => args[1] === `repos/fixture/repo/actions/runs/123/artifacts?name=${kind}-2`));
+      assert.ok(commands.some(args => args[1] === 'repos/fixture/repo/actions/runs/123/jobs?filter=latest&per_page=100'));
+      assert.deepEqual(commands.find(args => args[0] === 'run').slice(0, 8),
+        ['run', 'download', '123', '--repo', 'fixture/repo', '--name', `${kind}-2`, '--dir']);
+      assert.ok(!readdirSync(f.root).some(name => name.startsWith('.iphone-artifact-')));
+    });
+  }
+});
+
+test('rerunning only a consumer uses the successful producer attempt', async t => {
+  const f = fixture(t, 'rerun-consumer');
+  const result = await f.start().completed;
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(f.output, 'utf8'), 'current build');
+  assert.ok(f.commands().some(args => args[1] === 'repos/fixture/repo/actions/runs/123/artifacts?name=iphone-test-build-1'));
+  assert.equal(f.commands().find(args => args[0] === 'run')[6], 'iphone-test-build-1');
+});
+
+test('failed producers, missing, expired, duplicate and earlier-attempt artifacts never start a download', async t => {
+  for (const mode of ['failed', 'missing', 'expired', 'duplicate', 'stale', 'api-error']) {
+    await t.test(mode, async t => {
+      const f = fixture(t, mode);
+      const result = await f.start().completed;
+      assert.equal(result.status, 1, result.stderr);
+      assert.ok(!existsSync(f.output));
+      assert.ok(!f.commands().some(args => args[0] === 'run'));
+    });
+  }
+});
+
+test('failed or malformed downloads retain the previous output and remove partial files', async t => {
+  for (const mode of ['download-error', 'wrong-file']) {
+    await t.test(mode, async t => {
+      const f = fixture(t, mode);
+      writeFileSync(f.output, 'previous build');
+      const result = await f.start().completed;
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(readFileSync(f.output, 'utf8'), 'previous build');
+      assert.ok(!readdirSync(f.root).some(name => name.startsWith('.iphone-artifact-')));
+    });
+  }
+});
+
+test('waiting has a deadline and does not publish an output', async t => {
+  const f = fixture(t, 'waiting');
+  const result = await f.start({}, '1').completed;
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Timed out waiting/);
+  assert.ok(!existsSync(f.output));
+});
+
+test('cancelling a download stops the child and removes partial files', async t => {
+  const f = fixture(t, 'cancel-download');
+  const {child, completed} = f.start();
+  const deadline = Date.now() + 5000;
+  while (!f.commands().some(args => args[0] === 'run')) {
+    assert.ok(Date.now() < deadline, 'download did not start');
+    await delay(10);
+  }
+  child.kill('SIGTERM');
+  const result = await completed;
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /interrupted/);
+  assert.ok(!existsSync(f.output));
+  assert.ok(!readdirSync(f.root).some(name => name.startsWith('.iphone-artifact-')));
+});
+
+test('invalid run identities are rejected before accessing GitHub', async t => {
+  for (const overrides of [{GITHUB_RUN_ATTEMPT: '0'}, {GITHUB_RUN_ID: 'bad'}, {GITHUB_REPOSITORY: '../other'}]) {
+    await t.test(JSON.stringify(overrides), async t => {
+      const f = fixture(t, 'ready');
+      const result = await f.start(overrides).completed;
+      assert.equal(result.status, 1);
+      assert.deepEqual(f.commands(), []);
+    });
+  }
+});

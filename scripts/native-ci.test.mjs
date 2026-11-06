@@ -6,11 +6,33 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const workflow = readFileSync(new URL('../.github/workflows/native.yml', import.meta.url), 'utf8');
+const iphoneWorkflow = readFileSync(new URL('../.github/workflows/iphone-acceptance.yml', import.meta.url), 'utf8');
 // Exercise the actual workflow policy; keep its rules beside the job conditions.
 const block = workflow.match(/      - id: areas[\s\S]*?        run: \|\n([\s\S]*?)(?=^  [a-z-]+:\n)/m);
 assert.ok(block, 'Native clients must define its changes selector');
 const selector = block[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
 const platforms = ['windows', 'android', 'iphone', 'mac'];
+
+test('main prepares iPhone consumers concurrently while PR consumers wait outside the shared Apple slot', () => {
+  const producer = workflow.match(/^  iphone:\n([\s\S]*?)(?=^  [\w-]+:)/m)?.[1];
+  assert.match(producer, /name: iPhone build/);
+  const main = workflow.match(/^  iphone-tests:\n([\s\S]*?)(?=^  [\w-]+:)/m)?.[1];
+  const pr = workflow.match(/^  iphone-pr-tests:\n([\s\S]*?)(?=^  [\w-]+:)/m)?.[1];
+  assert.match(main, /needs: changes/);
+  assert.match(main, /github.event_name != 'pull_request'/);
+  assert.match(pr, /needs: \[changes, iphone\]/);
+  assert.match(pr, /github.event_name == 'pull_request'.*needs.iphone.result == 'success'/);
+  for (const consumer of [main, pr]) {
+    assert.match(consumer, /uses: .\/.github\/workflows\/iphone-acceptance.yml/);
+    assert.match(consumer, /actions: read/);
+  }
+  assert.match(iphoneWorkflow, /github.event_name == 'pull_request' && 'pr'/);
+  assert.match(iphoneWorkflow, /AGENT_IOS_TEST_ROUNDS: \$\{\{ inputs.rounds \}\}/);
+  assert.match(iphoneWorkflow, /just conversation-ui --await-build/);
+  assert.ok(workflow.indexOf('name: iphone-test-runner-${{ github.run_attempt }}') <
+    workflow.indexOf('name: iPhone contracts and shared test build'));
+  assert.match(workflow, /name: iphone-test-build-\$\{\{ github.run_attempt \}\}/);
+});
 
 function select(t, paths, { event = 'push', base = 'last-verified-main', queryFailure = false, fetchFailure = false, diffFailure = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'native-ci-'));

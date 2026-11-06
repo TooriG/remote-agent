@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
     echo 'iOS E2E requires an Apple Silicon Mac with Xcode' >&2; exit 2
 }
 options=()
-if [[ ${1:-} == --build-only || ${1:-} == --prebuilt ]]; then
+if [[ ${1:-} == --build-only || ${1:-} == --prebuilt || ${1:-} == --await-build ]]; then
     options+=("$1")
     shift
 fi
@@ -93,6 +93,9 @@ fi
 for test in "$@"; do
     [[ $test == testSimulator* ]] || { echo 'Only isolated Simulator tests are allowed' >&2; exit 2; }
 done
+if [[ ${options[0]:-} == --await-build ]]; then
+    exec "${CARGO_TARGET_DIR:-$PWD/target}/qa/xtask" ios-e2e "${options[@]}" "$@"
+fi
 if [[ ${options[0]:-} == --prebuilt ]]; then
     exec "${CARGO_TARGET_DIR:-$PWD/target}/debug/xtask" ios-e2e "${options[@]}" "$@"
 fi

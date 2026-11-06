@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 use xtask::Result;
 
-const USAGE: &str = "Usage: cargo xtask <command>\n  clean-builds [--dry-run]\n  ios-e2e [--build-only|--prebuilt] [--maestro] [--without-codex] TEST...\n  ios-markdown\n  connection-diagnostics [--log PATH] [--platform Ios|Macos] [--trace ID] [--attempt ID]\n  android-console SOCKET\n  android-network-permission SERIAL LOG ADB_PORT\n  terminal-query-probe\nBuilds and manual checks: just --list\n";
+const USAGE: &str = "Usage: cargo xtask <command>\n  clean-builds [--dry-run]\n  ios-e2e [--build-only|--prebuilt|--await-build] [--maestro] [--without-codex] TEST...\n  ios-markdown\n  connection-diagnostics [--log PATH] [--platform Ios|Macos] [--trace ID] [--attempt ID]\n  android-console SOCKET\n  android-network-permission SERIAL LOG ADB_PORT\n  terminal-query-probe\nBuilds and manual checks: just --list\n";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -35,6 +35,7 @@ async fn execute(arguments: &[String]) -> Result<()> {
             let (build_mode, arguments) = match arguments.first().map(String::as_str) {
                 Some("--build-only") => (xtask::ios_e2e::BuildMode::BuildOnly, &arguments[1..]),
                 Some("--prebuilt") => (xtask::ios_e2e::BuildMode::Prebuilt, &arguments[1..]),
+                Some("--await-build") => (xtask::ios_e2e::BuildMode::AwaitBuild, &arguments[1..]),
                 _ => (xtask::ios_e2e::BuildMode::BuildAndTest, arguments),
             };
             let (driver, arguments) = if arguments

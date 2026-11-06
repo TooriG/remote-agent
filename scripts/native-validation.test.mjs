@@ -33,7 +33,9 @@ if [[ -n \${NATIVE_VALIDATION_FAIL:-} && "$name $*" == "$NATIVE_VALIDATION_FAIL"
   }
   const target = join(root, 'target');
   mkdirSync(join(target, 'debug'), { recursive: true });
+  mkdirSync(join(target, 'qa'), { recursive: true });
   symlinkSync(command, join(target, 'debug', 'xtask'));
+  symlinkSync(command, join(target, 'qa', 'xtask'));
   return {
     run(script, args, failure = '', overrides = {}) {
       const result = spawnSync('/bin/bash', [join(root, script), ...args], {
@@ -117,6 +119,12 @@ test('prebuilt acceptance executes the shipped runner without invoking Cargo', (
   const result = fixture(t).run('scripts/ios-e2e.sh', ['--prebuilt', '--without-codex', 'testSimulatorExample']);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.commands, ['xtask ios-e2e --prebuilt --without-codex testSimulatorExample']);
+});
+
+test('overlapped acceptance executes the early runner without invoking Cargo', (t) => {
+  const result = fixture(t).run('scripts/ios-e2e.sh', ['--await-build', 'testSimulatorExample']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.commands, ['xtask ios-e2e --await-build testSimulatorExample']);
 });
 
 test('build-only mode forwards the requested tests without starting acceptance', (t) => {

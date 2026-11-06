@@ -150,7 +150,7 @@
             shellHook = kacheHook + appleSdkHook;
           };
           ios-test = pkgs.mkShellNoCC {
-            packages = with pkgs; [ just gitMinimal nodejs zsh ];
+            packages = with pkgs; [ just gitMinimal nodejs gh zsh ];
             shellHook = appleSdkHook + runtimeShellHook;
           };
           android-test = pkgs.mkShell {

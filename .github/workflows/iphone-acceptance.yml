@@ -1,0 +1,79 @@
+name: iPhone acceptance
+on:
+  workflow_call:
+    inputs:
+      tests:
+        type: string
+        default: ''
+      rounds:
+        type: number
+        default: 1
+permissions:
+  actions: read
+  contents: read
+jobs:
+  iphone-tests:
+    name: iPhone ${{ matrix.label }}
+    concurrency:
+      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-iphone-tests-{1}', github.run_id, matrix.label) }}
+      cancel-in-progress: false
+      queue: max
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mac, the shared build and three consumers fit the hosted macOS limit.
+        include: ${{ fromJSON(inputs.tests && '[{"shard":0,"label":"focused"}]' || '[{"shard":0,"label":"1/3"},{"shard":1,"label":"2/3"},{"shard":2,"label":"3/3"}]') }}
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      AGENT_IOS_TEST_WORKERS: 1
+      AGENT_IOS_TEST_SHARD: ${{ matrix.shard }}
+      AGENT_IOS_TEST_SHARDS: ${{ inputs.tests && 1 || 3 }}
+      AGENT_IOS_TEST_ROUNDS: ${{ inputs.rounds }}
+      AGENT_IOS_TESTS: ${{ inputs.tests }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Use preinstalled Xcode 26.6
+        run: |
+          export DEVELOPER_DIR="$AGENT_XCODE_DEVELOPER_DIR"
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          df -h /
+      - name: List iPhone Simulator runtimes
+        run: DEVELOPER_DIR="$AGENT_XCODE_DEVELOPER_DIR" xcrun simctl list runtimes
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - name: Prepare isolated Zsh startup for terminal tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-zsh"
+          : > "$RUNNER_TEMP/agent-zsh/.zshrc"
+          echo "ZDOTDIR=$RUNNER_TEMP/agent-zsh" >> "$GITHUB_ENV"
+      - name: Receive the runner from this build attempt
+        run: >-
+          nix develop .#ios-test --command node scripts/receive-iphone-artifact.mjs
+          iphone-test-runner target/qa/ios-runner.tar.gz
+      - name: Restore the runner independently of the app binaries
+        run: tar -xpzf target/qa/ios-runner.tar.gz -C target/qa
+      - name: Prepare the Simulator while awaiting the app, then run acceptance
+        run: |
+          set -o pipefail
+          if [[ -n "$AGENT_IOS_TESTS" ]]; then
+            read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
+            nix develop .#ios-test --command just ios-e2e --await-build "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
+          else
+            nix develop .#ios-test --command just conversation-ui --await-build 2>&1 | tee target/qa/quality.log
+          fi
+      - name: Retain Apple acceptance logs and result bundles
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: apple-iphone-${{ matrix.shard }}-acceptance
+          path: |
+            target/qa/quality.log
+            target/qa/Bex-*
+          retention-days: 7

@@ -14,6 +14,7 @@ pub enum BuildMode {
     BuildAndTest,
     BuildOnly,
     Prebuilt,
+    AwaitBuild,
 }
 
 fn check_maestro_report(report: &str, tests: &[String]) -> Result<()> {
@@ -621,7 +622,7 @@ async fn template(
 async fn worker(
     tests: Vec<String>,
     target: PathBuf,
-    source: PathBuf,
+    products_ready: watch::Receiver<Option<PathBuf>>,
     simulator_source: SimulatorSource,
     runtime_root: PathBuf,
     prefix: PathBuf,
@@ -644,7 +645,7 @@ async fn worker(
         "Bex isolated E2E {}-{label}",
         records.file_name().unwrap().to_string_lossy()
     );
-    let products = source.parent().ok_or("missing test products")?;
+    let products = target.join("qa/ios-derived-data/Build/Products");
     let run = products.join(label.as_ref()).with_extension("xctestrun");
     let log = File::create(prefix.with_extension("log"))?;
     let host_log = File::create(prefix.with_extension("host.log"))?;
@@ -679,24 +680,36 @@ async fn worker(
     if needs_browser_fixture(&tests) {
         command.arg("--prepare-browser");
     }
-    let mut host = Child::spawn(command)?;
+    let mut host = None;
     let result: Result<_> = async {
-            let deadline = Instant::now() + Duration::from_secs(30);
-            while !root.join("pairing.port").is_file() {
-                if host.try_wait()?.is_some() { return Err(format!("{label}: UI fixture exited before publishing its port").into()); }
-                if Instant::now() >= deadline { return Err(format!("{label}: UI fixture timed out").into()); }
-                tokio::select! { _ = tokio::time::sleep(Duration::from_millis(100)) => {}, _ = supervision::cancelled(cancel.clone()) => return Err(supervision::interrupted()) }
-            }
             let create = match simulator_source {
                 SimulatorSource::Template(template) => args![vec; "xcrun", "simctl", "clone", template, &name],
                 SimulatorSource::Runtime(runtime) => args![vec; "xcrun", "simctl", "create", &name, SIMULATOR_DEVICE_TYPE, runtime],
             };
             let simulator = supervision::run(&create, &cwd, Io::Capture, &cancel, SETUP_TIMEOUT).await?;
             let simulator = std::str::from_utf8(&simulator.stdout)?.trim();
-            let mut preparation = vec![
+            for (phase, arguments) in [
                 ("boot", args![vec; "xcrun", "simctl", "boot", simulator]),
                 ("bootstatus", args![vec; "xcrun", "simctl", "bootstatus", simulator, "-b"]),
-            ];
+            ] {
+                println!("{label}: {phase}");
+                supervision::run(&arguments, &cwd, Io::Log(&log), &cancel, SETUP_TIMEOUT).await
+                    .map_err(|error| format!("{label}: {phase} failed: {error}"))?;
+            }
+            let quiet_started = Instant::now();
+            let (stopped, present) = quiet_simulator(simulator, &runtime_root, &cwd, &log, &cancel).await?;
+            println!("{label}: stopped {stopped}/{present} unused system services in {:.2}s", quiet_started.elapsed().as_secs_f64());
+            println!("{label}: Simulator ready in {:.2}s; waiting for test products", started.elapsed().as_secs_f64());
+            let source = wait_for_test_products(products_ready, &cancel).await?;
+            host = Some(Child::spawn(command)?);
+            let host = host.as_mut().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !root.join("pairing.port").is_file() {
+                if host.try_wait()?.is_some() { return Err(format!("{label}: UI fixture exited before publishing its port").into()); }
+                if Instant::now() >= deadline { return Err(format!("{label}: UI fixture timed out").into()); }
+                tokio::select! { _ = tokio::time::sleep(Duration::from_millis(100)) => {}, _ = supervision::cancelled(cancel.clone()) => return Err(supervision::interrupted()) }
+            }
+            let mut preparation = Vec::new();
             if needs_media_fixtures(&tests) {
                 preparation.push(("addmedia", args![vec; "xcrun", "simctl", "addmedia", simulator, "apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png", records.join("attachment-video.mov")]));
             }
@@ -708,11 +721,6 @@ async fn worker(
                 println!("{label}: {phase}");
                 supervision::run(&arguments, &cwd, Io::Log(&log), &cancel, SETUP_TIMEOUT).await
                     .map_err(|error| format!("{label}: {phase} failed: {error}"))?;
-                if phase == "bootstatus" {
-                    let started = Instant::now();
-                    let (stopped, present) = quiet_simulator(simulator, &runtime_root, &cwd, &log, &cancel).await?;
-                    println!("{label}: stopped {stopped}/{present} unused system services in {:.2}s", started.elapsed().as_secs_f64());
-                }
             }
             if tests.iter().any(|test| test == "testSimulatorCanAttachDownloadAndPrepareAIEdit") {
                 let container = supervision::run(&args!["xcrun", "simctl", "get_app_container", simulator, "dev.remoteagent.mobile.ios", "data"], &cwd, Io::Capture, &cancel, SETUP_TIMEOUT).await?;
@@ -770,7 +778,10 @@ async fn worker(
             Ok(WorkerResult { tests, seconds: started.elapsed().as_secs_f64(), setup_seconds, bundle })
         }.await;
     // Stop the Host before potentially slow Simulator cleanup.
-    let shutdown = host.stop(true, Duration::from_secs(10)).await;
+    let shutdown = match host {
+        Some(mut host) => host.stop(true, Duration::from_secs(10)).await,
+        None => Ok(()),
+    };
     // Cleanup ignores cancellation, and recovers devices by this run's
     // unique name even if simctl create/clone was cancelled before returning an ID.
     let cleanup: Result<()> = async {
@@ -1081,8 +1092,9 @@ async fn target_directory(
     cwd: &Path,
     cancel: &watch::Receiver<bool>,
 ) -> Result<PathBuf> {
-    if mode == BuildMode::Prebuilt {
-        // The shared archive carries debug/xtask beside its qa/ products.
+    if matches!(mode, BuildMode::Prebuilt | BuildMode::AwaitBuild) {
+        // debug/xtask runs prebuilt tests; qa/xtask can receive that archive
+        // without overwriting its own running executable.
         return std::env::current_exe()?
             .parent()
             .and_then(Path::parent)
@@ -1103,6 +1115,108 @@ async fn target_directory(
             .as_str()
             .ok_or("missing Cargo target directory")?,
     ))
+}
+
+async fn prepare_media_fixtures(
+    attachments: bool,
+    file_previews: bool,
+    records: &Path,
+    cwd: &Path,
+    log: &File,
+    cancel: &watch::Receiver<bool>,
+) -> Result<()> {
+    for (needed, name, seconds) in [
+        (attachments, "attachment-video.mov", "1"),
+        (file_previews, "preview-movie.mp4", "10"),
+    ] {
+        if !needed {
+            continue;
+        }
+        supervision::run(
+            &args![
+                "xcrun",
+                "swift",
+                "apps/mobile/iosApp/UITests/Fixtures/create-video.swift",
+                records.join(name),
+                seconds
+            ],
+            cwd,
+            Io::Log(log),
+            cancel,
+            SETUP_TIMEOUT,
+        )
+        .await?;
+    }
+    if file_previews {
+        supervision::run(
+            &args![
+                "xcrun",
+                "swift",
+                "apps/mobile/iosApp/UITests/Fixtures/create-file-previews.swift",
+                records.join("file-previews"),
+                records.join("preview-movie.mp4")
+            ],
+            cwd,
+            Io::Log(log),
+            cancel,
+            SETUP_TIMEOUT,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn wait_for_test_products(
+    mut products: watch::Receiver<Option<PathBuf>>,
+    cancel: &watch::Receiver<bool>,
+) -> Result<PathBuf> {
+    loop {
+        if *cancel.borrow() {
+            return Err(supervision::interrupted());
+        }
+        if let Some(path) = products.borrow_and_update().clone() {
+            return Ok(path);
+        }
+        tokio::select! {
+            changed = products.changed() => changed.map_err(|_| "iPhone test build did not become available")?,
+            _ = supervision::cancelled(cancel.clone()) => return Err(supervision::interrupted()),
+        }
+    }
+}
+
+async fn receive_test_bundle(
+    target: &Path,
+    browser: bool,
+    cwd: &Path,
+    log: &File,
+    cancel: &watch::Receiver<bool>,
+) -> Result<PathBuf> {
+    let archive = target.join("qa/ios-e2e.tar.gz");
+    println!("Waiting for the shared iPhone app and Host fixtures");
+    supervision::run(
+        &args![
+            "node",
+            "scripts/receive-iphone-artifact.mjs",
+            "iphone-test-build",
+            &archive
+        ],
+        cwd,
+        Io::Log(log),
+        cancel,
+        BUILD_TIMEOUT,
+    )
+    .await?;
+    supervision::run(
+        &args!["tar", "-xpzf", &archive, "-C", target],
+        cwd,
+        Io::Log(log),
+        cancel,
+        SETUP_TIMEOUT,
+    )
+    .await?;
+    let source = prebuilt_test_bundle(target, browser)?;
+    println!("Received the shared iPhone app and Host fixtures");
+    Ok(source)
 }
 
 async fn acquire_ios_lock(path: &Path, cancel: &watch::Receiver<bool>) -> Result<File> {
@@ -1161,11 +1275,16 @@ pub async fn run(
     let _products = acquire_ios_lock(&qa.join("ios-build.lock"), &cancel).await?;
     let log = File::create(records.join("build.log"))?;
     let browser = needs_browser_fixture(&tests);
-    let (test_run, build_seconds) = if build_mode == BuildMode::Prebuilt {
-        println!("Using the prebuilt iOS app and Host fixtures");
-        (prebuilt_test_bundle(&target, browser)?, 0.0)
+    let (test_run, build_seconds) = if build_mode == BuildMode::AwaitBuild {
+        (None, 0.0)
     } else {
-        build_test_bundle(&cwd, &target, &build, driver, browser, &log, &cancel).await?
+        let (source, seconds) = if build_mode == BuildMode::Prebuilt {
+            println!("Using the prebuilt iOS app and Host fixtures");
+            (prebuilt_test_bundle(&target, browser)?, 0.0)
+        } else {
+            build_test_bundle(&cwd, &target, &build, driver, browser, &log, &cancel).await?
+        };
+        (Some(source), seconds)
     };
     if build_mode == BuildMode::BuildOnly {
         return archive_test_bundle(&target, browser, &log, &cancel).await;
@@ -1191,48 +1310,15 @@ pub async fn run(
     let groups = (0..workers)
         .map(|index| partition_tests(&tests, index, workers))
         .collect::<Result<Vec<_>>>()?;
-    for (needed, name, seconds) in [
-        (needs_media_fixtures(&tests), "attachment-video.mov", "1"),
-        (
-            needs_file_preview_fixtures(&tests),
-            "preview-movie.mp4",
-            "10",
-        ),
-    ] {
-        if !needed {
-            continue;
-        }
-        supervision::run(
-            &args![
-                "xcrun",
-                "swift",
-                "apps/mobile/iosApp/UITests/Fixtures/create-video.swift",
-                records.join(name),
-                seconds
-            ],
-            &cwd,
-            Io::Log(&log),
-            &cancel,
-            SETUP_TIMEOUT,
-        )
-        .await?;
-    }
-    if needs_file_preview_fixtures(&tests) {
-        supervision::run(
-            &args![
-                "xcrun",
-                "swift",
-                "apps/mobile/iosApp/UITests/Fixtures/create-file-previews.swift",
-                records.join("file-previews"),
-                records.join("preview-movie.mp4")
-            ],
-            &cwd,
-            Io::Log(&log),
-            &cancel,
-            SETUP_TIMEOUT,
-        )
-        .await?;
-    }
+    prepare_media_fixtures(
+        needs_media_fixtures(&tests),
+        needs_file_preview_fixtures(&tests),
+        &records,
+        &cwd,
+        &log,
+        &cancel,
+    )
+    .await?;
     let runtimes = supervision::run(
         &args!["xcrun", "simctl", "list", "runtimes", "-j"],
         &cwd,
@@ -1257,53 +1343,73 @@ pub async fn run(
         tests.len(),
         records.display()
     );
-    let mut results = Vec::new();
-    let mut failure = None;
-    for round in 1..=environment.rounds {
-        let mut pending = JoinSet::new();
-        for (index, tests) in groups.iter().cloned().enumerate() {
-            let label = if environment.rounds == 1 {
-                format!("worker-{}", index + 1)
-            } else {
-                format!("worker-{}-round-{round}", index + 1)
-            };
-            pending.spawn(worker(
-                tests,
-                target.clone(),
-                test_run.clone(),
-                simulator_source.clone(),
-                runtime_root.clone(),
-                records.join(label),
-                without_codex,
-                driver,
-                cancel.clone(),
-            ));
+    let (products_sender, products_ready) = watch::channel(test_run);
+    let reception = async {
+        let sender = products_sender;
+        if build_mode == BuildMode::AwaitBuild {
+            let source = receive_test_bundle(&target, browser, &cwd, &log, &cancel).await?;
+            sender.send(Some(source))?;
         }
-        // Await every owner so that an error never drops a live Host's cleanup.
-        while let Some(result) = pending.join_next().await {
-            match result {
-                Ok(Ok(result)) => results.push(result),
-                Ok(Err(error)) => {
-                    if environment.rounds > 1 {
-                        eprintln!("Round {round}/{}: {error}", environment.rounds);
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    };
+    let execution = async {
+        let mut results = Vec::new();
+        let mut failure = None;
+        for round in 1..=environment.rounds {
+            // A failed shared build closes the channel. Further fresh rounds
+            // cannot execute tests, and reception retains the producer's error.
+            if products_ready.has_changed().is_err() && products_ready.borrow().is_none() {
+                break;
+            }
+            let mut pending = JoinSet::new();
+            for (index, tests) in groups.iter().cloned().enumerate() {
+                let label = if environment.rounds == 1 {
+                    format!("worker-{}", index + 1)
+                } else {
+                    format!("worker-{}-round-{round}", index + 1)
+                };
+                pending.spawn(worker(
+                    tests,
+                    target.clone(),
+                    products_ready.clone(),
+                    simulator_source.clone(),
+                    runtime_root.clone(),
+                    records.join(label),
+                    without_codex,
+                    driver,
+                    cancel.clone(),
+                ));
+            }
+            // Await every owner so that an error never drops a live Host's cleanup.
+            while let Some(result) = pending.join_next().await {
+                match result {
+                    Ok(Ok(result)) => results.push(result),
+                    Ok(Err(error)) => {
+                        if environment.rounds > 1 {
+                            eprintln!("Round {round}/{}: {error}", environment.rounds);
+                        }
+                        failure.get_or_insert(error);
                     }
-                    failure.get_or_insert(error);
-                }
-                Err(error) => {
-                    failure.get_or_insert(error.into());
+                    Err(error) => {
+                        failure.get_or_insert(error.into());
+                    }
                 }
             }
+            if *cancel.borrow() {
+                return Err(supervision::interrupted());
+            }
         }
-        if *cancel.borrow() {
-            return Err(supervision::interrupted());
+        if environment.rounds > 1 {
+            report_rounds(&records, environment.rounds, tests.len())?;
         }
-    }
-    if environment.rounds > 1 {
-        report_rounds(&records, environment.rounds, tests.len())?;
-    }
-    if let Some(error) = failure {
-        return Err(error);
-    }
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(results)
+    };
+    let (received, executed) = tokio::join!(reception, execution);
+    received?;
+    let results = executed?;
     let seconds = started.elapsed().as_secs_f64();
     fs::write(
         records.join("summary.json"),
@@ -1339,13 +1445,14 @@ mod tests {
             let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
             let mode = match mode.as_str() {
                 "prebuilt" => BuildMode::Prebuilt,
+                "await" => BuildMode::AwaitBuild,
                 "build-only" => BuildMode::BuildOnly,
                 "build" => BuildMode::BuildAndTest,
                 _ => panic!("unexpected test mode"),
             };
             let (_sender, cancel) = watch::channel(false);
             let target = target_directory(mode, &root, &cancel).await.unwrap();
-            let expected = if mode == BuildMode::Prebuilt {
+            let expected = if matches!(mode, BuildMode::Prebuilt | BuildMode::AwaitBuild) {
                 root.join("shared-build")
             } else {
                 root.join("custom-cargo-target")
@@ -1354,7 +1461,7 @@ mod tests {
             return;
         }
         use std::os::unix::fs::PermissionsExt;
-        for mode in ["prebuilt", "build-only", "build"] {
+        for mode in ["prebuilt", "await", "build-only", "build"] {
             let temporary = tempfile::tempdir().unwrap();
             let root = temporary.path().canonicalize().unwrap();
             let bin = root.join("bin");
@@ -1366,7 +1473,11 @@ mod tests {
             )
             .unwrap();
             fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
-            let runner = root.join("shared-build/debug/xtask");
+            let runner = root.join(if mode == "await" {
+                "shared-build/qa/xtask"
+            } else {
+                "shared-build/debug/xtask"
+            });
             fs::create_dir_all(runner.parent().unwrap()).unwrap();
             fs::copy(std::env::current_exe().unwrap(), &runner).unwrap();
             let output = Command::new(&runner)
@@ -1377,7 +1488,7 @@ mod tests {
                 ])
                 .env(ROOT, &root)
                 .env(MODE, mode)
-                .env("PATH", if mode == "prebuilt" { Path::new("") } else { &bin })
+                .env("PATH", if matches!(mode, "prebuilt" | "await") { Path::new("") } else { &bin })
                 .output()
                 .await
                 .unwrap();
@@ -1386,6 +1497,50 @@ mod tests {
                 "{mode}: {}{}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_products_wait_handles_arrival_producer_failure_and_cancellation() {
+        let (_cancel_sender, cancel) = watch::channel(false);
+        let path = PathBuf::from("shared-products.xctestrun");
+        let (sender, ready) = watch::channel(Some(path.clone()));
+        drop(sender);
+        assert_eq!(wait_for_test_products(ready, &cancel).await.unwrap(), path);
+
+        let (sender, pending) = watch::channel(None);
+        let waiting = tokio::spawn({
+            let cancel = cancel.clone();
+            async move { wait_for_test_products(pending, &cancel).await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        sender.send(Some(path.clone())).unwrap();
+        assert_eq!(waiting.await.unwrap().unwrap(), path);
+
+        let (sender, pending) = watch::channel(None);
+        drop(sender);
+        assert!(
+            wait_for_test_products(pending, &cancel)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("did not become available")
+        );
+        for products in [None, Some(path)] {
+            let (_sender, pending) = watch::channel(products);
+            let (_cancel_sender, cancelled) = watch::channel(true);
+            let error = tokio::time::timeout(
+                Duration::from_secs(5),
+                wait_for_test_products(pending, &cancelled),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::Interrupted
             );
         }
     }
@@ -1534,6 +1689,86 @@ esac
                 mode != "failure"
             );
             assert_eq!(root.join("target/debug/agent-desktop").is_file(), desktop);
+        }
+    }
+
+    #[tokio::test]
+    async fn simulator_preparation_precedes_products_and_failures_delete_only_owned_devices() {
+        if let Ok(mode) = std::env::var(BUILD_TEST_MODE) {
+            let root = PathBuf::from(std::env::var_os(BUILD_TEST_ROOT).unwrap());
+            let records = root.join("records");
+            fs::create_dir(&records).unwrap();
+            let (sender, products) = watch::channel(None);
+            drop(sender);
+            let (_sender, cancel) = watch::channel(false);
+            let error = worker(
+                vec!["testSimulatorExample".into()],
+                root.join("target"),
+                products,
+                SimulatorSource::Runtime("runtime".into()),
+                root.join("runtime"),
+                records.join("worker-1"),
+                false,
+                TestDriver::XCTest,
+                cancel,
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(error.to_string().contains(if mode == "boot-failure" {
+                "boot failed"
+            } else {
+                "did not become available"
+            }));
+            return;
+        }
+        for mode in ["missing-products", "boot-failure"] {
+            let temporary = build_fixture();
+            let root = temporary.path().canonicalize().unwrap();
+            fs::write(
+                root.join("bin/xcrun"),
+                r#"#!/usr/bin/env bash
+set -eu
+root=$AGENT_IOS_BUILD_TEST_ROOT
+printf 'xcrun %s\n' "$*" >> "$root/commands"
+case "$2" in
+  create) printf '%s' "$3" > "$root/device-name"; echo owned-device ;;
+  boot) if [[ $AGENT_IOS_BUILD_TEST_MODE == boot-failure ]]; then exit 17; fi ;;
+  list)
+    if [[ -e $root/device-name ]]; then
+      printf '{"devices":{"runtime":[{"name":"%s","udid":"owned-device"},{"name":"unrelated","udid":"external-device"}]}}\n' "$(cat "$root/device-name")"
+    else
+      echo '{"devices":{}}'
+    fi ;;
+  delete) rm "$root/device-name" ;;
+esac
+"#,
+            )
+            .unwrap();
+            let output = build_command(
+                &root,
+                "ios_e2e::tests::simulator_preparation_precedes_products_and_failures_delete_only_owned_devices",
+                mode,
+            )
+            .output()
+            .await
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let commands = fs::read_to_string(root.join("commands")).unwrap();
+            assert!(commands.contains("simctl create Bex isolated E2E records-worker-1"));
+            assert_eq!(
+                commands.contains("simctl bootstatus owned-device -b"),
+                mode == "missing-products"
+            );
+            assert!(commands.contains("simctl delete owned-device"));
+            assert!(!commands.contains("simctl delete external-device"));
+            assert!(!commands.contains("simctl install"));
+            assert!(!root.join("device-name").exists());
         }
     }
 

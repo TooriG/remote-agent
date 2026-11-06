@@ -361,6 +361,7 @@ jobs:
             target/qa/Bex-*
           retention-days: 7
   iphone:
+    # Artifact receivers identify the producer by this job name.
     name: iPhone build
     needs: changes
     permissions:
@@ -415,6 +416,20 @@ jobs:
               'crates/agent-protocol/Cargo.toml', 'crates/agent-protocol/src/**',
               'crates/xtask/src/ios_*.rs', 'scripts/build-agent*.sh', 'apps/mobile/iosApp/**') }}
           restore-keys: ios-swift-xcode-26.6-
+      - name: Build the iPhone test runner before the app
+        env: *local-rust-cache-env
+        run: |
+          nix develop .#ios-build --command cargo build --locked -p xtask
+          mkdir -p target/qa
+          tar -I 'gzip -1' -cf target/qa/ios-runner.tar.gz -C target/debug xtask
+      - name: Share the runner so Simulators can boot while the app builds
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: iphone-test-runner-${{ github.run_attempt }}
+          path: target/qa/ios-runner.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
       - name: iPhone contracts and shared test build
         env: *local-rust-cache-env
         run: |
@@ -435,7 +450,7 @@ jobs:
       - name: Share the iPhone app, Host fixtures and test runner
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: iphone-test-build
+          name: iphone-test-build-${{ github.run_attempt }}
           path: target/qa/ios-e2e.tar.gz
           if-no-files-found: error
           compression-level: 0
@@ -468,60 +483,27 @@ jobs:
             target/qa/Bex-*
           retention-days: 7
   iphone-tests:
-    name: iPhone ${{ matrix.label }}
-    needs: iphone
-    if: ${{ !cancelled() && needs.iphone.result == 'success' }}
-    concurrency:
-      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-iphone-tests-{1}', github.run_id, matrix.label) }}
-      cancel-in-progress: false
-      queue: max
-    strategy:
-      fail-fast: false
-      matrix:
-        # With Mac, three acceptance shards stay within the hosted macOS limit.
-        include: ${{ fromJSON(inputs.ios-tests && '[{"shard":0,"label":"focused"}]' || '[{"shard":0,"label":"1/3"},{"shard":1,"label":"2/3"},{"shard":2,"label":"3/3"}]') }}
-    runs-on: macos-26
-    timeout-minutes: 120
-    env:
-      AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      AGENT_IOS_TEST_WORKERS: 1
-      AGENT_IOS_TEST_SHARD: ${{ matrix.shard }}
-      AGENT_IOS_TEST_SHARDS: ${{ inputs.ios-tests && 1 || 3 }}
-      # The nightly measurement repeats every test in fresh Simulator and Host rounds.
-      AGENT_IOS_TEST_ROUNDS: ${{ github.event_name == 'schedule' && 3 || inputs.ios-test-rounds || 1 }}
-    steps:
-      - *apple-checkout
-      - *apple-xcode
-      - name: List iPhone Simulator runtimes
-        run: DEVELOPER_DIR="$AGENT_XCODE_DEVELOPER_DIR" xcrun simctl list runtimes
-      - *apple-nix
-      - *prepare-zsh
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: iphone-test-build
-          path: target/qa
-      - name: Restore the shared test build
-        run: tar -xpzf target/qa/ios-e2e.tar.gz -C target
-      - name: iPhone acceptance without rebuilding
-        env:
-          AGENT_IOS_TESTS: ${{ inputs.ios-tests }}
-        run: |
-          set -o pipefail
-          if [[ -n "$AGENT_IOS_TESTS" ]]; then
-            read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
-            nix develop .#ios-test --command just ios-e2e --prebuilt "${ios_tests[@]}" 2>&1 | tee target/qa/quality.log
-          else
-            nix develop .#ios-test --command just conversation-ui --prebuilt 2>&1 | tee target/qa/quality.log
-          fi
-      - name: Retain Apple acceptance logs and result bundles
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: apple-iphone-${{ matrix.shard }}-acceptance
-          path: |
-            target/qa/quality.log
-            target/qa/Bex-*
-          retention-days: 7
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.iphone == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/iphone-acceptance.yml
+    with:
+      tests: ${{ inputs.ios-tests || '' }}
+      rounds: ${{ github.event_name == 'schedule' && 3 || inputs.ios-test-rounds || 1 }}
+  iphone-pr-tests:
+    # PR Apple jobs share one slot. Wait for the producer before taking that
+    # slot, so a consumer cannot block the build whose artifact it awaits.
+    needs: [changes, iphone]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.iphone.result == 'success' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/iphone-acceptance.yml
+    with:
+      tests: ${{ inputs.ios-tests || '' }}
+      rounds: ${{ inputs.ios-test-rounds || 1 }}
   wsl-runtime:
     permissions:
       contents: write
@@ -674,7 +656,7 @@ jobs:
     name: Retire replaced dependency caches
     # Each Cargo.lock change publishes new dependency caches; the replaced ones
     # would otherwise push the repository over its cache budget and evict live caches.
-    needs: [android, mac, iphone, iphone-tests, wsl-runtime, windows]
+    needs: [android, mac, iphone, iphone-tests, iphone-pr-tests, wsl-runtime, windows]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     # Cache maintenance must not invalidate successful client acceptance.
     continue-on-error: true
