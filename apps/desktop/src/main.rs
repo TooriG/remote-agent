@@ -99,7 +99,11 @@ fn main() {
     let shutdown = closing.clone();
     let application = gpui_kit::application()
         .with_assets(DesktopAssets)
-        .with_http_client(std::sync::Arc::new(gpui_http::ReqwestClient::new()));
+        // Image hosts such as Wikimedia reject requests without a User-Agent.
+        .with_http_client(std::sync::Arc::new(
+            gpui_http::ReqwestClient::user_agent(concat!("Bex/", env!("CARGO_PKG_VERSION")))
+                .expect("valid User-Agent"),
+        ));
     application.on_reopen(open_main_window);
     application.run(move |cx| {
         cx.set_global(Runtime {
