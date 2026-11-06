@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 private enum WorkspacePreview {
-    case quickLook, web, download, truncated, unavailable
+    case quickLook, media, web, download, truncated, unavailable
     case text(String)
 }
 
@@ -47,7 +47,7 @@ extension LaunchUITests {
         verifyWorkspaceFileLink(app, index: 0, filename: "fixture image.png")
         verifyWorkspaceFileLink(app, index: 1, filename: "hello.txt", expected: .text("日本語のファイル"))
         for (offset, fixture) in [
-            ("video.mp4", WorkspacePreview.quickLook), ("audio.wav", .quickLook),
+            ("video.mp4", WorkspacePreview.media), ("audio.wav", .media),
             ("animation.gif", .quickLook), ("vector.svg", .web), ("document.pdf", .quickLook),
             ("archive.zip", .download), ("large.txt", .truncated), ("unknown.bin", .unavailable)
         ].enumerated() {
@@ -125,12 +125,15 @@ extension LaunchUITests {
         XCTAssertTrue(app.buttons["file.reload"].exists)
         XCTAssertTrue(app.buttons["file.ai-edit"].exists)
         switch expected {
-        case .quickLook:
+        case .quickLook, .media:
             // QuickLook draws images, documents and media, including their playback controls.
             let preview = app.descendants(matching: .any)["file.preview"]
             XCTAssertTrue(preview.waitUntilExists(timeout: 15))
             XCTAssertTrue(preview.isHittable)
             XCTAssertFalse(app.staticTexts["このファイル形式はプレビューできません"].exists)
+            if case .media = expected {
+                verifyMediaPlayback(app)
+            }
         case .web:
             let content = app.webViews.firstMatch
             XCTAssertTrue(content.waitUntilExists(timeout: 15))
@@ -139,6 +142,18 @@ extension LaunchUITests {
         default:
             break
         }
+    }
+
+    private func verifyMediaPlayback(_ app: XCUIApplication) {
+        let play = quickLookButton(app, ["Play", "再生"])
+        let pause = quickLookButton(app, ["Pause", "一時停止"])
+        if !pause.exists {
+            XCTAssertTrue(play.waitUntilExists(timeout: 15))
+            play.tap()
+        }
+        XCTAssertTrue(pause.waitUntilExists(timeout: 15), "QuickLook must actually play the media")
+        pause.tap()
+        XCTAssertTrue(play.waitUntilExists(timeout: 5), "QuickLook must pause playback")
     }
 
     func testSimulatorOpensOnlyTheTappedImageAndSavesIt() throws {

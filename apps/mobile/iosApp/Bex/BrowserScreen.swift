@@ -19,8 +19,8 @@ struct WorkspaceBrowserScreen: View {
     @FocusState private var textFocused: Bool
     @State private var showKeyboard = false
     @State private var dialogText = ""
-    /// The Host clears an answered dialog on its next frame; until then it stays dismissed here.
-    @State private var dialogAnswered = false
+    /// Suppress stale polling frames only while the answer is queued or in flight.
+    @State private var answeringDialog = false
     @State private var viewportSize = CGSize.zero
 
     private var acceptsInput: Bool {
@@ -79,13 +79,13 @@ struct WorkspaceBrowserScreen: View {
             }
         }
         .alert(Text(verbatim: frame?.dialog?.message ?? ""), isPresented: Binding(
-            get: { frame?.dialog != nil && !dialogAnswered }, set: { _ in }
+            get: { frame?.dialog != nil && !answeringDialog }, set: { _ in }
         )) {
             if frame?.dialog?.prompt == true {
                 TextField("入力", text: $dialogText)
             }
-            Button("キャンセル", role: .cancel) { answerDialog(accept: false) }
-            Button("OK") { answerDialog(accept: true) }
+            Button("キャンセル", role: .cancel) { send(.dialog(accept: false, text: "")) }
+            Button("OK") { send(.dialog(accept: true, text: dialogText)) }
         }
         .sheet(isPresented: Binding(get: { credentials != nil }, set: {
             if !$0 {
@@ -104,7 +104,7 @@ struct WorkspaceBrowserScreen: View {
                 do { try await Task.sleep(for: .milliseconds(connectionError == nil ? 150 : 1500)) } catch { return }
             }
         }
-        .onDisappear { commands.removeAll(); text = "" }
+        .onDisappear { commands.removeAll(); text = ""; answeringDialog = false }
     }
 
     /// Keys for the Host page's focused field, above the keyboard.
@@ -140,12 +140,6 @@ struct WorkspaceBrowserScreen: View {
             .onAppear { textFocused = true }
     }
 
-    private func answerDialog(accept: Bool) {
-        dialogAnswered = true
-        send(.dialog(accept: accept, text: accept ? dialogText : ""))
-        dialogText = ""
-    }
-
     private func open() {
         do {
             let url = try browserAddressUrl(input: address)
@@ -167,6 +161,10 @@ struct WorkspaceBrowserScreen: View {
         credentials = nil
         switch action {
         case .importCookies, .importPasswords: notice = "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。"
+        case .dialog:
+            answeringDialog = true
+            dialogText = ""
+            notice = nil
         default: notice = nil
         }
         commands.append(request(action))
@@ -182,9 +180,6 @@ struct WorkspaceBrowserScreen: View {
             text = ""
         }
         frame = result
-        if result.dialog == nil {
-            dialogAnswered = false
-        }
         if let focus = browserInputFocus(action: action, inputKind: result.inputKind) {
             showKeyboard = focus
             textFocused = showKeyboard
@@ -210,6 +205,11 @@ struct WorkspaceBrowserScreen: View {
     }
 
     private func perform(_ request: BrowserRequest) async {
+        defer {
+            if case .dialog = request.action {
+                answeringDialog = false
+            }
+        }
         do {
             let result = try await store.browser(request: request)
             guard !Task.isCancelled, scenePhase == .active else { return }
