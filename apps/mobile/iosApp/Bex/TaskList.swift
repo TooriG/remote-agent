@@ -48,16 +48,16 @@ struct ThreadsScreen: View {
                     Section {
                         DisclosureGroup(isExpanded: expanded) {
                             if project.loading, !project.hasMore {
-                                ProgressView().taskListRowStyle()
+                                ProgressView().taskListRowStyle(leading: 40)
                             }
                             if let error = project.error {
-                                AppNotice(text: error).taskListRowStyle()
+                                AppNotice(text: error).taskListRowStyle(leading: 40)
                                 Button("再試行") {
                                     model.perform(.refreshProject(projectId: project.id), on: project.hostId)
-                                }.taskListRowStyle()
+                                }.taskListRowStyle(leading: 40)
                             }
                             ForEach(project.threads, id: \.listKey) { thread in
-                                ThreadListRow(thread: thread, model: model)
+                                ThreadListRow(thread: thread, model: model, leadingInset: 40)
                             }
                             if project.hasMore {
                                 Button {
@@ -72,10 +72,10 @@ struct ThreadsScreen: View {
                                 }
                                 .disabled(project.loading)
                                 .accessibilityIdentifier("tasks.project.\(project.id).more")
-                                .taskListRowStyle()
+                                .taskListRowStyle(leading: 40)
                             }
                             if let shelf = project.settled {
-                                SettledThreadRows(shelf: shelf, model: model)
+                                SettledThreadRows(shelf: shelf, model: model, leadingInset: 40)
                             }
                         } label: {
                             HStack(spacing: 16) {
@@ -267,34 +267,6 @@ private extension ThreadSummary {
     }
 }
 
-private struct ProjectIcon: View {
-    let png: Data?
-    let monogram: String
-    let colorRGB: UInt32
-
-    var body: some View {
-        let color = Color(
-            red: Double((colorRGB >> 16) & 255) / 255,
-            green: Double((colorRGB >> 8) & 255) / 255,
-            blue: Double(colorRGB & 255) / 255
-        )
-        Group {
-            if let png, let image = UIImage(data: png) {
-                Image(uiImage: image).resizable().scaledToFit()
-            } else {
-                Text(monogram)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(color)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(color.opacity(0.15))
-            }
-        }
-        .frame(width: 24, height: 24)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .accessibilityHidden(true)
-    }
-}
-
 /// Keep the standard group's rows while its label provides separate expand and compose buttons.
 private struct ProjectDisclosureStyle: DisclosureGroupStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -302,16 +274,15 @@ private struct ProjectDisclosureStyle: DisclosureGroupStyle {
             configuration.label
             if configuration.isExpanded {
                 configuration.content
-                    .listRowInsets(EdgeInsets(top: 0, leading: 40, bottom: 0, trailing: 20))
             }
         }
     }
 }
 
 private extension View {
-    func taskListRowStyle() -> some View {
+    func taskListRowStyle(leading: CGFloat = 20) -> some View {
         listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+            .listRowInsets(EdgeInsets(top: 0, leading: leading, bottom: 0, trailing: 20))
             .listRowBackground(Color.clear)
     }
 }
@@ -319,6 +290,7 @@ private extension View {
 private struct ThreadListRow: View {
     let thread: ThreadSummary
     let model: AppViewModel
+    var leadingInset: CGFloat = 20
 
     private var accessibilityID: String {
         "\(thread.id.provider.bexKey):\(thread.id.id)"
@@ -368,7 +340,7 @@ private struct ThreadListRow: View {
         .accessibilityValue(LocalizedStringKey(
             thread.waiting ? "確認待ち" : thread.active ? "実行中" : thread.unread ? "完了・未確認" : ""
         ))
-        .taskListRowStyle()
+        .taskListRowStyle(leading: leadingInset)
     }
 }
 
@@ -394,6 +366,7 @@ private struct RunningIndicator: View {
 private struct SettledThreadRows: View {
     let shelf: SettledThreads
     let model: AppViewModel
+    var leadingInset: CGFloat = 20
 
     var body: some View {
         Button {
@@ -401,26 +374,26 @@ private struct SettledThreadRows: View {
         } label: {
             Label("片づけ済み", systemImage: shelf.expanded ? "chevron.down" : "chevron.right")
         }
-        .taskListRowStyle()
+        .taskListRowStyle(leading: leadingInset)
         if shelf.expanded {
             ForEach(shelf.threads, id: \.listKey) { thread in
-                ThreadListRow(thread: thread, model: model)
+                ThreadListRow(thread: thread, model: model, leadingInset: leadingInset)
             }
             if shelf.loading {
-                ProgressView().taskListRowStyle()
+                ProgressView().taskListRowStyle(leading: leadingInset)
             }
             if let error = shelf.error {
-                AppNotice(text: error).taskListRowStyle()
+                AppNotice(text: error).taskListRowStyle(leading: leadingInset)
                 Button("再試行") {
                     model.perform(.setSettledExpanded(projectId: shelf.projectId, expanded: true), on: shelf.hostId)
-                }.taskListRowStyle()
+                }.taskListRowStyle(leading: leadingInset)
             }
             if shelf.hasMore {
                 Button("もっと見る") {
                     model.perform(.expandSettled(projectId: shelf.projectId), on: shelf.hostId)
                 }
                 .disabled(shelf.loading)
-                .taskListRowStyle()
+                .taskListRowStyle(leading: leadingInset)
             }
         }
     }
