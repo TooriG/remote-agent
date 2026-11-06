@@ -328,7 +328,6 @@ jobs:
           nix develop .#native --command bash -euo pipefail <<'CHECKS' 2>&1 | tee target/qa/quality.log
           just quality rust
           just macos-unit-tests
-          cargo build --locked -p agent-nsh --target aarch64-apple-darwin
           just macos-e2e
           CHECKS
       - &finish-local-rust-cache
@@ -445,7 +444,6 @@ jobs:
           export AGENT_IOS_USE_CACHED_HOST_GRAPH="${{ steps.dependency-cache.outputs.cache-hit == 'true' && steps.local-rust-cache.outputs.cache-matched-key != '' }}"
           mkdir -p target/qa
           nix develop .#ios-build --command just ios-unit-tests 2>&1 | tee target/qa/quality.log
-          nix develop .#ios-build --command just nsh-ios-simulator 2>&1 | tee -a target/qa/quality.log
           if [[ -n "$AGENT_IOS_TESTS" ]]; then
             read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
             nix develop .#ios-build --command just ios-e2e --build-only "${ios_tests[@]}" 2>&1 | tee -a target/qa/quality.log
@@ -491,6 +489,38 @@ jobs:
             target/qa/quality.log
             target/qa/Bex-*
           retention-days: 7
+  nsh-apple:
+    name: NSH Apple previews
+    needs: changes
+    if: (needs.changes.outputs.mac == 'true' || needs.changes.outputs.iphone == 'true') && !inputs.ios-tests
+    concurrency:
+      group: native-apple-${{ github.event_name == 'pull_request' && 'pr' || format('{0}-nsh', github.run_id) }}
+      cancel-in-progress: false
+      queue: max
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 2
+      AGENT_XCODE_DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - *apple-checkout
+      - *apple-xcode
+      - *apple-nix
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cmd-format: nix develop .#native --command {0}
+          key: nsh-apple-xcode-26.6-${{ hashFiles('flake.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      # Preview builds must not delay publication of the shared iPhone test app.
+      - name: Build and package the native NSH Mac app
+        run: |
+          nix develop .#native --command bash -euo pipefail <<'BUILD'
+          cargo build --locked -p agent-nsh --target aarch64-apple-darwin
+          bash apps/nsh/package.sh macos
+          BUILD
+      - name: Build and package the native NSH iPhone app
+        run: nix develop .#ios-build --command just nsh-ios-simulator
   iphone-tests:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.iphone == 'true' }}
