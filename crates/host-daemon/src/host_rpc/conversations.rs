@@ -614,10 +614,6 @@ impl Conversations {
                     change,
                 }
             }
-            AgentChange::TaskParent { session, parent } => AgentChange::TaskParent {
-                session,
-                parent: owner(rows, &parent).map_or_else(|| parent.clone(), |row| row.id.clone()),
-            },
             AgentChange::Request {
                 session,
                 origin,

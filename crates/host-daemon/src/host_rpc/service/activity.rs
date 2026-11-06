@@ -60,7 +60,7 @@ impl HostRpcService {
                     session_pages(
                         agent.as_ref(),
                         "",
-                        SessionListScope::Loaded,
+                        SessionListScope::Roots,
                         100,
                         100,
                         None,
@@ -146,6 +146,83 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn activity_uses_only_normal_conversations_even_with_saved_subagent_completions() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bex-read-state.json");
+        let session = |id: &str| SessionRef::new(ProviderKind::Codex, id.into()).unwrap();
+        let root = session("public-root");
+        let child = session("child");
+        let grandchild = session("grandchild");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&[&root, &child, &grandchild].map(|session| {
+                serde_json::json!({"session":session,"turn_id":"completed","unread":true})
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let program = directory.path().join("codex-fixture");
+        std::fs::write(&program, r##"#!/usr/bin/env node
+const rl = require('node:readline').createInterface({input:process.stdin});
+const send = value => process.stdout.write(JSON.stringify(value) + '\n');
+let reads = 0;
+rl.on('line', line => {
+  const m = JSON.parse(line), p = m.params;
+  if (m.id === undefined) return;
+  let result = {};
+  if (m.method === 'initialize') result = {userAgent:'activity-fixture',codexHome:process.env.CODEX_HOME};
+  if (m.method === 'fixture/reads') result = reads;
+  if (m.method === 'thread/read') reads++;
+  if (m.method === 'thread/list') {
+    if (p.sourceKinds.includes('subAgentThreadSpawn')) throw new Error('Subagents are outside system activity');
+    result = {data:[{id:'running',status:{type:'active'}},{id:'native-root',status:{type:'idle'}}],nextCursor:null};
+  }
+  send({id:m.id,result});
+});
+"##).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let server = Arc::new(
+            codex_app_server::CodexAppServer::spawn(crate::providers::codex::Config {
+                program,
+                codex_home: Some(directory.path().to_owned()),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let service = HostRpcService::new(
+            [crate::providers::codex::Codex::new(Ok(server.clone())).into()],
+            ProjectStore::new(directory.path().join("projects.json")),
+        );
+        let mut conversation = crate::host_rpc::conversations::Conversation::new(&Thread {
+            id: Some(session("native-root")),
+            cwd: Some(directory.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+        conversation.id = root.clone();
+        service.inner.conversations.save(conversation).unwrap();
+        service.start();
+
+        let first = service.read_task_activity(false).await.unwrap();
+        assert_eq!(first.unread, [(root, "completed".into())]);
+        assert_eq!(first.display.current.label, "実行中 1件 · 完了 1件");
+        let repeated = service.read_task_activity(false).await.unwrap();
+        assert_eq!(repeated, first);
+        let reads = server
+            .request::<_, u32>("fixture/reads", &serde_json::json!({}))
+            .await
+            .unwrap()
+            .outcome
+            .unwrap();
+        assert_eq!(reads, 0, "activity never reads or classifies subagents");
+        drop(service);
+        server.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn reading_on_either_device_broadcasts_to_both_and_reconnect_reads_the_shared_state() {
         let directory = tempfile::tempdir().unwrap();
@@ -153,9 +230,16 @@ mod tests {
             [],
             ProjectStore::new(directory.path().join("projects.json")),
         );
+        let id = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
+        service.inner.router.task_activity(
+            vec![Thread {
+                id: Some(id.clone()),
+                ..Default::default()
+            }],
+            0,
+        );
         let mut phone = service.open_session();
         let mut desktop = service.open_session();
-        let id = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
         for (index, reader) in [(0, phone.id()), (1, desktop.id())] {
             let turn_id: agent_protocol::ids::TurnId = format!("turn-{index}").into();
             service.inner.router.session_change(

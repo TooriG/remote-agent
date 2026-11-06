@@ -4,8 +4,6 @@ use super::*;
 #[derive(Default)]
 pub(super) struct Task {
     pub(super) facts: Option<TaskState>,
-    pub(super) subagent: bool,
-    // Subagent discovery must not fence out an already pending read of execution facts.
     pub(super) facts_revision: u64,
 }
 /// Only user conversations contribute to system surfaces. Subagent work,
@@ -17,17 +15,15 @@ fn task_display(
     let mut summary = agent_protocol::live_activity::TaskActivitySummary::from_statuses(
         tasks
             .values()
-            .filter(|task| !task.subagent)
             .filter_map(|task| task.facts.map(|facts| facts.phase().0)),
     );
     summary.finished = unread
         .iter()
         .filter(|(session, _)| {
-            tasks.get(session).is_none_or(|task| {
-                !task.subagent
-                    && task.facts.is_none_or(|facts| {
-                        facts.session_status() == agent_protocol::models::SessionStatus::Idle
-                    })
+            tasks.get(session).is_some_and(|task| {
+                task.facts.is_none_or(|facts| {
+                    facts.session_status() == agent_protocol::models::SessionStatus::Idle
+                })
             })
         })
         .count() as u32;
@@ -38,13 +34,17 @@ pub(super) fn task_activity_state(
     tasks: &HashMap<SessionRef, Task>,
     unread: Vec<(SessionRef, agent_protocol::ids::TurnId)>,
 ) -> agent_protocol::live_activity::TaskActivityState {
+    let unread: Vec<_> = unread
+        .into_iter()
+        .filter(|(session, _)| tasks.contains_key(session))
+        .collect();
     let statuses: std::collections::BTreeMap<_, _> = tasks
         .iter()
         .filter_map(|(id, task)| Some((id.clone(), task.facts?.session_status())))
         .collect();
     let mut waiting: Vec<_> = tasks
         .iter()
-        .filter(|(_, task)| !task.subagent && task.facts.is_some_and(|facts| facts.waiting))
+        .filter(|(_, task)| task.facts.is_some_and(|facts| facts.waiting))
         .map(|(session, _)| session.clone())
         .collect();
     waiting.sort();
@@ -82,7 +82,12 @@ pub(super) fn record_task_facts(
     timeline: &agent_protocol::session::Timeline,
     change: &SessionChange,
 ) -> Vec<SessionId> {
-    let previous = state.tasks.get(target).and_then(|task| task.facts);
+    // Provider events also contain subagents. Only conversations admitted by
+    // the normal list (or created by the Host) have system task state.
+    let Some(previous) = state.tasks.get(target) else {
+        return Vec::new();
+    };
+    let previous = previous.facts;
     let task = TaskState {
         status: if timeline.status != agent_protocol::models::SessionStatus::Unknown
             || matches!(change, SessionChange::Status { .. })
@@ -109,12 +114,11 @@ pub(super) fn record_task_facts(
         } if turn.status == agent_protocol::execution::TurnStatus::Completed => Some(&turn.id),
         _ => None,
     };
-    let read_changed = state.tasks.get(target).is_none_or(|task| !task.subagent)
-        && state.reads.record(
-            target,
-            task.session_status() == agent_protocol::models::SessionStatus::Running,
-            completed,
-        );
+    let read_changed = state.reads.record(
+        target,
+        task.session_status() == agent_protocol::models::SessionStatus::Running,
+        completed,
+    );
     let facts_changed = previous != Some(task)
         && (task.phase().0 != "unknown" || previous.is_some_and(|task| task.phase().1));
     if read_changed || facts_changed {
@@ -122,7 +126,7 @@ pub(super) fn record_task_facts(
         let revision = state.task_revision;
         // A new completion is fresh evidence even when its phase is unchanged.
         // An older running list must not clear that completion's unread badge.
-        let owned = state.tasks.entry(target.clone()).or_default();
+        let owned = state.tasks.get_mut(target).unwrap();
         owned.facts = Some(task);
         owned.facts_revision = revision;
         let activity = task_activity_state(state.task_revision, &state.tasks, state.reads.unread());
@@ -141,31 +145,16 @@ impl SessionRouter {
     pub(in crate::host_rpc) fn task_activity_revision(&self) -> u64 {
         lock_state(&self.state).task_revision
     }
-    pub(in crate::host_rpc) fn task_subagent(&self, session: SessionRef) {
-        let mut state = lock_state(&self.state);
-        if state.tasks.get(&session).is_some_and(|task| task.subagent) {
-            return;
-        }
-        state.task_revision += 1;
-        let revision = state.task_revision;
-        state.reads.forget(&session);
-        let task = state.tasks.entry(session).or_default();
-        task.subagent = true;
-        let activity = task_activity_state(revision, &state.tasks, state.reads.unread());
-        let failed = publish_task_activity(state.apns.as_deref(), &state.sessions, &activity);
-        drop(state);
-        self.close_failed(failed);
-    }
+    /// Admit normal conversations from the provider's root list or Host creation.
     pub(in crate::host_rpc) fn task_activity(
         &self,
-        native: Vec<Thread>,
+        conversations: Vec<Thread>,
         read_revision: u64,
     ) -> agent_protocol::live_activity::TaskActivityState {
-        let tasks: Vec<_> = native
+        let tasks: Vec<_> = conversations
             .into_iter()
             .filter_map(|thread| {
                 let target = thread.id.clone()?;
-                let subagent = thread.parent_id.is_some();
                 let actor = self.actor(&target);
                 let owned = lock_state(&actor);
                 let task = if owned.timeline.status
@@ -189,16 +178,14 @@ impl SessionRouter {
                 };
                 drop(owned);
                 self.prune(&target, &actor);
-                Some((target, task, subagent))
+                Some((target, task))
             })
             .collect();
         let mut state = lock_state(&self.state);
         let before = state.task_revision;
         // Provider events received while loading the list take precedence, including completion.
-        for (session, task, subagent) in tasks {
+        for (session, task) in tasks {
             let previous = state.tasks.get(&session);
-            // Subagent identity is immutable and can arrive with an older execution read.
-            let subagent = subagent || previous.is_some_and(|old| old.subagent);
             let previous_facts = previous.and_then(|old| old.facts);
             let accepts_facts = !previous.is_some_and(|old| old.facts_revision > read_revision)
                 && task.is_some_and(|task| {
@@ -206,26 +193,20 @@ impl SessionRouter {
                         && (previous_facts.is_some() || task.phase().1)
                 });
             let facts = if accepts_facts { task } else { previous_facts };
-            let unchanged =
-                previous_facts == facts && previous.is_some_and(|old| old.subagent) == subagent;
-            let read_changed = if subagent {
-                state.reads.forget(&session)
-            } else {
-                accepts_facts
-                    && state.reads.record(
-                        &session,
-                        facts.unwrap().session_status()
-                            == agent_protocol::models::SessionStatus::Running,
-                        None,
-                    )
-            };
+            let unchanged = previous.is_some() && previous_facts == facts;
+            let read_changed = accepts_facts
+                && state.reads.record(
+                    &session,
+                    facts.unwrap().session_status()
+                        == agent_protocol::models::SessionStatus::Running,
+                    None,
+                );
             if unchanged && !read_changed {
                 continue;
             }
             state.task_revision += 1;
             let revision = state.task_revision;
             let owned = state.tasks.entry(session).or_default();
-            owned.subagent = subagent;
             if owned.facts != facts {
                 owned.facts = facts;
                 owned.facts_revision = revision;

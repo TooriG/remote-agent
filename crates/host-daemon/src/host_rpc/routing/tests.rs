@@ -10,21 +10,12 @@ fn subagent_work_and_requests_do_not_contribute_to_system_activity() {
     let child = SessionRef::new(ProviderKind::Codex, "child".into()).unwrap();
     let grandchild = SessionRef::new(ProviderKind::Codex, "grandchild".into()).unwrap();
     let other = SessionRef::new(ProviderKind::Claude, "root".into()).unwrap();
-    let seed = |id: &SessionRef, parent| Thread {
+    let seed = |id: &SessionRef| Thread {
         id: Some(id.clone()),
-        parent_id: parent,
         status: SessionStatus::Running,
         ..Default::default()
     };
-    let initial = router.task_activity(
-        vec![
-            seed(&root, None),
-            seed(&child, Some(root.clone())),
-            seed(&grandchild, Some(child.clone())),
-            seed(&other, None),
-        ],
-        0,
-    );
+    let initial = router.task_activity(vec![seed(&root), seed(&other)], 0);
     assert_eq!(initial.display.current.total, 2);
     assert_eq!(initial.display.current.label, "実行中 2件");
     assert!(initial.waiting.is_empty());
@@ -44,15 +35,7 @@ fn subagent_work_and_requests_do_not_contribute_to_system_activity() {
         assert_eq!(waiting.display.current.total, 2);
         assert_eq!(waiting.display.current.label, "実行中 2件");
         assert!(waiting.waiting.is_empty());
-        assert_eq!(
-            waiting
-                .statuses
-                .iter()
-                .find(|(id, _)| id == &grandchild)
-                .unwrap()
-                .1,
-            SessionStatus::Running
-        );
+        assert!(!waiting.statuses.iter().any(|(id, _)| id == &grandchild));
         router.session_change(
             &grandchild,
             SessionChange::RequestDelivery {
@@ -111,20 +94,12 @@ fn each_finished_conversation_keeps_a_mark_until_its_result_is_read() {
     let first = SessionRef::new(ProviderKind::Codex, "first".into()).unwrap();
     let second = SessionRef::new(ProviderKind::Claude, "second".into()).unwrap();
     let child = SessionRef::new(ProviderKind::Codex, "child".into()).unwrap();
-    let seed = |id: &SessionRef, parent| Thread {
+    let seed = |id: &SessionRef| Thread {
         id: Some(id.clone()),
-        parent_id: parent,
         status: SessionStatus::Running,
         ..Default::default()
     };
-    router.task_activity(
-        vec![
-            seed(&first, None),
-            seed(&second, None),
-            seed(&child, Some(first.clone())),
-        ],
-        0,
-    );
+    router.task_activity(vec![seed(&first), seed(&second)], 0);
     let finish = |id: &SessionRef, turn: &str| {
         router.session_change(
             id,
@@ -185,7 +160,7 @@ fn each_finished_conversation_keeps_a_mark_until_its_result_is_read() {
 }
 
 #[test]
-fn subagent_identity_can_arrive_after_newer_task_facts_without_overwriting_them() {
+fn only_listed_conversations_accept_activity_from_provider_events() {
     use agent_protocol::models::SessionStatus;
     let router = SessionRouter::new();
     let root = SessionRef::new(ProviderKind::Codex, "root".into()).unwrap();
@@ -199,16 +174,16 @@ fn subagent_identity_can_arrive_after_newer_task_facts_without_overwriting_them(
             },
         );
     }
-    let corrected = router.task_activity(
+    assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 0);
+    let listed = router.task_activity(
         vec![Thread {
-            id: Some(child.clone()),
-            parent_id: Some(root.clone()),
-            status: SessionStatus::Idle,
+            id: Some(root.clone()),
+            status: SessionStatus::Running,
             ..Default::default()
         }],
         revision,
     );
-    assert_eq!(corrected.display.current.total, 1);
+    assert_eq!(listed.display.current.total, 1);
     router.session_change(
         &root,
         SessionChange::Status {
@@ -217,41 +192,27 @@ fn subagent_identity_can_arrive_after_newer_task_facts_without_overwriting_them(
     );
     let state = router.task_activity(Vec::new(), 0);
     assert_eq!(state.display.current.total, 0);
-    assert_eq!(
-        state
-            .statuses
-            .iter()
-            .find(|(id, _)| id == &child)
-            .unwrap()
-            .1,
-        SessionStatus::Running,
-        "the delayed read preserved the child's newer running state"
-    );
-    let orphan = SessionRef::new(ProviderKind::Codex, "orphan".into()).unwrap();
+    assert!(!state.statuses.iter().any(|(id, _)| id == &child));
     router.session_change(
-        &orphan,
+        &child,
         SessionChange::Status {
             status: SessionStatus::Running,
         },
     );
-    assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 1);
-    router.task_subagent(orphan);
     assert_eq!(router.task_activity(Vec::new(), 0).display.current.total, 0);
 }
 
 proptest::proptest! {
     #[test]
-    fn descendant_count_and_list_order_do_not_inflate_conversation_count(roots in 1usize..8, descendants in 0usize..24, nested in proptest::bool::ANY, reverse in proptest::bool::ANY) {
+    fn descendant_count_and_list_order_do_not_inflate_conversation_count(roots in 1usize..8, descendants in 0usize..24, reverse in proptest::bool::ANY) {
         let router = SessionRouter::new();
         let mut threads = Vec::new();
         for root in 0..roots {
             let id = SessionRef::new(ProviderKind::Codex, format!("root-{root}")).unwrap();
             threads.push(Thread { id: Some(id.clone()), status: agent_protocol::models::SessionStatus::Running, ..Default::default() });
-            let mut parent = id.clone();
             for child in 0..descendants {
                 let id = SessionRef::new(ProviderKind::Codex, format!("child-{root}-{child}")).unwrap();
-                threads.push(Thread { id: Some(id.clone()), parent_id: Some(parent.clone()), status: agent_protocol::models::SessionStatus::Running, ..Default::default() });
-                if nested { parent = id; }
+                router.session_change(&id, SessionChange::Status { status: agent_protocol::models::SessionStatus::Running });
             }
         }
         if reverse { threads.reverse(); }
@@ -1308,6 +1269,13 @@ async fn byte_budget_disconnects_only_the_slow_connection() {
 #[tokio::test]
 async fn burst_of_small_updates_keeps_the_connection_and_delivers_every_update() {
     let router = SessionRouter::new();
+    let initial = router.task_activity(
+        vec![Thread {
+            id: Some(SessionRef::new(ProviderKind::Codex, "native".into()).unwrap()),
+            ..Default::default()
+        }],
+        0,
+    );
     let mut connection = router.open_session();
     let response: ThreadResponse = serde_json::from_value(
         json!({"thread":{"id":{"provider":"codex","id":"native"},"turns":[]}}),
@@ -1359,7 +1327,7 @@ async fn burst_of_small_updates_keeps_the_connection_and_delivers_every_update()
             panic!("expected task state")
         };
         assert_eq!(state.display.ongoing, active);
-        assert_eq!(state.revision, index + 1);
+        assert_eq!(state.revision, initial.revision + index + 1);
     }
     assert_eq!(
         connection

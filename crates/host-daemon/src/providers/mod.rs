@@ -154,7 +154,6 @@ pub(crate) struct SessionPage {
 pub(crate) enum SessionListScope<'a> {
     Roots,
     All,
-    Loaded,
     Descendants(&'a str),
 }
 

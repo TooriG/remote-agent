@@ -960,7 +960,6 @@ async fn worktree_lists_read_each_native_page_once_and_refresh_activity() {
                     "name":format!("Conversation {index}: {running}"),
                     "updatedAt":index,
                     "status":{"type":if index == 0 && running { "active" } else { "idle" }},
-                    "loaded":index == 0,
                 })
             })
             .collect();

@@ -101,24 +101,6 @@ impl ReadState {
         self.update(next);
         true
     }
-    pub(super) fn forget(&mut self, session: &SessionRef) -> bool {
-        let Ok(completions) = &self.completions else {
-            return false;
-        };
-        if !completions
-            .iter()
-            .any(|completion| &completion.session == session)
-        {
-            return false;
-        }
-        let next = completions
-            .iter()
-            .filter(|completion| &completion.session != session)
-            .cloned()
-            .collect();
-        self.update(next);
-        true
-    }
     fn update(&mut self, next: Vec<Completion>) {
         // Live facts survive temporary disk failures; read receipts only clear
         // a badge after their write succeeds.
@@ -183,6 +165,13 @@ mod tests {
         let path = directory.path().join("reads.json");
         let router = SessionRouter::new().with_read_state(path.clone());
         let id = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
+        router.task_activity(
+            vec![Thread {
+                id: Some(id.clone()),
+                ..Default::default()
+            }],
+            0,
+        );
         let complete = |turn: &str| {
             router.session_change(
                 &id,
@@ -252,59 +241,38 @@ mod tests {
     #[test]
     fn subagent_completions_never_survive_as_standalone_unread_results() {
         use agent_protocol::{execution::TurnStatus, models::SessionStatus};
-        for parent_source in ["before", "event", "list", "stale-list"] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("reads.json");
-            let router = SessionRouter::new().with_read_state(path.clone());
-            let root = SessionRef::new(ProviderKind::Codex, "root".into()).unwrap();
-            let child = SessionRef::new(ProviderKind::Codex, "child".into()).unwrap();
-            if parent_source == "before" {
-                router.task_subagent(child.clone());
-            }
-            let revision = router.task_activity_revision();
-            for session in [&root, &child] {
-                router.session_change(
-                    session,
-                    SessionChange::Status {
-                        status: SessionStatus::Idle,
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reads.json");
+        let router = SessionRouter::new().with_read_state(path.clone());
+        let root = SessionRef::new(ProviderKind::Codex, "root".into()).unwrap();
+        let child = SessionRef::new(ProviderKind::Codex, "child".into()).unwrap();
+        let conversation = Thread {
+            id: Some(root.clone()),
+            status: SessionStatus::Idle,
+            ..Default::default()
+        };
+        router.task_activity(vec![conversation.clone()], 0);
+        for session in [&root, &child] {
+            router.session_change(
+                session,
+                SessionChange::Turn {
+                    turn: agent_protocol::models::Turn {
+                        id: "completed".into(),
+                        status: TurnStatus::Completed,
+                        ..Default::default()
                     },
-                );
-                router.session_change(
-                    session,
-                    SessionChange::Turn {
-                        turn: agent_protocol::models::Turn {
-                            id: "completed".into(),
-                            status: TurnStatus::Completed,
-                            ..Default::default()
-                        },
-                        completed: true,
-                    },
-                );
-            }
-            match parent_source {
-                "event" => router.task_subagent(child.clone()),
-                "list" | "stale-list" => {
-                    router.task_activity(
-                        vec![Thread {
-                            id: Some(child),
-                            parent_id: Some(root.clone()),
-                            status: SessionStatus::Running,
-                            list_stale: (parent_source == "stale-list").then_some(true),
-                            ..Default::default()
-                        }],
-                        revision,
-                    );
-                }
-                _ => {}
-            }
-            let expected = vec![(root, "completed".into())];
-            assert_eq!(router.task_activity(Vec::new(), 0).unread, expected);
-            let restarted = SessionRouter::new().with_read_state(path);
-            let state = restarted.task_activity(Vec::new(), 0);
-            assert_eq!(state.unread, expected);
-            assert_eq!(state.display.current.total, 1);
-            assert!(!state.display.ongoing);
+                    completed: true,
+                },
+            );
         }
+        let expected = vec![(root, "completed".into())];
+        assert_eq!(router.task_activity(Vec::new(), 0).unread, expected);
+        assert_eq!(ReadState::load(path.clone()).unread(), expected);
+        let restarted = SessionRouter::new().with_read_state(path);
+        let state = restarted.task_activity(vec![conversation], 0);
+        assert_eq!(state.unread, expected);
+        assert_eq!(state.display.current.total, 1);
+        assert!(!state.display.ongoing);
     }
 
     #[test]

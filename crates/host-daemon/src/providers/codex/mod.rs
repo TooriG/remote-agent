@@ -718,36 +718,6 @@ impl Agent for Codex {
             .expect("list access is open");
         let (source_kinds, ancestor_thread_id): (&'static [&'static str], Option<&str>) =
             match scope {
-                SessionListScope::Loaded => {
-                    let page: Page<String> = self
-                        .request(
-                            "thread/loaded/list",
-                            &serde_json::json!({"limit":limit,"cursor":cursor}),
-                        )
-                        .await?;
-                    use futures_util::{StreamExt, TryStreamExt};
-                    let data =
-                        futures_util::stream::iter(page.data.into_iter().map(|id| async move {
-                            let mut response = self
-                                .thread_response(
-                                    "thread/read",
-                                    &serde_json::json!({"threadId":id,"includeTurns":false}),
-                                )
-                                .await?;
-                            response.thread.turns = None;
-                            Ok::<_, Failure>(SessionSummary {
-                                thread: response.thread,
-                                branch: None,
-                            })
-                        }))
-                        .buffer_unordered(4)
-                        .try_collect()
-                        .await?;
-                    return Ok(SessionPage {
-                        data,
-                        next_cursor: page.next_cursor,
-                    });
-                }
                 SessionListScope::Roots => {
                     (&["cli", "vscode", "exec", "appServer", "unknown"], None)
                 }
@@ -1174,7 +1144,11 @@ impl Agent for Codex {
                             let result = match event_change(instance, &request) {
                                 Ok(Some(change)) => {
                                     subscriptions.observe(&change);
-                                    emit(&output, change).await
+                                    if matches!(change, AgentChange::TaskParent { .. }) {
+                                        Ok(())
+                                    } else {
+                                        emit(&output, change).await
+                                    }
                                 }
                                 Ok(None) => Ok(()),
                                 Err(error) => Err(error),
@@ -1335,7 +1309,7 @@ rl.on('line', line => {
     }
 
     #[test]
-    fn started_subagents_publish_their_conversation_parent() {
+    fn started_subagents_report_parent_for_subscription_retention() {
         let line = serde_json::json!({"method":"thread/started","params":{"thread":{"id":"child","parentThreadId":"parent"}}}).to_string();
         let change =
             super::event_change(uuid::Uuid::nil(), &super::RpcMessage::parse(&line).unwrap())
