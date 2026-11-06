@@ -6,7 +6,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0D3F91562D2E488890ECB01E /* ConversationContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B4D5714D09D4233A252BF6B /* ConversationContainer.swift */; };
 		EB35FB642FBD2BAAE63C4417 /* ConversationMediaPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB82712EB6C081752DD49DF7 /* ConversationMediaPresentation.swift */; };
 		144475AC4BF43F9C23481CEA /* ConversationListLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CF4B0B87EF0B5062C0FDD15 /* ConversationListLayout.swift */; };
         F11E00000000000000000001 /* file-icons in Resources */ = {isa = PBXBuildFile; fileRef = F11E00000000000000000002 /* file-icons */; };
@@ -87,7 +86,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		5B4D5714D09D4233A252BF6B /* ConversationContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationContainer.swift; sourceTree = "<group>"; };
 		AB82712EB6C081752DD49DF7 /* ConversationMediaPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMediaPresentation.swift; sourceTree = "<group>"; };
 		3CF4B0B87EF0B5062C0FDD15 /* ConversationListLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListLayout.swift; sourceTree = "<group>"; };
         F11E00000000000000000002 /* file-icons */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "file-icons"; path = "../file-icons"; sourceTree = "<group>"; };
@@ -233,7 +231,6 @@
 				4134613DBAED1B9229F23DE5 /* ConversationMediaImport.swift */,
 				109E523F621AEB123226918A /* ConversationHistory.swift */,
 				C0DE00000000000000000802 /* ConversationList.swift */,
-				5B4D5714D09D4233A252BF6B /* ConversationContainer.swift */,
 				AB82712EB6C081752DD49DF7 /* ConversationMediaPresentation.swift */,
 				3CF4B0B87EF0B5062C0FDD15 /* ConversationListLayout.swift */,
 				2036041A039EEBAA78D55844 /* AppPresentationData.swift */,
@@ -425,7 +422,6 @@
 				110EFBD84D6039D2705F2B1F /* ConversationMediaImport.swift in Sources */,
 				556D7396D1777928A463D2DF /* ConversationHistory.swift in Sources */,
 				C0DE00000000000000000801 /* ConversationList.swift in Sources */,
-				0D3F91562D2E488890ECB01E /* ConversationContainer.swift in Sources */,
 				EB35FB642FBD2BAAE63C4417 /* ConversationMediaPresentation.swift in Sources */,
 				144475AC4BF43F9C23481CEA /* ConversationListLayout.swift in Sources */,
 				B5EDE65C803E4BD5CE028DE5 /* AppPresentationData.swift in Sources */,

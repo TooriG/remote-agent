@@ -8,6 +8,33 @@ import UIKit
     var latestVisible = true
 }
 
+struct ConversationList: UIViewControllerRepresentable {
+    enum RowID: Hashable {
+        case history
+        case message(String)
+    }
+
+    let ids: [RowID]
+    let scroll: ConversationScrollState
+    let following: Bool
+    let accessibilityValue: String
+    let viewportHeight: CGFloat
+    let row: (Int) -> AnyView
+
+    func makeUIViewController(context _: Context) -> ConversationListController {
+        ConversationListController(scroll: scroll)
+    }
+
+    func updateUIViewController(_ controller: ConversationListController, context _: Context) {
+        controller.viewportHeight = viewportHeight
+        controller.update(ids: ids, following: following, accessibilityValue: accessibilityValue, row: row)
+    }
+
+    static func dismantleUIViewController(_ controller: ConversationListController, coordinator _: ()) {
+        controller.stop()
+    }
+}
+
 /// Observe the collection's actual layout, including inset changes that do not resize its controller.
 private final class ConversationCollectionView: UICollectionView {
     var didLayout: (() -> Void)?
@@ -40,6 +67,7 @@ final class ConversationListController: UIViewController {
     private let scroll: ConversationScrollState
     private let layout: ConversationListLayout
     let collectionView: UICollectionView
+    var viewportHeight: CGFloat?
     private var source = Source(ids: [], row: { _ in AnyView(EmptyView()) })
     private var indices: [ConversationList.RowID: Int] = [:]
     private var pending: Source?
@@ -162,10 +190,21 @@ final class ConversationListController: UIViewController {
 
     private func didLayoutCollectionView() {
         guard active else { return }
+        updateViewportInsets()
         applyPending()
         guard !applying else { return }
         positionViewport()
         publishVisibility()
+    }
+
+    /// SwiftUI lays out the composer; only the collection extends beneath its safe-area inset.
+    private func updateViewportInsets() {
+        guard let viewportHeight else { return }
+        let inherited = view.safeAreaInsets.bottom - additionalSafeAreaInsets.bottom
+        let bottom = max(0, view.bounds.height - viewportHeight - inherited)
+        if additionalSafeAreaInsets.bottom != bottom {
+            additionalSafeAreaInsets.bottom = bottom
+        }
     }
 
     private var geometry: Geometry {

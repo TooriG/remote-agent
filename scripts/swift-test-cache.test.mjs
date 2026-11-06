@@ -16,7 +16,6 @@ function fixture(t) {
   copyFileSync('scripts/test-ios-scroll.sh', join(root, 'scripts/test-ios-scroll.sh'));
   for (const path of [
     'apps/mobile/iosApp/Bex/ConversationList.swift',
-    'apps/mobile/iosApp/Bex/ConversationContainer.swift',
     'apps/mobile/iosApp/Bex/ConversationListLayout.swift',
     'apps/mobile/iosApp/Bex/ConversationTextLayout.swift',
     'apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift',

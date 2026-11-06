@@ -341,6 +341,7 @@ extension LaunchUITests {
 
             XCTAssertTrue(row.waitUntilExists(timeout: 15)); row.tap()
             XCTAssertTrue(app.descendants(matching: .any)[answerID].waitUntilExists(timeout: 15))
+            assertComposerAtBottomWithKeyboardHidden(in: app)
             XCTAssertEqual(message.value as? String, "Keep this conversation draft")
             backToTaskList(app, swipe: !cycle.isMultiple(of: 2))
 
@@ -357,10 +358,9 @@ extension LaunchUITests {
             backToTaskList(app, swipe: !cycle.isMultiple(of: 2))
             row.tap()
             XCTAssertTrue(app.descendants(matching: .any)[answerID].waitUntilExists(timeout: 15))
+            assertComposerAtBottomWithKeyboardHidden(in: app)
         }
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Task reopened after repeated back and cancelled edge swipes"
-        screenshot.lifetime = .keepAlways; add(screenshot)
+        captureScreen(app, named: "Task reopened after repeated back and cancelled edge swipes")
     }
 
     private func assertUnavailableScannerCanBeCancelled(_ app: XCUIApplication) {

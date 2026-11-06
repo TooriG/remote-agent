@@ -20,6 +20,17 @@ final class LaunchUITests: XCTestCase {
         add(attachment)
     }
 
+    func assertComposerAtBottomWithKeyboardHidden(in app: XCUIApplication,
+                                                  file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), file: file, line: line)
+        let send = app.buttons["task.send"]
+        XCTAssertTrue(send.waitUntilExists(timeout: 10), file: file, line: line)
+        waitForStableFrame(send)
+        captureScreen(app, named: "Composer position after reopening without keyboard")
+        // Allow the home indicator and the composer's own inset, never a keyboard-sized empty region.
+        XCTAssertLessThan(app.frame.maxY - send.frame.maxY, 90, file: file, line: line)
+    }
+
     func waitForStableFrame(_ element: XCUIElement) {
         // Sample early and keep failed-poll diagnostics off the accessibility tree.
         var previous = element.frame

@@ -360,24 +360,37 @@ extension ConversationScrollTests {
 extension ConversationScrollTests {
     private func checkComposerUnderlay() async {
         for height: CGFloat in [60, 100, 180] {
-            let controller = ConversationContainerController(scroll: ConversationScrollState())
+            let scroll = ConversationScrollState()
+            let controller = UIHostingController(rootView:
+                GeometryReader { geometry in
+                    ConversationList(ids: [.message("long")], scroll: scroll, following: true,
+                                     accessibilityValue: "", viewportHeight: geometry.size.height) { _ in
+                        AnyView(Text("Scrollable conversation").frame(height: 1200))
+                    }
+                    .ignoresSafeArea(.container, edges: .bottom)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    Text("Composer").frame(maxWidth: .infinity).frame(height: height)
+                })
+            controller.additionalSafeAreaInsets.bottom = 34
             mount(controller)
-            let view = controller.list.collectionView
-            controller.list.update(ids: [.message("long")], following: true, accessibilityValue: "") { _ in
-                AnyView(Text("Scrollable conversation").frame(height: 1200))
-            }
-            controller.updateControls(composer: AnyView(Text("Composer").frame(height: height)),
-                                      latest: AnyView(EmptyView()))
             await layout(controller)
-            check(view.frame == controller.view.bounds, "Conversation must draw behind the entire composer")
-            let composerFrame = controller.children[1].view.frame
-            check(abs(composerFrame.height - height) < 1, "Native hosting must size the composer")
-            check(abs(view.adjustedContentInset.bottom - view.bounds.height + composerFrame.minY) < 1,
-                  "Native insets must follow the composer edge: \(geometry(view)), composer=\(composerFrame)")
+            let view = collection(in: controller.view)!
+            check(abs(view.convert(view.bounds, to: controller.view).maxY - controller.view.bounds.maxY) < 1,
+                  "Conversation must draw behind the composer and home indicator")
+            check(abs(view.adjustedContentInset.bottom - height - controller.view.safeAreaInsets.bottom) < 1,
+                  "Native insets must reserve the composer and home indicator once: \(geometry(view))")
             let last = view.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))!
             check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
                       - last.frame.maxY - 6) < 1,
             "The latest message must remain readable above the composer: \(geometry(view))")
         }
+    }
+
+    private func collection(in view: UIView) -> UICollectionView? {
+        if let view = view as? UICollectionView {
+            return view
+        }
+        return view.subviews.lazy.compactMap { self.collection(in: $0) }.first
     }
 }
