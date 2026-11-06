@@ -76,8 +76,38 @@ final class ConversationTextView: UITextView {
                 content,
                 range: range
             )
-        textStorage.setAttributedString(content)
+        // Preserve TextKit's layout for completed paragraphs while the tail streams.
+        // Compare attributes too: completing Markdown can restyle existing text.
+        let prefix = Self.unchangedPrefix(textStorage, content)
+        textStorage.replaceCharacters(
+            in: NSRange(location: prefix, length: textStorage.length - prefix),
+            with: content.attributedSubstring(from: NSRange(location: prefix, length: content.length - prefix))
+        )
         selectedRange = keepSelection ? range : NSRange(location: 0, length: 0)
+    }
+
+    private static func unchangedPrefix(_ previous: NSAttributedString, _ next: NSAttributedString) -> Int {
+        let limit = min(previous.length, next.length)
+        let previousText = previous.string as NSString
+        let nextText = next.string as NSString
+        var offset = 0
+        while offset < limit {
+            var oldRange = NSRange()
+            var newRange = NSRange()
+            let oldAttributes = previous.attributes(at: offset, effectiveRange: &oldRange)
+            let newAttributes = next.attributes(at: offset, effectiveRange: &newRange)
+            guard NSDictionary(dictionary: oldAttributes).isEqual(to: newAttributes) else { break }
+            let end = min(NSMaxRange(oldRange), NSMaxRange(newRange), limit)
+            let range = NSRange(location: offset, length: end - offset)
+            let oldText = previousText.substring(with: range)
+            let newText = nextText.substring(with: range)
+            let count = oldText.commonPrefix(with: newText, options: .literal).utf16.count
+            offset += count
+            if count < range.length {
+                break
+            }
+        }
+        return offset
     }
 }
 

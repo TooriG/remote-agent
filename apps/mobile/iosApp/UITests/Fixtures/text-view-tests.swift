@@ -7,7 +7,7 @@ enum ConversationMarkdownContent {
 }
 
 enum ConversationAttributedText {
-    static func attributedText(_ blocks: [String], dark _: Bool) -> NSAttributedString {
+    static func attributedText(_ blocks: [String], dark: Bool) -> NSAttributedString {
         let text = NSMutableAttributedString()
         for (index, block) in blocks.enumerated() {
             let quoted = block.hasPrefix(">")
@@ -15,7 +15,8 @@ enum ConversationAttributedText {
             paragraph.firstLineHeadIndent = quoted ? 12 : 0
             paragraph.headIndent = paragraph.firstLineHeadIndent
             var attributes: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: 18), .foregroundColor: UIColor.black, .paragraphStyle: paragraph
+                .font: UIFont.systemFont(ofSize: 18), .foregroundColor: dark ? UIColor.white : UIColor.black,
+                .paragraphStyle: paragraph
             ]
             if quoted {
                 attributes[ConversationTextView.quote] = true
@@ -33,6 +34,15 @@ enum ConversationAttributedText {
 
 @main
 struct ConversationTextViewTests {
+    private final class Edits: NSObject, NSTextStorageDelegate {
+        var range: NSRange?
+
+        func textStorage(_: NSTextStorage, didProcessEditing _: NSTextStorage.EditActions,
+                         range editedRange: NSRange, changeInLength _: Int) {
+            range = editedRange
+        }
+    }
+
     static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
         guard condition() else {
             fputs("FAIL: \(message)\n", stderr)
@@ -86,7 +96,12 @@ struct ConversationTextViewTests {
         check(view.contentOffset == .zero, "Revealing a selection must not scroll inside the message")
         _ = view.accessibilityScroll(.down)
         check(view.contentOffset == .zero, "Accessibility must not scroll inside the message")
+        let edits = Edits()
+        view.textStorage.delegate = edits
+        let lastParagraph = (view.text as NSString).range(of: blocks.last!).location
         view.update(blocks: blocks + ["Streamed line"], dark: false, sizeCategory: .large)
+        check((edits.range?.location ?? 0) >= lastParagraph,
+              "Appending a line must retain TextKit's layout for completed paragraphs")
         view.frame.size = view.measure(width: 320)
         view.layoutIfNeeded()
         check(view.text.hasSuffix("Streamed line"), "Streaming must show the new text")
@@ -107,6 +122,21 @@ struct ConversationTextViewTests {
         reopened.update(blocks: ["Short answer"], dark: false, sizeCategory: .large)
         check(reopened.measure(width: 320).width == 320,
               "Short messages must fill the proposed column width instead of shrinking to their text")
+        checkRestyling()
         print("Conversation text view tests passed")
+    }
+
+    @MainActor private static func checkRestyling() {
+        let view = ConversationTextView()
+        view.update(blocks: ["First paragraph", "tail"], dark: false, sizeCategory: .large)
+        view.update(blocks: ["> First paragraph", "tail extended"], dark: false, sizeCategory: .large)
+        check(view.textStorage.attribute(ConversationTextView.quote, at: 0, effectiveRange: nil) as? Bool == true,
+              "Changed attributes before the streamed tail must be updated")
+        view.update(blocks: ["> First paragraph", "tail extended"], dark: true, sizeCategory: .large)
+        check(view.textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor == .white,
+              "Attribute-only changes must restyle existing text")
+        view.update(blocks: ["日本語 😀", "tail"], dark: false, sizeCategory: .large)
+        view.update(blocks: ["日本語 😃", "tail extended"], dark: false, sizeCategory: .large)
+        check(view.text == "日本語 😃\ntail extended", "Tail replacement must preserve Unicode boundaries")
     }
 }
