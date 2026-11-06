@@ -64,7 +64,8 @@ try {
       if (matches.length === 1) break;
       if (producer.status === 'completed') throw new Error(`iPhone build did not publish ${artifactName}`);
     }
-    await delay(10_000, undefined, { signal: controller.signal });
+    // Three consumers share the repository's GitHub API quota while building.
+    await delay(30_000, undefined, { signal: controller.signal });
   }
   await mkdir(dirname(destination), { recursive: true });
   pending = await mkdtemp(join(dirname(destination), '.iphone-artifact-'));

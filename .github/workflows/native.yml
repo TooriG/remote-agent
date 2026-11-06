@@ -419,9 +419,11 @@ jobs:
       - name: Build the iPhone test runner before the app
         env: *local-rust-cache-env
         run: |
-          nix develop .#ios-build --command cargo build --locked -p xtask
+          nix develop .#ios-build --command bash -euo pipefail <<'RUNNER'
+          cargo build --locked -p xtask
           mkdir -p target/qa
           tar -I 'gzip -1' -cf target/qa/ios-runner.tar.gz -C target/debug xtask
+          RUNNER
       - name: Share the runner so Simulators can boot while the app builds
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

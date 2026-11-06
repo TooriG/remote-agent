@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -32,6 +32,39 @@ test('main prepares iPhone consumers concurrently while PR consumers wait outsid
   assert.ok(workflow.indexOf('name: iphone-test-runner-${{ github.run_attempt }}') <
     workflow.indexOf('name: iPhone contracts and shared test build'));
   assert.match(workflow, /name: iphone-test-build-\$\{\{ github.run_attempt \}\}/);
+});
+
+test('the early runner is built and archived inside Nix with its executable permission intact', t => {
+  const block = workflow.match(/      - name: Build the iPhone test runner before the app\n[\s\S]*?        run: \|\n([\s\S]*?)(?=      - name: Share the runner)/);
+  assert.ok(block);
+  const script = block[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
+  const root = mkdtempSync(join(tmpdir(), 'iphone-runner-stage-'));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  const realTar = spawnSync('bash', ['-c', 'command -v tar'], {encoding: 'utf8'});
+  assert.equal(realTar.status, 0, realTar.stderr);
+  for (const [name, body] of Object.entries({
+    nix: 'while [[ $1 != --command ]]; do shift; done\nshift\nexport NATIVE_RUNNER_STAGE=ready\nexec "$@"',
+    cargo: 'test "$NATIVE_RUNNER_STAGE" = ready\nmkdir -p target/debug\nprintf "runner fixture\\n" > target/debug/xtask\nchmod 755 target/debug/xtask',
+    tar: 'test "$NATIVE_RUNNER_STAGE" = ready\nexec "$NATIVE_REAL_TAR" "$@"',
+  })) {
+    const path = join(bin, name);
+    writeFileSync(path, `#!/usr/bin/env bash\nset -eu\n${body}\n`);
+    chmodSync(path, 0o755);
+  }
+  const result = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
+    cwd: root, encoding: 'utf8',
+    env: {...process.env, PATH: `${bin}:${process.env.PATH}`, NATIVE_RUNNER_STAGE: '', NATIVE_REAL_TAR: realTar.stdout.trim()},
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const restored = join(root, 'restored');
+  mkdirSync(restored);
+  const unpack = spawnSync(realTar.stdout.trim(), ['-xpzf', join(root, 'target/qa/ios-runner.tar.gz'), '-C', restored], {encoding: 'utf8'});
+  assert.equal(unpack.status, 0, unpack.stderr);
+  assert.deepEqual(readdirSync(restored), ['xtask']);
+  assert.equal(readFileSync(join(restored, 'xtask'), 'utf8'), 'runner fixture\n');
+  assert.equal(statSync(join(restored, 'xtask')).mode & 0o777, 0o755);
 });
 
 function select(t, paths, { event = 'push', base = 'last-verified-main', queryFailure = false, fetchFailure = false, diffFailure = false } = {}) {
