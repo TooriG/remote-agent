@@ -96,11 +96,11 @@ extension LaunchUITests {
         let preview = app.descendants(matching: .any)["conversation.preview.content"]
         XCTAssertTrue(preview.waitUntilExists(timeout: 15))
         XCTAssertTrue(app.buttons["conversation.preview.share"].exists)
-        XCTAssertFalse(app.buttons["conversation.preview.save"].exists)
         XCTAssertFalse(app.buttons["file.close"].exists)
         XCTAssertFalse(app.buttons["file.reload"].exists)
         XCTAssertFalse(app.buttons["file.ai-edit"].exists)
         verifyMediaPlayback(app, preview: preview)
+        saveConversationPreview(app)
         captureScreen(app, named: "Video opens directly without file editing controls")
         done.tap()
         wait(for: [expectation(for: NSPredicate(format: "isHittable == true"),
@@ -194,11 +194,7 @@ extension LaunchUITests {
         XCTAssertTrue(done.waitUntilExists(timeout: 10))
         app.windows.firstMatch.pinch(withScale: 2, velocity: 1)
         captureScreen(app, named: "Only the tapped image opens even in a conversation with many images")
-        let directSave = app.buttons["conversation.preview.save"]
-        XCTAssertTrue(directSave.exists)
-        directSave.tap()
-        wait(for: [expectation(for: NSPredicate(format: "enabled == false AND label IN %@", ["Saved", "保存済み"]),
-                               evaluatedWith: directSave)], timeout: 20)
+        saveConversationPreview(app)
         app.buttons["conversation.preview.share"].tap()
         let save = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label IN %@", ["Save Image", "画像を保存"])).firstMatch
@@ -207,6 +203,14 @@ extension LaunchUITests {
         wait(for: [expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: save)], timeout: 20)
         done.tap()
         XCTAssertTrue(image.waitUntilExists(timeout: 10))
+    }
+
+    private func saveConversationPreview(_ app: XCUIApplication) {
+        let save = app.buttons["conversation.preview.save"]
+        XCTAssertTrue(save.exists)
+        save.tap()
+        wait(for: [expectation(for: NSPredicate(format: "enabled == false AND label IN %@", ["Saved", "保存済み"]),
+                               evaluatedWith: save)], timeout: 20)
     }
 
     func testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening() throws {

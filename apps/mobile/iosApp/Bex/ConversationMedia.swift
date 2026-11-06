@@ -195,23 +195,21 @@ struct ConversationPreview: View {
                             .accessibilityIdentifier("conversation.preview.close")
                     }
                     ToolbarItemGroup(placement: .primaryAction) {
-                        if UTType(filenameExtension: file.url.pathExtension)?.conforms(to: .image) == true {
-                            Button {
-                                saving = true
-                                Task { await save() }
-                            } label: {
-                                Image(systemName: saved ? "checkmark" : "arrow.down.to.line")
-                            }
-                            .disabled(saving || saved)
-                            .accessibilityLabel(LocalizedStringKey(saved ? "保存済み" : "保存"))
-                            .accessibilityIdentifier("conversation.preview.save")
+                        Button {
+                            saving = true
+                            Task { await save() }
+                        } label: {
+                            Image(systemName: saved ? "checkmark" : "arrow.down.to.line")
                         }
+                        .disabled(saving || saved)
+                        .accessibilityLabel(LocalizedStringKey(saved ? "保存済み" : "保存"))
+                        .accessibilityIdentifier("conversation.preview.save")
                         ShareLink(item: file.url) { Image(systemName: "square.and.arrow.up") }
                             .accessibilityLabel("保存・共有")
                             .accessibilityIdentifier("conversation.preview.share")
                     }
                 }
-                .alert("画像を保存できません", isPresented: Binding(get: { saveError != nil }, set: {
+                .alert("保存できません", isPresented: Binding(get: { saveError != nil }, set: {
                     if !$0 {
                         saveError = nil
                     }
@@ -231,8 +229,10 @@ struct ConversationPreview: View {
         }
         do {
             let url = file.url
+            let resourceType: PHAssetResourceType = UTType(filenameExtension: url.pathExtension)?
+                .conforms(to: .image) == true ? .photo : .video
             try await PHPhotoLibrary.shared().performChanges {
-                PHAssetCreationRequest.forAsset().addResource(with: .photo, fileURL: url, options: nil)
+                PHAssetCreationRequest.forAsset().addResource(with: resourceType, fileURL: url, options: nil)
             }
             saved = true
         } catch { saveError = error.localizedDescription }

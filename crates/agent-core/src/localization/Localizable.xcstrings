@@ -11329,6 +11329,22 @@
         }
       }
     },
+    "保存できません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存できません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not save"
+          }
+        }
+      }
+    },
     "保存を再試行": {
       "localizations": {
         "ja": {
@@ -15133,22 +15149,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Preview image"
-          }
-        }
-      }
-    },
-    "画像を保存できません": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "画像を保存できません"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not save image"
           }
         }
       }
