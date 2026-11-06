@@ -37,7 +37,7 @@ extension LaunchUITests {
         XCTAssertTrue(app.buttons["pairing.scan"].exists)
         XCTAssertEqual(app.buttons["pairing.scan"].label, "QRコードを読み取る")
         assertUnavailableScannerCanBeCancelled(app)
-        XCTAssertFalse(app.staticTexts["tasks.project.simulator-project"].exists)
+        XCTAssertFalse(app.buttons["tasks.project.simulator-project"].exists)
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["tasks.connect"].waitUntilExists(timeout: 10))
         app.buttons["tasks.connect"].tap()
@@ -46,11 +46,11 @@ extension LaunchUITests {
         XCTAssertTrue(app.navigationBars["プライバシーポリシー"].waitUntilExists(timeout: 5))
         app.buttons["閉じる"].tap()
         XCTAssertTrue(app.buttons["pairing.scan"].waitUntilExists(timeout: 10))
-        XCTAssertFalse(app.staticTexts["tasks.project.simulator-project"].exists)
+        XCTAssertFalse(app.buttons["tasks.project.simulator-project"].exists)
         captureScreen(app, named: "Removed Host stays unpaired after relaunch")
         app.terminate()
         let reconnected = try connectedSimulatorApp()
-        XCTAssertTrue(reconnected.staticTexts["tasks.project.simulator-project"].exists)
+        XCTAssertTrue(reconnected.buttons["tasks.project.simulator-project"].exists)
         XCTAssertFalse(reconnected.staticTexts["notice"].exists)
     }
 
@@ -74,7 +74,7 @@ extension LaunchUITests {
         let taskList = app.descendants(matching: .any)["tasks.list"]
         XCTAssertTrue(taskList.waitUntilExists(timeout: 30))
         XCTAssertFalse(detail.exists)
-        let project = app.staticTexts["tasks.project.simulator-project"]
+        let project = app.buttons["tasks.project.simulator-project"]
         XCTAssertTrue(project.waitUntilExists(timeout: 10))
         XCTAssertEqual(project.value as? String, "閉じています")
         project.tap()
@@ -175,8 +175,12 @@ extension LaunchUITests {
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitUntilExists(timeout: 10))
         XCTAssertGreaterThan(search.frame.midY, app.frame.height * 0.8)
-        let project = app.staticTexts["tasks.project.simulator-project"]
+        let project = app.buttons["tasks.project.simulator-project"]
         XCTAssertTrue(project.exists)
+        // Expansion persists across launches; this scenario begins with a closed project.
+        if project.value as? String == "開いています" {
+            project.tap()
+        }
         XCTAssertEqual(project.value as? String, "閉じています")
         let compose = app.buttons["tasks.new.project.simulator-project"]
         XCTAssertTrue(compose.isHittable)
@@ -186,10 +190,11 @@ extension LaunchUITests {
         XCTAssertFalse(app.buttons["tasks.new.chat"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(search.waitUntilExists(timeout: 10))
+        XCTAssertEqual(project.value as? String, "閉じています")
         search.tap(); search.typeText("no-matching-conversation-unique\n")
-        XCTAssertFalse(app.staticTexts["tasks.project.simulator-project"].exists)
+        XCTAssertFalse(app.buttons["tasks.project.simulator-project"].exists)
         search.buttons.firstMatch.tap()
-        app.buttons["close"].tap()
+        closeSearch(app)
         app.buttons["tasks.menu"].tap()
         app.buttons["tasks.refresh"].tap()
         XCTAssertTrue(project.waitUntilExists(timeout: 10))

@@ -37,6 +37,12 @@ final class LaunchUITests: XCTestCase {
         element.tap()
     }
 
+    func closeSearch(_ app: XCUIApplication) {
+        app.buttons.matching(NSPredicate(
+            format: "identifier == %@ OR label IN %@", "close", ["Close", "閉じる"]
+        )).firstMatch.tap()
+    }
+
     /// The status bar is the native way back to the start of a conversation.
     func tapStatusBar(_ app: XCUIApplication) {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0)).withOffset(CGVector(dx: 0, dy: 32)).tap()
@@ -50,7 +56,7 @@ final class LaunchUITests: XCTestCase {
     }
 
     func expandSimulatorProject(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        let project = app.staticTexts["tasks.project.simulator-project"]
+        let project = app.buttons["tasks.project.simulator-project"]
         guard project.waitUntilExists(timeout: 10) else {
             XCTFail("The fixture project did not appear.\n\(app.debugDescription)", file: file, line: line)
             return

@@ -134,7 +134,6 @@ struct ThreadScreen: View {
             ConversationComposer(model: model, mediaPresentation: mediaPresentation,
                                  hasConversation: conversation != nil,
                                  isSideChat: isSideChat, openTools: openTools)
-                .background(.bar)
         }
     }
 }

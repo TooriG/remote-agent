@@ -182,7 +182,7 @@ extension LaunchUITests {
         XCTAssertTrue(app.descendants(matching: .any)[identifier].waitUntilExists(timeout: 20),
                       "Foreground return did not fetch the conversation created by another client")
         XCTAssertFalse(app.staticTexts["notice"].exists)
-        let project = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tasks.project."))
+        let project = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tasks.project."))
             .firstMatch
         XCTAssertTrue(project.waitUntilExists(timeout: 10)); project.tap()
         let row = app.descendants(matching: .any)[identifier]

@@ -42,10 +42,11 @@ struct ThreadsScreen: View {
                 .listSectionSeparator(.hidden)
 
                 ForEach(projects, id: \.listKey) { project in
+                    let expanded = Binding(get: { project.expanded }, set: {
+                        model.perform(.setProjectExpanded(projectId: project.id, expanded: $0), on: project.hostId)
+                    })
                     Section {
-                        DisclosureGroup(isExpanded: Binding(get: { project.expanded }, set: {
-                            model.perform(.setProjectExpanded(projectId: project.id, expanded: $0), on: project.hostId)
-                        })) {
+                        DisclosureGroup(isExpanded: expanded) {
                             if project.loading, !project.hasMore {
                                 ProgressView().taskListRowStyle()
                             }
@@ -78,16 +79,22 @@ struct ThreadsScreen: View {
                             }
                         } label: {
                             HStack(spacing: 16) {
-                                ProjectIcon(
-                                    png: colorScheme == .dark ? project.icon?.darkPng : project.icon?.lightPng,
-                                    monogram: project.monogram,
-                                    colorRGB: project.iconColor
-                                )
-                                // Keep this identity separate from the group's rows and create button.
-                                Text(project.name).font(.title3).lineLimit(1)
-                                    .accessibilityIdentifier("tasks.project.\(project.id)")
-                                    .accessibilityValue(project.expanded ? "開いています" : "閉じています")
-                                Spacer(minLength: 0)
+                                Button { expanded.wrappedValue.toggle() } label: {
+                                    HStack(spacing: 16) {
+                                        ProjectIcon(
+                                            png: colorScheme == .dark ? project.icon?.darkPng : project.icon?.lightPng,
+                                            monogram: project.monogram,
+                                            colorRGB: project.iconColor
+                                        )
+                                        Text(project.name).font(.title3).lineLimit(1)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .frame(minHeight: 44)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("tasks.project.\(project.id)")
+                                .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                                 Button { model.openNewThread(cwd: project.roots.first?.path ?? "", on: project.hostId)
                                 } label: {
                                     Image(systemName: "square.and.pencil").font(.title3)
@@ -98,8 +105,8 @@ struct ThreadsScreen: View {
                                 .accessibilityLabel("\(project.name)で新しいタスク")
                                 .accessibilityIdentifier("tasks.new.project.\(project.id)")
                             }
-                            .frame(minHeight: 44)
                         }
+                        .disclosureGroupStyle(ProjectDisclosureStyle())
                         .taskListRowStyle()
                     }
                     .listSectionSeparator(.hidden)
@@ -285,6 +292,19 @@ private struct ProjectIcon: View {
         .frame(width: 24, height: 24)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityHidden(true)
+    }
+}
+
+/// Keep the standard group's rows while its label provides separate expand and compose buttons.
+private struct ProjectDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Group {
+            configuration.label
+            if configuration.isExpanded {
+                configuration.content
+                    .listRowInsets(EdgeInsets(top: 0, leading: 40, bottom: 0, trailing: 20))
+            }
+        }
     }
 }
 

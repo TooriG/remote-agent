@@ -263,7 +263,7 @@ extension LaunchUITests {
         search.tap()
         search.buttons.firstMatch.tap()
         XCTAssertTrue(rootFile.waitUntilExists(timeout: 10))
-        app.buttons["close"].tap()
+        closeSearch(app)
         closeWorkbench(app)
         XCTAssertFalse(app.staticTexts["notice"].exists)
         XCTAssertTrue(app.textFields["task.message"].waitUntilExists(timeout: 10))
@@ -299,7 +299,7 @@ extension LaunchUITests {
         XCTAssertFalse(app.staticTexts["PCとペアリング"].exists)
 
         let notice = app.staticTexts["notice"]
-        let project = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tasks.project."))
+        let project = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tasks.project."))
             .firstMatch
         if project.exists, project.value as? String == "閉じています" {
             project.tap()

@@ -6,7 +6,7 @@ extension LaunchUITests {
         try useSimulatorListFixture("merge-worktree/fresh")
         // Refresh updates the open project while retaining closed project pages.
         refreshSimulatorTaskList(app)
-        let project = app.staticTexts["tasks.project.simulator-project"]
+        let project = app.buttons["tasks.project.simulator-project"]
         XCTAssertTrue(project.waitUntilExists(timeout: 10))
         let running = app.descendants(matching: .any)["tasks.running.codex:merge-active"]
         XCTAssertTrue(running.waitUntilExists(timeout: 10))
