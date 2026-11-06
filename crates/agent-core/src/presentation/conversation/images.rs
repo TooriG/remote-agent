@@ -1,7 +1,5 @@
 use super::{ConversationRow, ConversationRowContent};
-use crate::presentation::markdown::{
-    MarkdownFileSurface, markdown_file_target, markdown_without_images,
-};
+use crate::presentation::markdown::{MarkdownFileSurface, markdown_file_target, markdown_images};
 use std::collections::HashSet;
 
 fn image_key(source: &str) -> String {
@@ -42,12 +40,8 @@ pub(super) fn without_repeated_generated_images(
             }
             ConversationRowContent::Response { item, .. } if item.data.kind == "agent" => {
                 if let Some(text) = &item.data.body {
-                    inline_images.extend(
-                        markdown_without_images(text)
-                            .1
-                            .iter()
-                            .map(|source| image_key(source)),
-                    );
+                    inline_images
+                        .extend(markdown_images(text).iter().map(|source| image_key(source)));
                 }
             }
             // Grouping exposes only assistant text and generated images as responses.

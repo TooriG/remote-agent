@@ -10,7 +10,7 @@ pub(super) struct RequestInputs {
 pub(super) struct MarkdownContent {
     pub(super) source: SharedString,
     pub(super) rendered: SharedString,
-    pub(super) images: Rc<[String]>,
+    pub(super) definitions: Arc<HashMap<String, String>>,
     pub(super) code_headers: Arc<HashMap<usize, String>>,
     pub(super) file_chips: super::view::markdown_file::FileChips,
     pub(super) parser_revision: u64,

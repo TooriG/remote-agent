@@ -1977,7 +1977,7 @@ impl ConversationView {
                 MarkdownContent {
                     source,
                     rendered,
-                    images: presentation.images.into(),
+                    definitions: Arc::new(presentation.definitions),
                     code_headers: Arc::new(presentation.code_headers),
                     file_chips,
                     parser_revision: uuid::Uuid::new_v4().as_u64_pair().0,
@@ -1988,7 +1988,7 @@ impl ConversationView {
             );
         }
         let cached = &self.timeline.markdown[&id];
-        let images = cached.images.clone();
+        let definitions = cached.definitions.clone();
         let view = cx.entity().downgrade();
         let wrap_code = cached.wrap_code;
         let compact_tables = cached.compact_tables;
@@ -1999,6 +1999,8 @@ impl ConversationView {
         let table_key = id.clone();
         let diagram_key = id.clone();
         let diagram_view = view.clone();
+        let image_key = id.clone();
+        let media = self.media.clone();
         let mut code_style = gpui_kit::StyleRefinement::default()
             .pt(px(44.))
             .border_1()
@@ -2021,177 +2023,197 @@ impl ConversationView {
             .code_block(code_style)
             .table(table_style)
             .table_cell(table_cell);
-        let mut body = v_flex().gap_3().w_full().child(
-            TextView::markdown(SharedString::from(id.clone()), cached.rendered.clone())
-                .selectable(true)
-                .markdown_extensions(
-                    gpui_kit::base::text::MarkdownExtensions::default()
-                        .parser_revision(cached.parser_revision),
-                )
-                .plugin(cached.file_chips.clone())
-                .markdown_block_parser(|node, context| {
-                    let original = context.node_source(node)?;
-                    let diagram = agent_core::presentation::markdown::markdown_diagram(original)?;
-                    Some(
-                        gpui_kit::base::text::MarkdownNode::new("mermaid", diagram.clone())
-                            .text(diagram.source)
-                            .markdown(original.to_owned()),
+        v_flex()
+            .w_full()
+            .child(
+                TextView::markdown(SharedString::from(id.clone()), cached.rendered.clone())
+                    .selectable(true)
+                    .markdown_extensions(
+                        gpui_kit::base::text::MarkdownExtensions::default()
+                            .parser_revision(cached.parser_revision),
                     )
-                })
-                .markdown_block_renderer("mermaid", move |node, _, cx| {
-                    diagram_view
-                        .update(cx, |view, cx| view.markdown_diagram(&diagram_key, node, cx))
-                        .unwrap_or_else(|_| div().into_any_element())
-                })
-                .style(style)
-                .selection_format(gpui_kit::component::text::SelectionFormat::Source)
-                .code_block_actions(move |block, _, _| {
-                    let text = block.code();
-                    let label = block
-                        .span
-                        .and_then(|span| headers.get(&span.start))
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            block.lang().unwrap_or_else(|| "CODE".into()).to_string()
-                        });
-                    let wrap_view = wrap_view.clone();
-                    let code_key = code_key.clone();
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(
-                            div()
-                                .min_w_0()
-                                .max_w(px(220.))
-                                .text_ellipsis()
-                                .text_xs()
-                                .child(label),
+                    .plugin(cached.file_chips.clone())
+                    .markdown_block_parser(move |node, context| {
+                        let images = agent_core::presentation::markdown::markdown_image_paragraph(
+                            node,
+                            &definitions,
+                        )?;
+                        Some(
+                            gpui_kit::base::text::MarkdownNode::new("images", images)
+                                .markdown(context.node_source(node)?.to_owned()),
                         )
-                        .child(
-                            Button::new("wrap-code")
-                                .label(if wrap_code {
-                                    language.text("折り返し解除")
-                                } else {
-                                    language.text("折り返し")
-                                })
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    let _ = wrap_view.update(cx, |view, cx| {
-                                        if let Some(cached) =
-                                            view.timeline.markdown.get_mut(&code_key)
-                                        {
-                                            cached.wrap_code = !cached.wrap_code;
-                                        }
-                                        view.timeline.remeasure_item(&code_key);
-                                        cx.notify();
-                                    });
-                                }),
+                    })
+                    .markdown_block_renderer("images", move |node, _, cx| {
+                        let start = node.source_range().map_or(0, |range| range.start);
+                        let mut images = v_flex().gap_3().w_full();
+                        for (index, source) in
+                            node.data::<Vec<String>>().into_iter().flatten().enumerate()
+                        {
+                            images = images.child(Media::preview(
+                                &media,
+                                format!("{image_key}-markdown-image-{start}-{index}"),
+                                source,
+                                false,
+                                320.,
+                                true,
+                                cx,
+                            ));
+                        }
+                        images.into_any_element()
+                    })
+                    .markdown_block_parser(|node, context| {
+                        let original = context.node_source(node)?;
+                        let diagram =
+                            agent_core::presentation::markdown::markdown_diagram(original)?;
+                        Some(
+                            gpui_kit::base::text::MarkdownNode::new("mermaid", diagram.clone())
+                                .text(diagram.source)
+                                .markdown(original.to_owned()),
                         )
-                        .child(
-                            Button::new("copy-code")
-                                .icon(IconName::Copy)
-                                .small()
-                                .ghost()
-                                .tooltip(language.text("コードをコピー"))
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        text.to_string(),
-                                    ))
-                                }),
-                        )
-                })
-                .table_actions(move |table, _, _| {
-                    let table_view = table_view.clone();
-                    let table_key = table_key.clone();
-                    let markdown = table.markdown.clone();
-                    let mut rows = vec![table.headers.clone()];
-                    rows.extend(table.rows.clone());
-                    h_flex()
-                        .gap_2()
-                        .justify_end()
-                        .child(
-                            Button::new("wrap-table")
-                                .label(if compact_tables {
-                                    language.text("セルを折り返す")
-                                } else {
-                                    language.text("セルをコンパクトに表示")
-                                })
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    let _ = table_view.update(cx, |view, cx| {
-                                        if let Some(cached) =
-                                            view.timeline.markdown.get_mut(&table_key)
-                                        {
-                                            cached.compact_tables = !cached.compact_tables;
-                                        }
-                                        view.timeline.remeasure_item(&table_key);
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            Button::new("copy-markdown")
-                                .label(language.text("Markdownをコピー"))
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        markdown.clone(),
-                                    ))
-                                }),
-                        )
-                        .child(
-                            Button::new("copy-csv")
-                                .label(language.text("CSVをコピー"))
-                                .small()
-                                .ghost()
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        agent_core::presentation::markdown::markdown_table_csv(
-                                            rows.clone(),
-                                        ),
-                                    ))
-                                }),
-                        )
-                })
-                .on_link_click(move |url, event, window, cx| {
-                    if let gpui_kit::ClickEvent::Mouse(click) = event
-                        && click.up.button == MouseButton::Right
-                    {
-                        let _ = view.update(cx, |view, cx| {
-                            view.selection.update(cx, |selection, cx| {
-                                selection.show_context_menu(
-                                    Some(url.to_string()),
-                                    click.up.position,
-                                    window,
-                                    cx,
-                                );
+                    })
+                    .markdown_block_renderer("mermaid", move |node, _, cx| {
+                        diagram_view
+                            .update(cx, |view, cx| view.markdown_diagram(&diagram_key, node, cx))
+                            .unwrap_or_else(|_| div().into_any_element())
+                    })
+                    .style(style)
+                    .selection_format(gpui_kit::component::text::SelectionFormat::Source)
+                    .code_block_actions(move |block, _, _| {
+                        let text = block.code();
+                        let label = block
+                            .span
+                            .and_then(|span| headers.get(&span.start))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                block.lang().unwrap_or_else(|| "CODE".into()).to_string()
                             });
+                        let wrap_view = wrap_view.clone();
+                        let code_key = code_key.clone();
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .max_w(px(220.))
+                                    .text_ellipsis()
+                                    .text_xs()
+                                    .child(label),
+                            )
+                            .child(
+                                Button::new("wrap-code")
+                                    .label(if wrap_code {
+                                        language.text("折り返し解除")
+                                    } else {
+                                        language.text("折り返し")
+                                    })
+                                    .small()
+                                    .ghost()
+                                    .on_click(move |_, _, cx| {
+                                        let _ = wrap_view.update(cx, |view, cx| {
+                                            if let Some(cached) =
+                                                view.timeline.markdown.get_mut(&code_key)
+                                            {
+                                                cached.wrap_code = !cached.wrap_code;
+                                            }
+                                            view.timeline.remeasure_item(&code_key);
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("copy-code")
+                                    .icon(IconName::Copy)
+                                    .small()
+                                    .ghost()
+                                    .tooltip(language.text("コードをコピー"))
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            text.to_string(),
+                                        ))
+                                    }),
+                            )
+                    })
+                    .table_actions(move |table, _, _| {
+                        let table_view = table_view.clone();
+                        let table_key = table_key.clone();
+                        let markdown = table.markdown.clone();
+                        let mut rows = vec![table.headers.clone()];
+                        rows.extend(table.rows.clone());
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new("wrap-table")
+                                    .label(if compact_tables {
+                                        language.text("セルを折り返す")
+                                    } else {
+                                        language.text("セルをコンパクトに表示")
+                                    })
+                                    .small()
+                                    .ghost()
+                                    .on_click(move |_, _, cx| {
+                                        let _ = table_view.update(cx, |view, cx| {
+                                            if let Some(cached) =
+                                                view.timeline.markdown.get_mut(&table_key)
+                                            {
+                                                cached.compact_tables = !cached.compact_tables;
+                                            }
+                                            view.timeline.remeasure_item(&table_key);
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("copy-markdown")
+                                    .label(language.text("Markdownをコピー"))
+                                    .small()
+                                    .ghost()
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            markdown.clone(),
+                                        ))
+                                    }),
+                            )
+                            .child(
+                                Button::new("copy-csv")
+                                    .label(language.text("CSVをコピー"))
+                                    .small()
+                                    .ghost()
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            agent_core::presentation::markdown::markdown_table_csv(
+                                                rows.clone(),
+                                            ),
+                                        ))
+                                    }),
+                            )
+                    })
+                    .on_link_click(move |url, event, window, cx| {
+                        if let gpui_kit::ClickEvent::Mouse(click) = event
+                            && click.up.button == MouseButton::Right
+                        {
+                            let _ = view.update(cx, |view, cx| {
+                                view.selection.update(cx, |selection, cx| {
+                                    selection.show_context_menu(
+                                        Some(url.to_string()),
+                                        click.up.position,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            });
+                            return;
+                        }
+                        let _ = view.update(cx, |_, cx| {
+                            cx.emit(ConversationAction::OpenLink(
+                                url.to_string(),
+                                event.modifiers().control,
+                            ))
                         });
-                        return;
-                    }
-                    let _ = view.update(cx, |_, cx| {
-                        cx.emit(ConversationAction::OpenLink(
-                            url.to_string(),
-                            event.modifiers().control,
-                        ))
-                    });
-                }),
-        );
-        for (index, source) in images.iter().enumerate() {
-            body = body.child(Media::preview(
-                &self.media,
-                format!("{id}-markdown-image-{index}"),
-                source,
-                false,
-                320.,
-                true,
-                cx,
-            ));
-        }
-        body.into_any_element()
+                    }),
+            )
+            .into_any_element()
     }
 }
 
@@ -3053,6 +3075,46 @@ mod rendering_tests {
             "expanded diff must occupy space in the rendered conversation"
         );
     }
+    #[gpui::test]
+    fn markdown_images_render_where_they_are_written(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(40, 40),
+        )]));
+        let (snapshot, source) = user_message_fixture(
+            "![図](/fixture/image.png)\n\n一行目\n\n二行目\n\n三行目\n\n四行目",
+            None,
+            false,
+        );
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let view = ConversationView::new(snapshot, source, window, cx);
+            view.desktop.update(cx, |desktop, cx| {
+                desktop.publish_views(window, cx);
+                desktop.media.update(cx, |media, cx| {
+                    media.fixture_image("/fixture/image.png", image.into(), cx);
+                });
+            });
+            view
+        });
+        window.simulate_resize(size(px(780.), px(900.)));
+        window.run_until_parked();
+        view.update(window, |_, cx| cx.notify());
+        window.run_until_parked();
+        let image = window
+            .debug_bounds("chat-image")
+            .expect("image must render");
+        let bubble = window.debug_bounds("user-message-bubble").unwrap();
+        // The image leads the message as written instead of trailing its text.
+        assert!(
+            image.top() < bubble.top() + px(40.),
+            "{image:?} in {bubble:?}"
+        );
+        assert!(
+            image.bottom() + px(80.) < bubble.bottom(),
+            "{image:?} in {bubble:?}"
+        );
+    }
+
     fn user_message_fixture(
         text: &str,
         image: Option<&str>,

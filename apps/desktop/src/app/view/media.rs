@@ -1285,7 +1285,7 @@ mod file_panel_tests {
 #[cfg(test)]
 mod tests {
     use agent_core::presentation::markdown::{
-        MarkdownBlock, markdown_blocks, markdown_without_images,
+        MarkdownBlock, markdown_blocks, markdown_presentation,
     };
     use gpui_kit as gpui;
     use gpui_kit::{AppContext, TestAppContext, component::text::TextViewState};
@@ -1297,8 +1297,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../crates/agent-core/tests/fixtures/markdown/table.md"
         ));
-        let (rendered, images) = markdown_without_images(source);
-        assert!(images.is_empty());
+        let rendered = markdown_presentation(source, "", None).source;
         let state = cx.new(|cx| TextViewState::markdown(&rendered, cx));
         cx.run_until_parked();
         state.update(cx, |state, cx| state.select_all(cx));

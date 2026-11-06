@@ -166,61 +166,125 @@ fn definitions(node: &Node) -> HashMap<&str, &str> {
     result
 }
 
-fn image<'a>(node: &'a Node, definitions: &HashMap<&str, &'a str>) -> Option<(&'a str, &'a str)> {
+fn image<'a>(
+    node: &'a Node,
+    definition: impl Fn(&str) -> Option<&'a str>,
+) -> Option<(&'a str, &'a str)> {
     match node {
         Node::Image(image) => Some((&image.url, &image.alt)),
-        Node::ImageReference(image) => definitions
-            .get(image.identifier.as_str())
-            .map(|url| (*url, image.alt.as_str())),
+        Node::ImageReference(image) => {
+            definition(&image.identifier).map(|url| (url, image.alt.as_str()))
+        }
         _ => None,
     }
 }
 
-/// Separate images for Host-backed desktop loading without interpreting Markdown again in the client.
-pub fn markdown_without_images(source: &str) -> (Cow<'_, str>, Vec<String>) {
-    let source = without_disclosure_tags(source);
-    // Inline and reference images both start with `![`. Most streamed text has
-    // no image opener, so leave parsing to the desktop renderer in that case.
-    if !source.contains("![") {
-        return (source, Vec::new());
-    }
-    fn visit(
-        node: &Node,
-        definitions: &HashMap<&str, &str>,
-        source: &str,
-        previous: &mut usize,
-        text: &mut String,
-        images: &mut Vec<String>,
-    ) {
-        if let Some((url, _)) = image(node, definitions) {
-            let position = node.position().expect("parsed image has a source position");
-            text.push_str(&source[*previous..position.start.offset]);
-            *previous = position.end.offset;
-            images.push(url.to_owned());
-        } else {
-            for child in node.children().into_iter().flatten() {
-                visit(child, definitions, source, previous, text, images);
-            }
+fn image_paragraph<'a>(
+    node: &'a Node,
+    definition: impl Fn(&str) -> Option<&'a str> + Copy,
+) -> Option<Vec<&'a str>> {
+    let Node::Paragraph(paragraph) = node else {
+        return None;
+    };
+    let mut images = Vec::new();
+    for child in &paragraph.children {
+        match child {
+            Node::Text(text) if text.value.trim().is_empty() => {}
+            Node::Break(_) => {}
+            child => images.push(image(child, definition)?.0),
         }
     }
-    let root = parse(&source);
-    let mut text = String::new();
-    let mut images = Vec::new();
-    let mut previous = 0;
-    visit(
-        &root,
-        &definitions(&root),
-        &source,
-        &mut previous,
-        &mut text,
-        &mut images,
-    );
-    if images.is_empty() {
-        (source, images)
-    } else {
-        text.push_str(&source[previous..]);
-        (Cow::Owned(text), images)
+    (!images.is_empty()).then_some(images)
+}
+
+/// The images of a paragraph that contains nothing else, which a native
+/// renderer draws in place of the paragraph; `None` for any other node.
+pub fn markdown_image_paragraph(
+    node: &Node,
+    definitions: &HashMap<String, String>,
+) -> Option<Vec<String>> {
+    image_paragraph(node, |id| definitions.get(id).map(String::as_str))
+        .map(|images| images.into_iter().map(str::to_owned).collect())
+}
+
+/// Every image in reading order, including references.
+pub fn markdown_images(source: &str) -> Vec<String> {
+    fn visit(node: &Node, definitions: &HashMap<&str, &str>, images: &mut Vec<String>) {
+        if let Some((url, _)) = image(node, |id| definitions.get(id).copied()) {
+            images.push(url.to_owned());
+        }
+        for child in node.children().into_iter().flatten() {
+            visit(child, definitions, images);
+        }
     }
+    let source = without_disclosure_tags(source);
+    let mut images = Vec::new();
+    // Inline and reference images both start with `![`; most text needs no parse.
+    if source.contains("![") {
+        let root = parse(&source);
+        visit(&root, &definitions(&root), &mut images);
+    }
+    images
+}
+
+/// Desktop draws an image only where it stands alone in a paragraph. An image
+/// that shares a paragraph, heading or table cell moves verbatim into its own
+/// paragraph after the enclosing top-level block, keeping its reading order.
+fn markdown_with_image_paragraphs(source: &str) -> Cow<'_, str> {
+    fn displaced(
+        node: &Node,
+        definitions: &HashMap<&str, &str>,
+        ranges: &mut Vec<std::ops::Range<usize>>,
+    ) {
+        let definition = |id: &str| definitions.get(id).copied();
+        if image_paragraph(node, definition).is_some() {
+            return;
+        }
+        if image(node, definition).is_some() {
+            let position = node.position().expect("parsed image has a source position");
+            ranges.push(position.start.offset..position.end.offset);
+            return;
+        }
+        for child in node.children().into_iter().flatten() {
+            displaced(child, definitions, ranges);
+        }
+    }
+    let source = without_disclosure_tags(source);
+    if !source.contains("![") {
+        return source;
+    }
+    let root = parse(&source);
+    let definitions = definitions(&root);
+    let mut text = String::new();
+    let mut previous = 0;
+    for block in root.children().into_iter().flatten() {
+        let mut ranges = Vec::new();
+        displaced(block, &definitions, &mut ranges);
+        if ranges.is_empty() {
+            continue;
+        }
+        for range in &ranges {
+            text.push_str(&source[previous..range.start]);
+            previous = range.end;
+        }
+        let end = block
+            .position()
+            .expect("parsed block has a source position")
+            .end
+            .offset;
+        text.push_str(&source[previous..end]);
+        previous = end;
+        for range in ranges {
+            text.push_str("\n\n");
+            text.push_str(&source[range]);
+        }
+        text.push_str("\n\n");
+    }
+    if previous == 0 {
+        return source;
+    }
+    text.push_str(&source[previous..]);
+    Cow::Owned(text)
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
@@ -263,13 +327,14 @@ pub fn markdown_table_csv(rows: Vec<Vec<String>>) -> String {
     csv
 }
 
-/// Desktop Markdown and its code labels share a parse. Image removal can change
+/// Desktop Markdown and its code labels share a parse. Moving images can change
 /// block boundaries, so it precedes parsing; file chips only replace inline nodes.
 pub struct MarkdownPresentation<'a> {
     /// Borrowed only when the complete input is unchanged, so native caches
     /// can share their original text allocation with the rendered source.
     pub source: Cow<'a, str>,
-    pub images: Vec<String>,
+    /// Resolves reference images in [`markdown_image_paragraph`]; empty without images.
+    pub definitions: HashMap<String, String>,
     pub code_headers: HashMap<usize, String>,
     pub files: HashMap<usize, MarkdownFileChip>,
 }
@@ -279,22 +344,30 @@ pub fn markdown_presentation<'a>(
     cwd: &str,
     home: Option<&str>,
 ) -> MarkdownPresentation<'a> {
-    let (source, images) = markdown_without_images(source);
+    let source = markdown_with_image_paragraphs(source);
     // File chips need a link or inline-code opener. Fenced labels need a fence;
     // ordinary prose and indented code can go straight to the retained renderer.
     if !source.contains(['[', '<', '`', '~']) {
         return MarkdownPresentation {
             source,
-            images,
+            definitions: HashMap::new(),
             code_headers: HashMap::new(),
             files: HashMap::new(),
         };
     }
     let root = parse(&source);
     let files = links::chips::file_chips(&source, &root, cwd, home);
+    let definitions = if source.contains("![") {
+        definitions(&root)
+            .into_iter()
+            .map(|(id, url)| (id.to_owned(), url.to_owned()))
+            .collect()
+    } else {
+        HashMap::new()
+    };
     MarkdownPresentation {
         source,
-        images,
+        definitions,
         code_headers: code_headers(&root).into_iter().collect(),
         files,
     }
@@ -344,7 +417,7 @@ fn inline(
     mut style: MarkdownRun,
     runs: &mut Vec<MarkdownRun>,
 ) {
-    if let Some((url, alt)) = image(node, definitions) {
+    if let Some((url, alt)) = image(node, |id| definitions.get(id).copied()) {
         style.image = Some(url.to_owned());
         style.text = alt.to_owned();
         runs.push(style);
@@ -664,6 +737,70 @@ mod tests {
         runs.iter().map(|run| run.text.as_str()).collect()
     }
 
+    /// The image paragraphs a desktop renderer finds, in reading order.
+    fn image_paragraphs(source: &str) -> Vec<Vec<String>> {
+        fn visit(node: &Node, definitions: &HashMap<String, String>, found: &mut Vec<Vec<String>>) {
+            if let Some(images) = markdown_image_paragraph(node, definitions) {
+                found.push(images);
+            }
+            for child in node.children().into_iter().flatten() {
+                visit(child, definitions, found);
+            }
+        }
+        let root = parse(source);
+        let definitions = definitions(&root)
+            .into_iter()
+            .map(|(id, url)| (id.to_owned(), url.to_owned()))
+            .collect();
+        let mut found = Vec::new();
+        visit(&root, &definitions, &mut found);
+        found
+    }
+
+    #[test]
+    fn desktop_images_keep_their_place_in_reading_order() {
+        let standalone =
+            "前\n\n![a](a.png)\n\n- 項目\n\n  ![b](b.png)\n\n![c](c.png)\n![d](d.png)\n\n後";
+        assert!(matches!(
+            markdown_with_image_paragraphs(standalone),
+            Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            image_paragraphs(standalone),
+            [vec!["a.png"], vec!["b.png"], vec!["c.png", "d.png"]]
+        );
+        let shared = "前 ![a](a.png) 後\n\n| x |\n|---|\n| ![b](b.png) |\n\n- 項目 ![c](c.png)\n- 次\n\n最後";
+        let rendered = markdown_with_image_paragraphs(shared);
+        // Each image follows the paragraph, table or list that held it.
+        let order: Vec<_> = [
+            "前  後",
+            "![a](a.png)",
+            "|  |",
+            "![b](b.png)",
+            "- 項目 \n- 次",
+            "![c](c.png)",
+            "最後",
+        ]
+        .iter()
+        .map(|part| {
+            rendered
+                .find(part)
+                .unwrap_or_else(|| panic!("{part} in {rendered}"))
+        })
+        .collect();
+        assert!(order.is_sorted(), "{rendered}");
+        assert_eq!(
+            image_paragraphs(&rendered),
+            [["a.png"], ["b.png"], ["c.png"]]
+        );
+        assert!(matches!(
+            markdown_with_image_paragraphs(&rendered),
+            Cow::Borrowed(_)
+        ));
+        assert!(image_paragraphs("![a](a.png) text").is_empty());
+        assert!(image_paragraphs("![a](a.png) ![undefined]").is_empty());
+    }
+
     #[test]
     fn markdown_table_preserves_reported_cells_and_surrounding_prose() {
         let blocks = markdown_blocks(format!("Before\n\n{TABLE}\nAfter"));
@@ -810,10 +947,10 @@ mod tests {
             "!&#91;alt](image.png)",
             TABLE,
         ] {
-            let (rendered, images) = markdown_without_images(source);
+            let rendered = markdown_with_image_paragraphs(source);
             assert!(matches!(rendered, Cow::Borrowed(_)));
             assert_eq!(rendered, source);
-            assert!(images.is_empty());
+            assert!(markdown_images(source).is_empty());
         }
     }
 
@@ -855,24 +992,23 @@ mod tests {
                     text.replace(['\r', '\n'], ""),
                     "Before東映の解約完了画面証拠After"
                 );
-                let (rendered, images) = markdown_without_images(&source);
-                assert_eq!(images, ["images/receipt.png"]);
-                assert_eq!(
-                    rendered,
-                    format!(
-                        "Before\n\n{separator}**東映の解約完了画面**{separator}{separator}\n\nAfter\n\n[receipt]: images/receipt.png"
-                    )
-                );
+                assert_eq!(markdown_images(&source), ["images/receipt.png"]);
+                let rendered = markdown_with_image_paragraphs(&source);
+                assert!(!rendered.contains("<"));
+                let caption = rendered.find("**東映の解約完了画面**").unwrap();
+                let image = rendered.find("![証拠][receipt]").unwrap();
+                assert!(caption < image && image < rendered.find("After").unwrap());
+                assert_eq!(image_paragraphs(&rendered), [["images/receipt.png"]]);
             }
         }
         let source = "<details><summary>説明だけ</summary>本文</details>";
-        assert_eq!(markdown_without_images(source).0, "説明だけ本文");
+        assert_eq!(markdown_with_image_paragraphs(source), "説明だけ本文");
         assert_eq!(
             paragraph_text(&markdown_blocks(source.into())[0]),
             "説明だけ本文"
         );
         assert_eq!(
-            markdown_without_images("<details/>本文<summary/>").0,
+            markdown_with_image_paragraphs("<details/>本文<summary/>"),
             "本文"
         );
     }
@@ -899,11 +1035,10 @@ mod tests {
                 .iter()
                 .any(|block| paragraph_text(block).trim() == "内側")
         );
-        let (rendered, images) = markdown_without_images(source);
-        assert_eq!(images, ["nested.png"]);
+        assert_eq!(markdown_images(source), ["nested.png"]);
         assert_eq!(
-            rendered,
-            "\n外側\n```html\n<summary>![literal](code.png)</summary>\n```\n\n内側\n\n\n\n"
+            markdown_with_image_paragraphs(source),
+            "\n外側\n```html\n<summary>![literal](code.png)</summary>\n```\n\n内側\n\n![画像](nested.png)\n\n"
         );
     }
 
@@ -921,10 +1056,10 @@ mod tests {
             "<summary unfinished='attribute",
             "<div>![literal](image.png)</div>",
         ] {
-            let (rendered, images) = markdown_without_images(source);
+            let rendered = markdown_with_image_paragraphs(source);
             assert!(matches!(rendered, Cow::Borrowed(_)), "{source}");
             assert_eq!(rendered, source);
-            assert!(images.is_empty());
+            assert!(markdown_images(source).is_empty());
             assert_eq!(
                 paragraph_text(&markdown_blocks(source.into())[0]),
                 match source {
@@ -949,7 +1084,7 @@ mod tests {
         assert_eq!(presentation.source, source);
         assert!(matches!(presentation.source, Cow::Borrowed(_)));
         assert!(std::ptr::eq(presentation.source.as_ref(), source));
-        assert!(presentation.images.is_empty());
+        assert!(presentation.definitions.is_empty());
         assert!(presentation.code_headers.is_empty());
         let presentation = markdown_presentation("<file:///tmp/main.rs>", "/repo", None);
         assert_eq!(presentation.source, "<file:///tmp/main.rs>");
@@ -964,7 +1099,10 @@ mod tests {
     fn transformed_presentation_owns_its_rendered_text() {
         for (source, expected) in [
             ("<summary>caption</summary>", "caption"),
-            ("![image](image.png)", ""),
+            (
+                "前 ![image](image.png) 後",
+                "前  後\n\n![image](image.png)\n\n",
+            ),
         ] {
             let presentation = markdown_presentation(source, "/repo", None);
             assert_eq!(presentation.source, expected);
@@ -974,11 +1112,10 @@ mod tests {
 
     #[test]
     fn presentation_keeps_code_labels_at_displayed_offsets() {
-        let source = "[長い説明](src/first.rs)\n\n```rust filename=src/一.rs\nfn first() {}\n```\n\n![証拠](image.png)\n\n`src/a/index.ts` and `src/b/index.ts`\n\n~~~ts title=src/second.ts\nconst second = 2;\n~~~\n\n`src/last.rs`";
+        let source = "[長い説明](src/first.rs) ![証拠](image.png)\n\n```rust filename=src/一.rs\nfn first() {}\n```\n\n`src/a/index.ts` and `src/b/index.ts`\n\n~~~ts title=src/second.ts\nconst second = 2;\n~~~\n\n`src/last.rs`";
         let presentation = markdown_presentation(source, "/repo", None);
-        assert_eq!(presentation.images, ["image.png"]);
         assert!(matches!(presentation.source, Cow::Owned(_)));
-        assert!(!presentation.source.contains("![証拠]"));
+        assert_eq!(image_paragraphs(&presentation.source), [["image.png"]]);
         let labels: Vec<_> = presentation
             .files
             .values()
@@ -1017,13 +1154,13 @@ mod tests {
             .chain([source.len()])
         {
             let partial = &source[..end];
-            let (rendered, images) = markdown_without_images(partial);
+            let images = markdown_images(partial);
             assert!(images.len() <= 1);
             assert!(images.iter().all(|url| url == "images/receipt.png"));
             markdown_blocks(partial.into());
-            markdown_presentation(&rendered, "/repo", None);
+            markdown_presentation(partial, "/repo", None);
         }
-        assert_eq!(markdown_without_images(source).1, ["images/receipt.png"]);
+        assert_eq!(markdown_images(source), ["images/receipt.png"]);
     }
 
     #[test]
@@ -1035,10 +1172,10 @@ mod tests {
             "![unfinished](",
             "![undefined reference]",
         ] {
-            let (rendered, images) = markdown_without_images(source);
+            let rendered = markdown_with_image_paragraphs(source);
             assert!(matches!(rendered, Cow::Borrowed(_)));
             assert_eq!(rendered, source);
-            assert!(images.is_empty());
+            assert!(markdown_images(source).is_empty());
         }
     }
 
@@ -1051,25 +1188,38 @@ mod tests {
             "![picture]",
         ] {
             let source = format!("前 {image} 後\n\n[picture]: image.png");
-            let (rendered, images) = markdown_without_images(&source);
-            assert_eq!(rendered, "前  後\n\n[picture]: image.png");
-            assert_eq!(images, ["image.png"]);
+            assert_eq!(
+                markdown_with_image_paragraphs(&source),
+                format!("前  後\n\n{image}\n\n\n\n[picture]: image.png")
+            );
+            assert_eq!(markdown_images(&source), ["image.png"]);
+            assert_eq!(
+                image_paragraphs(&markdown_presentation(&source, "", None).source),
+                [["image.png"]]
+            );
         }
     }
 
     #[test]
     fn desktop_image_extraction_preserves_source_and_reference_context() {
         let source = include_str!("../../tests/fixtures/markdown/document.md");
-        let (rendered, images) = markdown_without_images(source);
-        assert_eq!(images, ["images/example.png"]);
-        assert_eq!(rendered, source.replace("![画像][picture]", ""));
+        assert_eq!(markdown_images(source), ["images/example.png"]);
+        let rendered = markdown_with_image_paragraphs(source);
+        assert!(matches!(rendered, Cow::Borrowed(_)));
+        assert_eq!(image_paragraphs(&rendered), [["images/example.png"]]);
         let source =
             "![first](a.png) **![second](b.png)** [![third][image]](target)\n\n[image]: c.png";
-        let (rendered, images) = markdown_without_images(source);
-        assert_eq!(images, ["a.png", "b.png", "c.png"]);
-        assert_eq!(rendered, " **** [](target)\n\n[image]: c.png");
-        let (rendered, images) = markdown_without_images(TABLE);
-        assert_eq!(rendered, TABLE);
-        assert!(images.is_empty());
+        assert_eq!(markdown_images(source), ["a.png", "b.png", "c.png"]);
+        let rendered = markdown_with_image_paragraphs(source);
+        assert_eq!(
+            rendered,
+            " **** [](target)\n\n![first](a.png)\n\n![second](b.png)\n\n![third][image]\n\n\n\n[image]: c.png"
+        );
+        assert_eq!(
+            image_paragraphs(&rendered),
+            [["a.png"], ["b.png"], ["c.png"]]
+        );
+        assert_eq!(markdown_with_image_paragraphs(TABLE), TABLE);
+        assert!(markdown_images(TABLE).is_empty());
     }
 }
