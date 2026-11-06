@@ -29,6 +29,7 @@ async fn main() {
         option_env!("AGENT_BUILD_REVISION").unwrap_or("development"),
     )
     .unwrap();
+    println!("Preparing UI fixture workspace");
     let workspace = directory.join("project");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(
@@ -77,6 +78,7 @@ async fn main() {
         program,
         ..Default::default()
     };
+    println!("Starting UI fixture Host");
     let host = HostFixture::start(
         &directory,
         config,
@@ -91,6 +93,7 @@ async fn main() {
     let mut browser_desktop = None;
     if let Some(argument) = std::env::args_os().nth(6) {
         assert_eq!(argument, "--prepare-browser");
+        println!("Preparing native browser dependency");
         // Use the production native owner in an isolated desktop window. The
         // fixture's authenticated Host RPC reaches exactly that renderer.
         #[cfg(target_os = "macos")]
@@ -121,7 +124,6 @@ async fn main() {
             }
             browser_desktop = Some(child);
         }
-        println!("Preparing browser dependency before Simulator startup");
         let connection = host.local().await.unwrap();
         let ready = connection
             .peer

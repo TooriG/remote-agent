@@ -77,6 +77,7 @@ impl HostFixture {
             Arc::new(HostCredentials::load(memory.clone(), directory.join("state")).await?);
         let endpoint = Endpoint::bind(credentials.host_identity().await, Relays::Disabled).await?;
         let ticket = endpoint.ticket();
+        eprintln!("Host fixture: local transport bound; starting Codex");
         let server = CodexAppServer::spawn(config.clone())
             .await
             .map(Arc::new)
@@ -89,6 +90,7 @@ impl HostFixture {
                 .map_err(anyhow::Error::msg)?;
         }
         let mut backends = vec![codex.into()];
+        eprintln!("Host fixture: Codex ready; configuring remaining providers");
         if let Some(program) = claude {
             let backend = match host_daemon::providers::Claude::load(
                 program.to_owned(),
@@ -109,6 +111,7 @@ impl HostFixture {
             };
             backends.push(backend);
         }
+        eprintln!("Host fixture: providers ready; starting RPC");
         let service = HostRpcService::new(
             backends,
             ProjectStore::new(directory.join("bex-worktrees.json")),
