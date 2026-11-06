@@ -493,7 +493,8 @@ jobs:
     uses: ./.github/workflows/iphone-acceptance.yml
     with:
       tests: ${{ inputs.ios-tests || '' }}
-      rounds: ${{ github.event_name == 'schedule' && 3 || inputs.ios-test-rounds || 1 }}
+      # workflow_dispatch numbers can arrive as strings at a reusable-workflow boundary.
+      rounds: ${{ fromJSON(format('{0}', github.event_name == 'schedule' && 3 || inputs.ios-test-rounds || 1)) }}
   iphone-pr-tests:
     # PR Apple jobs share one slot. Wait for the producer before taking that
     # slot, so a consumer cannot block the build whose artifact it awaits.
@@ -505,7 +506,7 @@ jobs:
     uses: ./.github/workflows/iphone-acceptance.yml
     with:
       tests: ${{ inputs.ios-tests || '' }}
-      rounds: ${{ inputs.ios-test-rounds || 1 }}
+      rounds: ${{ fromJSON(format('{0}', inputs.ios-test-rounds || 1)) }}
   wsl-runtime:
     permissions:
       contents: write

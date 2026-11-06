@@ -25,6 +25,7 @@ test('main prepares iPhone consumers concurrently while PR consumers wait outsid
   for (const consumer of [main, pr]) {
     assert.match(consumer, /uses: .\/.github\/workflows\/iphone-acceptance.yml/);
     assert.match(consumer, /actions: read/);
+    assert.match(consumer, /rounds: \$\{\{ fromJSON\(format\('\{0\}', /);
   }
   assert.match(iphoneWorkflow, /github.event_name == 'pull_request' && 'pr'/);
   assert.match(iphoneWorkflow, /AGENT_IOS_TEST_ROUNDS: \$\{\{ inputs.rounds \}\}/);
