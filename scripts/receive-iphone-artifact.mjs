@@ -27,17 +27,28 @@ process.once('SIGINT', interrupt);
 process.once('SIGTERM', interrupt);
 
 async function gh(args) {
-  const operation = execute('gh', args, {
-    signal: controller.signal,
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  try {
-    return (await operation).stdout;
-  } finally {
-    const child = operation.child;
-    if (child.pid && child.exitCode === null && child.signalCode === null) {
-      await new Promise(resolve => child.once('close', resolve));
+  for (;;) {
+    const operation = execute('gh', args, {
+      signal: controller.signal,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    try {
+      return (await operation).stdout;
+    } catch (error) {
+      // Metadata reads are safe to repeat after transport failures. Keep
+      // authentication errors and downloads with partial files fail-fast.
+      if (args[0] !== 'api' || controller.signal.aborted ||
+          !/TLS handshake timeout|i\/o timeout|connection reset by peer|unexpected EOF/.test(error.stderr ?? '')) {
+        throw error;
+      }
+      console.error('Temporary GitHub API connection failure; retrying in 5 seconds');
+    } finally {
+      const child = operation.child;
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
+        await new Promise(resolve => child.once('close', resolve));
+      }
     }
+    await delay(5000, undefined, { signal: controller.signal });
   }
 }
 

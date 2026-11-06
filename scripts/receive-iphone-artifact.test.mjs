@@ -22,7 +22,17 @@ const path = require('node:path');
 const args = process.argv.slice(2);
 const mode = process.env.ARTIFACT_TEST_MODE;
 fs.appendFileSync(process.env.ARTIFACT_TEST_LOG, JSON.stringify(args) + '\\n');
-if (mode === 'api-error') process.exit(17);
+if (args[0] === 'api' && mode === 'unauthorized') {
+  console.error('HTTP 403: Resource not accessible by integration');
+  process.exit(17);
+}
+if (args[0] === 'api' && ['transient', 'network-outage'].includes(mode)) {
+  const calls = fs.readFileSync(process.env.ARTIFACT_TEST_LOG, 'utf8').trim().split('\\n').map(JSON.parse);
+  if (mode === 'network-outage' || calls.filter(call => call[1] === args[1]).length === 1) {
+    console.error('net/http: TLS handshake timeout');
+    process.exit(17);
+  }
+}
 if (args[0] === 'api') {
   if (args[1].includes('/artifacts?')) {
     let artifacts = [{name: process.env.ARTIFACT_TEST_KIND + (mode === 'rerun-consumer' ? '-1' : '-2'), expired: false}];
@@ -39,7 +49,10 @@ if (args[0] === 'api') {
   const dir = args[args.indexOf('--dir') + 1];
   fs.mkdirSync(dir, {recursive: true});
   fs.writeFileSync(path.join(dir, mode === 'wrong-file' ? 'unexpected' : process.env.ARTIFACT_TEST_FILE), 'current build');
-  if (mode === 'download-error') process.exit(18);
+  if (mode === 'download-error') {
+    console.error('net/http: TLS handshake timeout');
+    process.exit(18);
+  }
   if (mode === 'cancel-download') setInterval(() => {}, 1000);
 }
 `);
@@ -92,8 +105,26 @@ test('rerunning only a consumer uses the successful producer attempt', async t =
   assert.equal(f.commands().find(args => args[0] === 'run')[6], 'iphone-test-build-1');
 });
 
+test('transient jobs and artifact metadata connection failures recover within one reception', async t => {
+  const f = fixture(t, 'transient');
+  const result = await f.start({}, '20').completed;
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(f.output, 'utf8'), 'current build');
+  assert.equal(f.commands().filter(args => args[0] === 'api').length, 4);
+  assert.equal(f.commands().filter(args => args[0] === 'run').length, 1);
+});
+
+test('metadata authentication failures are reported without retrying', async t => {
+  const f = fixture(t, 'unauthorized');
+  const result = await f.start().completed;
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /HTTP 403/);
+  assert.equal(f.commands().length, 1);
+  assert.ok(!existsSync(f.output));
+});
+
 test('failed producers, missing, expired, duplicate and earlier-attempt artifacts never start a download', async t => {
-  for (const mode of ['failed', 'missing', 'expired', 'duplicate', 'stale', 'api-error']) {
+  for (const mode of ['failed', 'missing', 'expired', 'duplicate', 'stale']) {
     await t.test(mode, async t => {
       const f = fixture(t, mode);
       const result = await f.start().completed;
@@ -112,6 +143,7 @@ test('failed or malformed downloads retain the previous output and remove partia
       const result = await f.start().completed;
       assert.equal(result.status, 1, result.stderr);
       assert.equal(readFileSync(f.output, 'utf8'), 'previous build');
+      assert.equal(f.commands().filter(args => args[0] === 'run').length, 1);
       assert.ok(!readdirSync(f.root).some(name => name.startsWith('.iphone-artifact-')));
     });
   }
@@ -122,6 +154,15 @@ test('waiting has a deadline and does not publish an output', async t => {
   const result = await f.start({}, '1').completed;
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /Timed out waiting/);
+  assert.ok(!existsSync(f.output));
+});
+
+test('a network outage cannot extend the reception deadline', async t => {
+  const f = fixture(t, 'network-outage');
+  const result = await f.start({}, '1').completed;
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Timed out waiting/);
+  assert.equal(f.commands().length, 1);
   assert.ok(!existsSync(f.output));
 });
 
