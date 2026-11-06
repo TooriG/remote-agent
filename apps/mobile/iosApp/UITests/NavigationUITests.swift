@@ -142,7 +142,8 @@ extension LaunchUITests {
         contents.tap(); contents.typeText("invalid invitation")
         app.buttons["pairing.submit"].tap()
         XCTAssertTrue(app.staticTexts["notice"].waitUntilExists(timeout: 5))
-        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        // The error can appear before the native keyboard finishes dismissing.
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
         contents.tap()
         let payload = try simulatorPairingPayload()
         contents.typeText(payload)
