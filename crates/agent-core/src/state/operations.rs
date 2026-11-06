@@ -103,14 +103,6 @@ pub enum Intent {
     RemoveWorktree(RemoveWorktree),
     ListSessions(ListSessions),
     ListProjectSessions(ListProjectSessions),
-    SetSessionSettled(SetSessionSettled),
-    SetSettledExpanded {
-        project_id: Option<String>,
-        expanded: bool,
-    },
-    ExpandSettled {
-        project_id: Option<String>,
-    },
     ListAgents(ListAgents),
     WatchAgents {
         thread_id: Option<crate::session::SessionRef>,
@@ -282,12 +274,6 @@ pub enum OperationKey {
         scope: agent_protocol::operations::ListDecorationScope,
     },
     SessionList,
-    SettledList {
-        project_id: Option<String>,
-    },
-    Settlement {
-        session: crate::session::SessionRef,
-    },
     SessionPage {
         part: crate::models::ListPart,
     },
@@ -527,8 +513,6 @@ mod file_reference;
 pub use file_reference::ResolveFileReference;
 mod lists;
 pub use lists::*;
-mod settlement;
-pub use settlement::*;
 mod models;
 pub use models::*;
 mod sessions;

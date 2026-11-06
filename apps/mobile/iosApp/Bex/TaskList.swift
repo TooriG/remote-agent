@@ -57,7 +57,10 @@ struct ThreadsScreen: View {
                                 }.taskListRowStyle(leading: 40)
                             }
                             ForEach(project.threads, id: \.listKey) { thread in
-                                ThreadListRow(thread: thread, model: model, leadingInset: 40)
+                                ThreadListRow(thread: thread, leadingInset: 40) { model.openThread(
+                                    thread.id,
+                                    on: thread.hostId
+                                ) }
                             }
                             if project.hasMore {
                                 Button {
@@ -73,9 +76,6 @@ struct ThreadsScreen: View {
                                 .disabled(project.loading)
                                 .accessibilityIdentifier("tasks.project.\(project.id).more")
                                 .taskListRowStyle(leading: 40)
-                            }
-                            if let shelf = project.settled {
-                                SettledThreadRows(shelf: shelf, model: model, leadingInset: 40)
                             }
                         } label: {
                             HStack(spacing: 16) {
@@ -152,7 +152,7 @@ struct ThreadsScreen: View {
                             .taskListRowStyle()
                     }
                     ForEach(chats, id: \.listKey) { thread in
-                        ThreadListRow(thread: thread, model: model)
+                        ThreadListRow(thread: thread) { model.openThread(thread.id, on: thread.hostId) }
                     }
                     if model.list?.hasMore == true {
                         Button {
@@ -168,9 +168,6 @@ struct ThreadsScreen: View {
                         .disabled(model.loadingThreads || model.list?.loadingChats == true)
                         .accessibilityIdentifier("tasks.chats.more")
                         .taskListRowStyle()
-                    }
-                    ForEach(model.list?.settled ?? [], id: \.hostId) { shelf in
-                        SettledThreadRows(shelf: shelf, model: model)
                     }
                 } header: {
                     Text("チャット")
@@ -261,6 +258,12 @@ private extension ProjectSummary {
     }
 }
 
+private extension ThreadSummary {
+    var listKey: String {
+        "\(hostId):\(id.provider.bexKey):\(id.id)"
+    }
+}
+
 /// Keep the standard group's rows while its label provides separate expand and compose buttons.
 private struct ProjectDisclosureStyle: DisclosureGroupStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -270,5 +273,81 @@ private struct ProjectDisclosureStyle: DisclosureGroupStyle {
                 configuration.content
             }
         }
+    }
+}
+
+private extension View {
+    func taskListRowStyle(leading: CGFloat = 20) -> some View {
+        listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: leading, bottom: 0, trailing: 20))
+            .listRowBackground(Color.clear)
+    }
+}
+
+private struct ThreadListRow: View {
+    let thread: ThreadSummary
+    var leadingInset: CGFloat = 20
+    let open: () -> Void
+
+    private var accessibilityID: String {
+        "\(thread.id.provider.bexKey):\(thread.id.id)"
+    }
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 10) {
+                Text(thread.title).font(.title3).foregroundColor(.primary).lineLimit(1)
+                Spacer()
+                if thread.waiting {
+                    Image(systemName: TaskActivityAttributes.IconKind.waiting.symbol)
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("確認待ち")
+                        .accessibilityIdentifier("tasks.waiting.\(accessibilityID)")
+                } else if thread.active {
+                    RunningIndicator().controlSize(.small)
+                        .accessibilityIdentifier("tasks.running.\(accessibilityID)")
+                } else if thread.unread {
+                    Circle().fill(Color.primary).frame(width: 8, height: 8)
+                        .accessibilityLabel("完了・未確認")
+                        .accessibilityIdentifier("tasks.completed.\(accessibilityID)")
+                }
+                if let status = thread.worktreeStatus {
+                    let unmerged = status == .unmerged
+                    Image(unmerged ? "GitDiff" : "GitMerge")
+                        .resizable()
+                        .frame(width: 18, height: 18)
+                        .foregroundStyle(unmerged ? .orange : .purple)
+                        .accessibilityLabel(LocalizedStringKey(unmerged ? "main に未反映の変更あり" : "main にマージ済み"))
+                        .accessibilityIdentifier(
+                            "tasks.\(unmerged ? "unmerged" : "merged").\(accessibilityID)"
+                        )
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityIdentifier("tasks.row.\(accessibilityID)")
+        .accessibilityValue(LocalizedStringKey(
+            thread.waiting ? "確認待ち" : thread.active ? "実行中" : thread.unread ? "完了・未確認" : ""
+        ))
+        .taskListRowStyle(leading: leadingInset)
+    }
+}
+
+/// On iOS 26.6 devices a running row kept the indicator's layout space while the
+/// indicator stayed stopped and invisible, and refreshing the unchanged row did not
+/// restart it. A new indicator on each appearance and foreground return starts animating.
+private struct RunningIndicator: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var generation = 0
+
+    var body: some View {
+        ProgressView()
+            .id(generation)
+            .onAppear { generation += 1 }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    generation += 1
+                }
+            }
     }
 }

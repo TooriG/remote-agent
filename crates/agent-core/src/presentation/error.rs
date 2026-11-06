@@ -76,11 +76,9 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
         | Fork { .. }
         | TurnItems { .. }
         | ProjectList { .. }
-        | SettledList { .. }
         | ListDecorations { .. }
         | TaskActivity
         | LiveActivity { .. } => return None,
-        Settlement { .. } => (Projects, "会話の整理状態を変更できませんでした"),
         Item { item } => (
             Conversation {
                 draft_key: (&item.thread_id).into(),

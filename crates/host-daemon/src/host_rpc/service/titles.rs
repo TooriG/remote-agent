@@ -61,7 +61,6 @@ impl HostRpcService {
                     part: params.query.part,
                     searching: !params.query.search_term.trim().is_empty(),
                 },
-                params.query.settled,
             )
             .await;
         tracing::info!(target: "agent", operation = "host.thread.list.performance",
@@ -80,7 +79,6 @@ impl HostRpcService {
                 limit: params.limit,
                 searching: !params.search_term.trim().is_empty(),
             },
-            params.settled,
         )
         .await
     }
@@ -190,9 +188,8 @@ impl HostRpcService {
         &self,
         search: &str,
         query: crate::projects::titles::TitleQuery<'_>,
-        settled: bool,
     ) -> Result<agent_protocol::models::ThreadList, Failure> {
-        let (revision, settlements) = self.inner.router.settlement_snapshot()?;
+        let revision = self.inner.router.list_revision();
         let task_revision = self.inner.router.task_activity_revision();
         let agents = self.inner.providers.all();
         let first_page_size = title_first_page_size(query);
@@ -293,8 +290,7 @@ impl HostRpcService {
                 head,
             ));
         }
-        let mut titles =
-            crate::projects::titles::TitleList::new(&snapshot.projects, query, settled);
+        let mut titles = crate::projects::titles::TitleList::new(&snapshot.projects, query);
         let mut provider_errors = self
             .provider_errors()
             .as_object()
@@ -343,10 +339,6 @@ impl HostRpcService {
                     continue;
                 };
                 thread.git_branch = summary.branch;
-                thread.settled = thread
-                    .id
-                    .as_ref()
-                    .is_some_and(|id| settlements.contains(id));
                 let capabilities = self.title_capabilities(thread.id.as_ref(), capabilities)?;
                 describe_thread(&mut thread, capabilities, &snapshot);
                 listed.extend(thread.id.clone());
@@ -737,7 +729,6 @@ mod tests {
                     limit: 101,
                     searching: false,
                 },
-                false,
             )
             .await
             .unwrap();
@@ -1010,7 +1001,6 @@ mod tests {
                     .dispatch(
                         session.id(),
                         &Call::ListProjectSessions(op::ListProjectSessions {
-                            settled: false,
                             project_id: project_id.clone(),
                             limit: 5,
                             search_term: String::new(),

@@ -221,7 +221,6 @@ private fun LazyListScope.recentChats(
                 LoadingLabel("もっと見る", list.loadingChats)
             }
         }
-    list?.settled.orEmpty().forEach { shelf -> settledSection(shelf, { perform(it, shelf.hostId) }, language) }
     if (list != null && threads.isEmpty())
         item {
             Text(
@@ -241,7 +240,7 @@ private fun LoadingLabel(label: String, loading: Boolean) {
 }
 
 @Composable
-internal fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit, projectName: String? = null) {
+private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit, projectName: String? = null) {
     val language = LocalUiLanguage.current
     Row(
         Modifier.fillMaxWidth()
@@ -279,7 +278,6 @@ internal fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Uni
                 tint = if (unmerged) Color(UNMERGED_COLOR_ARGB) else MaterialTheme.colorScheme.tertiary,
             )
         }
-        ThreadSettlementMenu(thread, openConversation)
         Icon(
             painterResource(R.drawable.ic_chevron),
             null,
@@ -294,7 +292,7 @@ private const val DRAG_PLACEHOLDER_ALPHA = 0.2f
 private const val SEARCH_DEBOUNCE_MILLIS = 200L
 private const val UNMERGED_COLOR_ARGB = 0xFFFB923C
 
-internal val SessionRef.listKey: String
+private val SessionRef.listKey: String
     get() = "session:$provider:$id"
 
 private fun LazyListScope.projectThreads(
@@ -372,7 +370,6 @@ private fun LazyListScope.projectSection(
                     LoadingLabel("もっと見る", project.loading)
                 }
             }
-        project.settled?.let { settledSection(it, dispatch, language) }
     }
 }
 

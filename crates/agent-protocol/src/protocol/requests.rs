@@ -74,7 +74,6 @@ macro_rules! contracts {
     };
 }
 contracts! {
-    SetSessionSettled, "host/session/settle" => (op::SetSessionSettled, op::SessionSettlement) [clone],
     ReadHandoffHistory, "host/session/context/read" => (crate::handoff::ReadHistory, crate::handoff::Page) [clone],
     ReadTaskActivity, "host/taskActivity/read" => (crate::live_activity::ReadTaskActivity, crate::live_activity::TaskActivityState) [clone],
     MarkSessionRead, "host/session/markRead" => (crate::live_activity::MarkSessionRead, m::Empty) [clone],

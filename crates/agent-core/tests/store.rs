@@ -485,7 +485,6 @@ async fn setup(snapshot: Snapshot) -> (Arc<Store>, host_fixture::Reader, host_fi
                 .as_ref()
                 .map(|accounts| json!(accounts))
                 .unwrap_or_else(|| json!({"accounts":[],"selected":{}})),
-            "host/session/decorations/read" => json!({"icons":{},"statuses":[]}),
             "host/account/usage" => json!({"windows":[],"fetchedAt":1,"error":null}),
             "host/taskActivity/read" => {
                 json!({"revision":0,"statuses":[],"waiting":[],"unread":[],"display":agent_protocol::live_activity::TaskActivitySummary::default().display()})
@@ -3278,10 +3277,8 @@ async fn reconnect_cancels_obsolete_pairing_and_retains_local_state() {
                 session.close();
             }
             if let Some((session, mut reader, writer)) = replacement {
-                let mut pending = std::collections::BTreeSet::from(["host/session/list", "host/taskActivity/read"]);
-                while !pending.is_empty() {
+                for _ in 0..2 {
                     let request = reader.read_request().await.unwrap().unwrap();
-                    pending.remove(request["method"].as_str().unwrap());
                     let result = match request["method"].as_str().unwrap() {
                         "host/session/list" => json!({"data":[{"id":{"provider":"codex","id":"replacement"},"name":"fresh"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}),
                         "host/account/list" => json!({"accounts":[],"selected":{}}),
@@ -3291,8 +3288,8 @@ async fn reconnect_cancels_obsolete_pairing_and_retains_local_state() {
                     };
                     writer.reply(&request, json!({"result":result})).await.unwrap();
                 }
-                wait_for(&store, |state| state.lists.task_activity.is_some() && state.lists.threads.as_ref().is_some_and(|page| page.data.first().is_some_and(|thread| thread.id.as_ref().is_some_and(|id| id.id == "replacement")))).await;
-                assert_eq!(store.snapshot().lists.threads.as_ref().unwrap().data[0].name.as_deref(), Some("fresh"));
+                wait_for(&store, |state| state.lists.task_activity.is_some()).await;
+                assert!(store.snapshot().lists.threads.as_ref().unwrap().data.is_empty());
                 assert!(store.snapshot().connection.connected);
                 assert!(store.snapshot().pane.error.is_none());
                 store.close().await.unwrap();

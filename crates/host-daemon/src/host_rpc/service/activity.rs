@@ -151,19 +151,19 @@ mod tests {
     async fn activity_uses_only_normal_conversations_even_with_saved_subagent_completions() {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("bex-state.sqlite");
+        let path = directory.path().join("bex-read-state.json");
         let session = |id: &str| SessionRef::new(ProviderKind::Codex, id.into()).unwrap();
         let root = session("public-root");
         let child = session("child");
         let grandchild = session("grandchild");
-        let database = crate::host_rpc::database::Database::open(&path);
-        database.write(|tx| {
-            for session in [&root, &child, &grandchild] {
-                crate::host_rpc::database::ensure_thread(tx, session)?;
-                tx.execute("UPDATE threads SET completed_turn_id = 'completed', unread = 1 WHERE provider = ?1 AND id = ?2", rusqlite::params![session.provider.key(), session.id]).map_err(crate::host_rpc::database::failure)?;
-            }
-            Ok(())
-        }).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&[&root, &child, &grandchild].map(|session| {
+                serde_json::json!({"session":session,"turn_id":"completed","unread":true})
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         let program = directory.path().join("codex-fixture");
         std::fs::write(&program, r##"#!/usr/bin/env node
 const rl = require('node:readline').createInterface({input:process.stdin});

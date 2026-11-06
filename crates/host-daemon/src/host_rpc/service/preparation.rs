@@ -163,18 +163,15 @@ impl HostRpcService {
                     status: native.thread.status,
                 },
             );
-            let observed = response
-                .thread
-                .turns
-                .iter()
-                .flatten()
-                .find(|turn| turn.id == turn_id)
-                .expect("confirmed input belongs to the returned history");
-            self.inner.router.confirm_submission(
+            self.inner.router.session_change(
                 &row.id,
-                &preparation.submission.client_user_message_id,
-                observed,
-            )?;
+                SessionChange::Submission {
+                    id: preparation.submission.client_user_message_id.clone(),
+                    delivery: SubmissionDelivery::Accepted {
+                        turn_id: Some(turn_id),
+                    },
+                },
+            );
         }
         Ok(response)
     }

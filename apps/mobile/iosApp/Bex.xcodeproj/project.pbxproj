@@ -32,7 +32,6 @@
 		FD93084AF1873DEF927C9EDC /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DBDDA3779489C57B929936E /* AppViewModel.swift */; };
 		D08EEED058A8C4FE92AA21E2 /* TaskList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04926FF582DA33DFFF64E6C5 /* TaskList.swift */; };
 		95B75077B9D9E4103B4A851A /* ProjectIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09EF00CA36D34A5FAA72C2F7 /* ProjectIcon.swift */; };
-		89024E14C5DD0AE18DB725E0 /* TaskListRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF8831D2C53C3DD98827CCFA /* TaskListRows.swift */; };
 		665D9C527D3738090B08598A /* TaskConnections.swift in Sources */ = {isa = PBXBuildFile; fileRef = C566DFC61A2F26347BE616E6 /* TaskConnections.swift */; };
 		CB49F882BDB040D193481C41 /* ConnectionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92E660B9BEE4F45B54F9762; };
 		FD938C839188C56CFF5BE7A4 /* ConversationScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 613A5AAB450EC067108110F3 /* ConversationScreen.swift */; };
@@ -115,7 +114,6 @@
 		1DBDDA3779489C57B929936E /* AppViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppViewModel.swift; sourceTree = "<group>"; };
 		04926FF582DA33DFFF64E6C5 /* TaskList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskList.swift; sourceTree = "<group>"; };
 		09EF00CA36D34A5FAA72C2F7 /* ProjectIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectIcon.swift; sourceTree = "<group>"; };
-		CF8831D2C53C3DD98827CCFA /* TaskListRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskListRows.swift; sourceTree = "<group>"; };
 		C566DFC61A2F26347BE616E6 /* TaskConnections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskConnections.swift; sourceTree = "<group>"; };
 		C92E660B9BEE4F45B54F9762 /* ConnectionSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSettings.swift; sourceTree = "<group>"; };
 		613A5AAB450EC067108110F3 /* ConversationScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationScreen.swift; sourceTree = "<group>"; };
@@ -246,7 +244,6 @@
 				C0DE00000000000000000001 /* CodexModelSettings.swift */,
 				04926FF582DA33DFFF64E6C5 /* TaskList.swift */,
 				09EF00CA36D34A5FAA72C2F7 /* ProjectIcon.swift */,
-				CF8831D2C53C3DD98827CCFA /* TaskListRows.swift */,
 				C566DFC61A2F26347BE616E6 /* TaskConnections.swift */,
 				C92E660B9BEE4F45B54F9762 /* ConnectionSettings.swift */,
 				25A49FEF4CFAB482E889EBDF /* WorktreeSettings.swift */,
@@ -438,7 +435,6 @@
 				C0DE00000000000000000101 /* CodexModelSettings.swift in Sources */,
 				D08EEED058A8C4FE92AA21E2 /* TaskList.swift in Sources */,
 				95B75077B9D9E4103B4A851A /* ProjectIcon.swift in Sources */,
-				89024E14C5DD0AE18DB725E0 /* TaskListRows.swift in Sources */,
 				665D9C527D3738090B08598A /* TaskConnections.swift in Sources */,
 				CB49F882BDB040D193481C41 /* ConnectionSettings.swift in Sources */,
 				0FF3408BDCB920A7C06397A8 /* WorktreeSettings.swift in Sources */,

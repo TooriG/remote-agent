@@ -22,16 +22,14 @@ pub(crate) enum TitleQuery<'a> {
 pub(crate) struct TitleList<'a> {
     projects: &'a [Project],
     query: TitleQuery<'a>,
-    settled: bool,
     data: Vec<Thread>,
     recent_projects: Vec<String>,
 }
 impl<'a> TitleList<'a> {
-    pub(crate) fn new(projects: &'a [Project], query: TitleQuery<'a>, settled: bool) -> Self {
+    pub(crate) fn new(projects: &'a [Project], query: TitleQuery<'a>) -> Self {
         Self {
             projects,
             query,
-            settled,
             data: Vec::new(),
             recent_projects: Vec::new(),
         }
@@ -169,9 +167,7 @@ impl<'a> TitleList<'a> {
         } else if self.complete() {
             return;
         }
-        if searching || thread.settled == self.settled {
-            self.data.push(summary(thread));
-        }
+        self.data.push(summary(thread));
     }
     pub(crate) fn finish(mut self) -> ThreadList {
         let positions: HashMap<_, _> = self
@@ -287,7 +283,6 @@ pub(crate) fn summary(mut thread: Thread) -> Thread {
         thread.name = (!title.is_empty()).then_some(title);
     }
     Thread {
-        settled: thread.settled,
         list_revision: thread.list_revision,
         id: thread.id,
         active_provider: thread.active_provider,
@@ -373,7 +368,6 @@ mod tests {
                 part: None,
                 searching: false,
             },
-            false,
         );
         titles.push(thread("latest", Some("recent")));
         titles.push(thread("chat", None));
@@ -429,7 +423,6 @@ mod tests {
                 limit: 1005,
                 searching: false,
             },
-            false,
         );
         for index in 0..1001 {
             titles.push(thread(&format!("q-{index}"), Some("q")));
@@ -471,7 +464,6 @@ mod tests {
                 part: None,
                 searching: false,
             },
-            false,
         );
         titles.push(thread("p4-task", Some("p4")));
         titles.push(thread("chat", None));
@@ -506,7 +498,6 @@ mod tests {
                 part: None,
                 searching: true,
             },
-            false,
         );
         titles.push(thread("chat-1", None));
         titles.push(thread("chat-2", None));
@@ -535,7 +526,6 @@ mod tests {
                 part: None,
                 searching: false,
             },
-            false,
         );
         exact_page.push(thread("chat-1", None));
         exact_page.push(thread("chat-2", None));
@@ -561,7 +551,6 @@ mod tests {
                     part: None,
                     searching: false,
                 },
-                false,
             );
             titles.push(thread("chat-1", None));
             titles.push(thread("chat-2", None));
@@ -606,7 +595,6 @@ mod tests {
                 part: None,
                 searching: false,
             },
-            false,
         );
         for index in 0..5 {
             titles.push(thread(&format!("assigned-{index}"), Some("p1")));
@@ -654,7 +642,6 @@ mod tests {
                 part: None,
                 searching: true,
             },
-            false,
         );
         let mut child = thread("child", Some("p"));
         child.parent_id = Some(
@@ -681,7 +668,7 @@ mod tests {
         #[test]
         fn limits_use_exact_lookahead(count in 0usize..80, limit in 1u32..40) {
             let mut titles=TitleList::new(&[],TitleQuery::Root { limit, project_limit:5, project_limits: None,
-                part: None, searching:false }, false);
+                part: None, searching:false });
             for index in 0..count { titles.push(thread(&index.to_string(),None)); }
             proptest::prop_assert_eq!(titles.remaining_chats(), Some((limit as usize + 1).saturating_sub(count)));
             let page=titles.finish();

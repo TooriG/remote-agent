@@ -359,8 +359,6 @@ group! {
         #[serde(skip)]
         pub project_threads: Arc<BTreeMap<String, Arc<ThreadList>>>,
         #[serde(skip)]
-        pub settlement: Arc<settlement::SettlementState>,
-        #[serde(skip)]
         pub expanded_projects: Arc<BTreeMap<String, u32>>,
         #[serde(skip)]
         pub list_query: Arc<ListQuery>,
@@ -505,7 +503,6 @@ impl Snapshot {
             .threads
             .iter()
             .chain(self.lists.project_threads.values())
-            .chain(self.lists.settlement.pages.values())
             .flat_map(|page| &page.data)
     }
 
@@ -592,7 +589,6 @@ impl Snapshot {
 }
 
 mod notifications;
-mod settlement;
 use notifications::notification;
 pub mod projects;
 pub use projects::ProjectPreferences;
@@ -700,7 +696,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         RevokeDevice, ListFiles, ResolveFile, ResolveFileReference, ReadFile,
         ReadFileOpenCapabilities, OpenInEditor,
         SaveFile, ReviewWorkspace, ReadWorktreeSettings,
-        UpdateWorktreeSettings, ListWorktrees, RemoveWorktree, ListProjectSessions, SetSessionSettled,
+        UpdateWorktreeSettings, ListWorktrees, RemoveWorktree, ListProjectSessions,
         ListAgents, AddProject, ScanProjects, ImportProjects, CreateSession, RetryPreparation,
         ReadThread, OpenRequest, ReadItem, ResizeTerminal,
         Interrupt,
@@ -867,24 +863,11 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             let Some(limit) = previous.lists.expanded_projects.get(&project_id).copied() else {
                 return (next, Vec::new());
             };
-            return prepare(next, op::ListProjectSessions { settled: false,
+            return prepare(next, op::ListProjectSessions {
                 project_id,
                 limit,
                 search_term: previous.lists.list_query.search_term.clone(),
             });
-        }
-        Intent::SetSettledExpanded { project_id, expanded } => {
-            if !expanded {
-                Arc::make_mut(&mut next.lists.settlement).expanded.remove(&project_id);
-            } else {
-                Arc::make_mut(&mut next.lists.settlement).expanded.insert(project_id.clone());
-                let limit = next.lists.settlement.pages.get(&project_id).map_or(5, |page| page.limit);
-                if next.connection.connected { return prepare(next, op::ReadSettledSessions { project_id, limit }); }
-            }
-        }
-        Intent::ExpandSettled { project_id } => {
-            let limit = next.lists.settlement.pages.get(&project_id).map_or(5, |page| page.limit.saturating_add(10));
-            if next.connection.connected { return prepare(next, op::ReadSettledSessions { project_id, limit }); }
         }
         Intent::SetProjectPinned { project_id, pinned } => projects::update(&mut next, &project_id, |p| p.pinned = pinned),
         Intent::ReorderProject { project_id, target_id, after } => projects::reorder(&mut next, &project_id, &target_id, after),
@@ -893,7 +876,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             if next.connection.connected && next.lists.expanded_projects.contains_key(&project_id)
                 && !next.lists.project_threads.contains_key(&project_id)
                 && projects::chat_placement(next.lists.project_preferences.get(&next.connection.storage_scope), &thread_id) == Some(project_id.as_str()) {
-                return prepare(next, op::ListProjectSessions { settled: false,
+                return prepare(next, op::ListProjectSessions {
                     project_id, limit: 5, search_term: previous.lists.list_query.search_term.clone(),
                 });
             }
@@ -935,7 +918,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 let limit = page.map_or(5, |page| page.limit);
                 Arc::make_mut(&mut next.lists.expanded_projects).insert(project_id.clone(), limit);
                 if next.connection.connected && (page.is_none() || next.lists.unconfirmed_lists.contains(&op::OperationKey::ProjectList { project_id: project_id.clone() })) {
-                    return prepare(next, op::ListProjectSessions { settled: false,
+                    return prepare(next, op::ListProjectSessions {
                         project_id,
                         limit,
                         search_term: previous.lists.list_query.search_term.clone(),
@@ -950,7 +933,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 };
                 let limit = limit.saturating_add(10);
                 Arc::make_mut(&mut next.lists.expanded_projects).insert(project_id.clone(), limit);
-                return prepare(next, op::ListProjectSessions { settled: false,
+                return prepare(next, op::ListProjectSessions {
                     project_id,
                     limit,
                     search_term: previous.lists.list_query.search_term.clone(),
@@ -1307,7 +1290,6 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             next.lists.activity = Arc::default();
             next.lists.expanded_projects = Arc::default();
             next.lists.project_threads = Arc::default();
-            next.lists.settlement = Arc::default();
             next.lists.unconfirmed_lists = Arc::default();
             if !next.connection.storage_scope.is_empty() {
                 let archived = ScopedData {
@@ -1422,13 +1404,11 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
 
 impl Snapshot {
     fn reset_list_revisions(&mut self) {
-        Arc::make_mut(&mut self.lists.settlement).updates.clear();
         for page in self
             .lists
             .threads
             .iter_mut()
             .chain(Arc::make_mut(&mut self.lists.project_threads).values_mut())
-            .chain(Arc::make_mut(&mut self.lists.settlement).pages.values_mut())
         {
             if page.revision == 0
                 && page.data.iter().all(|row| row.list_revision == 0)
@@ -1467,21 +1447,16 @@ impl Snapshot {
             effects.push(Effect::execute(op::ReadFileOpenCapabilities {}));
         }
         effects.extend(op::reconnect_file_trees(self));
-        effects.extend(self.lists.settlement.expanded.iter().map(|project_id| {
-            Effect::execute(op::ReadSettledSessions {
-                project_id: project_id.clone(),
-                limit: self
-                    .lists
-                    .settlement
-                    .pages
-                    .get(project_id)
-                    .map_or(5, |page| page.limit),
-            })
-        }));
-        // Shared organization can change while this client is disconnected.
-        effects.push(Effect::execute(op::ListSessions::new(
-            (*self.lists.list_query).clone(),
-        )));
+        if self.lists.threads.is_none()
+            || self
+                .lists
+                .unconfirmed_lists
+                .contains(&op::OperationKey::SessionList)
+        {
+            effects.push(Effect::execute(op::ListSessions::new(
+                (*self.lists.list_query).clone(),
+            )));
+        }
         // The Host catalog can change while a mobile client is backgrounded.
         // Keep cached choices visible until the fresh catalog arrives.
         effects.extend(op::refresh_models());
@@ -1576,7 +1551,6 @@ impl Snapshot {
                 .threads
                 .iter_mut()
                 .chain(Arc::make_mut(&mut self.lists.project_threads).values_mut())
-                .chain(Arc::make_mut(&mut self.lists.settlement).pages.values_mut())
             {
                 if list.data.iter().any(has_session_status) {
                     for thread in &mut Arc::make_mut(list).data {

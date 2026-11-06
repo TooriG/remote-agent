@@ -103,7 +103,6 @@ struct OpenInEditor {
 enum ListDecorationScope {
     Root { part: Option<ListPart> },
     Project { project_id: String },
-    Settled { project_id: Option<String> },
     Task { session: SessionRef },
 }
 #[uniffi::remote(Enum)]
@@ -214,7 +213,6 @@ enum ListPart {
 }
 #[uniffi::remote(Record)]
 struct ListQuery {
-    pub settled: bool,
     pub part: Option<ListPart>,
     pub limit: u32,
     pub project_limit: u32,
@@ -753,16 +751,9 @@ struct ListSessions {
 }
 #[uniffi::remote(Record)]
 struct ListProjectSessions {
-    pub settled: bool,
     pub project_id: String,
     pub limit: u32,
     pub search_term: String,
-}
-
-#[uniffi::remote(Record)]
-struct SetSessionSettled {
-    pub thread_id: SessionRef,
-    pub settled: bool,
 }
 #[uniffi::remote(Record)]
 struct ListAgents {

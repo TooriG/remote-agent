@@ -31,22 +31,10 @@ pub fn combine_connection_lists(
     lists
         .into_iter()
         .map(|(host, mut list)| {
-            for shelf in &mut list.settled {
-                shelf.host_id.clone_from(&host);
-                for thread in &mut shelf.threads {
-                    thread.host_id.clone_from(&host);
-                }
-            }
             for thread in &mut list.threads {
                 thread.host_id.clone_from(&host);
             }
             for project in list.projects.iter_mut().chain(&mut list.hidden_projects) {
-                if let Some(shelf) = &mut project.settled {
-                    shelf.host_id.clone_from(&host);
-                    for thread in &mut shelf.threads {
-                        thread.host_id.clone_from(&host);
-                    }
-                }
                 project.host_id.clone_from(&host);
                 for thread in &mut project.threads {
                     thread.host_id.clone_from(&host);
@@ -66,7 +54,6 @@ pub fn combine_connection_lists(
                 (first, second) => first.or(second),
             };
             list.projects.extend(other.projects);
-            list.settled.extend(other.settled);
             list.hidden_projects.extend(other.hidden_projects);
             list.threads.extend(other.threads);
             list
@@ -80,8 +67,6 @@ mod tests {
 
     fn thread() -> ThreadSummary {
         ThreadSummary {
-            settled: false,
-            can_settle: true,
             host_id: String::new(),
             id: crate::session::SessionRef {
                 provider: crate::session::ProviderKind::Codex,
@@ -98,12 +83,10 @@ mod tests {
 
     fn list() -> ThreadList {
         ThreadList {
-            settled: Vec::new(),
             loading_projects: false,
             loading_chats: false,
             notice: None,
             projects: vec![ProjectSummary {
-                settled: None,
                 host_id: String::new(),
                 id: "same-project".into(),
                 name: "repo".into(),

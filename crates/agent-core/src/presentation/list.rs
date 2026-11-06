@@ -21,7 +21,6 @@ pub struct ProjectIconImages {
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ProjectSummary {
-    pub settled: Option<SettledThreads>,
     pub host_id: String,
     pub id: String,
     pub name: String,
@@ -71,7 +70,6 @@ fn project_summary(project: &Project, display_name: &str) -> ProjectSummary {
         .chars()
         .fold(0, |index, c| (index * 31 + c as usize) % COLORS.len());
     ProjectSummary {
-        settled: None,
         host_id: String::new(),
         id: project.id.clone(),
         name: display_name.to_owned(),
@@ -105,8 +103,6 @@ fn coordinator_url(project_id: &str) -> Option<String> {
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadSummary {
-    pub settled: bool,
-    pub can_settle: bool,
     pub host_id: String,
     pub id: crate::session::SessionRef,
     pub title: String,
@@ -119,7 +115,6 @@ pub struct ThreadSummary {
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadList {
-    pub settled: Vec<SettledThreads>,
     pub loading_projects: bool,
     pub loading_chats: bool,
     pub notice: Option<String>,
@@ -128,18 +123,6 @@ pub struct ThreadList {
     pub hidden_projects: Vec<ProjectSummary>,
     pub has_more: bool,
     pub has_more_projects: bool,
-}
-
-#[derive(Clone, PartialEq)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-pub struct SettledThreads {
-    pub host_id: String,
-    pub project_id: Option<String>,
-    pub expanded: bool,
-    pub loading: bool,
-    pub error: Option<super::error::ErrorText>,
-    pub threads: Vec<ThreadSummary>,
-    pub has_more: bool,
 }
 
 /// Only the data consumed by list presentation. Conversation bodies and
@@ -179,7 +162,6 @@ impl<'a> ListSource<'a> {
             .threads
             .iter()
             .chain(self.lists.project_threads.values())
-            .chain(self.lists.settlement.pages.values())
             .flat_map(|page| &page.data)
     }
     fn thread_metadata(&self, id: &crate::session::SessionRef) -> Option<&crate::models::Thread> {
@@ -213,7 +195,6 @@ impl<'a> ListSource<'a> {
                 .lists
                 .expanded_projects
                 .same(&other.lists.expanded_projects)
-            && self.lists.settlement.same(&other.lists.settlement)
             && self.lists.list_query.same(&other.lists.list_query)
             && self.lists.activity.same(&other.lists.activity)
             && self
@@ -258,15 +239,6 @@ impl<'a> ListSource<'a> {
                     project_id: project.id.clone(),
                 }),
         )
-        .chain(
-            self.lists
-                .settlement
-                .expanded
-                .iter()
-                .map(|project_id| K::SettledList {
-                    project_id: project_id.clone(),
-                }),
-        )
         .all(|key| {
             self.operations.get(&key).map(|state| &state.phase)
                 == other.operations.get(&key).map(|state| &state.phase)
@@ -299,7 +271,6 @@ fn list_metadata(thread: &crate::models::Thread) -> impl PartialEq + '_ {
         &thread.name,
         &thread.preview,
         thread.status,
-        thread.settled,
         thread.updated_at,
         &thread.parent_id,
         &thread.project_id,
@@ -348,59 +319,6 @@ impl Snapshot {
 }
 
 impl ListSource<'_> {
-    fn settled_shelf(
-        &self,
-        project_id: Option<String>,
-        project_ids: &HashSet<&str>,
-    ) -> SettledThreads {
-        let key = crate::state::operations::OperationKey::SettledList {
-            project_id: project_id.clone(),
-        };
-        let page = self.lists.settlement.pages.get(&project_id);
-        let error = self
-            .operations
-            .get(&key)
-            .and_then(|state| match &state.phase {
-                crate::state::operations::OperationPhase::Failed { message } => {
-                    Some(super::error::error_text(message))
-                }
-                _ => None,
-            });
-        let preferences = self.lists.project_preferences.get(self.storage_scope);
-        let placed = project_id
-            .as_ref()
-            .and_then(|id| preferences?.get(id))
-            .into_iter()
-            .flat_map(|prefs| &prefs.placed_chats)
-            .filter_map(|chat| self.thread_metadata(&chat.id));
-        let placements = ChatPlacements::new(preferences, page.map_or(0, |page| page.data.len()));
-        let mut seen = HashSet::new();
-        let rows = placed
-            .chain(page.into_iter().flat_map(|page| &page.data))
-            .filter(|thread| thread.settled)
-            .filter(|thread| {
-                thread.id.as_ref().is_some_and(|id| {
-                    placements.get(id).or(thread.project_id.as_deref()) == project_id.as_deref()
-                        && seen.insert(id)
-                })
-            });
-        SettledThreads {
-            host_id: String::new(),
-            project_id: project_id.clone(),
-            expanded: self.lists.settlement.expanded.contains(&project_id),
-            loading: self.operation_running(key),
-            error,
-            threads: thread_summaries(
-                rows,
-                &self.lists.activity.active,
-                &self.lists.activity.unread,
-                self.waiting_sessions(),
-                project_ids,
-                project_id.as_deref(),
-            ),
-            has_more: page.is_some_and(|page| page.has_more),
-        }
-    }
     fn list_error_providers(&self, list: &crate::models::ThreadList) -> Vec<String> {
         list.provider_errors
             .iter()
@@ -537,11 +455,6 @@ impl ListSource<'_> {
         };
         (
             ThreadList {
-                settled: if search.is_empty() {
-                    vec![self.settled_shelf(None, &project_ids)]
-                } else {
-                    Vec::new()
-                },
                 notice,
                 threads: summaries,
                 loading_projects: self.operation_running(
@@ -572,10 +485,6 @@ impl ListSource<'_> {
                         summary.expanded = expanded;
                         if !expanded {
                             return summary;
-                        }
-                        if search.is_empty() {
-                            summary.settled =
-                                Some(self.settled_shelf(Some(project.id.clone()), &project_ids));
                         }
                         let archived_before = prefs.and_then(|prefs| prefs.archived_before);
                         let archived_ids = prefs.map(|prefs| &prefs.archived_ids);
@@ -728,9 +637,6 @@ impl ListSource<'_> {
                             ),
                         );
                         summary
-                            .threads
-                            .retain(|thread| !search.is_empty() || !thread.settled);
-                        summary
                     })
                     .collect(),
                 has_more: list.has_more,
@@ -761,9 +667,6 @@ impl ListSource<'_> {
             .iter()
             .chain(self.lists.project_threads.values().flat_map(|p| &p.data))
         {
-            if thread.settled && self.lists.list_query.search_term.trim().is_empty() {
-                continue;
-            }
             let Some(id) = &thread.id else { continue };
             let placement = placements.get(id);
             let project = placement.or_else(|| thread.project_id.as_ref().map(String::as_str));
@@ -828,11 +731,7 @@ impl ListSource<'_> {
 
     pub fn thread_list(&self) -> Option<ThreadList> {
         let list = self.lists.threads.as_deref()?;
-        let mut result = self.list_projection(list, true, 0).0;
-        if self.lists.list_query.search_term.trim().is_empty() {
-            result.threads.retain(|thread| !thread.settled);
-        }
-        Some(result)
+        Some(self.list_projection(list, true, 0).0)
     }
 }
 
@@ -859,10 +758,6 @@ fn thread_summaries<'a>(
                 waiting.contains(id)
             };
             ThreadSummary {
-                settled: thread.settled,
-                can_settle: !active
-                    && !waiting
-                    && thread.status == crate::models::SessionStatus::Idle,
                 host_id: String::new(),
                 id: id.clone(),
                 title: task_title(thread.name.as_deref(), thread.preview.as_deref()).to_owned()

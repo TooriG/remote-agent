@@ -786,11 +786,10 @@ mod tests {
                             // Do not answer the Host check. Recovery must replace this
                             // transport without waiting for the normal 30-second deadline.
                             let (next, mut next_reader, next_writer) = scoped_incoming(&host, &trust).await;
-                            let mut pending = std::collections::HashSet::from(["host/taskActivity/read", "host/session/list"]);
-                            if selected { pending.insert("host/session/open"); }
-                            while !pending.is_empty() {
+                            let mut reads = 0;
+                            while reads < 2 + usize::from(selected) {
                                 let request = next_reader.read_request().await.unwrap().unwrap();
-                                pending.remove(request["method"].as_str().unwrap());
+                                reads += usize::from(request["method"] != "host/diagnostics/connection");
                                 next_writer.reply(&request, response(&request, "after")).await.unwrap();
                             }
                             assert!(!matches!(reader.read_request().await, Ok(Some(_))));

@@ -2,7 +2,6 @@
 //! conversation; afterwards the Host records each turn as it finishes and
 //! never returns to native storage for reads. Rows keep every item inline;
 //! readers summarize or defer bodies for transfer.
-use super::database::{Database, advance, append_event, ensure_thread};
 use agent_protocol::{
     execution::TurnStatus,
     ids::{ItemId, TurnId},
@@ -11,13 +10,15 @@ use agent_protocol::{
     session::SessionRef,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Mutex};
 
 /// A window stops growing past this many encoded bytes, keeping at least one turn.
 const WINDOW_BYTES: usize = 1 << 20;
 
 pub(crate) struct Transcripts {
-    pub(super) database: Arc<Database>,
+    // A store that failed to open stays failed; reads must not fall back to
+    // an empty transcript that would look like a conversation without turns.
+    state: Mutex<Result<Connection, String>>,
 }
 
 pub(crate) struct Window {
@@ -42,50 +43,70 @@ fn decode_turn(body: &[u8]) -> Result<Turn, String> {
     protocol::decode(body).map_err(failure)
 }
 
-fn encode_metadata(response: ThreadResponse) -> Result<String, String> {
-    let mut value = serde_json::to_value(response).map_err(failure)?;
-    let thread = value["thread"].as_object_mut().expect("thread record");
-    for field in [
-        "id",
-        "cwd",
-        "name",
-        "preview",
-        "settled",
-        "listRevision",
-        "transcriptVersion",
-    ] {
-        thread.remove(field);
-    }
-    serde_json::to_string(&value).map_err(failure)
-}
-
-fn read_metadata(
-    connection: &Connection,
-    session: &SessionRef,
-) -> Result<Option<ThreadResponse>, String> {
-    connection.query_row(
-        "SELECT json_extract(payload_json, '$.history'), cwd, name, preview, settled FROM threads WHERE provider = ?1 AND id = ?2 AND imported = 1",
-        params![session.provider.key(), session.id],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, bool>(4)?)),
-    ).optional().map_err(failure)?.map(|(payload, cwd, name, preview, settled)| {
-        let mut response: ThreadResponse = serde_json::from_str(&payload).map_err(failure)?;
-        response.thread.id = Some(session.clone());
-        response.thread.cwd = cwd;
-        response.thread.name = name;
-        response.thread.preview = preview;
-        response.thread.settled = settled;
-        Ok(response)
-    }).transpose()
-}
-
 impl Transcripts {
-    pub(super) fn new(database: Arc<Database>) -> Self {
-        Self { database }
+    pub(crate) fn open(path: &Path) -> Self {
+        let state = (|| {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(failure)?;
+            }
+            let connection = Connection::open(path).map_err(failure)?;
+            // A restarting Host can briefly overlap its predecessor.
+            connection
+                .busy_timeout(std::time::Duration::from_secs(10))
+                .map_err(failure)?;
+            connection
+                .execute_batch(
+                    "PRAGMA journal_mode = WAL;
+                     PRAGMA synchronous = NORMAL;
+                     CREATE TABLE IF NOT EXISTS conversations (
+                         provider TEXT NOT NULL,
+                         id TEXT NOT NULL,
+                         cwd TEXT,
+                         metadata BLOB,
+                         PRIMARY KEY (provider, id)
+                     ) WITHOUT ROWID;
+                     CREATE TABLE IF NOT EXISTS turns (
+                         provider TEXT NOT NULL,
+                         id TEXT NOT NULL,
+                         position INTEGER NOT NULL,
+                         turn_id TEXT NOT NULL,
+                         running INTEGER NOT NULL,
+                         body BLOB NOT NULL,
+                         PRIMARY KEY (provider, id, position)
+                     ) WITHOUT ROWID;
+                     CREATE INDEX IF NOT EXISTS turn_ids ON turns (provider, id, turn_id, position);
+                     -- Host-wide order of each conversation's latest change.
+                     CREATE TABLE IF NOT EXISTS versions (
+                         provider TEXT NOT NULL,
+                         id TEXT NOT NULL,
+                         version INTEGER NOT NULL,
+                         PRIMARY KEY (provider, id)
+                     ) WITHOUT ROWID;
+                     CREATE INDEX IF NOT EXISTS version_order ON versions (version);",
+                )
+                .map_err(failure)?;
+            Ok(connection)
+        })();
+        Self {
+            state: Mutex::new(state),
+        }
     }
 
-    #[cfg(test)]
-    pub(crate) fn open(path: &std::path::Path) -> Self {
-        Self::new(Arc::new(Database::open(path)))
+    fn with<T>(
+        &self,
+        work: impl FnOnce(&mut Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        work(state.as_mut().map_err(|error| error.clone())?)
+    }
+
+    fn write<T>(&self, work: impl FnOnce(&Transaction) -> Result<T, String>) -> Result<T, String> {
+        self.with(|connection| {
+            let transaction = connection.transaction().map_err(failure)?;
+            let value = work(&transaction)?;
+            transaction.commit().map_err(failure)?;
+            Ok(value)
+        })
     }
 
     /// Native history fills in what the Host did not run. A turn the Host
@@ -102,13 +123,9 @@ impl Transcripts {
         response.thread.history_cursor = None;
         response.thread.history_has_more = None;
         response.thread.history_read_state = None;
-        let cwd = response.thread.cwd.take();
-        let name = response.thread.name.take();
-        let preview = response.thread.preview.take();
-        let metadata = encode_metadata(response)?;
+        let metadata = protocol::encode(&response).map_err(failure)?;
         let key = params![conversation.provider.key(), conversation.id];
-        self.database.write(|transaction| {
-            ensure_thread(transaction, conversation)?;
+        self.write(|transaction| {
             let mut recorded = Vec::new();
             {
                 let mut rows = transaction
@@ -155,9 +172,9 @@ impl Transcripts {
             }
             transaction
                 .execute(
-                    "UPDATE threads SET imported = 1, cwd = ?3, name = CASE WHEN name_override THEN name ELSE ?4 END, preview = CASE WHEN preview_override THEN preview ELSE ?5 END,
-                        payload_json = json_set(payload_json, '$.history', json(?6)) WHERE provider = ?1 AND id = ?2",
-                    params![conversation.provider.key(), conversation.id, cwd, name, preview, metadata],
+                    "INSERT INTO conversations (provider, id, cwd, metadata) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT (provider, id) DO UPDATE SET cwd = excluded.cwd, metadata = excluded.metadata",
+                    params![conversation.provider.key(), conversation.id, response.thread.cwd, metadata],
                 )
                 .map_err(failure)?;
             advance(transaction, conversation.provider.key(), &conversation.id)
@@ -175,7 +192,7 @@ impl Transcripts {
         removed_item: Option<&ItemId>,
     ) -> Result<(), String> {
         let key = params![conversation.provider.key(), conversation.id];
-        self.database.write(|transaction| {
+        self.write(|transaction| {
             let stored = find_turn(transaction, conversation, &turn.id, false, |stored| {
                 removed_item
                     .map_or_else(
@@ -204,7 +221,7 @@ impl Transcripts {
             };
             transaction
                 .execute(
-                    "INSERT OR IGNORE INTO threads (provider, id) VALUES (?1, ?2)",
+                    "INSERT OR IGNORE INTO conversations (provider, id) VALUES (?1, ?2)",
                     key,
                 )
                 .map_err(failure)?;
@@ -222,7 +239,7 @@ impl Transcripts {
         item_id: Option<&ItemId>,
         change: impl FnOnce(Turn) -> Option<Turn>,
     ) -> Result<(), String> {
-        self.database.write(|transaction| {
+        self.write(|transaction| {
             let Some((position, turn)) =
                 find_turn(transaction, conversation, turn_id, false, |turn| {
                     item_id
@@ -242,7 +259,7 @@ impl Transcripts {
 
     /// No turn runs across a Host restart.
     pub(crate) fn interrupt_running(&self) -> Result<(), String> {
-        self.database.write(|transaction| {
+        self.write(|transaction| {
             let mut stopped = Vec::new();
             {
                 let mut rows = transaction
@@ -280,11 +297,21 @@ impl Transcripts {
         &self,
         conversation: &SessionRef,
     ) -> Result<Option<ThreadResponse>, String> {
-        self.database.with(|connection| {
+        self.with(|connection| {
             let key = params![conversation.provider.key(), conversation.id];
-            let Some(mut response) = read_metadata(connection, conversation)? else {
+            let Some(metadata) = connection
+                .query_row(
+                    "SELECT metadata FROM conversations WHERE provider = ?1 AND id = ?2",
+                    key,
+                    |row| row.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()
+                .map_err(failure)?
+                .flatten()
+            else {
                 return Ok(None);
             };
+            let mut response: ThreadResponse = protocol::decode(&metadata).map_err(failure)?;
             let mut statement = connection
                 .prepare("SELECT body FROM turns WHERE provider = ?1 AND id = ?2 ORDER BY position")
                 .map_err(failure)?;
@@ -308,8 +335,17 @@ impl Transcripts {
         limit: usize,
     ) -> Result<Option<Window>, String> {
         let key = params![conversation.provider.key(), conversation.id];
-        self.database.with(|connection| {
-            let Some(mut response) = read_metadata(connection, conversation)? else {
+        self.with(|connection| {
+            let Some(metadata) = connection
+                .query_row(
+                    "SELECT metadata FROM conversations WHERE provider = ?1 AND id = ?2",
+                    key,
+                    |row| row.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()
+                .map_err(failure)?
+                .flatten()
+            else {
                 return Ok(None);
             };
             let count =
@@ -342,6 +378,7 @@ impl Transcripts {
                 turns.push(std::sync::Arc::new(decode_turn(&body)?));
             }
             turns.reverse();
+            let mut response: ThreadResponse = protocol::decode(&metadata).map_err(failure)?;
             let start = end - turns.len();
             response.thread.turns = Some(turns);
             response.thread.transcript_version = connection
@@ -359,9 +396,9 @@ impl Transcripts {
 
     /// Imported conversations and their working directories.
     pub(crate) fn imported(&self) -> Result<Vec<(SessionRef, Option<String>)>, String> {
-        self.database.with(|connection| {
+        self.with(|connection| {
             let mut rows = connection
-                .prepare("SELECT provider, id, cwd FROM threads WHERE imported = 1")
+                .prepare("SELECT provider, id, cwd FROM conversations WHERE metadata IS NOT NULL")
                 .map_err(failure)?;
             let mut rows = rows.query([]).map_err(failure)?;
             let mut imported = Vec::new();
@@ -384,7 +421,7 @@ impl Transcripts {
         conversation: &SessionRef,
         turn_id: &TurnId,
     ) -> Result<Option<Turn>, String> {
-        self.database.with(|connection| {
+        self.with(|connection| {
             find_turn(connection, conversation, turn_id, true, Some)
                 .map(|found| found.map(|(_, turn)| turn))
         })
@@ -397,11 +434,47 @@ impl Transcripts {
         item_id: &ItemId,
         imported_only: bool,
     ) -> Result<Option<std::sync::Arc<Item>>, String> {
-        self.database.with(|connection| {
+        self.with(|connection| {
             find_turn(connection, conversation, turn_id, imported_only, |turn| {
                 turn.items?.into_iter().find(|item| &item.id == item_id)
             })
             .map(|found| found.map(|(_, item)| item))
+        })
+    }
+
+    /// Names change on the Host; the imported snapshot must follow them.
+    pub(crate) fn rename(
+        &self,
+        conversation: &SessionRef,
+        name: Option<&str>,
+    ) -> Result<(), String> {
+        let key = params![conversation.provider.key(), conversation.id];
+        self.write(|transaction| {
+            let Some(metadata) = transaction
+                .query_row(
+                    "SELECT metadata FROM conversations WHERE provider = ?1 AND id = ?2",
+                    key,
+                    |row| row.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()
+                .map_err(failure)?
+                .flatten()
+            else {
+                return Ok(());
+            };
+            let mut response: ThreadResponse = protocol::decode(&metadata).map_err(failure)?;
+            response.thread.name = name.map(Into::into);
+            transaction
+                .execute(
+                    "UPDATE conversations SET metadata = ?3 WHERE provider = ?1 AND id = ?2",
+                    params![
+                        conversation.provider.key(),
+                        conversation.id,
+                        protocol::encode(&response).map_err(failure)?
+                    ],
+                )
+                .map_err(failure)?;
+            advance(transaction, conversation.provider.key(), &conversation.id)
         })
     }
 }
@@ -415,8 +488,8 @@ fn find_turn<T>(
 ) -> Result<Option<(i64, T)>, String> {
     let mut statement = connection
         .prepare_cached(
-            "SELECT position, body FROM turns JOIN threads USING (provider, id)
-         WHERE provider = ?1 AND id = ?2 AND turn_id = ?3 AND (?4 = 0 OR imported = 1)
+            "SELECT position, body FROM turns JOIN conversations USING (provider, id)
+         WHERE provider = ?1 AND id = ?2 AND turn_id = ?3 AND (?4 = 0 OR metadata IS NOT NULL)
          ORDER BY position DESC",
         )
         .map_err(failure)?;
@@ -449,24 +522,26 @@ fn turn_count(connection: &Connection, provider: &str, id: &str) -> Result<i64, 
         .map_err(failure)
 }
 
+/// Give the conversation the next Host-wide version, using the version index.
+fn advance(transaction: &Transaction, provider: &str, id: &str) -> Result<(), String> {
+    transaction
+        .prepare_cached(
+            "INSERT INTO versions (provider, id, version)
+             VALUES (?1, ?2, (SELECT COALESCE(MAX(version), 0) + 1 FROM versions))
+             ON CONFLICT (provider, id) DO UPDATE SET version = excluded.version",
+        )
+        .map_err(failure)?
+        .execute(params![provider, id])
+        .map_err(failure)?;
+    Ok(())
+}
+
 fn write_turn(
     transaction: &Transaction,
     conversation: &SessionRef,
     position: i64,
     turn: &Turn,
 ) -> Result<(), String> {
-    ensure_thread(transaction, conversation)?;
-    let sequence = append_event(transaction, conversation, "turn.updated", turn)?;
-    for item in turn.items.iter().flatten() {
-        if let Some(id) = &item.client_input_id
-            && matches!(
-                item.body(),
-                agent_protocol::items::ItemBody::UserMessage { .. }
-            )
-        {
-            transaction.execute("UPDATE command_receipts SET delivery = 'accepted', resolved = 1, turn_id = ?4, result_sequence = ?5 WHERE provider = ?1 AND id = ?2 AND command_id = ?3 AND kind = 'submission'", params![conversation.provider.key(), conversation.id, id.as_str(), turn.id.as_str(), sequence as i64]).map_err(failure)?;
-        }
-    }
     transaction
         .prepare_cached(
             "INSERT INTO turns (provider, id, position, turn_id, running, body)
@@ -726,7 +801,6 @@ mod tests {
             .thread
             .transcript_version;
         store
-            .database
             .with(|connection| {
                 connection
                     .execute_batch(
@@ -789,7 +863,6 @@ mod tests {
         assert_eq!(window.start, 0);
         assert_eq!(texts(&window), ["first/a", "second/b", "third/c"]);
         store
-            .database
             .with(|connection| {
                 let counted: i64 = connection
                     .query_row(
@@ -978,7 +1051,6 @@ mod tests {
         let (_root, store) = store();
         let target = conversation();
         store
-            .database
             .rename(&target, Some("ignored before import"))
             .unwrap();
         store
@@ -987,7 +1059,7 @@ mod tests {
                 history(vec![turn("running", &["partial"], TurnStatus::Running)]),
             )
             .unwrap();
-        store.database.rename(&target, Some("renamed")).unwrap();
+        store.rename(&target, Some("renamed")).unwrap();
         store.interrupt_running().unwrap();
         let window = store.window(&target, None, 10).unwrap().unwrap();
         assert_eq!(window.response.thread.name.as_deref(), Some("renamed"));
@@ -1059,7 +1131,7 @@ mod tests {
             .unwrap();
         let recorded = version(&target);
         assert!(recorded > version(&other));
-        store.database.rename(&target, Some("renamed")).unwrap();
+        store.rename(&target, Some("renamed")).unwrap();
         let renamed = version(&target);
         assert!(renamed > recorded);
         store.interrupt_running().unwrap();
