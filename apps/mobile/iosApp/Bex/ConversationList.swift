@@ -125,6 +125,7 @@ final class ConversationListController: UIViewController {
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
+        collectionView.addGestureRecognizer(KeyboardDismissingTap())
         collectionView.isPrefetchingEnabled = false
         collectionView.accessibilityIdentifier = "task.detail"
         let row = UICollectionView

@@ -91,3 +91,43 @@ final class ConversationListLayout: UICollectionViewCompositionalLayout {
         return max(-insets.top, height - viewportHeight + insets.bottom)
     }
 }
+
+/// Selectable message text takes focus only after its double-tap selection fails (about 350ms),
+/// and empty space never takes it; dismiss the keyboard on the tap itself.
+final class KeyboardDismissingTap: UITapGestureRecognizer, UIGestureRecognizerDelegate {
+    private var keyboardShown = false
+
+    init() {
+        super.init(target: nil, action: nil)
+        addTarget(self, action: #selector(dismissKeyboard))
+        cancelsTouchesInView = false
+        delegate = self
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow),
+                                               name: UIResponder.keyboardWillShowNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide),
+                                               name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    @objc private func keyboardWillShow() {
+        keyboardShown = true
+    }
+
+    @objc private func keyboardWillHide() {
+        keyboardShown = false
+    }
+
+    @objc private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    /// Without a keyboard, the first responder is selected message text, whose taps must keep their selection.
+    func gestureRecognizerShouldBegin(_: UIGestureRecognizer) -> Bool {
+        keyboardShown
+    }
+
+    /// The tapped content still receives the tap, so links, buttons and text selection keep working.
+    func gestureRecognizer(_: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
+        true
+    }
+}

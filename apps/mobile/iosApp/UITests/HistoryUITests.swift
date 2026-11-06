@@ -218,6 +218,10 @@ extension LaunchUITests {
         focusComposerKeepingLatestVisible(in: app, latestResponse: completed)
         message.typeText("Keep this draft")
         waitForDraftText(message, text: "Keep this draft")
+        // Empty space beside the messages dismisses the keyboard too.
+        app.descendants(matching: .any)["task.detail"].coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.3))
+            .tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
         XCTAssertTrue(row.waitUntilExists(timeout: 20)); row.tap()
