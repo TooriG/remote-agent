@@ -7,7 +7,7 @@ enum ConversationMarkdownContent {
 }
 
 enum ConversationAttributedText {
-    static func attributedText(_ blocks: [String], dark _: Bool, attachmentWidth _: CGFloat) -> NSAttributedString {
+    static func attributedText(_ blocks: [String], dark _: Bool) -> NSAttributedString {
         let text = NSMutableAttributedString()
         for (index, block) in blocks.enumerated() {
             let quoted = block.hasPrefix(">")

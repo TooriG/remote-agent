@@ -19,14 +19,12 @@ struct WorkspaceBrowserScreen: View {
     @FocusState private var textFocused: Bool
     @State private var showKeyboard = false
     @State private var dialogText = ""
+    /// The Host clears an answered dialog on its next frame; until then it stays dismissed here.
+    @State private var dialogAnswered = false
     @State private var viewportSize = CGSize.zero
 
     private var acceptsInput: Bool {
         frame != nil && scenePhase == .active && connectionError == nil
-    }
-
-    private var currentTab: BrowserTab? {
-        frame?.tabs.first { $0.id == frame?.tabId }
     }
 
     var body: some View {
@@ -45,20 +43,8 @@ struct WorkspaceBrowserScreen: View {
             if let message = error ?? connectionError ?? notice {
                 AppNotice(text: message).padding(.horizontal)
             }
-            if let dialog = frame?.dialog {
-                VStack {
-                    Text(dialog.message)
-                    if dialog.prompt {
-                        TextField("入力", text: $dialogText).textFieldStyle(.roundedBorder)
-                    }
-                    HStack {
-                        Button("キャンセル") { send(.dialog(accept: false, text: "")) }
-                        Button("OK") { send(.dialog(accept: true, text: dialogText)); dialogText = "" }
-                    }.disabled(!acceptsInput)
-                }.padding()
-            }
             ZStack {
-                if let image, let currentTab, currentTab.url != "about:blank" {
+                if let image, let currentTab = frame?.currentTab, currentTab.url != "about:blank" {
                     RemoteBrowserCanvas(image: image, acceptsInput: acceptsInput, send: send)
                         .accessibilityIdentifier("browser.content")
                 } else if frame != nil {
@@ -68,10 +54,7 @@ struct WorkspaceBrowserScreen: View {
                     ProgressView("ホストのブラウザに接続中…")
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(GeometryReader { geometry in
-                    Color.clear.onAppear { viewportSize = geometry.size }
-                        .onChange(of: geometry.size) { _, size in viewportSize = size }
-                })
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { viewportSize = $0 }
             if showKeyboard {
                 inputPanel
             }
@@ -87,8 +70,22 @@ struct WorkspaceBrowserScreen: View {
                 Button { showKeyboard.toggle() } label: { Label("文字入力", systemImage: "keyboard") }
                     .disabled(!acceptsInput).accessibilityIdentifier("browser.keyboard")
                 Spacer()
-                browserMenu.disabled(!acceptsInput)
+                BrowserMenu(frame: frame, viewportSize: viewportSize, send: send).disabled(!acceptsInput)
             }
+            ToolbarItemGroup(placement: .keyboard) {
+                if textFocused {
+                    keyButtons
+                }
+            }
+        }
+        .alert(Text(verbatim: frame?.dialog?.message ?? ""), isPresented: Binding(
+            get: { frame?.dialog != nil && !dialogAnswered }, set: { _ in }
+        )) {
+            if frame?.dialog?.prompt == true {
+                TextField("入力", text: $dialogText)
+            }
+            Button("キャンセル", role: .cancel) { answerDialog(accept: false) }
+            Button("OK") { answerDialog(accept: true) }
         }
         .sheet(isPresented: Binding(get: { credentials != nil }, set: {
             if !$0 {
@@ -110,19 +107,21 @@ struct WorkspaceBrowserScreen: View {
         .onDisappear { commands.removeAll(); text = "" }
     }
 
+    /// Keys for the Host page's focused field, above the keyboard.
+    @ViewBuilder private var keyButtons: some View {
+        Button { showKeyboard = false } label: { Image(systemName: "keyboard.chevron.compact.down") }
+            .accessibilityLabel("閉じる").accessibilityIdentifier("browser.keyboard.dismiss")
+        Button("Tab") { send(.key(key: .tab)) }
+        Button("すべて選択") { send(.key(key: .selectAll)) }
+        Spacer()
+        Button { send(.key(key: .backspace)) } label: { Image(systemName: "delete.left") }
+            .accessibilityLabel("1文字削除")
+        Button("Enter") { send(.key(key: .enter)) }
+    }
+
     private var inputPanel: some View {
         VStack {
             Divider()
-            HStack {
-                Button { showKeyboard = false } label: { Image(systemName: "keyboard.chevron.compact.down") }
-                    .accessibilityLabel("閉じる").accessibilityIdentifier("browser.keyboard.dismiss")
-                Button("Tab") { send(.key(key: .tab)) }
-                Button("すべて選択") { send(.key(key: .selectAll)) }
-                Spacer()
-                Button { send(.key(key: .backspace)) } label: { Image(systemName: "delete.left") }
-                    .accessibilityLabel("1文字削除")
-                Button("Enter") { send(.key(key: .enter)) }
-            }
             HStack {
                 Group {
                     if frame?.inputKind == .text {
@@ -141,41 +140,10 @@ struct WorkspaceBrowserScreen: View {
             .onAppear { textFocused = true }
     }
 
-    private var browserMenu: some View {
-        Menu {
-            Button("ログイン状態・保存パスワード") { send(.credentials) }
-                .accessibilityIdentifier("browser.credentials")
-            Section("開いているタブ") {
-                ForEach(frame?.tabs ?? [], id: \.id) { tab in
-                    Button { send(.selectTab(id: tab.id)) } label: {
-                        Label(tab.url == "about:blank" ? "新しいタブ" : (tab.title.isEmpty ? tab.url : tab.title),
-                              systemImage: tab.id == frame?.tabId ? "checkmark" : "globe")
-                    }
-                    .accessibilityIdentifier(tab.id == frame?.tabId ? "browser.title" : "browser.tab.\(tab.id)")
-                }
-            }
-            Button("新しいタブ") { send(.openTab(url: "about:blank")) }
-            Button("タブを閉じる") {
-                if let currentTab {
-                    send(.closeTab(id: currentTab.id))
-                }
-            }
-
-            Divider()
-            Button("画面に合わせる") {
-                if let action = browserFitAction(width: viewportSize.width, height: viewportSize.height,
-                                                 currentWidth: frame?.width ?? 0,
-                                                 currentHeight: frame?.height ?? 0) {
-                    send(action)
-                }
-            }
-            Button("デスクトップ · 1280 × 800") { send(.resize(width: 1280, height: 800)) }
-
-            Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
-
-            Button("URL をコピー") { UIPasteboard.general.string = currentTab?.url }
-        } label: { Label("ブラウザのメニュー", systemImage: "ellipsis") }
-            .accessibilityLabel("ブラウザのメニュー").accessibilityIdentifier("browser.menu")
+    private func answerDialog(accept: Bool) {
+        dialogAnswered = true
+        send(.dialog(accept: accept, text: accept ? dialogText : ""))
+        dialogText = ""
     }
 
     private func open() {
@@ -214,6 +182,9 @@ struct WorkspaceBrowserScreen: View {
             text = ""
         }
         frame = result
+        if result.dialog == nil {
+            dialogAnswered = false
+        }
         if let focus = browserInputFocus(action: action, inputKind: result.inputKind) {
             showKeyboard = focus
             textFocused = showKeyboard
@@ -232,7 +203,8 @@ struct WorkspaceBrowserScreen: View {
             image = UIImage(data: result.image)
         }
         if !addressFocused {
-            address = currentTab?.url == "about:blank" ? "" : (currentTab?.url ?? "")
+            let url = frame?.currentTab?.url
+            address = url == "about:blank" ? "" : (url ?? "")
         }
         connectionError = nil
     }
@@ -255,6 +227,55 @@ struct WorkspaceBrowserScreen: View {
                 self.error = message
             }
         }
+    }
+}
+
+/// Tabs, credentials and viewport sizes of the Host's browser.
+private struct BrowserMenu: View {
+    let frame: BrowserFrame?
+    let viewportSize: CGSize
+    let send: (BrowserAction) -> Void
+
+    var body: some View {
+        Menu {
+            Button("ログイン状態・保存パスワード") { send(.credentials) }
+                .accessibilityIdentifier("browser.credentials")
+            Section("開いているタブ") {
+                Picker("開いているタブ", selection: Binding(get: { frame?.tabId ?? "" }, set: {
+                    send(.selectTab(id: $0))
+                })) {
+                    ForEach(frame?.tabs ?? [], id: \.id) { tab in
+                        Label(tab.url == "about:blank" ? "新しいタブ" : (tab.title.isEmpty ? tab.url : tab.title),
+                              systemImage: "globe")
+                            .tag(tab.id)
+                            .accessibilityIdentifier(tab.id == frame?.tabId ? "browser.title" : "browser.tab.\(tab.id)")
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+            Button("新しいタブ") { send(.openTab(url: "about:blank")) }
+            Button("タブを閉じる") {
+                if let currentTab = frame?.currentTab {
+                    send(.closeTab(id: currentTab.id))
+                }
+            }
+
+            Divider()
+            Button("画面に合わせる") {
+                if let action = browserFitAction(width: viewportSize.width, height: viewportSize.height,
+                                                 currentWidth: frame?.width ?? 0,
+                                                 currentHeight: frame?.height ?? 0) {
+                    send(action)
+                }
+            }
+            Button("デスクトップ · 1280 × 800") { send(.resize(width: 1280, height: 800)) }
+
+            Button("モバイル · 390 × 844") { send(.resize(width: 390, height: 844)) }
+
+            Button("URL をコピー") { UIPasteboard.general.string = frame?.currentTab?.url }
+        } label: { Label("ブラウザのメニュー", systemImage: "ellipsis") }
+            .accessibilityLabel("ブラウザのメニュー").accessibilityIdentifier("browser.menu")
     }
 }
 
@@ -345,5 +366,11 @@ private final class BrowserCanvasView: UIScrollView, UIScrollViewDelegate {
         let delta = gesture.translation(in: page)
         send?(.scroll(x: max(0, min(page.bounds.maxX - 1, point.x)), y: max(0, min(page.bounds.maxY - 1, point.y)),
                       deltaX: max(-4096, min(4096, -delta.x)), deltaY: max(-4096, min(4096, -delta.y))))
+    }
+}
+
+extension BrowserFrame {
+    var currentTab: BrowserTab? {
+        tabs.first { $0.id == tabId }
     }
 }

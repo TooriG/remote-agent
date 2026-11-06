@@ -43,40 +43,9 @@ struct ThreadsScreen: View {
 
                 ForEach(projects, id: \.listKey) { project in
                     Section {
-                        HStack(spacing: 16) {
-                            Button {
-                                model.perform(
-                                    .setProjectExpanded(projectId: project.id, expanded: !project.expanded),
-                                    on: project.hostId
-                                )
-                            } label: {
-                                HStack(spacing: 16) {
-                                    ProjectIcon(
-                                        png: colorScheme == .dark ? project.icon?.darkPng : project.icon?.lightPng,
-                                        monogram: project.monogram,
-                                        colorRGB: project.iconColor
-                                    )
-                                    Text(project.name).font(.title3).lineLimit(1)
-                                    Spacer(minLength: 0)
-                                }
-                                .frame(minHeight: 44)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("tasks.project.\(project.id)")
-                            .accessibilityValue(project.expanded ? "開いています" : "閉じています")
-                            Button { model.openNewThread(cwd: project.roots.first?.path ?? "", on: project.hostId)
-                            } label: {
-                                Image(systemName: "square.and.pencil").font(.title3)
-                                    .foregroundColor(.secondary).frame(width: 44, height: 44)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("\(project.name)で新しいタスク")
-                            .accessibilityIdentifier("tasks.new.project.\(project.id)")
-                        }
-                        .taskListRowStyle()
-                        if project.expanded {
+                        DisclosureGroup(isExpanded: Binding(get: { project.expanded }, set: {
+                            model.perform(.setProjectExpanded(projectId: project.id, expanded: $0), on: project.hostId)
+                        })) {
                             if project.loading, !project.hasMore {
                                 ProgressView().taskListRowStyle()
                             }
@@ -87,10 +56,7 @@ struct ThreadsScreen: View {
                                 }.taskListRowStyle()
                             }
                             ForEach(project.threads, id: \.listKey) { thread in
-                                ThreadListRow(thread: thread, indented: true) { model.openThread(
-                                    thread.id,
-                                    on: thread.hostId
-                                ) }
+                                ThreadListRow(thread: thread) { model.openThread(thread.id, on: thread.hostId) }
                             }
                             if project.hasMore {
                                 Button {
@@ -103,12 +69,34 @@ struct ThreadsScreen: View {
                                         Text("もっと見る")
                                     }
                                 }
-                                .padding(.leading, 40)
                                 .disabled(project.loading)
                                 .accessibilityIdentifier("tasks.project.\(project.id).more")
                                 .taskListRowStyle()
                             }
+                        } label: {
+                            HStack(spacing: 16) {
+                                ProjectIcon(
+                                    png: colorScheme == .dark ? project.icon?.darkPng : project.icon?.lightPng,
+                                    monogram: project.monogram,
+                                    colorRGB: project.iconColor
+                                )
+                                Text(project.name).font(.title3).lineLimit(1)
+                                Spacer(minLength: 0)
+                                Button { model.openNewThread(cwd: project.roots.first?.path ?? "", on: project.hostId)
+                                } label: {
+                                    Image(systemName: "square.and.pencil").font(.title3)
+                                        .foregroundColor(.secondary).frame(width: 44, height: 44)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("\(project.name)で新しいタスク")
+                                .accessibilityIdentifier("tasks.new.project.\(project.id)")
+                            }
+                            .frame(minHeight: 44)
                         }
+                        .accessibilityIdentifier("tasks.project.\(project.id)")
+                        .accessibilityValue(project.expanded ? "開いています" : "閉じています")
+                        .taskListRowStyle()
                     }
                     .listSectionSeparator(.hidden)
                 }
@@ -303,7 +291,6 @@ private extension View {
 
 private struct ThreadListRow: View {
     let thread: ThreadSummary
-    var indented = false
     let open: () -> Void
 
     private var accessibilityID: String {
@@ -340,7 +327,6 @@ private struct ThreadListRow: View {
                         )
                 }
             }
-            .padding(.leading, indented ? 40 : 0)
             .contentShape(Rectangle())
         }
         .accessibilityIdentifier("tasks.row.\(accessibilityID)")

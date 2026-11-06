@@ -37,6 +37,11 @@ final class LaunchUITests: XCTestCase {
         element.tap()
     }
 
+    /// The status bar is the native way back to the start of a conversation.
+    func tapStatusBar(_ app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0)).withOffset(CGVector(dx: 0, dy: 32)).tap()
+    }
+
     func waitForDraftText(_ input: XCUIElement, text: String, timeout: TimeInterval = 15) {
         let ready = expectation(
             for: NSPredicate(format: "exists == true AND value == %@", text), evaluatedWith: input
@@ -285,6 +290,13 @@ extension LaunchUITests {
         return tabs.element(boundBy: max(0, tabs.count - 1))
     }
 
+    /// Open tools are listed in the navigation title's menu, which the bar labels with its title.
+    func openWorkbenchTabs(_ app: XCUIApplication) {
+        let bar = app.navigationBars.firstMatch
+        XCTAssertTrue(bar.waitUntilExists(timeout: 10))
+        tapWhenStable(bar.buttons[bar.identifier])
+    }
+
     func dismissWorkbenchMenu(_ app: XCUIApplication) {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
@@ -294,7 +306,7 @@ extension LaunchUITests {
         if app.descendants(matching: .any)["workbench.launcher"].exists {
             tool.tap(); return
         }
-        tapWhenStable(app.buttons["workbench.tabs"])
+        openWorkbenchTabs(app)
         let tab = workbenchTab(app, kind)
         if tab.exists {
             tab.tap(); return

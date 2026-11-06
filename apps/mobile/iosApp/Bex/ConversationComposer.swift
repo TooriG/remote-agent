@@ -140,11 +140,6 @@ struct ConversationComposer: View {
             .glassEffect(.regular, in: .rect(cornerRadius: 26))
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
-        .background(LinearGradient(
-            colors: [.clear, Color(UIColor.systemBackground)],
-            startPoint: .top,
-            endPoint: .bottom
-        ))
     }
 
     /// The expanded composer's attachment, model, and primary actions.
@@ -234,9 +229,10 @@ struct ConversationComposer: View {
                 model.send()
             }
         } label: {
-            Image(systemName: "arrow.up")
+            Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold))
         }
-        .buttonStyle(ComposerActionButtonStyle())
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.circle)
         .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "文字起こしして送信" : "送信"))
         .disabled(!model.isConnected || (!model.isNewThread && !hasConversation) || model
             .composerControls.provider == nil || model

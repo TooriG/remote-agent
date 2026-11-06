@@ -171,3 +171,15 @@ private final class HostTerminalView: SwiftTerm.TerminalView {
         super.send(source: source, data: data)
     }
 }
+
+@MainActor private func removingCopyCommand(_ element: UIMenuElement) -> UIMenuElement? {
+    if let command = element as? UICommand,
+       command.action == #selector(UIResponderStandardEditActions.copy(_:)) {
+        return nil
+    }
+    if let menu = element as? UIMenu {
+        let children = menu.children.compactMap(removingCopyCommand)
+        return children.isEmpty ? nil : menu.replacingChildren(children)
+    }
+    return element
+}

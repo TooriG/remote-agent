@@ -234,7 +234,7 @@ extension LaunchUITests {
                        "Streaming growth of the same row must keep its final text visible")
         assertConversationTextMargins(completed, in: app)
         captureScreen(app, named: "Long Markdown stream completed with draft preserved")
-        app.buttons["task.top"].tap()
+        tapStatusBar(app)
         let code = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Markdown stream fixture"))
             .firstMatch
         XCTAssertTrue(code.waitUntilExists(timeout: 10))

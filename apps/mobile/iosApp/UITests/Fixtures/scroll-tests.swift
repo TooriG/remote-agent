@@ -55,6 +55,16 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
         await Task.yield()
     }
 
+    /// UIKit's status-bar navigation: the delegate approves, the view scrolls to its start, then reports it.
+    private func tapStatusBar(_ controller: ConversationListController) async {
+        let view = controller.collectionView
+        guard controller.scrollViewShouldScrollToTop(view) else { return }
+        view.setContentOffset(CGPoint(x: -view.adjustedContentInset.left, y: -view.adjustedContentInset.top),
+                              animated: false)
+        await layout(controller)
+        controller.scrollViewDidScrollToTop(view)
+    }
+
     private func position(_ item: Int, in controller: ConversationListController) -> CGFloat {
         let view = controller.collectionView
         guard let attributes = view.layoutAttributesForItem(at: IndexPath(item: item, section: 0)) else {
@@ -68,7 +78,7 @@ extension ConversationScrollTests {
     private func checkShortViewport() async {
         let controller = ConversationListController(scroll: ConversationScrollState())
         mount(controller)
-        controller.update(ids: [.message("short")], following: true, request: nil,
+        controller.update(ids: [.message("short")], following: true,
                           accessibilityValue: "") { _ in AnyView(Text("Short answer").frame(height: 60)) }
         await layout(controller)
         let view = controller.collectionView
@@ -100,7 +110,7 @@ extension ConversationScrollTests {
         let ids = (0 ..< 10000).map { ConversationList.RowID.message(String($0)) }
         var built = 0
         func update(_ rows: [ConversationList.RowID]) {
-            controller.update(ids: rows, following: scroll.following, request: scroll.request,
+            controller.update(ids: rows, following: scroll.following,
                               accessibilityValue: "items=\(rows.count)") { index in
                 built += 1
                 return AnyView(Text(String(describing: rows[index])).frame(maxWidth: .infinity).frame(height: 72))
@@ -113,7 +123,7 @@ extension ConversationScrollTests {
         check(view.indexPathsForVisibleItems.contains(IndexPath(item: 9999, section: 0)), "Open at the latest row")
         check(controller.children.count < 40, "Recycling must keep the hosting-controller hierarchy bounded")
 
-        scroll.goTo(.top)
+        await tapStatusBar(controller)
         update(ids)
         await layout(controller)
         check(view.indexPathsForVisibleItems.contains(IndexPath(item: 0, section: 0)), "Top navigation must detach")
@@ -146,7 +156,7 @@ extension ConversationScrollTests {
         mount(controller)
         var ids = [ConversationList.RowID.message("first"), .message("last")]
         func update(_ height: CGFloat) {
-            controller.update(ids: ids, following: scroll.following, request: scroll.request,
+            controller.update(ids: ids, following: scroll.following,
                               accessibilityValue: "") { index in
                 AnyView(Text("Message").frame(height: index == 0 ? 72 : height))
             }
@@ -182,7 +192,7 @@ extension ConversationScrollTests {
         mount(controller)
         var ids = [ConversationList.RowID.message("first"), .message("last")]
         func update(_ height: CGFloat) {
-            controller.update(ids: ids, following: scroll.following, request: scroll.request,
+            controller.update(ids: ids, following: scroll.following,
                               accessibilityValue: "") { index in
                 AnyView(Text("Long message").frame(height: index == 0 ? 72 : height))
             }
@@ -232,7 +242,7 @@ extension ConversationScrollTests {
         mount(controller)
         let latest = ConversationList.RowID.message("latest")
         func update(_ ids: [ConversationList.RowID]) {
-            controller.update(ids: ids, following: scroll.following, request: scroll.request,
+            controller.update(ids: ids, following: scroll.following,
                               accessibilityValue: "") { _ in AnyView(Text("Message").frame(height: 60)) }
         }
         update([.history, latest])
@@ -254,7 +264,7 @@ extension ConversationScrollTests {
         check(view.contentOffset == before, "A nonvisual page must not anchor a later unrelated update")
         let replacement = ConversationListController(scroll: ConversationScrollState())
         mount(replacement)
-        replacement.update(ids: [.message("other")], following: true, request: nil, accessibilityValue: "") { _ in
+        replacement.update(ids: [.message("other")], following: true, accessibilityValue: "") { _ in
             AnyView(Text("Other conversation").frame(height: 60))
         }
         await layout(replacement)
@@ -266,7 +276,7 @@ extension ConversationScrollTests {
         let scroll = ConversationScrollState()
         let controller = ConversationListController(scroll: scroll)
         mount(controller)
-        controller.update(ids: [.message("wrapped")], following: true, request: nil, accessibilityValue: "") { _ in
+        controller.update(ids: [.message("wrapped")], following: true, accessibilityValue: "") { _ in
             AnyView(VStack(alignment: .leading) {
                 Text(String(repeating: "A message wraps at the actual cell width. ", count: 300))
                     .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
@@ -279,14 +289,14 @@ extension ConversationScrollTests {
         let wide = view.layoutAttributesForItem(at: path)!.size
         check(wide.height > view.bounds.height && wide.height < 10000,
               "Wrapped text must measure its contents while a horizontal scroller keeps its ideal height: \(wide)")
-        view.contentInset.left = 24
-        view.contentInset.right = 24
+        // Landscape safe areas inset the conversation horizontally.
+        controller.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 24, bottom: 0, right: 24)
         await layout(controller)
+        let safeArea = view.safeAreaInsets
         let inset = view.layoutAttributesForItem(at: path)!.frame
-        check(abs(inset.width - (view.bounds.width - view.adjustedContentInset.left
-                - view.adjustedContentInset.right - 32)) < 1,
-        "Horizontal inset changes must remeasure rows without resizing the viewport: \(inset), \(geometry(view))")
-        check(abs(inset.minX - view.contentOffset.x - view.adjustedContentInset.left - 16) < 1,
+        check(abs(inset.width - (view.bounds.width - safeArea.left - safeArea.right - 32)) < 1,
+              "Horizontal inset changes must remeasure rows without resizing the viewport: \(inset), \(geometry(view))")
+        check(abs(inset.minX - view.contentOffset.x - safeArea.left - 16) < 1,
               "The leading row margin must follow the native horizontal inset")
         check(abs(view.contentSize.width + view.adjustedContentInset.left
                   + view.adjustedContentInset.right - view.bounds.width) < 1,
@@ -296,9 +306,8 @@ extension ConversationScrollTests {
         let narrow = view.layoutAttributesForItem(at: path)!.size
         check(narrow.width < wide.width && narrow.height > wide.height,
               "A width change must remeasure the SwiftUI row: wide=\(wide), narrow=\(narrow), \(geometry(view))")
-        check(abs(narrow.width - (view.bounds.width - view.adjustedContentInset.left
-                - view.adjustedContentInset.right - 32)) < 1,
-        "Native safe-area insets must be outside the row margins: narrow=\(narrow), \(geometry(view))")
+        check(abs(narrow.width - (view.bounds.width - view.safeAreaInsets.left - view.safeAreaInsets.right - 32)) < 1,
+              "Native safe-area insets must be outside the row margins: narrow=\(narrow), \(geometry(view))")
         check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
                   - view.layoutAttributesForItem(at: path)!.frame.maxY - 6) < 1,
         "Following must survive width changes in a long message")
@@ -310,7 +319,7 @@ extension ConversationScrollTests {
         mount(controller)
         let messages = (0 ..< 20).map { ConversationList.RowID.message("current-\($0)") }
         func update(_ ids: [ConversationList.RowID], header: CGFloat) {
-            controller.update(ids: ids, following: scroll.following, request: scroll.request,
+            controller.update(ids: ids, following: scroll.following,
                               accessibilityValue: "") { index in
                 AnyView(Text("Message").frame(height: index == 0 ? header : 72))
             }
@@ -318,7 +327,7 @@ extension ConversationScrollTests {
         let ids = [ConversationList.RowID.history] + messages
         update(ids, header: 60)
         await layout(controller)
-        scroll.goTo(.top)
+        await tapStatusBar(controller)
         update(ids, header: 60)
         await layout(controller)
         let reading = position(1, in: controller)

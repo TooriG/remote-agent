@@ -1,4 +1,5 @@
 import Observation
+import QuickLook
 import SwiftUI
 
 /// User-initiated presentations outlive recycled rows. Inline loads remain owned by each image or web view.
@@ -127,9 +128,12 @@ struct ConversationMediaPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .fullScreenCover(item: $presentation.image, onDismiss: presentation.closeImage) { image in
-                ConversationPreview(url: image.url, isImage: true, close: presentation.closeImage)
-            }
+            // QuickLook owns zooming, sharing and saving to Photos.
+            .quickLookPreview(Binding(get: { presentation.image?.url }, set: {
+                if $0 == nil {
+                    presentation.closeImage()
+                }
+            }))
             .sheet(item: $presentation.sharedFile, onDismiss: presentation.closeShare) { file in
                 FileShareSheet(url: file.url)
             }

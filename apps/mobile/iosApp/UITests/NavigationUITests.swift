@@ -291,7 +291,7 @@ extension LaunchUITests {
         settings.tap()
         let choice = app.buttons["model.choice.fixture-model"]
         XCTAssertTrue(choice.waitUntilExists(timeout: 10))
-        XCTAssertEqual(choice.value as? String, "選択中")
+        XCTAssertTrue(choice.isSelected)
         captureScreen(app, named: "Restored model and account picker")
         dismissModelSettings(app)
         expandComposer(app)
