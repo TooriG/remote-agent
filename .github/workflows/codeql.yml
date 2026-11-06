@@ -11,7 +11,8 @@ permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Let main finish its current scan and retain only the newest pending scan.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
