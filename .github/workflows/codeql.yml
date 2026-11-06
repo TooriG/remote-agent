@@ -1,0 +1,55 @@
+name: CodeQL
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 19 * * 0'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Swift and Kotlin require their native builds; these languages can be
+        # extracted without rebuilding the apps or running acceptance tests.
+        language: [actions, javascript-typescript, python, rust]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        if: matrix.language == 'rust'
+      - name: Use the pinned Rust toolchain and native dependencies
+        if: matrix.language == 'rust'
+        # Extraction runs Cargo build scripts and procedural macros even in
+        # none mode. Pass the same compiler and libraries as the native shell.
+        run: |
+          nix develop .#native --command bash -euo pipefail <<'RUST_ENV'
+          for name in PATH LIBCLANG_PATH LD_LIBRARY_PATH PKG_CONFIG_PATH NIX_CFLAGS_COMPILE NIX_LDFLAGS CC CXX AR RANLIB CMAKE_PREFIX_PATH; do
+            printf "%s=%s\n" "$name" "${!name-}" >> "$GITHUB_ENV"
+          done
+          RUST_ENV
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          tools: linked
+          queries: security-extended
+      - name: Analyze and upload results
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:${{ matrix.language }}
