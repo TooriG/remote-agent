@@ -177,13 +177,17 @@ final class ConversationListController: UIViewController {
 
     private func refreshVisibleRows() {
         guard active else { return }
-        for path in collectionView.indexPathsForVisibleItems {
-            if let cell = collectionView.cellForItem(at: path), let id = data.itemIdentifier(for: path) {
-                show(cell, id: id)
+        // Self-sizing cell updates animate by default. During streaming their
+        // animated frames lag behind the measured height used to follow the tail.
+        UIView.performWithoutAnimation {
+            for path in collectionView.indexPathsForVisibleItems {
+                if let cell = collectionView.cellForItem(at: path), let id = data.itemIdentifier(for: path) {
+                    show(cell, id: id)
+                }
             }
+            collectionView.setNeedsLayout()
+            collectionView.layoutIfNeeded()
         }
-        collectionView.setNeedsLayout()
-        collectionView.layoutIfNeeded()
     }
 
     /// UIKit sizes the cell from the SwiftUI content itself, so rows need no separate measurement.
