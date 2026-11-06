@@ -157,7 +157,7 @@ private final class HostTerminalView: SwiftTerm.TerminalView {
         let copy = UIAction(title: copyTitle, image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
             self?.copy(nil)
         }
-        return UIMenu(children: [copy] + suggestedActions.compactMap(removingCopyCommand))
+        return UIMenu(children: [copy] + splitCopyCommand(suggestedActions).others)
     }
 
     override func paste(_ sender: Any?) {
@@ -170,16 +170,4 @@ private final class HostTerminalView: SwiftTerm.TerminalView {
         guard Self.isPasting else { return }
         super.send(source: source, data: data)
     }
-}
-
-@MainActor private func removingCopyCommand(_ element: UIMenuElement) -> UIMenuElement? {
-    if let command = element as? UICommand,
-       command.action == #selector(UIResponderStandardEditActions.copy(_:)) {
-        return nil
-    }
-    if let menu = element as? UIMenu {
-        let children = menu.children.compactMap(removingCopyCommand)
-        return children.isEmpty ? nil : menu.replacingChildren(children)
-    }
-    return element
 }

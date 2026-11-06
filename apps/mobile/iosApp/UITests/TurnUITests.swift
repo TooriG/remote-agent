@@ -186,7 +186,7 @@ extension LaunchUITests {
         let side = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", "サイドチャットで質問")).firstMatch
         if !side.exists {
-            let forward = app.buttons["Forward"]
+            let forward = app.buttons.matching(NSPredicate(format: "label IN %@", ["Forward", "進む"])).firstMatch
             XCTAssertTrue(forward.waitUntilExists(timeout: 5)); forward.tap()
         }
         XCTAssertTrue(side.waitUntilExists(timeout: 5)); side.tap()

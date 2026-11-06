@@ -292,41 +292,45 @@ struct AudioSessionConfiguration {
     }
 }
 
-struct SharedFile: Identifiable {
+/// Owns one temporary directory while a preview or share sheet still uses its file.
+final class SharedFile: Identifiable {
     let id = UUID()
     let url: URL
-}
 
-extension View {
-    /// Shares a downloaded file through the system share sheet, presented modally as UIKit does,
-    /// and removes the file's temporary directory once sharing ends.
-    func shareSheet(_ file: Binding<SharedFile?>) -> some View {
-        background(ShareSheetPresenter(file: file))
+    init(url: URL) {
+        self.url = url
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
     }
 }
 
-private struct ShareSheetPresenter: UIViewControllerRepresentable {
-    @Binding var file: SharedFile?
+/// Keep UIKit's Copy command available beside primary actions without duplicating it.
+@MainActor func splitCopyCommand(_ elements: [UIMenuElement]) -> (copy: UICommand?, others: [UIMenuElement]) {
+    var copy: UICommand?
+    let others = elements.compactMap { element -> UIMenuElement? in
+        if let command = element as? UICommand,
+           command.action == #selector(UIResponderStandardEditActions.copy(_:)) {
+            copy = copy ?? command
+            return nil
+        }
+        if let menu = element as? UIMenu {
+            let children = splitCopyCommand(menu.children)
+            copy = copy ?? children.copy
+            return children.others.isEmpty ? nil : menu.replacingChildren(children.others)
+        }
+        return element
+    }
+    return (copy, others)
+}
 
-    func makeUIViewController(context _: Context) -> UIViewController {
-        UIViewController()
+struct ShareSheet: UIViewControllerRepresentable {
+    let file: SharedFile
+
+    func makeUIViewController(context _: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [file.url], applicationActivities: nil)
     }
 
-    func updateUIViewController(_ anchor: UIViewController, context _: Context) {
-        let presented = anchor.presentedViewController as? UIActivityViewController
-        guard let file else {
-            presented?.dismiss(animated: true)
-            return
-        }
-        guard presented == nil, anchor.view.window != nil else { return }
-        let controller = UIActivityViewController(activityItems: [file.url], applicationActivities: nil)
-        controller.popoverPresentationController?.sourceView = anchor.view
-        controller.completionWithItemsHandler = { _, _, _, _ in
-            try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent())
-            if self.file?.id == file.id {
-                self.file = nil
-            }
-        }
-        anchor.present(controller, animated: true)
-    }
+    func updateUIViewController(_: UIActivityViewController, context _: Context) {}
 }

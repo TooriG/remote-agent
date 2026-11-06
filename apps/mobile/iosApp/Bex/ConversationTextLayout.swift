@@ -52,10 +52,12 @@ final class ConversationTextView: UITextView {
     /// Reopened conversations share these sizes, keyed by what the view shows.
     func measure(width proposal: CGFloat?) -> CGSize {
         guard let content, !content.blocks.isEmpty else { return .zero }
-        let width = proposal.flatMap { $0.isFinite ? $0 : nil } ?? .greatestFiniteMagnitude
+        let proposedWidth = proposal.flatMap { $0.isFinite ? $0 : nil }
+        let width = proposedWidth ?? .greatestFiniteMagnitude
         guard width > 0 else { return .zero }
         return ConversationTextSizes.size(content, width: width) {
-            sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+            let measured = sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+            return CGSize(width: proposedWidth ?? measured.width, height: measured.height)
         }
     }
 

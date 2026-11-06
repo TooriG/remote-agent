@@ -1,5 +1,5 @@
 import AgentCore
-import AVFoundation
+import AVKit
 import QuickLook
 import SwiftUI
 import UIKit
@@ -64,7 +64,14 @@ private struct WorkspaceFilePreview: View {
     }
 
     @ViewBuilder private func preview(_ file: DownloadedFile) -> some View {
-        if mimeType == "image/svg+xml" {
+        if let playback = file.playback {
+            switch playback {
+            case let .success(player):
+                VideoPlayer(player: player).accessibilityIdentifier("file.preview.media")
+            case let .failure(error):
+                AppNotice(text: error.localizedDescription).padding()
+            }
+        } else if mimeType == "image/svg+xml" {
             // QuickLook does not draw SVG.
             FileWebPreview(url: file.url, mimeType: mimeType)
         } else if QLPreviewController.canPreview(file.url as NSURL) {
@@ -74,34 +81,50 @@ private struct WorkspaceFilePreview: View {
         }
     }
 
-    /// QuickLook can play media while it covers the sheet. Retain the file and the
-    /// playback session until the preview itself is released.
+    /// Native players can temporarily cover the sheet. Retain both the file
+    /// and playback resources until the preview itself is released.
     private final class DownloadedFile {
         let url: URL
+        let playback: Result<AVPlayer, Error>?
         private let audioConfiguration: AudioSessionConfiguration?
 
-        init(url: URL, mimeType: String) {
+        init(url: URL, mimeType: String) async {
             self.url = url
-            let session = AVAudioSession.sharedInstance()
-            // Media plays even with the ringer muted. Leave an active recording session
-            // in charge of its audio configuration.
-            guard mimeType.hasPrefix("video/") || mimeType.hasPrefix("audio/"),
-                  ![AVAudioSession.Category.record, .playAndRecord].contains(session.category) else {
-                audioConfiguration = nil
-                return
-            }
-            let previous = AudioSessionConfiguration(
-                category: session.category, mode: session.mode, options: session.categoryOptions
-            )
-            do {
-                try session.setCategory(.playback, mode: mimeType.hasPrefix("video/") ? .moviePlayback : .default)
-                audioConfiguration = previous
-            } catch {
+            if mimeType.hasPrefix("video/") || mimeType.hasPrefix("audio/") {
+                do {
+                    let asset = AVURLAsset(url: url)
+                    guard try await asset.load(.isPlayable) else {
+                        throw CocoaError(.fileReadCorruptFile)
+                    }
+                    try Task.checkCancellation()
+                    let session = AVAudioSession.sharedInstance()
+                    // Leave an active recording session in charge of its audio configuration.
+                    let previous = [AVAudioSession.Category.record, .playAndRecord].contains(session.category)
+                        ? nil : AudioSessionConfiguration(
+                            category: session.category, mode: session.mode, options: session.categoryOptions
+                        )
+                    if previous != nil {
+                        try session.setCategory(
+                            .playback,
+                            mode: mimeType.hasPrefix("video/") ? .moviePlayback : .default
+                        )
+                    }
+                    playback = .success(AVPlayer(playerItem: AVPlayerItem(asset: asset)))
+                    audioConfiguration = previous
+                } catch {
+                    playback = .failure(error)
+                    audioConfiguration = nil
+                }
+            } else {
+                playback = nil
                 audioConfiguration = nil
             }
         }
 
         deinit {
+            if case let .success(player)? = playback {
+                player.pause()
+            }
             if let audioConfiguration, AVAudioSession.sharedInstance().category == .playback {
                 try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
                 try? audioConfiguration.restore()
@@ -173,7 +196,7 @@ struct WorkspaceFileSheet: View {
                         } else {
                             load(restoreDraft: false)
                         }
-                    }
+                    }.disabled(busy)
                     Button("ダウンロード", action: share).disabled(busy).accessibilityIdentifier("file.download")
                     Button("AIで編集") { aiEdit(entry.path) }.accessibilityIdentifier("file.ai-edit")
                 }.padding()
@@ -207,7 +230,7 @@ struct WorkspaceFileSheet: View {
                     load(restoreDraft: false)
                 }
             }
-            .shareSheet($sharedFile)
+            .sheet(item: $sharedFile) { ShareSheet(file: $0) }
         }
     }
 
@@ -253,9 +276,11 @@ private struct FileWebPreview: View {
     @State private var page: WebPage?
 
     var body: some View {
-        Group {
+        ZStack {
             if let page {
                 WebView(page)
+            } else {
+                ProgressView()
             }
         }
         .task(id: url) {

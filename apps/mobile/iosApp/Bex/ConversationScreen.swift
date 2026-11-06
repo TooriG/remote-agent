@@ -130,10 +130,11 @@ struct ThreadScreen: View {
             }
         }
         .background(Color(UIColor.systemBackground))
-        .safeAreaBar(edge: .bottom, spacing: 0) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             ConversationComposer(model: model, mediaPresentation: mediaPresentation,
                                  hasConversation: conversation != nil,
                                  isSideChat: isSideChat, openTools: openTools)
+                .background(.bar)
         }
     }
 }
