@@ -1,4 +1,5 @@
 //! Native UI over the same ClientSession and presentation as the existing apps.
+mod accounts;
 mod activity;
 mod client;
 mod composer;
@@ -7,6 +8,7 @@ mod conversation;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod dictation;
 mod editor;
+mod environment;
 mod files;
 mod invocations;
 mod media;
@@ -110,6 +112,23 @@ pub fn App() -> impl IntoElement {
     let failure = signal(None::<String>);
     let routes = signal(vec![0_u8]);
     let settings = signal(false);
+    let provider = signal(None::<agent_protocol::session::ProviderKind>);
+    let account_pending = signal(false);
+    let account_locked = computed(move || {
+        account_pending.get()
+            || publication.with(|p| {
+                p.settings.account_login().is_some()
+                    || provider.get().is_some_and(|provider| {
+                        p.snapshot.operation_running(
+                            agent_core::state::operations::OperationKey::AccountLogin { provider },
+                        )
+                    })
+            })
+    });
+    let close_settings = move || {
+        provider.set(None);
+        settings.set(false);
+    };
     let sidebar = signal(true);
     let searching = signal(false);
     let query = signal(String::new());
@@ -163,29 +182,52 @@ pub fn App() -> impl IntoElement {
             }
         })
     };
-    let toolbar_action = move |action: &str| match action {
-        "sidebar" => sidebar.update(|open| *open = !*open),
-        "search" => searching.update(|open| *open = !*open),
-        "files" => {
-            let (cwd, home) = publication
-                .with_untracked(|p| (p.composer.controls.navigation.cwd.clone(), p.context.home()));
-            if cwd.is_empty() {
-                native::message("ファイル", "作業フォルダーのある会話を開いてください。");
-            } else {
-                files.show(agent_core::presentation::markdown::file_host_path(
-                    cwd, home,
-                ));
-            }
+    let toolbar_action = move |action: &str| {
+        if account_locked.get_untracked() {
+            return;
         }
-        "compose" => {
-            connection.dispatch(Intent::NewChat {
-                cwd: publication.with(|p| p.snapshot.pane.navigation.cwd.clone()),
-            });
-            if !is_desktop() {
-                routes.set(vec![0, 1]);
+        match action {
+            "sidebar" => sidebar.update(|open| *open = !*open),
+            "search" => searching.update(|open| *open = !*open),
+            "files" => {
+                let (cwd, home) = publication.with_untracked(|p| {
+                    (p.composer.controls.navigation.cwd.clone(), p.context.home())
+                });
+                if cwd.is_empty() {
+                    native::message("ファイル", "作業フォルダーのある会話を開いてください。");
+                } else {
+                    files.show(agent_core::presentation::markdown::file_host_path(
+                        cwd, home,
+                    ));
+                }
             }
+            "compose" => {
+                connection.dispatch(Intent::NewChat {
+                    cwd: publication.with(|p| p.snapshot.pane.navigation.cwd.clone()),
+                });
+                if !is_desktop() {
+                    routes.set(vec![0, 1]);
+                }
+            }
+            _ => settings.set(true),
         }
-        _ => settings.set(true),
+    };
+    let environment = move || {
+        view()
+            .flex_1()
+            .child(when(
+                move || provider.get().is_none(),
+                move || environment::overview(hosts, host, provider, close_settings),
+            ))
+            .child(each(
+                move || provider.get().into_iter().collect::<Vec<_>>(),
+                |provider: &agent_protocol::session::ProviderKind| *provider,
+                move |selected, _| {
+                    accounts::screen(selected.get_untracked(), account_pending, move || {
+                        provider.set(None)
+                    })
+                },
+            ))
     };
     let content = move || {
         let following = signal(true);
@@ -198,9 +240,10 @@ pub fn App() -> impl IntoElement {
     };
     let notices = move || {
         view()
-            .child(notices::notices(move || {
-                files.root.get().is_some() || files.file.get().is_some()
-            }))
+            .child(notices::notices(
+                move || files.root.get().is_some() || files.file.get().is_some(),
+                move || settings.get(),
+            ))
             .child(when(
                 move || failure.get().is_some(),
                 move || {
@@ -232,7 +275,10 @@ pub fn App() -> impl IntoElement {
                             .p_2()
                             .gap_2()
                             .style_when(move || !sidebar.get(), |s| s.hidden())
-                            .child(connections::selector(hosts, host))
+                            .child(
+                                connections::selector(hosts, host)
+                                    .prop("enabled", move || json!(!account_locked.get())),
+                            )
                             .child(native::search(query).w_full())
                             .child(list())
                             .child(native::text_button(json!("ファイル"), move || {
@@ -244,7 +290,7 @@ pub fn App() -> impl IntoElement {
                     )
                     .child(when(
                         move || settings.get() || hosts.with(Vec::is_empty),
-                        move || connections::screen(hosts, host, move || settings.set(false)),
+                        environment,
                     ))
                     .child(when(
                         move || {
@@ -281,85 +327,112 @@ pub fn App() -> impl IntoElement {
             }
             if settings.get() {
                 stack.push(2);
+                if provider.get().is_some() {
+                    stack.push(5);
+                }
             }
             stack
         },
         |route: &u8| *route,
         move |route, position| {
-            let page =
-                match route.get_untracked() {
-                    1 => nsh_base::nav_page()
-                        .title(move || title.get())
-                        .child(notices())
-                        .child(content())
-                        .header_right(
-                            native::menu(
-                                "ellipsis",
-                                "その他",
-                                native::choices(&["更新", "ファイル", "環境"]),
-                                move |item| {
-                                    if item == "更新" {
-                                        connection.dispatch(Intent::ShowThreadList);
-                                    } else if item == "ファイル" {
-                                        toolbar_action("files");
-                                    } else {
-                                        settings.set(true);
-                                    }
-                                },
-                            )
-                            .w(px(44.0))
-                            .h(px(44.0)),
-                        ),
-                    2 => nsh_base::nav_page().title("環境").child(notices()).child(
-                        connections::screen(hosts, host, move || settings.set(false)),
-                    ),
-                    3 => nsh_base::nav_page()
-                        .title("ファイル")
-                        .child(notices())
-                        .child(files::screen()),
-                    4 => nsh_base::nav_page()
-                        .title(move || {
-                            files.file.with(|target| {
-                                target
-                                    .as_ref()
-                                    .map(|target| {
-                                        agent_core::presentation::markdown::file_basename(
-                                            &target.path,
-                                        )
-                                        .to_owned()
-                                    })
-                                    .unwrap_or_default()
-                            })
-                        })
-                        .child(notices())
-                        .child(editor::editors()),
-                    _ => nsh_base::nav_page()
-                        .title("Bex")
-                        .header_back_title("戻る")
-                        .header_right_system_item(HeaderSystemItem::Compose)
-                        .header_right(view().on_press(move || toolbar_action("compose")))
-                        .child(notices())
-                        .child(when(
-                            move || hosts.with(Vec::is_empty),
-                            move || connections::screen(hosts, host, || {}),
-                        ))
-                        .child(when(
-                            move || !hosts.with(Vec::is_empty),
-                            move || {
-                                view()
-                                    .flex_1()
-                                    .child(connections::selector(hosts, host))
-                                    .child(when(
-                                        move || searching.get(),
-                                        move || native::search(query).w_full(),
-                                    ))
-                                    .child(list())
-                                    .child(native::toolbar(title, toolbar_action).w_full())
+            let page = match route.get_untracked() {
+                1 => nsh_base::nav_page()
+                    .title(move || title.get())
+                    .child(notices())
+                    .child(content())
+                    .header_right(
+                        native::menu(
+                            "ellipsis",
+                            "その他",
+                            native::choices(&["更新", "ファイル", "環境"]),
+                            move |item| {
+                                if item == "更新" {
+                                    connection.dispatch(Intent::ShowThreadList);
+                                } else if item == "ファイル" {
+                                    toolbar_action("files");
+                                } else {
+                                    settings.set(true);
+                                }
                             },
-                        )),
-                };
+                        )
+                        .w(px(44.0))
+                        .h(px(44.0)),
+                    ),
+                2 => nsh_base::nav_page()
+                    .title("環境")
+                    .child(notices())
+                    .child(environment::overview(hosts, host, provider, close_settings)),
+                5 => nsh_base::nav_page()
+                    .title(move || {
+                        publication.with(|p| {
+                            p.settings
+                                .connection_setup()
+                                .agents
+                                .into_iter()
+                                .find(|a| Some(a.provider) == provider.get())
+                                .map(|a| a.name)
+                                .unwrap_or_else(|| "アカウント".into())
+                        })
+                    })
+                    .header_back_visible(move || !account_locked.get())
+                    .pop_on_back(move || !account_locked.get())
+                    .pop_on_swipe(move || !account_locked.get())
+                    .child(notices())
+                    .child(accounts::screen(
+                        provider.get_untracked().unwrap(),
+                        account_pending,
+                        move || provider.set(None),
+                    )),
+                3 => nsh_base::nav_page()
+                    .title("ファイル")
+                    .child(notices())
+                    .child(files::screen()),
+                4 => nsh_base::nav_page()
+                    .title(move || {
+                        files.file.with(|target| {
+                            target
+                                .as_ref()
+                                .map(|target| {
+                                    agent_core::presentation::markdown::file_basename(&target.path)
+                                        .to_owned()
+                                })
+                                .unwrap_or_default()
+                        })
+                    })
+                    .child(notices())
+                    .child(editor::editors()),
+                _ => nsh_base::nav_page()
+                    .title("Bex")
+                    .header_back_title("戻る")
+                    .header_right_system_item(HeaderSystemItem::Compose)
+                    .header_right(view().on_press(move || toolbar_action("compose")))
+                    .child(notices())
+                    .child(when(
+                        move || hosts.with(Vec::is_empty),
+                        move || connections::screen(hosts, host, || {}),
+                    ))
+                    .child(when(
+                        move || !hosts.with(Vec::is_empty),
+                        move || {
+                            view()
+                                .flex_1()
+                                .child(connections::selector(hosts, host))
+                                .child(when(
+                                    move || searching.get(),
+                                    move || native::search(query).w_full(),
+                                ))
+                                .child(list())
+                                .child(native::toolbar(title, toolbar_action).w_full())
+                        },
+                    )),
+            };
             page.on_dismiss(move || {
-                settings.set(false);
+                if route.get_untracked() == 2 {
+                    close_settings();
+                }
+                if route.get_untracked() == 5 {
+                    provider.set(None);
+                }
                 if route.get_untracked() == 3 {
                     files.close();
                 }

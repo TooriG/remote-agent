@@ -203,6 +203,9 @@ impl Client {
         intent: Intent,
     ) -> async_channel::Receiver<Result<agent_core::store::Outcome, AgentError>> {
         let receipt = self.execute(host, intent);
+        if let Err(reason) = &receipt {
+            self.report(reason);
+        }
         let (send, receive) = async_channel::bounded(1);
         self.spawn(async move {
             let result = match receipt {
@@ -414,6 +417,47 @@ mod tests {
         })
         .await
         .expect("client publication stalled")
+    }
+
+    #[test]
+    fn an_unavailable_request_reports_once_and_a_valid_host_can_recover() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = saved_host(directory.path());
+        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let initial = runtime.block_on(publication(&incoming, ""));
+        let draft = initial.composer.controls.navigation.draft_key.clone();
+        let edit = |text: &str| Intent::SetDraftText {
+            thread_id: draft.clone(),
+            text: text.into(),
+        };
+        let failed = client.request("missing-host", edit("must not be applied"));
+        runtime.block_on(async {
+            let reason = failed.recv().await.unwrap().unwrap_err().to_string();
+            client
+                .request(&host.id, edit("recovered 日本語 👋"))
+                .recv()
+                .await
+                .unwrap()
+                .unwrap();
+            let errors = tokio::time::timeout(Duration::from_secs(10), async {
+                let mut errors = Vec::new();
+                loop {
+                    match incoming.recv().await.unwrap() {
+                        Update::Error(reason) => errors.push(reason),
+                        Update::Presentation { value, .. }
+                            if value.composer.draft.text == "recovered 日本語 👋" =>
+                        {
+                            break errors;
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(errors, [reason]);
+            client.shutdown().await.unwrap();
+        });
     }
 
     #[test]

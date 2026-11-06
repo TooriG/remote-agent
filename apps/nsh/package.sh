@@ -52,7 +52,10 @@ shutil.copy2(executable, binary)
 with (contents / "Info.plist").open("wb") as output:
     plistlib.dump(info, output)
 PY
-if [[ $platform == ios-simulator ]]; then
+if [[ $platform == macos ]]; then
+    xcrun actool apps/mobile/iosApp/Bex/Assets.xcassets --compile "$bundle/Contents/Resources" \
+        --platform macosx --minimum-deployment-target 26.0 > /dev/null
+else
     icon_info="${CARGO_TARGET_DIR:-$PWD/target}/nsh-preview/ios-icon-info.plist"
     xcrun actool apps/mobile/iosApp/Bex/Assets.xcassets --compile "$bundle" \
         --platform iphonesimulator --minimum-deployment-target 26.0 --target-device iphone \

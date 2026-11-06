@@ -12,7 +12,11 @@ use objc2_foundation::{
     NSArray, NSData, NSIndexPath, NSInteger, NSObject, NSObjectProtocol, NSString,
 };
 use objc2_ui_kit::*;
-use std::{cell::RefCell, ptr::NonNull, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    ptr::NonNull,
+    rc::Rc,
+};
 
 fn action(context: &ComponentContext, event: &'static str, value: &str) -> Retained<UIAction> {
     let context = context.clone();
@@ -23,6 +27,87 @@ fn action(context: &ComponentContext, event: &'static str, value: &str) -> Retai
     // UIKit copies the block; its captures own their data and context.
     unsafe {
         UIAction::actionWithHandler(RcBlock::as_ptr(&handler), MainThreadMarker::new().unwrap())
+    }
+}
+
+struct Switch {
+    view: Retained<UISwitch>,
+    value: Rc<Cell<bool>>,
+}
+
+impl Switch {
+    fn new(context: ComponentContext) -> Self {
+        let mtm = MainThreadMarker::new().unwrap();
+        let view = UISwitch::new(mtm);
+        let size = view.intrinsicContentSize();
+        context.set_size(size.width as f32, size.height as f32);
+        let value = Rc::new(Cell::new(false));
+        let current = value.clone();
+        let handler = RcBlock::new(move |action: NonNull<UIAction>| {
+            // UIKit supplies the live action, whose sender is the control being changed.
+            if let Some(sender) = unsafe { action.as_ref() }.sender()
+                && let Some(view) = sender.downcast_ref::<UISwitch>()
+            {
+                let requested = view.isOn();
+                // Core owns the setting, including the unchanged value after a failed operation.
+                view.setOn_animated(current.get(), false);
+                context.emit("change", requested.into());
+            }
+        });
+        let action = unsafe { UIAction::actionWithHandler(RcBlock::as_ptr(&handler), mtm) };
+        view.addAction_forControlEvents(&action, UIControlEvents::ValueChanged);
+        Self { view, value }
+    }
+}
+
+impl NativeComponent for Switch {
+    fn view(&self) -> &UIView {
+        &self.view
+    }
+
+    fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        match name {
+            "value" => {
+                let value = value.and_then(JsonValue::as_bool).unwrap_or(false);
+                self.value.set(value);
+                self.view.setOn_animated(value, false);
+            }
+            "enabled" => self
+                .view
+                .setEnabled(value.and_then(JsonValue::as_bool).unwrap_or(true)),
+            "label" => self.view.setAccessibilityLabel(
+                value
+                    .and_then(JsonValue::as_str)
+                    .map(NSString::from_str)
+                    .as_deref(),
+                self.view.mtm(),
+            ),
+            _ => {}
+        }
+    }
+}
+
+struct Progress(Retained<UIProgressView>);
+
+impl Progress {
+    fn new(context: ComponentContext) -> Self {
+        let view = UIProgressView::new(MainThreadMarker::new().unwrap());
+        context.set_size(0.0, view.intrinsicContentSize().height as f32);
+        Self(view)
+    }
+}
+
+impl NativeComponent for Progress {
+    fn view(&self) -> &UIView {
+        &self.0
+    }
+
+    fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        if name == "value" {
+            self.0.setProgress(
+                (value.and_then(JsonValue::as_f64).unwrap_or_default() / 100.0) as f32,
+            );
+        }
     }
 }
 
@@ -111,6 +196,14 @@ impl NativeComponent for Button {
                     .and_then(JsonValue::as_str)
                     .and_then(|s| UIImage::systemImageNamed(&NSString::from_str(s)));
                 let config = self.view.configuration().unwrap();
+                config.setImage(image.as_deref());
+                self.view.setConfiguration(Some(&config));
+            }
+            "asset" => {
+                let config = self.view.configuration().unwrap();
+                let image = value
+                    .and_then(JsonValue::as_str)
+                    .and_then(|name| UIImage::imageNamed(&NSString::from_str(name)));
                 config.setImage(image.as_deref());
                 self.view.setConfiguration(Some(&config));
             }
@@ -397,5 +490,7 @@ pub fn register(components: &Components) {
     components.register("bex.menu", Rc::new(|cx| Box::new(Button::new(cx))));
     components.register("bex.list", Rc::new(|cx| Box::new(List::new(cx))));
     components.register("bex.search", Rc::new(|cx| Box::new(Search::new(cx))));
+    components.register("bex.switch", Rc::new(|cx| Box::new(Switch::new(cx))));
+    components.register("bex.progress", Rc::new(|cx| Box::new(Progress::new(cx))));
     components.register("bex.toolbar", Rc::new(|cx| Box::new(Toolbar::new(cx))));
 }

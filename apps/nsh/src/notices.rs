@@ -6,7 +6,10 @@ use agent_core::{
 use nsh_core::prelude::*;
 use serde_json::json;
 
-pub(crate) fn notices(workspace: impl Fn() -> bool + 'static) -> impl IntoElement {
+pub(crate) fn notices(
+    workspace: impl Fn() -> bool + 'static,
+    settings: impl Fn() -> bool + 'static,
+) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     each(
         move || {
@@ -17,6 +20,9 @@ pub(crate) fn notices(workspace: impl Fn() -> bool + 'static) -> impl IntoElemen
                 }
                 if workspace() {
                     notices.extend(p.snapshot.error_notices(ErrorScope::Workspace));
+                }
+                if settings() {
+                    notices.extend(p.settings.notices());
                 }
                 notices
             })

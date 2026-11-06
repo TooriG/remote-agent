@@ -135,6 +135,23 @@ pub fn search(query: Signal<String>) -> NativeView {
         })
 }
 
+pub fn switch(
+    label: impl IntoReactive<Value>,
+    value: impl IntoReactive<Value>,
+    change: impl Fn(bool) + 'static,
+) -> NativeView {
+    native("bex.switch")
+        .prop("label", label)
+        .prop("value", value)
+        .on_native_event(move |event: &NativeEvent| {
+            if &*event.name == "change"
+                && let Some(value) = event.data.as_bool()
+            {
+                change(value);
+            }
+        })
+}
+
 pub fn toolbar(title: Memo<String>, action: impl Fn(&str) + 'static) -> NativeView {
     native("bex.toolbar")
         .prop("title", move || json!(title.get()))
@@ -158,4 +175,28 @@ pub fn message(title: impl Into<String>, description: impl Into<String>) {
             .show()
             .await;
     });
+}
+
+pub fn open_link(url: impl Into<String>) {
+    let url = url.into();
+    spawn(async move {
+        if !open_url(url).await {
+            message("リンクを開けませんでした", "開くアプリを確認してください。");
+        }
+    });
+}
+
+pub fn date_time(seconds: i64) -> String {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        use objc2_foundation::{NSDate, NSDateFormatter, NSDateFormatterStyle};
+        NSDateFormatter::localizedStringFromDate_dateStyle_timeStyle(
+            &NSDate::dateWithTimeIntervalSince1970(seconds as f64),
+            NSDateFormatterStyle::MediumStyle,
+            NSDateFormatterStyle::ShortStyle,
+        )
+        .to_string()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    seconds.to_string()
 }

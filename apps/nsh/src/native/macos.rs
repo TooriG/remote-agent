@@ -8,7 +8,10 @@ use objc2::{
 use objc2_app_kit::*;
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -36,6 +39,101 @@ impl ActionTarget {
 }
 pub(super) fn symbol(name: &str) -> Option<Retained<NSImage>> {
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
+}
+
+struct Switch {
+    view: Retained<NSSwitch>,
+    target: Retained<SwitchTarget>,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = (ComponentContext, Cell<NSControlStateValue>)]
+    struct SwitchTarget;
+    unsafe impl NSObjectProtocol for SwitchTarget {}
+    impl SwitchTarget {
+        #[unsafe(method(changed:))]
+        fn changed(&self, sender: &NSSwitch) {
+            let requested = sender.state() == NSControlStateValueOn;
+            // A failed operation may publish the same value, so restore it here too.
+            sender.setState(self.ivars().1.get());
+            self.ivars().0.emit("change", requested.into());
+        }
+    }
+);
+
+impl Switch {
+    fn new(context: ComponentContext) -> Self {
+        let target = SwitchTarget::alloc(MainThreadMarker::new().unwrap())
+            .set_ivars((context.clone(), Cell::new(NSControlStateValueOff)));
+        let target: Retained<SwitchTarget> = unsafe { msg_send![super(target), init] };
+        let view = NSSwitch::new(target.mtm());
+        // This component retains the target for as long as AppKit uses the action.
+        unsafe {
+            view.setTarget(Some(&target));
+            view.setAction(Some(sel!(changed:)));
+        }
+        let size = view.intrinsicContentSize();
+        context.set_size(size.width as f32, size.height as f32);
+        Self { view, target }
+    }
+}
+
+impl NativeComponent for Switch {
+    fn view(&self) -> Retained<NSView> {
+        self.view.clone().into_super().into_super()
+    }
+
+    fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        match name {
+            "value" => {
+                let state = if value.and_then(JsonValue::as_bool).unwrap_or(false) {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                };
+                self.target.ivars().1.set(state);
+                self.view.setState(state);
+            }
+            "enabled" => self
+                .view
+                .setEnabled(value.and_then(JsonValue::as_bool).unwrap_or(true)),
+            "label" => self.view.setAccessibilityLabel(
+                value
+                    .and_then(JsonValue::as_str)
+                    .map(NSString::from_str)
+                    .as_deref(),
+            ),
+            _ => {}
+        }
+    }
+}
+
+struct Progress(Retained<NSProgressIndicator>);
+
+impl Progress {
+    fn new(context: ComponentContext) -> Self {
+        let view = NSProgressIndicator::new(MainThreadMarker::new().unwrap());
+        view.setIndeterminate(false);
+        view.setMinValue(0.0);
+        view.setMaxValue(100.0);
+        context.set_size(0.0, view.intrinsicContentSize().height as f32);
+        Self(view)
+    }
+}
+
+impl NativeComponent for Progress {
+    fn view(&self) -> Retained<NSView> {
+        self.0.clone().into_super()
+    }
+
+    fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        if name == "value" {
+            self.0
+                .setDoubleValue(value.and_then(JsonValue::as_f64).unwrap_or_default());
+        }
+    }
 }
 
 struct Button {
@@ -81,6 +179,12 @@ impl NativeComponent for Button {
                         .as_deref(),
                 );
             }
+            "asset" => self.view.setImage(
+                value
+                    .and_then(JsonValue::as_str)
+                    .and_then(|name| NSImage::imageNamed(&NSString::from_str(name)))
+                    .as_deref(),
+            ),
             "label" => self.view.setAccessibilityLabel(
                 value
                     .and_then(JsonValue::as_str)
@@ -391,6 +495,8 @@ pub fn register(components: &Components) {
     components.register("bex.button", Rc::new(|cx| Box::new(Button::new(cx))));
     components.register("bex.menu", Rc::new(|cx| Box::new(Menu::new(cx))));
     components.register("bex.search", Rc::new(|cx| Box::new(Search::new(cx))));
+    components.register("bex.switch", Rc::new(|cx| Box::new(Switch::new(cx))));
+    components.register("bex.progress", Rc::new(|cx| Box::new(Progress::new(cx))));
     components.register(
         "bex.list",
         Rc::new(|cx| Box::new(super::list_macos::List::new(cx))),

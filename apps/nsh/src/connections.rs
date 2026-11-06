@@ -2,7 +2,10 @@ use crate::{Connection, native, storage::Host};
 use nsh_core::{element::input, prelude::*};
 use serde_json::json;
 
-pub(crate) fn selector(hosts: Signal<Vec<Host>>, selected: Signal<String>) -> impl IntoElement {
+pub(crate) fn selector(
+    hosts: Signal<Vec<Host>>,
+    selected: Signal<String>,
+) -> nsh_core::element::NativeView {
     let connection = use_context::<Connection>().unwrap();
     native::menu(
         "desktopcomputer",
@@ -50,7 +53,6 @@ pub(crate) fn screen(
     let confirmation = signal(None::<agent_protocol::models::Invitation>);
     let error = signal(None::<String>);
     view()
-        .flex_1()
         .p_4()
         .gap_3()
         .text_color(move || nsh_base::theme().foreground)
