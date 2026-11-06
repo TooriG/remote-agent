@@ -14,7 +14,17 @@ final class AppViewModel {
     private(set) var isConnected = false
     private(set) var loadingThreads = false
     private(set) var notices: [ErrorScope: [ErrorNotice]] = [:]
-    var screen: AppScreen = .threads
+    /// NavigationStack writes its own path during interactive transitions. Keep that path as the
+    /// native source of truth rather than reconstructing it and discarding nonempty writes.
+    var navigationPath: [AppScreen] = [] {
+        didSet {
+            if navigationPath.isEmpty, !oldValue.isEmpty {
+                cancelPairing()
+                perform(.showThreadList)
+            }
+        }
+    }
+
     var connections: [String: Task<Void, Never>] = [:]
     var pairingConnection: Task<Void, Never>?
     var isConnecting: Bool {
@@ -165,7 +175,7 @@ final class AppViewModel {
     func openPairing() {
         persist()
         cancelPairing()
-        screen = .profiles
+        navigationPath = [.profiles]
     }
 
     func cancelPairing() {

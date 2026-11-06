@@ -30,15 +30,20 @@ extension AppViewModel {
     }
 
     func showSettings() {
-        screen = .settings
+        navigationPath = [.settings]
     }
 
     func showProfiles() {
-        screen = .profiles; perform(.showThreadList)
+        navigationPath = [.profiles]; perform(.showThreadList)
     }
 
     func showThreadList() {
-        screen = .threads; perform(.showThreadList)
+        if navigationPath.isEmpty {
+            // The initial Host restore can select a thread while the native path is already at its root.
+            perform(.showThreadList)
+        } else {
+            navigationPath = []
+        }
     }
 
     func refreshTaskList() {
@@ -68,7 +73,7 @@ extension AppViewModel {
     }
 
     func openNewThread(cwd: String) {
-        perform(.newChat(cwd: cwd)); screen = .thread
+        perform(.newChat(cwd: cwd)); navigationPath = [.thread]
     }
 
     func openNewThread(on profileId: String) {
@@ -105,7 +110,7 @@ extension AppViewModel {
         notice = nil
         perform(.readThread(ReadThread(threadId: id, open: true)))
         if snapshot.navigation().threadId == id {
-            screen = .thread
+            navigationPath = [.thread]
         }
     }
 

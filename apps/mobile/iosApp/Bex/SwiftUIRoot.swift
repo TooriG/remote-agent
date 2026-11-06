@@ -5,15 +5,8 @@ struct SwiftUIRoot: View {
     let model: AppViewModel
 
     var body: some View {
-        NavigationStack(path: Binding<[AppScreen]>(
-            get: { model.screen == .threads ? [] : [model.screen] },
-            set: { path in
-                if path.isEmpty {
-                    model.cancelPairing()
-                    model.showThreadList()
-                }
-            }
-        )) {
+        @Bindable var model = model
+        NavigationStack(path: $model.navigationPath) {
             ThreadsScreen(model: model)
                 .navigationDestination(for: AppScreen.self) { screen in
                     switch screen {
@@ -27,7 +20,6 @@ struct SwiftUIRoot: View {
                         }
                     case .settings: SettingsScreen(model: model)
                     case .profiles: ConnectionsScreen(model: model)
-                    default: EmptyView()
                     }
                 }
                 .navigationBarTitleDisplayMode(.inline)
@@ -37,8 +29,8 @@ struct SwiftUIRoot: View {
                          reconnect: model.isConnected ? nil : { model.connect() }, reconnecting: model.isConnecting)
                 .padding(.horizontal)
         }
-        .onChange(of: model.screen) { screen in
-            if screen != .thread {
+        .onChange(of: model.navigationPath) { path in
+            if path.last != .thread {
                 model.chat?.sideChatRequest = nil
             }
         }
