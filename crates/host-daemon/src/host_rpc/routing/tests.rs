@@ -213,6 +213,7 @@ proptest::proptest! {
             for child in 0..descendants {
                 let id = SessionRef::new(ProviderKind::Codex, format!("child-{root}-{child}")).unwrap();
                 router.session_change(&id, SessionChange::Status { status: agent_protocol::models::SessionStatus::Running });
+                threads.push(Thread { id: Some(id), parent_id: Some(threads[0].id.clone().unwrap()), status: agent_protocol::models::SessionStatus::Running, ..Default::default() });
             }
         }
         if reverse { threads.reverse(); }

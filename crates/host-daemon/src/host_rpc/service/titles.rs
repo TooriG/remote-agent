@@ -190,6 +190,7 @@ impl HostRpcService {
         query: crate::projects::titles::TitleQuery<'_>,
     ) -> Result<agent_protocol::models::ThreadList, Failure> {
         let revision = self.inner.router.list_revision();
+        let task_revision = self.inner.router.task_activity_revision();
         let agents = self.inner.providers.all();
         let first_page_size = title_first_page_size(query);
         let started = std::time::Instant::now();
@@ -370,6 +371,9 @@ impl HostRpcService {
             ));
         }
         let mut page = titles.finish();
+        self.inner
+            .router
+            .task_activity(page.data.clone(), task_revision);
         page.revision = revision;
         for thread in &mut page.data {
             thread.list_revision = revision;

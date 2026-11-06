@@ -718,6 +718,36 @@ impl Agent for Codex {
             .expect("list access is open");
         let (source_kinds, ancestor_thread_id): (&'static [&'static str], Option<&str>) =
             match scope {
+                SessionListScope::Loaded => {
+                    let page: Page<String> = self
+                        .request(
+                            "thread/loaded/list",
+                            &serde_json::json!({"limit":limit,"cursor":cursor}),
+                        )
+                        .await?;
+                    use futures_util::{StreamExt, TryStreamExt};
+                    let data =
+                        futures_util::stream::iter(page.data.into_iter().map(|id| async move {
+                            let mut response = self
+                                .thread_response(
+                                    "thread/read",
+                                    &serde_json::json!({"threadId":id,"includeTurns":false}),
+                                )
+                                .await?;
+                            response.thread.turns = None;
+                            Ok::<_, Failure>(SessionSummary {
+                                thread: response.thread,
+                                branch: None,
+                            })
+                        }))
+                        .buffer_unordered(4)
+                        .try_collect()
+                        .await?;
+                    return Ok(SessionPage {
+                        data,
+                        next_cursor: page.next_cursor,
+                    });
+                }
                 SessionListScope::Roots => {
                     (&["cli", "vscode", "exec", "appServer", "unknown"], None)
                 }

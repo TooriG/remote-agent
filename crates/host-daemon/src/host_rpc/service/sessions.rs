@@ -443,10 +443,8 @@ impl HostRpcService {
         thread: Thread,
         projects: &[agent_protocol::models::Project],
     ) {
-        if thread.parent_id.is_none() {
-            // Admit new Host conversations without replacing newer provider events.
-            self.inner.router.task_activity(vec![thread.clone()], 0);
-        }
+        // Admit new Host conversations without replacing newer provider events.
+        self.inner.router.task_activity(vec![thread.clone()], 0);
         let project = thread
             .project_id
             .as_ref()
