@@ -23,6 +23,7 @@ mod activity;
 mod connections;
 mod read_state;
 mod requests;
+mod settlement;
 #[cfg(test)]
 mod tests;
 
@@ -104,6 +105,7 @@ struct State {
     apns: Option<Arc<crate::apns::Apns>>,
     tasks: HashMap<SessionRef, Task>,
     reads: read_state::ReadState,
+    database: Arc<super::database::Database>,
     task_revision: u64,
     list_revision: u64,
     next_session_id: SessionId,
@@ -148,9 +150,6 @@ impl SessionRouter {
             } => self.resolve_native_request(instance, &native_id),
             AgentChange::SourceClosed(instance) => self.close_request_source(instance),
             AgentChange::Renamed { session, name } => {
-                if let Some(transcripts) = lock_state(&self.state).transcripts.clone() {
-                    record_failure(transcripts.rename(&session, name.as_deref()));
-                }
                 self.broadcast(Notification::SessionRenamed {
                     session,
                     name,
@@ -177,7 +176,20 @@ impl SessionRouter {
         self,
         transcripts: Arc<super::transcripts::Transcripts>,
     ) -> Self {
-        lock_state(&self.state).transcripts = Some(transcripts);
+        let mut state = lock_state(&self.state);
+        state.database = transcripts.database.clone();
+        state.reads = read_state::ReadState::new(state.database.clone());
+        if let Ok(revision) = state.database.with(|connection| {
+            connection
+                .query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map_err(super::database::failure)
+        }) {
+            state.list_revision = revision as u64;
+        }
+        state.transcripts = Some(transcripts);
+        drop(state);
         self
     }
     /// Running turns end with the Host; record what they produced.
@@ -204,11 +216,20 @@ impl SessionRouter {
         }
     }
     fn actor(&self, target: &SessionRef) -> Arc<Mutex<SessionActor>> {
-        lock_state(&self.state)
-            .executions
-            .entry(target.clone())
-            .or_default()
-            .clone()
+        let mut state = lock_state(&self.state);
+        if let Some(actor) = state.executions.get(target) {
+            return actor.clone();
+        }
+        let mut actor = SessionActor::default();
+        match state.database.pending_submissions(target) {
+            Ok(submissions) => actor.timeline.submissions = submissions,
+            Err(error) => {
+                tracing::error!(target: "agent", operation = "host.submissions.read", message = %error)
+            }
+        }
+        let actor = Arc::new(Mutex::new(actor));
+        state.executions.insert(target.clone(), actor.clone());
+        actor
     }
     fn existing(&self, target: &SessionRef) -> Option<Arc<Mutex<SessionActor>>> {
         lock_state(&self.state).executions.get(target).cloned()
@@ -245,21 +266,25 @@ impl SessionRouter {
         &self,
         target: &SessionRef,
         id: &str,
-    ) -> Option<agent_protocol::operations::SubmissionReceipt> {
-        let actor = self.existing(target)?;
-        let receipt = match lock_state(&actor).timeline.submissions.get(id) {
+    ) -> Result<Option<agent_protocol::operations::SubmissionReceipt>, Failure> {
+        let delivery = lock_state(&self.state)
+            .database
+            .submission_delivery(target, id)
+            .map_err(|error| Failure::new("submission_storage_failed", error))?;
+        Ok(match delivery {
             Some(agent_protocol::session::SubmissionDelivery::Accepted { turn_id }) => {
-                Some(agent_protocol::operations::SubmissionReceipt {
-                    turn_id: turn_id.clone(),
-                })
+                Some(agent_protocol::operations::SubmissionReceipt { turn_id })
             }
             _ => None,
-        };
-        self.prune(target, &actor);
-        receipt
+        })
     }
 
-    pub(super) fn begin_submission(&self, target: &SessionRef, id: &str) -> Result<(), Failure> {
+    pub(super) fn begin_submission(
+        &self,
+        target: &SessionRef,
+        id: &str,
+        input: Option<&agent_protocol::operations::Submission>,
+    ) -> Result<(), Failure> {
         if id.is_empty() || id.len() > 256 {
             return Err(Failure::new(
                 "invalid_params",
@@ -288,6 +313,20 @@ impl SessionRouter {
             ));
         }
         let mut failed = Vec::new();
+        let mut state = lock_state(&self.state);
+        let change = state
+            .database
+            .admit_submission(target, id, input)
+            .map_err(|error| Failure::unknown("submission_admission_failed", error))?;
+        if let Some(change) = change {
+            state.list_revision = state.list_revision.max(change.revision);
+            let frame = protocol::encode(Notification::SessionSettlement { change })
+                .expect("settlement encodes");
+            failed.extend(state.sessions.iter().filter_map(|(id, output)| {
+                output.try_send(*id, frame.clone()).is_err().then_some(*id)
+            }));
+        }
+        drop(state);
         self.change_locked(
             &mut owned,
             target,
@@ -301,14 +340,48 @@ impl SessionRouter {
         self.close_failed(failed);
         Ok(())
     }
+    pub(super) fn confirm_submission(
+        &self,
+        target: &SessionRef,
+        id: &str,
+        turn: &agent_protocol::models::Turn,
+    ) -> Result<(), Failure> {
+        lock_state(&self.state)
+            .database
+            .confirm_submission(target, id, &turn.id)
+            .map_err(|error| Failure::new("submission_storage_failed", error))?;
+        self.session_change(
+            target,
+            SessionChange::Submission {
+                id: id.into(),
+                delivery: agent_protocol::session::SubmissionDelivery::Accepted {
+                    turn_id: Some(turn.id.clone()),
+                },
+            },
+        );
+        // The echoed user item retires delivery evidence on every subscriber,
+        // including when completion happened while this Host was offline.
+        self.session_change(
+            target,
+            SessionChange::Turn {
+                turn: turn.clone(),
+                completed: turn.status != agent_protocol::execution::TurnStatus::Running,
+            },
+        );
+        Ok(())
+    }
     pub(super) fn finish_submission(
         &self,
         target: &SessionRef,
         id: &str,
         delivery: agent_protocol::session::SubmissionDelivery,
-    ) {
+    ) -> Result<(), Failure> {
+        lock_state(&self.state)
+            .database
+            .finish_submission(target, id, &delivery)
+            .map_err(|error| Failure::unknown("submission_storage_failed", error))?;
         let Some(actor) = self.existing(target) else {
-            return;
+            return Ok(());
         };
         let mut owned = lock_state(&actor);
         let mut failed = Vec::new();
@@ -326,6 +399,7 @@ impl SessionRouter {
         drop(owned);
         self.close_failed(failed);
         self.prune(target, &actor);
+        Ok(())
     }
     pub(crate) fn item(
         &self,
@@ -444,6 +518,11 @@ impl SessionRouter {
         // only the current metadata; its turns and paging are unchanged.
         let unchanged = known && actor.timeline.turns.is_none();
         response.thread = actor.overlay(response.thread);
+        let settlement = self
+            .settlement_state(&read.target)
+            .map_err(|error| error.to_string())?;
+        response.thread.settled = settlement.settled;
+        response.thread.list_revision = settlement.revision;
         if unchanged {
             let thread = &mut response.thread;
             thread.turns = None;
@@ -682,6 +761,28 @@ impl SessionRouter {
             actor.release();
             return;
         }
+        if let (Some(transcripts), Some(turn)) = (&transcripts, finished) {
+            let removed_item = match change {
+                SessionChange::RemoveItem { item_id, .. } => Some(item_id),
+                _ => None,
+            };
+            record_failure(transcripts.record(target, &turn, removed_item));
+        }
+        if let (Some(transcripts), true, Some(turn_id)) = (&transcripts, late, change.turn_id()) {
+            record_failure(
+                transcripts.update_turn(target, turn_id, change.item_id(), |turn| {
+                    let (timeline, result) =
+                        change.apply_timeline(agent_protocol::session::Timeline {
+                            turns: Some(vec![Arc::new(turn)]),
+                            ..Default::default()
+                        });
+                    result.ok()?;
+                    timeline.turns?.pop().map(Arc::unwrap_or_clone)
+                }),
+            );
+        }
+        // Provider observations stay live through storage failures. Commands
+        // commit before changing state; an already observed execution cannot be undone.
         let frame = protocol::encode(change).expect("change encodes");
         for (connection, output) in actor.subscriptions.values() {
             if output.try_send(*connection, frame.clone()).is_err() {
@@ -708,26 +809,6 @@ impl SessionRouter {
             change,
         ));
         drop(state);
-        if let (Some(transcripts), Some(turn)) = (&transcripts, finished) {
-            let removed_item = match change {
-                SessionChange::RemoveItem { item_id, .. } => Some(item_id),
-                _ => None,
-            };
-            record_failure(transcripts.record(target, &turn, removed_item));
-        }
-        if let (Some(transcripts), true, Some(turn_id)) = (&transcripts, late, change.turn_id()) {
-            record_failure(
-                transcripts.update_turn(target, turn_id, change.item_id(), |turn| {
-                    let (timeline, result) =
-                        change.apply_timeline(agent_protocol::session::Timeline {
-                            turns: Some(vec![Arc::new(turn)]),
-                            ..Default::default()
-                        });
-                    result.ok()?;
-                    timeline.turns?.pop().map(Arc::unwrap_or_clone)
-                }),
-            );
-        }
         actor.release();
     }
 }

@@ -23,6 +23,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -65,6 +67,8 @@ import dev.remoteagent.core.ListSessions
 import dev.remoteagent.core.ProjectIconImages
 import dev.remoteagent.core.ProjectSummary
 import dev.remoteagent.core.ReadThread
+import dev.remoteagent.core.SetSessionSettled
+import dev.remoteagent.core.SettledThreads
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.ThreadSummary
@@ -221,6 +225,9 @@ private fun LazyListScope.recentChats(
                 LoadingLabel("もっと見る", list.loadingChats)
             }
         }
+    list?.settled.orEmpty().forEach { shelf ->
+        settledSection(shelf, { perform(it, shelf.hostId) }, language)
+    }
     if (list != null && threads.isEmpty())
         item {
             Text(
@@ -241,6 +248,7 @@ private fun LoadingLabel(label: String, loading: Boolean) {
 
 @Composable
 private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit, projectName: String? = null) {
+    var menuOpen by remember { mutableStateOf(false) }
     val language = LocalUiLanguage.current
     Row(
         Modifier.fillMaxWidth()
@@ -277,6 +285,19 @@ private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit
                 Modifier.padding(start = 8.dp).size(18.dp),
                 tint = if (unmerged) Color(UNMERGED_COLOR_ARGB) else MaterialTheme.colorScheme.tertiary,
             )
+        }
+        Box {
+            TextButton(onClick = { menuOpen = true }) { Text("⋯") }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text(language.text(if (thread.settled) "Active に戻す" else "片づける")) },
+                    enabled = thread.settled || thread.canSettle,
+                    onClick = {
+                        menuOpen = false
+                        openConversation(Intent.SetSessionSettled(SetSessionSettled(thread.id, !thread.settled)))
+                    },
+                )
+            }
         }
         Icon(
             painterResource(R.drawable.ic_chevron),
@@ -361,6 +382,7 @@ private fun LazyListScope.projectSection(
             }
         }
         items(project.threads, key = { "project:${project.listKey}:${it.id.listKey}" }) { SummaryRow(it, dispatch) }
+        project.settled?.let { settledSection(it, dispatch, language) }
         if (project.hasMore)
             item(key = "more:${project.listKey}") {
                 TextButton(
@@ -452,6 +474,36 @@ private fun ProjectIcon(icon: ProjectIconImages?, monogram: String, colorRgb: UI
     } else {
         Box(modifier.background(color.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
             Text(monogram, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private fun LazyListScope.settledSection(
+    shelf: SettledThreads,
+    perform: (Intent) -> Unit,
+    language: dev.remoteagent.core.UiLanguage,
+) {
+    val key = "settled:${shelf.hostId}:${shelf.projectId}"
+    item(key = key) {
+        TextButton(onClick = { perform(Intent.SetSettledExpanded(shelf.projectId, !shelf.expanded)) }) {
+            Text(language.text("片づけ済み"))
+            Text(if (shelf.expanded) "⌄" else "›")
+        }
+    }
+    if (!shelf.expanded) return
+    items(shelf.threads, key = { "$key:${it.id.listKey}" }) { SummaryRow(it, perform) }
+    if (shelf.loading) item(key = "$key:loading") { CircularProgressIndicator(Modifier.size(18.dp)) }
+    shelf.error?.let { error ->
+        item(key = "$key:error") {
+            ErrorTextView(error, color = androidx.compose.ui.graphics.Color.Unspecified)
+            TextButton(onClick = { perform(Intent.SetSettledExpanded(shelf.projectId, true)) }) {
+                Text(language.text("再試行"))
+            }
+        }
+    }
+    if (shelf.hasMore) item(key = "$key:more") {
+        TextButton(onClick = { perform(Intent.ExpandSettled(shelf.projectId)) }, enabled = !shelf.loading) {
+            Text(language.text("もっと見る"))
         }
     }
 }

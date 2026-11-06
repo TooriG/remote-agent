@@ -267,23 +267,20 @@ fn route(
 // Native fixture item IDs locate a backing session, while UI assertions must
 // use its persisted public address. Unmanaged fixture sessions own their ID.
 fn session_identity(root: &Path, native: &str) -> Result<serde_json::Value> {
-    let rows: Vec<serde_json::Value> = match fs::read(root.join("bex-conversations.json")) {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(error.into()),
-    };
-    let native = json!({"provider":"codex", "id":native});
-    Ok(rows
-        .iter()
-        .find(|row| {
-            row["bindings"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|binding| binding["session"] == native)
-        })
-        .map(|row| row["id"].clone())
-        .unwrap_or(native))
+    use rusqlite::OptionalExtension;
+    let fallback = json!({"provider":"codex", "id":native});
+    let path = root.join("bex-state.sqlite");
+    if !path.exists() {
+        return Ok(fallback);
+    }
+    let database =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let public = database.query_row(
+        "SELECT thread_provider, thread_id FROM provider_threads WHERE provider = 'codex' AND id = ?1",
+        [native],
+        |row| Ok(json!({"provider":row.get::<_, String>(0)?, "id":row.get::<_, String>(1)?})),
+    ).optional()?;
+    Ok(public.unwrap_or(fallback))
 }
 
 fn merge_worktree(root: &Path, path: &str) -> Result<()> {

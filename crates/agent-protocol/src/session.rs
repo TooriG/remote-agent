@@ -8,6 +8,9 @@ use std::{
     sync::Arc,
 };
 
+mod settlement;
+pub use settlement::settlement_unavailable_reason;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderKind {

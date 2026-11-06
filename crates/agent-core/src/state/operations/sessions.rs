@@ -340,6 +340,7 @@ impl Operation for ReadThread {
         Ok(())
     }
     fn apply(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {
+        snapshot.reconcile_settlements(std::slice::from_mut(&mut output.response.thread));
         held_window(snapshot, &self.thread_id, &mut output);
         if output
             .response

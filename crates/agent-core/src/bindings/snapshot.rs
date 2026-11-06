@@ -362,7 +362,7 @@ mod tests {
         );
         assert!(!failed.list_source().equivalent(&loading.list_source()));
         let mut loaded = failed.clone();
-        ListProjectSessions { project_id: "old".into(), limit: 5, search_term: String::new() }.apply(&mut loaded, serde_json::from_value(serde_json::json!({
+        ListProjectSessions { settled: false, project_id: "old".into(), limit: 5, search_term: String::new() }.apply(&mut loaded, serde_json::from_value(serde_json::json!({
             "data":[{"id":{"provider":"codex","id":"old-task"},"name":"Old task","projectId":"old","status":"running"}], "projects":[], "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
         })).unwrap());
         loaded.operations.remove(&key);

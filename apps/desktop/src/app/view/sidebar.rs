@@ -61,6 +61,10 @@ pub(super) enum SidebarRow {
     Chat {
         item: Box<SidebarMenuItem>,
         drag: SidebarDrag,
+        settled: bool,
+        can_settle: bool,
+        owner: WeakEntity<SidebarView>,
+        host: String,
     },
     Heading(String),
     Error(agent_core::presentation::error::ErrorText),
@@ -133,7 +137,23 @@ impl SidebarRow {
                 .collapsed(collapsed)
                 .render(id, window, cx)
                 .into_any_element(),
-            Self::Chat { item, drag } => {
+            Self::Chat {
+                item,
+                drag,
+                settled,
+                can_settle,
+                owner,
+                host,
+            } => {
+                let session = match &drag.kind {
+                    SidebarDragKind::Chat(id) => id.clone(),
+                    _ => unreachable!(),
+                };
+                let label = language.text(if settled {
+                    "Active に戻す"
+                } else {
+                    "片づける"
+                });
                 let selector = format!(
                     "drag-chat-{}",
                     match &drag.kind {
@@ -141,7 +161,7 @@ impl SidebarRow {
                         _ => "",
                     }
                 );
-                div()
+                h_flex()
                     .debug_selector(move || selector.clone())
                     .id(format!("drag-{id}"))
                     .w_full()
@@ -150,7 +170,38 @@ impl SidebarRow {
                         cx.stop_propagation();
                         cx.new(|_| drag.clone())
                     })
-                    .child(item.collapsed(collapsed).render(id, window, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(item.collapsed(collapsed).render(id, window, cx)),
+                    )
+                    .when(!collapsed, |row| {
+                        row.child(
+                            Button::new("settlement")
+                                .xsmall()
+                                .ghost()
+                                .label(if settled { "↩" } else { "✓" })
+                                .tooltip(label)
+                                .accessibility_label(label)
+                                .disabled(!can_settle && !settled)
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    let _ = owner.update(cx, |desktop, cx| {
+                                        desktop.dispatch_list(
+                                            Some(host.clone()),
+                                            Intent::SetSessionSettled(
+                                                agent_protocol::operations::SetSessionSettled {
+                                                    thread_id: session.clone(),
+                                                    settled: !settled,
+                                                },
+                                            ),
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        )
+                    })
                     .into_any_element()
             }
             Self::Project {
@@ -596,6 +647,7 @@ impl SidebarView {
                         &model.storage_scope,
                         thread,
                         Self::thread_button(thread, selected, cx).icon(Icon::empty().size_4()),
+                        cx,
                     ));
                 }
                 if project.loading && !project.has_more {
@@ -638,6 +690,13 @@ impl SidebarView {
                     }
                     projects.push(more.disable(project.loading).into());
                 }
+                projects.extend(Self::settled_sidebar_rows(
+                    project.settled.as_ref(),
+                    &model.storage_scope,
+                    model.selected.as_ref(),
+                    &model.host,
+                    cx,
+                ));
             }
         }
         if list.as_ref().is_some_and(|page| page.has_more_projects) {
@@ -706,6 +765,7 @@ impl SidebarView {
                             &model.storage_scope,
                             thread,
                             Self::thread_button(thread, selected, cx),
+                            cx,
                         )
                     })
                     .collect()
@@ -727,6 +787,17 @@ impl SidebarView {
                 )
                 .into(),
             );
+        }
+        if let Some(list) = list {
+            for shelf in &list.settled {
+                chats.extend(Self::settled_sidebar_rows(
+                    Some(shelf),
+                    &model.storage_scope,
+                    model.selected.as_ref(),
+                    &model.host,
+                    cx,
+                ));
+            }
         }
         Sidebar::new("desktop-sidebar")
             .header(
@@ -885,12 +956,105 @@ impl SidebarView {
         )
     }
 
+    fn settled_sidebar_rows(
+        shelf: Option<&agent_core::presentation::list::SettledThreads>,
+        scope: &str,
+        selected: Option<&agent_protocol::session::SessionRef>,
+        selected_host: &str,
+        cx: &Context<Self>,
+    ) -> Vec<SidebarRow> {
+        let Some(shelf) = shelf else {
+            return Vec::new();
+        };
+        let language = crate::localization::language(cx);
+        let project_id = shelf.project_id.clone();
+        let expanded = shelf.expanded;
+        let host = shelf.host_id.clone();
+        let mut rows = vec![
+            SidebarMenuItem::new(language.text("片づけ済み"))
+                .icon(if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    s.dispatch_list(
+                        Some(host.clone()),
+                        Intent::SetSettledExpanded {
+                            project_id: project_id.clone(),
+                            expanded: !expanded,
+                        },
+                        cx,
+                    );
+                }))
+                .into(),
+        ];
+        if !expanded {
+            return rows;
+        }
+        for thread in &shelf.threads {
+            rows.push(Self::draggable_chat(
+                scope,
+                thread,
+                Self::thread_button(
+                    thread,
+                    selected == Some(&thread.id)
+                        && (thread.host_id.is_empty() || thread.host_id == selected_host),
+                    cx,
+                ),
+                cx,
+            ));
+        }
+        if shelf.loading {
+            rows.push(SidebarMenuItem::new(language.text("読み込み中…")).into());
+        }
+        if let Some(error) = &shelf.error {
+            rows.push(SidebarRow::Error(error.clone()));
+        }
+        if shelf.has_more || shelf.error.is_some() {
+            let project_id = shelf.project_id.clone();
+            let retry = shelf.error.is_some();
+            let host = shelf.host_id.clone();
+            rows.push(
+                SidebarMenuItem::new(language.text(if retry {
+                    "再試行"
+                } else {
+                    "もっと見る"
+                }))
+                .disable(shelf.loading)
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    s.dispatch_list(
+                        Some(host.clone()),
+                        if retry {
+                            Intent::SetSettledExpanded {
+                                project_id: project_id.clone(),
+                                expanded: true,
+                            }
+                        } else {
+                            Intent::ExpandSettled {
+                                project_id: project_id.clone(),
+                            }
+                        },
+                        cx,
+                    );
+                }))
+                .into(),
+            );
+        }
+        rows
+    }
+
     fn draggable_chat(
         scope: &str,
         thread: &agent_core::presentation::list::ThreadSummary,
         item: SidebarMenuItem,
+        cx: &Context<Self>,
     ) -> SidebarRow {
         SidebarRow::Chat {
+            settled: thread.settled,
+            can_settle: thread.can_settle,
+            owner: cx.weak_entity(),
+            host: thread.host_id.clone(),
             item: Box::new(item),
             drag: SidebarDrag {
                 scope: source_scope(&thread.host_id, scope),

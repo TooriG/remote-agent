@@ -91,6 +91,9 @@ fn project_membership<'de, D: serde::Deserializer<'de>>(
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
+    /// Host-owned organization, independent of execution and read receipts.
+    #[serde(default)]
+    pub settled: bool,
     /// Host list revision; newer notices survive an older in-flight read.
     #[serde(default)]
     pub list_revision: u64,
@@ -394,6 +397,8 @@ pub enum ListPart {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ListQuery {
+    /// Search includes both sections; otherwise limits apply to this section only.
+    pub settled: bool,
     pub part: Option<ListPart>,
     pub limit: u32,
     pub project_limit: u32,
@@ -405,6 +410,7 @@ pub struct ListQuery {
 impl Default for ListQuery {
     fn default() -> Self {
         Self {
+            settled: false,
             limit: 5,
             project_limit: 5,
             search_term: String::new(),

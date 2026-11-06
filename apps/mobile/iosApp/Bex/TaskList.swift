@@ -56,7 +56,7 @@ struct ThreadsScreen: View {
                                 }.taskListRowStyle()
                             }
                             ForEach(project.threads, id: \.listKey) { thread in
-                                ThreadListRow(thread: thread) { model.openThread(thread.id, on: thread.hostId) }
+                                ThreadListRow(thread: thread, model: model)
                             }
                             if project.hasMore {
                                 Button {
@@ -72,6 +72,9 @@ struct ThreadsScreen: View {
                                 .disabled(project.loading)
                                 .accessibilityIdentifier("tasks.project.\(project.id).more")
                                 .taskListRowStyle()
+                            }
+                            if let shelf = project.settled {
+                                SettledThreadRows(shelf: shelf, model: model)
                             }
                         } label: {
                             HStack(spacing: 16) {
@@ -142,7 +145,7 @@ struct ThreadsScreen: View {
                             .taskListRowStyle()
                     }
                     ForEach(chats, id: \.listKey) { thread in
-                        ThreadListRow(thread: thread) { model.openThread(thread.id, on: thread.hostId) }
+                        ThreadListRow(thread: thread, model: model)
                     }
                     if model.list?.hasMore == true {
                         Button {
@@ -158,6 +161,9 @@ struct ThreadsScreen: View {
                         .disabled(model.loadingThreads || model.list?.loadingChats == true)
                         .accessibilityIdentifier("tasks.chats.more")
                         .taskListRowStyle()
+                    }
+                    ForEach(model.list?.settled ?? [], id: \.hostId) { shelf in
+                        SettledThreadRows(shelf: shelf, model: model)
                     }
                 } header: {
                     Text("チャット")
@@ -292,14 +298,14 @@ private extension View {
 
 private struct ThreadListRow: View {
     let thread: ThreadSummary
-    let open: () -> Void
+    let model: AppViewModel
 
     private var accessibilityID: String {
         "\(thread.id.provider.bexKey):\(thread.id.id)"
     }
 
     var body: some View {
-        Button(action: open) {
+        Button { model.openThread(thread.id, on: thread.hostId) } label: {
             HStack(spacing: 10) {
                 Text(thread.title).font(.title3).foregroundColor(.primary).lineLimit(1)
                 Spacer()
@@ -330,6 +336,14 @@ private struct ThreadListRow: View {
             }
             .contentShape(Rectangle())
         }
+        .contextMenu {
+            Button(LocalizedStringKey(thread.settled ? "Active に戻す" : "片づける")) {
+                model.perform(
+                    .setSessionSettled(SetSessionSettled(threadId: thread.id, settled: !thread.settled)),
+                    on: thread.hostId
+                )
+            }.disabled(!thread.settled && !thread.canSettle)
+        }
         .accessibilityIdentifier("tasks.row.\(accessibilityID)")
         .accessibilityValue(LocalizedStringKey(
             thread.waiting ? "確認待ち" : thread.active ? "実行中" : thread.unread ? "完了・未確認" : ""
@@ -354,5 +368,40 @@ private struct RunningIndicator: View {
                     generation += 1
                 }
             }
+    }
+}
+
+private struct SettledThreadRows: View {
+    let shelf: SettledThreads
+    let model: AppViewModel
+
+    var body: some View {
+        Button {
+            model.perform(.setSettledExpanded(projectId: shelf.projectId, expanded: !shelf.expanded), on: shelf.hostId)
+        } label: {
+            Label("片づけ済み", systemImage: shelf.expanded ? "chevron.down" : "chevron.right")
+        }
+        .taskListRowStyle()
+        if shelf.expanded {
+            ForEach(shelf.threads, id: \.listKey) { thread in
+                ThreadListRow(thread: thread, model: model)
+            }
+            if shelf.loading {
+                ProgressView().taskListRowStyle()
+            }
+            if let error = shelf.error {
+                AppNotice(text: error).taskListRowStyle()
+                Button("再試行") {
+                    model.perform(.setSettledExpanded(projectId: shelf.projectId, expanded: true), on: shelf.hostId)
+                }.taskListRowStyle()
+            }
+            if shelf.hasMore {
+                Button("もっと見る") {
+                    model.perform(.expandSettled(projectId: shelf.projectId), on: shelf.hostId)
+                }
+                .disabled(shelf.loading)
+                .taskListRowStyle()
+            }
+        }
     }
 }

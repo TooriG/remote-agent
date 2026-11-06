@@ -206,25 +206,58 @@ impl SessionRouter {
         lock_state(&self.state).list_revision
     }
     pub(crate) fn broadcast(&self, mut notification: Notification) {
+        let mut state = lock_state(&self.state);
         if matches!(
             notification,
             Notification::SessionUpdated { .. } | Notification::SessionRenamed { .. }
         ) {
-            let mut state = lock_state(&self.state);
-            state.list_revision += 1;
-            match &mut notification {
-                Notification::SessionUpdated { thread, project } => {
-                    thread.list_revision = state.list_revision;
-                    if let Some(project) = project {
-                        project.list_revision = state.list_revision;
-                    }
-                }
-                Notification::SessionRenamed { revision, .. } => *revision = state.list_revision,
+            let result = match &mut notification {
+                Notification::SessionUpdated { thread, project } => thread
+                    .id
+                    .as_ref()
+                    .ok_or_else(|| "Thread identity is required".to_owned())
+                    .and_then(|session| {
+                        state.database.update_metadata(
+                            session,
+                            thread.cwd.as_deref(),
+                            thread.name.as_deref(),
+                            thread.preview.as_deref(),
+                        )
+                    })
+                    .map(|(revision, settled)| {
+                        thread.list_revision = revision;
+                        thread.settled = settled;
+                        if let Some(project) = project {
+                            project.list_revision = revision;
+                        }
+                        revision
+                    }),
+                Notification::SessionRenamed {
+                    session,
+                    name,
+                    revision,
+                } => state
+                    .database
+                    .rename(session, name.as_deref())
+                    .inspect(|sequence| *revision = *sequence),
                 _ => unreachable!(),
-            }
+            };
+            let revision = match result {
+                Ok(revision) => revision,
+                Err(message) => {
+                    tracing::error!(target: "agent", operation = "host.metadata.write", message);
+                    return;
+                }
+            };
+            state.list_revision = state.list_revision.max(revision);
         }
-        let failed =
-            self.broadcast_frames(protocol::encode(notification).expect("notification encodes"));
+        let frame = protocol::encode(notification).expect("notification encodes");
+        let failed = state
+            .sessions
+            .iter()
+            .filter_map(|(id, output)| output.try_send(*id, frame.clone()).is_err().then_some(*id))
+            .collect();
+        drop(state);
         self.close_failed(failed);
     }
 }

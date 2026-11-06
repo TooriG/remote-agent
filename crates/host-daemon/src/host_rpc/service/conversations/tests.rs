@@ -1105,6 +1105,7 @@ async fn unavailable_conversations_keep_project_membership_and_page_warnings() {
         &host,
         client.id(),
         Call::ListProjectSessions(op::ListProjectSessions {
+            settled: false,
             project_id: project_id.clone(),
             limit: 20,
             search_term: String::new(),
@@ -2047,11 +2048,14 @@ async fn replayed_handoff_receipts_do_not_block_later_provider_switches() {
     assert_eq!(a.inputs.lock().unwrap().len(), 1);
     let opened = history(&host, client.id(), &root).await;
     assert!(opened.thread.active_turn_id().is_none());
-    assert!(opened.thread.submissions.contains_key("a1"));
+    assert!(
+        !opened.thread.submissions.contains_key("a1"),
+        "replaying a finished receipt must not invent pending input"
+    );
     let row = host.inner.conversations.get(&root).unwrap().unwrap();
     host.inner
         .router
-        .begin_submission(&root, "pending")
+        .begin_submission(&root, "pending", None)
         .unwrap();
     for delivery in [
         SubmissionDelivery::Sending,
@@ -2066,7 +2070,8 @@ async fn replayed_handoff_receipts_do_not_block_later_provider_switches() {
     ] {
         host.inner
             .router
-            .finish_submission(&root, "pending", delivery);
+            .finish_submission(&root, "pending", delivery)
+            .unwrap();
         assert_eq!(
             send(
                 &host,
@@ -2084,7 +2089,8 @@ async fn replayed_handoff_receipts_do_not_block_later_provider_switches() {
     }
     host.inner
         .router
-        .finish_submission(&root, "pending", SubmissionDelivery::Rejected);
+        .finish_submission(&root, "pending", SubmissionDelivery::Rejected)
+        .unwrap();
     send(
         &host,
         client.id(),
@@ -3232,4 +3238,92 @@ async fn a_client_holding_the_current_transcript_receives_no_turns() {
     assert!(!changed.unchanged);
     assert!(changed.response.thread.transcript_version > version);
     assert_eq!(changed.response.thread.turns.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn settlement_filters_before_paging_and_search_includes_both_sections() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    let mut ids = Vec::new();
+    for index in 0..36 {
+        let id = SessionRef::new(ProviderKind::Codex, format!("thread-{index}")).unwrap();
+        let response: ThreadResponse = serde_json::from_value(serde_json::json!({"thread":{"id":id,"status":"idle","preview":"needle","updatedAt":100.0-index as f64,"turns":[]}})).unwrap();
+        a.records.lock().unwrap().insert(id.id.clone(), response);
+        if index < 30 {
+            host.inner.router.set_settled(&id, true).unwrap();
+        }
+        ids.push(id);
+    }
+    for settled in [false, true] {
+        let page: agent_protocol::models::ThreadList = call(
+            &host,
+            client.id(),
+            Call::ListSessions(op::ListSessions::new(agent_protocol::models::ListQuery {
+                settled,
+                part: Some(agent_protocol::models::ListPart::Chats),
+                limit: 5,
+                ..Default::default()
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.data.len(), 5);
+        assert!(page.has_more);
+        assert!(page.data.iter().all(|thread| thread.settled == settled));
+        assert_eq!(
+            page.data[0].id,
+            Some(ids[if settled { 0 } else { 30 }].clone())
+        );
+    }
+    let search: agent_protocol::models::ThreadList = call(
+        &host,
+        client.id(),
+        Call::ListSessions(op::ListSessions::new(agent_protocol::models::ListQuery {
+            search_term: "needle".into(),
+            limit: 100,
+            ..Default::default()
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(search.data.len(), 36);
+    assert_eq!(search.data.iter().filter(|row| row.settled).count(), 30);
+    let target = ids[30].clone();
+    let settled: op::SessionSettlement = call(
+        &host,
+        client.id(),
+        Call::SetSessionSettled(op::SetSessionSettled {
+            thread_id: target.clone(),
+            settled: true,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(settled.settled);
+    assert!(
+        history(&host, client.id(), &target).await.thread.settled,
+        "opening does not activate a settled conversation"
+    );
+    a.records
+        .lock()
+        .unwrap()
+        .get_mut(&target.id)
+        .unwrap()
+        .thread
+        .status = SessionStatus::Running;
+    let rejected = call::<op::SessionSettlement>(
+        &host,
+        client.id(),
+        Call::SetSessionSettled(op::SetSessionSettled {
+            thread_id: target.clone(),
+            settled: true,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(rejected.code, "settlement_unavailable");
+    assert!(host.inner.router.is_settled(&target).unwrap());
 }

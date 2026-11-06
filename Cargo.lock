@@ -4797,6 +4797,7 @@ dependencies = [
  "reqwest",
  "rstest",
  "rustix 1.1.5",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",

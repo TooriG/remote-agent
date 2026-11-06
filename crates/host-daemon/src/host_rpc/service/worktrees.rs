@@ -575,15 +575,18 @@ pub(super) mod tests {
                 let _execution = host.inner.router.retain_execution(public.clone()).unwrap();
                 host.inner
                     .router
-                    .begin_submission(&public, "message")
+                    .begin_submission(&public, "message", None)
                     .unwrap();
-                host.inner.router.finish_submission(
-                    &public,
-                    "message",
-                    SubmissionDelivery::Accepted {
-                        turn_id: Some(turn),
-                    },
-                );
+                host.inner
+                    .router
+                    .finish_submission(
+                        &public,
+                        "message",
+                        SubmissionDelivery::Accepted {
+                            turn_id: Some(turn),
+                        },
+                    )
+                    .unwrap();
 
                 let entries = host.worktree_list().await.unwrap();
                 assert_eq!(entries.len(), 1);

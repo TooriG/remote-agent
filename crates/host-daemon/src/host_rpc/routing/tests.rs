@@ -1190,22 +1190,25 @@ fn completion_does_not_discard_unconfirmed_input_and_accepted_receipts_replay() 
         provider: ProviderKind::Codex,
         id: "native".into(),
     };
-    router.begin_submission(&target, "send").unwrap();
-    assert!(router.begin_submission(&target, "send").is_err());
+    router.begin_submission(&target, "send", None).unwrap();
+    assert!(router.begin_submission(&target, "send", None).is_err());
     turn(&router, false);
-    assert!(router.begin_submission(&target, "send").is_err());
+    assert!(router.begin_submission(&target, "send", None).is_err());
     turn(&router, true);
-    assert!(router.begin_submission(&target, "send").is_err());
-    router.finish_submission(
-        &target,
-        "send",
-        agent_protocol::session::SubmissionDelivery::Accepted {
-            turn_id: Some("run".into()),
-        },
-    );
+    assert!(router.begin_submission(&target, "send", None).is_err());
+    router
+        .finish_submission(
+            &target,
+            "send",
+            agent_protocol::session::SubmissionDelivery::Accepted {
+                turn_id: Some("run".into()),
+            },
+        )
+        .unwrap();
     assert_eq!(
         router
             .submission_receipt(&target, "send")
+            .unwrap()
             .unwrap()
             .turn_id
             .as_deref(),
@@ -1233,7 +1236,7 @@ fn provider_exit_clears_activity_but_preserves_uncertain_delivery() {
         "native".to_string(),
     )
     .unwrap();
-    router.begin_submission(&target, "input").unwrap();
+    router.begin_submission(&target, "input", None).unwrap();
     router.session_change(
         &target,
         SessionChange::Status {

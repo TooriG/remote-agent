@@ -1686,7 +1686,7 @@ async fn large_history_loads_conversation_before_lossless_item_details() {
         let thread = &started["thread"]["id"];
         let listed = mobile
             .peer
-            .call(&rpc::ListProjectSessions {
+            .call(&rpc::ListProjectSessions { settled: false,
                 project_id: "workspace".into(),
                 limit: 20,
                 search_term: String::new(),
@@ -1851,7 +1851,7 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
         );
         let more = mobile
             .peer
-            .call(&rpc::ListProjectSessions {
+            .call(&rpc::ListProjectSessions { settled: false,
                 project_id: "project-5".into(),
                 limit: 5,
                 search_term: String::new(),
@@ -1867,7 +1867,7 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
         }));
         let expanded = mobile
             .peer
-            .call(&rpc::ListProjectSessions {
+            .call(&rpc::ListProjectSessions { settled: false,
                 project_id: "project-5".into(),
                 limit: 15,
                 search_term: String::new(),
@@ -1879,7 +1879,7 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
         assert!(expanded.has_more);
         let end = mobile
             .peer
-            .call(&rpc::ListProjectSessions {
+            .call(&rpc::ListProjectSessions { settled: false,
                 project_id: "project-5".into(),
                 limit: 25,
                 search_term: String::new(),
@@ -1890,7 +1890,7 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
         assert!(!end.has_more);
         let old = mobile
             .peer
-            .call(&rpc::ListProjectSessions {
+            .call(&rpc::ListProjectSessions { settled: false,
                 project_id: "project-1".into(),
                 limit: 5,
                 search_term: String::new(),
@@ -1918,7 +1918,7 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
         assert!(!found.has_more_projects);
         let project_search = mobile
             .peer
-            .call(&rpc::ListProjectSessions {
+            .call(&rpc::ListProjectSessions { settled: false,
                 project_id: "project-1".into(),
                 limit: 5,
                 search_term: "conversation 18".into(),

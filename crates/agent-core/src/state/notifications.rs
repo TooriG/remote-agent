@@ -51,6 +51,11 @@ pub(super) fn notification(
     }
 
     match message {
+        Notification::SessionSettlement { change } => {
+            let mut next = previous.clone();
+            let effects = next.accept_settlement(change);
+            (next, effects)
+        }
         Notification::ProviderSettings { settings } => {
             let mut next = previous.clone();
             let effects = if next.accept_provider_settings(settings) {
@@ -132,18 +137,33 @@ impl Snapshot {
         {
             apply_rename(page, index, name, revision);
         }
-        let renames: Vec<_> = self
+        let changes: Vec<_> = self
             .lists
             .project_threads
             .iter()
-            .filter_map(|(project, page)| {
-                rename_index(&page.data, session, revision).map(|index| (project.clone(), index))
+            .filter_map(|(key, page)| {
+                rename_index(&page.data, session, revision).map(|index| (key.clone(), index))
             })
             .collect();
-        if !renames.is_empty() {
+        if !changes.is_empty() {
             let pages = Arc::make_mut(&mut self.lists.project_threads);
-            for (project, index) in renames {
-                apply_rename(pages.get_mut(&project).unwrap(), index, name, revision);
+            for (key, index) in changes {
+                apply_rename(pages.get_mut(&key).unwrap(), index, name, revision);
+            }
+        }
+        let settled_changes: Vec<_> = self
+            .lists
+            .settlement
+            .pages
+            .iter()
+            .filter_map(|(key, page)| {
+                rename_index(&page.data, session, revision).map(|index| (key.clone(), index))
+            })
+            .collect();
+        if !settled_changes.is_empty() {
+            let pages = &mut Arc::make_mut(&mut self.lists.settlement).pages;
+            for (key, index) in settled_changes {
+                apply_rename(pages.get_mut(&key).unwrap(), index, name, revision);
             }
         }
     }
@@ -152,6 +172,7 @@ impl Snapshot {
         mut thread: Thread,
         project: Option<crate::models::Project>,
     ) {
+        self.reconcile_settlements(std::slice::from_mut(&mut thread));
         let Some(id) = thread.id.as_ref() else { return };
         if let Some(state) = &self.lists.task_activity
             && let Some((_, status)) = state.statuses.iter().find(|(session, _)| session == id)
@@ -203,6 +224,22 @@ impl Snapshot {
                     page.projects.len() > self.lists.list_query.project_limit as usize;
                 page.projects
                     .truncate(self.lists.list_query.project_limit as usize);
+            }
+        }
+        let settled_updates: Vec<_> = self
+            .lists
+            .settlement
+            .pages
+            .iter()
+            .filter_map(|(key, page)| {
+                updated_row(&page.data, thread.clone(), false)
+                    .map(|(index, row)| (key.clone(), index, row))
+            })
+            .collect();
+        if !settled_updates.is_empty() {
+            let shelves = &mut Arc::make_mut(&mut self.lists.settlement).pages;
+            for (key, index, row) in settled_updates {
+                apply_row_update(shelves.get_mut(&key).unwrap(), index, row);
             }
         }
         if let Some(project) = thread.project_id.as_ref() {

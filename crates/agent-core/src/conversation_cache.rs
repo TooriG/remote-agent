@@ -74,6 +74,7 @@ fn list_metadata(list: &ThreadList) -> ThreadList {
             .data
             .iter()
             .map(|thread| Thread {
+                settled: thread.settled,
                 id: thread.id.clone(),
                 active_provider: thread.active_provider,
                 parent_id: thread.parent_id.clone(),

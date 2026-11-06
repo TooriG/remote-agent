@@ -12,6 +12,10 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method")]
 pub enum Notification {
+    #[serde(rename = "host/session/settled")]
+    SessionSettlement {
+        change: crate::operations::SessionSettlement,
+    },
     #[serde(rename = "host/provider/settingsChanged")]
     ProviderSettings {
         settings: crate::providers::ProviderSettings,
@@ -153,6 +157,7 @@ results! {
     HostStatus(crate::models::HostStatus), Invitation(crate::models::Invitation),
     Remotes(Vec<crate::models::RemoteHost>), Remote(crate::models::RemoteHost),
     Submission(crate::operations::SubmissionReceipt),
+    Settlement(crate::operations::SessionSettlement),
     Unit(()), Text(String), CodexCli(crate::operations::CodexCliStatus)
 }
 #[derive(Debug, Serialize, Deserialize)]

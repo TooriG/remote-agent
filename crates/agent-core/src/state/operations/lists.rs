@@ -30,7 +30,7 @@ pub use agent_protocol::operations::ListSessions;
 
 pub use agent_protocol::operations::ReadListDecorations;
 
-fn decorations(
+pub(super) fn decorations(
     scope: agent_protocol::operations::ListDecorationScope,
     projects: &[crate::models::Project],
     threads: &[crate::models::Thread],
@@ -109,12 +109,25 @@ impl Operation for ReadListDecorations {
         }
         // Match the exact source captured by the read, including provider,
         // directory and branch. A later duplicate reply keeps its last value.
+        enum Page {
+            Root,
+            Project(String),
+            Settled(Option<String>),
+        }
         let updates: Vec<_> = snapshot
             .lists
             .project_threads
             .iter()
-            .map(|(id, list)| (Some(id), list))
-            .chain(snapshot.lists.threads.iter().map(|list| (None, list)))
+            .map(|(id, list)| (Page::Project(id.clone()), list))
+            .chain(snapshot.lists.threads.iter().map(|list| (Page::Root, list)))
+            .chain(
+                snapshot
+                    .lists
+                    .settlement
+                    .pages
+                    .iter()
+                    .map(|(id, list)| (Page::Settled(id.clone()), list)),
+            )
             .filter_map(|(project, list)| {
                 let changed: Vec<_> = list
                     .data
@@ -129,15 +142,19 @@ impl Operation for ReadListDecorations {
                             .then_some((index, *status))
                     })
                     .collect();
-                (!changed.is_empty()).then(|| (project.cloned(), changed))
+                (!changed.is_empty()).then_some((project, changed))
             })
             .collect();
         for (project, changed) in updates {
             let list = match project {
-                Some(id) => Arc::make_mut(&mut snapshot.lists.project_threads)
+                Page::Project(id) => Arc::make_mut(&mut snapshot.lists.project_threads)
                     .get_mut(&id)
                     .expect("captured project page is present"),
-                None => snapshot
+                Page::Settled(id) => Arc::make_mut(&mut snapshot.lists.settlement)
+                    .pages
+                    .get_mut(&id)
+                    .expect("captured settled page is present"),
+                Page::Root => snapshot
                     .lists
                     .threads
                     .as_mut()
@@ -501,6 +518,7 @@ impl Operation for ListProjectSessions {
                 .get(&self.project_id)
                 .map(AsRef::as_ref),
         );
+        snapshot.reconcile_settlements(&mut output.data);
         let (data, more) = page_rows(output.data, output.limit);
         output.data = data;
         output.has_more |= more;
@@ -526,7 +544,7 @@ impl Operation for ListProjectSessions {
     }
 }
 
-fn update_titles(snapshot: &mut Snapshot, summaries: &[crate::models::Thread]) {
+pub(super) fn update_titles(snapshot: &mut Snapshot, summaries: &[crate::models::Thread]) {
     for summary in summaries {
         if let Some(id) = &summary.id
             && snapshot
@@ -534,11 +552,13 @@ fn update_titles(snapshot: &mut Snapshot, summaries: &[crate::models::Thread]) {
                 .conversations
                 .get(id)
                 .is_some_and(|thread| {
-                    thread.name != summary.name && thread.list_revision <= summary.list_revision
+                    (thread.name != summary.name || thread.settled != summary.settled)
+                        && thread.list_revision <= summary.list_revision
                 })
             && let Some(thread) = shared_mut(&mut snapshot.sessions.conversations, id)
         {
             thread.name = summary.name.clone();
+            thread.settled = summary.settled;
             thread.list_revision = summary.list_revision;
         }
     }
@@ -651,6 +671,7 @@ impl Operation for ListSessions {
         }
 
         let mut threads = merge_received(threads, snapshot.lists.threads.as_deref());
+        snapshot.reconcile_settlements(&mut threads.data);
         Arc::make_mut(&mut snapshot.lists.unconfirmed_lists).remove(&OperationKey::SessionList);
         let projects: Vec<_> = threads
             .projects
@@ -781,6 +802,7 @@ impl Operation for ListSessions {
                     })
                     .map(|(id, limit)| {
                         Effect::execute(ListProjectSessions {
+                            settled: false,
                             project_id: id.clone(),
                             limit: *limit,
                             search_term: snapshot.lists.list_query.search_term.clone(),
@@ -944,8 +966,8 @@ mod tests {
         assert_eq!(connected.lists.threads.as_ref().unwrap().limit, 15);
         assert_eq!(
             effects.len(),
-            5,
-            "status, three independent model reads, and accounts only; no list read"
+            6,
+            "reconnect also refreshes shared organization while retaining cached pages"
         );
         let (renamed, effects) = super::super::super::notifications::notification(
             &connected,
@@ -1021,6 +1043,7 @@ mod tests {
         assert!(effects.is_empty(), "initial pages are already received");
         let received = state.lists.project_threads["p1"].clone();
         ListProjectSessions {
+            settled: false,
             project_id: "p0".into(),
             limit: 25,
             search_term: String::new(),
@@ -1217,7 +1240,7 @@ mod tests {
             assert!(store.snapshot().thread_list().unwrap().projects[0].expanded);
             let request = read(&mut reader).await;
             assert_eq!(request["method"], "host/project/sessions");
-            assert_eq!(request["params"], json!({"projectId":"old","limit":5,"searchTerm":"Archive"}));
+            assert_eq!(request["params"], json!({"projectId":"old","limit":5,"searchTerm":"Archive","settled":false}));
             assert!(store.snapshot().thread_list().unwrap().projects[0].loading);
             assert!(
                 store
@@ -1522,6 +1545,7 @@ mod tests {
         }
         let limit = published.lists.expanded_projects["old"];
         ListProjectSessions {
+            settled: false,
             project_id: "old".into(),
             limit,
             search_term: String::new(),
@@ -1540,6 +1564,7 @@ mod tests {
         );
         assert!(effects.is_empty());
         ListProjectSessions {
+            settled: false,
             project_id: "old".into(),
             limit,
             search_term: String::new(),
@@ -1651,6 +1676,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         let mut opened = opened;
         ListProjectSessions {
+            settled: false,
             project_id: "project".into(),
             limit: 5,
             search_term: String::new(),

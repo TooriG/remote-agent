@@ -360,9 +360,25 @@ pub struct ListSessions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListProjectSessions {
+    #[serde(default)]
+    pub settled: bool,
     pub project_id: String,
     pub limit: u32,
     pub search_term: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionSettled {
+    pub thread_id: crate::session::SessionRef,
+    pub settled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionSettlement {
+    pub session: crate::session::SessionRef,
+    pub settled: bool,
+    pub revision: u64,
 }
 
 /// Values already obtained by the title read; decorating them must not list
@@ -374,6 +390,9 @@ pub enum ListDecorationScope {
     },
     Project {
         project_id: String,
+    },
+    Settled {
+        project_id: Option<String>,
     },
     Task {
         session: crate::session::SessionRef,

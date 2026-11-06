@@ -7,6 +7,7 @@ mod model_selections;
 mod preparation;
 mod project_import;
 mod sessions;
+mod settlement;
 mod titles;
 mod transcripts;
 mod update;
@@ -67,20 +68,17 @@ impl HostRpcService {
         let files = crate::workspace_files::WorkspaceFiles::new(
             projects.path().with_file_name("bex-attachments"),
         );
-        let transcripts = Arc::new(super::transcripts::Transcripts::open(
-            &projects.path().with_file_name("bex-transcripts.sqlite"),
+        let database = Arc::new(super::database::Database::open(
+            &projects.path().with_file_name("bex-state.sqlite"),
         ));
-        let router = SessionRouter::new()
-            .with_read_state(projects.path().with_file_name("bex-read-state.json"))
-            .with_transcripts(transcripts.clone());
+        let transcripts = Arc::new(super::transcripts::Transcripts::new(database.clone()));
+        let router = SessionRouter::new().with_transcripts(transcripts.clone());
         let (providers, dictation) = crate::providers::Registry::new(backends);
         Self {
             inner: Arc::new(ServiceInner {
                 history_scope: OnceLock::new(),
                 updating: std::sync::atomic::AtomicBool::new(false),
-                conversations: super::conversations::Conversations::new(
-                    projects.path().with_file_name("bex-conversations.json"),
-                ),
+                conversations: super::conversations::Conversations::new(database),
                 transcripts,
                 imports: Default::default(),
                 capacity: Default::default(),
@@ -254,14 +252,17 @@ impl HostRpcService {
             let submission = target.as_ref().zip(input_id);
             // Keep the execution alive and serialize decisions through the
             // provider acknowledgement, including concurrent client inputs.
-            let _read = submission
-                .map(|(target, _)| self.inner.router.retain_execution(target.clone()))
+            let _read = target
+                .as_ref()
+                .filter(|_| submission.is_some() || matches!(message, Call::SetSessionSettled(_)))
+                .map(|target| self.inner.router.retain_execution(target.clone()))
                 .transpose()
                 .map_err(|error| Failure::new("invalid_params", error))?;
             let _serial = if let Some(target) = target.as_ref().filter(|_| {
                 matches!(
                     message,
                     Call::Submit(_)
+                        | Call::SetSessionSettled(_)
                         | Call::RenameSession(_)
                         | Call::ForkSession(_)
                         | Call::RetryPreparation(_)
@@ -298,11 +299,18 @@ impl HostRpcService {
             }
             if let Some((target, id)) = submission {
                 if matches!(message, Call::Submit(_))
-                    && let Some(receipt) = self.inner.router.submission_receipt(target, id)
+                    && let Some(receipt) = self.inner.router.submission_receipt(target, id)?
                 {
                     return Ok(receipt.into());
                 }
-                self.inner.router.begin_submission(target, id)?;
+                self.inner.router.begin_submission(
+                    target,
+                    id,
+                    match message {
+                        Call::Submit(input) => Some(input),
+                        _ => None,
+                    },
+                )?;
             }
             let result = if let Call::Submit(input) = message {
                 self.submit_input(target.as_ref().expect("submission target"), input)
@@ -323,7 +331,7 @@ impl HostRpcService {
                     }
                     Err(_) => SubmissionDelivery::Unknown,
                 };
-                self.inner.router.finish_submission(target, id, delivery);
+                self.inner.router.finish_submission(target, id, delivery)?;
             }
             result
         }
@@ -367,6 +375,7 @@ impl HostRpcService {
                 .map(Into::into);
         }
         let response = match request {
+            Call::SetSessionSettled(params) => self.set_session_settled(params).await?.into(),
             Call::ReadFileOpenCapabilities(_) => self
                 .inner
                 .editors
@@ -760,6 +769,7 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
         Call::ReadItem(p) => (Some(&p.thread_id), None),
         Call::ReadTurnItems(p) => (Some(&p.session), None),
         Call::RenameSession(p) => (Some(&p.thread_id), None),
+        Call::SetSessionSettled(p) => (Some(&p.thread_id), None),
         _ => (None, None),
     }
 }

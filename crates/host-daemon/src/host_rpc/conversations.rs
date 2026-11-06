@@ -10,12 +10,10 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
-    io::Write,
-    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct Binding {
     pub session: SessionRef,
     /// Number of Host transcript turns already available to this runtime.
@@ -373,46 +371,44 @@ pub(super) fn source(id: &str) -> Result<(SessionRef, String), Failure> {
     })
 }
 
+mod storage;
+
 pub(super) struct Conversations {
-    path: PathBuf,
+    database: Arc<super::database::Database>,
     // Loading errors remain errors; a damaged registry must never create a
     // second logical conversation or redirect an input to an old native session.
     state: Mutex<Result<Vec<Conversation>, String>>,
 }
 
 impl Conversations {
-    pub fn new(path: PathBuf) -> Self {
-        let state = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice::<Vec<Conversation>>(&bytes)
-                .map_err(|error| error.to_string())
-                .and_then(|mut rows| {
-                    validate(&rows)?;
-                    for row in &mut rows {
-                        if let Some(startup) = &mut row.startup {
-                            startup.preparation.status = match startup.preparation.status {
-                                PreparationStatus::Preparing => PreparationStatus::Failed {
-                                    error: agent_protocol::execution::ExecutionError {
-                                        message: "ホストの再起動で準備が中断されました。再試行してください。".into(),
-                                        ..Default::default()
-                                    },
-                                },
-                                PreparationStatus::Sending => PreparationStatus::Unknown,
-                                ref status => status.clone(),
-                            };
-                        }
-                        for handoff in &mut row.handoffs {
-                            if handoff.submission == SubmissionDelivery::Sending {
-                                handoff.submission = SubmissionDelivery::Unknown;
-                            }
-                        }
+    pub(super) fn new(database: Arc<super::database::Database>) -> Self {
+        let state = storage::load(&database).and_then(|mut rows| {
+            validate(&rows)?;
+            for row in &mut rows {
+                if let Some(startup) = &mut row.startup {
+                    startup.preparation.status = match startup.preparation.status {
+                        PreparationStatus::Preparing => PreparationStatus::Failed {
+                            error: agent_protocol::execution::ExecutionError {
+                                message:
+                                    "ホストの再起動で準備が中断されました。再試行してください。"
+                                        .into(),
+                                ..Default::default()
+                            },
+                        },
+                        PreparationStatus::Sending => PreparationStatus::Unknown,
+                        ref status => status.clone(),
+                    };
+                }
+                for handoff in &mut row.handoffs {
+                    if handoff.submission == SubmissionDelivery::Sending {
+                        handoff.submission = SubmissionDelivery::Unknown;
                     }
-                    Ok(rows)
-                }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(error.to_string()),
-        };
+                }
+            }
+            Ok(rows)
+        });
         Self {
-            path,
+            database,
             state: Mutex::new(state),
         }
     }
@@ -521,12 +517,15 @@ impl Conversations {
             .as_ref()
             .cloned()
             .map_err(|error| Failure::new("conversation_storage_failed", error))?;
-        if let Some(row) = next.iter_mut().find(|row| row.id == conversation.id) {
-            *row = conversation;
+        let index = if let Some(index) = next.iter().position(|row| row.id == conversation.id) {
+            next[index] = conversation;
+            index
         } else {
+            let index = next.len();
             next.push(conversation);
-        }
-        self.save_rows(&mut state, next)
+            index
+        };
+        self.save_rows(&mut state, next, index)
     }
 
     pub fn admit(&self, conversation: Conversation) -> Result<(Conversation, bool), Failure> {
@@ -538,8 +537,9 @@ impl Conversations {
         if let Some(row) = rows.iter().find(|row| row.id == conversation.id) {
             return Ok((row.clone(), false));
         }
+        let index = rows.len();
         rows.push(conversation.clone());
-        self.save_rows(&mut state, rows)?;
+        self.save_rows(&mut state, rows, index)?;
         Ok((conversation, true))
     }
 
@@ -561,7 +561,7 @@ impl Conversations {
             return Ok((rows[index].clone(), false));
         };
         rows[index] = row.clone();
-        self.save_rows(&mut state, rows)?;
+        self.save_rows(&mut state, rows, index)?;
         Ok((row, true))
     }
 
@@ -569,18 +569,10 @@ impl Conversations {
         &self,
         state: &mut Result<Vec<Conversation>, String>,
         next: Vec<Conversation>,
+        changed: usize,
     ) -> Result<(), Failure> {
         validate(&next).map_err(|error| Failure::new("invalid_conversation", error))?;
-        let bytes = serde_json::to_vec(&next)?;
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| Failure::new("conversation_storage_failed", error))?;
-        }
-        atomicwrites::AtomicFile::new(&self.path, atomicwrites::OverwriteBehavior::AllowOverwrite)
-            .write(|file| {
-                file.write_all(&bytes)?;
-                file.sync_all()
-            })
+        storage::save(&self.database, &next[changed])
             .map_err(|error| Failure::new("conversation_storage_failed", error))?;
         *state = Ok(next);
         Ok(())
@@ -794,8 +786,8 @@ mod tests {
             PreparationStage::Provider,
         ] {
             let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("conversations.json");
-            let store = Conversations::new(path.clone());
+            let path = directory.path().join("state.sqlite");
+            let store = Conversations::new(Arc::new(super::super::database::Database::open(&path)));
             for status in [PreparationStatus::Preparing, PreparationStatus::Sending] {
                 let mut row = conversation();
                 let submission = agent_protocol::operations::Submission {
@@ -817,10 +809,11 @@ mod tests {
                     started_at: 1.,
                 });
                 store.save(row.clone()).unwrap();
-                let restored = Conversations::new(path.clone())
-                    .get(&row.id)
-                    .unwrap()
-                    .unwrap();
+                let restored =
+                    Conversations::new(Arc::new(super::super::database::Database::open(&path)))
+                        .get(&row.id)
+                        .unwrap()
+                        .unwrap();
                 let startup = restored.startup.unwrap();
                 assert_eq!(startup.preparation.submission, submission);
                 assert_eq!(startup.preparation.stage, stage);
@@ -842,31 +835,105 @@ mod tests {
     #[test]
     fn persistence_recovers_preparation_and_does_not_commit_failed_writes() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("conversations.json");
-        let store = Conversations::new(path.clone());
+        let path = directory.path().join("state.sqlite");
+        let store = Conversations::new(Arc::new(super::super::database::Database::open(&path)));
         let mut row = conversation();
         row.cover(3);
         store.save(row.clone()).unwrap();
-        let recovered = Conversations::new(path.clone())
+        let recovered = Conversations::new(Arc::new(super::super::database::Database::open(&path)))
             .get(&row.id)
             .unwrap()
             .unwrap();
         assert_eq!(recovered.segments.len(), 1);
         assert_eq!(recovered.bindings[0].covered, Some(3));
-        std::fs::remove_file(&path).unwrap();
-        std::fs::create_dir(&path).unwrap();
+        store.database.with(|db| db.execute_batch("CREATE TRIGGER fail_write BEFORE UPDATE ON threads BEGIN SELECT RAISE(ABORT, 'injected failure'); END").map_err(super::super::database::failure)).unwrap();
         row.name = Some("uncommitted".into());
         assert!(store.save(row.clone()).is_err());
         assert_eq!(store.get(&row.id).unwrap().unwrap().name, None);
-        std::fs::remove_dir(&path).unwrap();
-        std::fs::write(&path, "broken").unwrap();
-        assert!(Conversations::new(path).get(&row.id).is_err());
+        assert_eq!(
+            Conversations::new(Arc::new(super::super::database::Database::open(&path)))
+                .get(&row.id)
+                .unwrap()
+                .unwrap()
+                .name,
+            None
+        );
+        store
+            .database
+            .with(|db| {
+                db.execute_batch("DROP TRIGGER fail_write")
+                    .map_err(super::super::database::failure)
+            })
+            .unwrap();
+        store.save(row.clone()).unwrap();
+        assert_eq!(store.get(&row.id).unwrap().unwrap().name, row.name);
+        let corrupt = directory.path().join("corrupt.sqlite");
+        std::fs::write(&corrupt, "broken").unwrap();
+        assert!(
+            Conversations::new(Arc::new(super::super::database::Database::open(&corrupt)))
+                .get(&row.id)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn native_metadata_remains_an_observation_until_the_host_overrides_it() {
+        let database = Arc::new(super::super::database::Database::default());
+        let store = Conversations::new(database.clone());
+        let mut row = conversation();
+        store.save(row.clone()).unwrap();
+        database
+            .update_metadata(
+                &row.id,
+                Some(&row.cwd),
+                Some("Native title"),
+                Some("Native preview"),
+            )
+            .unwrap();
+        let reopened = Conversations::new(database.clone())
+            .get(&row.id)
+            .unwrap()
+            .unwrap();
+        assert!(reopened.name.is_none() && reopened.preview.is_none());
+        row.cwd = "/another-workspace".into();
+        store.save(row.clone()).unwrap();
+        let metadata = || {
+            database.with(|db| db.query_row("SELECT name, preview, json_extract(payload_json, '$.conversation.id') FROM threads", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))).map_err(super::super::database::failure)).unwrap()
+        };
+        assert_eq!(
+            metadata(),
+            ("Native title".into(), "Native preview".into(), None)
+        );
+        row.name = Some("Local title".into());
+        store.save(row.clone()).unwrap();
+        database
+            .update_metadata(
+                &row.id,
+                Some(&row.cwd),
+                Some("Other native title"),
+                Some("New preview"),
+            )
+            .unwrap();
+        assert_eq!(
+            metadata(),
+            ("Local title".into(), "New preview".into(), None)
+        );
+        assert_eq!(
+            Conversations::new(database)
+                .get(&row.id)
+                .unwrap()
+                .unwrap()
+                .name,
+            row.name
+        );
     }
 
     #[test]
     fn released_provider_callbacks_cannot_change_the_active_conversation() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Conversations::new(directory.path().join("conversations.json"));
+        let store = Conversations::new(Arc::new(super::super::database::Database::open(
+            &directory.path().join("state.sqlite"),
+        )));
         let mut row = conversation();
         let target = SessionRef {
             provider: ProviderKind::Claude,

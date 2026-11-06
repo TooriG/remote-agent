@@ -101,6 +101,11 @@ fn decorations_match_captured_sources_across_root_and_project_pages() {
         },
         ..Default::default()
     };
+    let mut settled = current.clone();
+    settled.settled = true;
+    Arc::make_mut(&mut state.lists.settlement)
+        .pages
+        .insert(None, list(vec![settled], Vec::new()));
     let previous = state.clone();
     let output = ListDecorations {
         icons: [
@@ -119,6 +124,11 @@ fn decorations_match_captured_sources_across_root_and_project_pages() {
         ],
     };
     assert!(operation.apply(&mut state, output).is_empty());
+    assert!(state.lists.settlement.pages[&None].data[0].settled);
+    assert_eq!(
+        state.lists.settlement.pages[&None].data[0].worktree_status,
+        Some(WorktreeStatus::Merged)
+    );
     let root = state.lists.threads.as_ref().unwrap();
     assert_eq!(root.data[0].worktree_status, Some(WorktreeStatus::Merged));
     assert_eq!(root.data[1].worktree_status, None);

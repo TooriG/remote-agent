@@ -227,6 +227,7 @@ impl HostRpcService {
         let renamed = agent.rename(&target.id, &params.name).await?;
         self.inner
             .transcripts
+            .database
             .rename(target, Some(&params.name))
             .map_err(transcripts::storage_failure)?;
         Ok(renamed)
@@ -249,7 +250,7 @@ impl HostRpcService {
             if let Some(receipt) = self
                 .inner
                 .router
-                .submission_receipt(target, &input.client_user_message_id)
+                .submission_receipt(target, &input.client_user_message_id)?
             {
                 return Ok(receipt);
             }

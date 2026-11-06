@@ -2758,25 +2758,31 @@ mod model_reconnection_tests {
             project_pages: Default::default(),
             provider_errors: None,
         });
-        let previous = Snapshot {
+        let mut previous = Snapshot {
             lists: crate::state::Lists {
                 threads: Some(page.clone()),
                 project_threads: Arc::new([("p".into(), page)].into()),
                 unconfirmed_lists: Arc::new(
-                    [
-                        op::OperationKey::SessionList,
-                        op::OperationKey::ProjectList {
-                            project_id: "p".into(),
-                        },
-                    ]
+                    [op::OperationKey::ProjectList {
+                        project_id: "p".into(),
+                    }]
                     .into(),
                 ),
                 ..Default::default()
             },
             ..Default::default()
         };
+        Arc::make_mut(&mut previous.lists.settlement)
+            .pages
+            .insert(None, previous.lists.threads.as_ref().unwrap().clone());
+        Arc::make_mut(&mut previous.lists.settlement)
+            .expanded
+            .insert(None);
         let (connected, effects) = reduce(&previous, Event::Connected);
         assert!(connected.lists.threads.is_some());
+        assert_eq!(connected.lists.settlement.pages[&None].limit, 5);
+        assert!(effects.iter().any(|effect| effect.operation.key()
+            == Some(op::OperationKey::SettledList { project_id: None })));
         assert_eq!(
             effects
                 .iter()
