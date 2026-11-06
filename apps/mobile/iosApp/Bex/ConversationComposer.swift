@@ -62,7 +62,7 @@ struct ConversationComposer: View {
         let collapsed = !model.isNewThread && !composerFocused && model.draft.isEmpty && attachments.isEmpty
             && answering == nil && !dictation.isRecording && !dictation.requestingPermission && !model.transcribing
             && !model.transferring && !preparingMedia
-        return VStack(spacing: 0) {
+        return VStack(spacing: 12) {
             if !isSideChat, !model.isNewThread, let review = model.files.review(), review.fileCount() > 0 {
                 Button { openTools?(.diff) } label: {
                     HStack(spacing: 10) {
@@ -72,7 +72,8 @@ struct ConversationComposer: View {
                     }
                     .font(.subheadline.monospacedDigit())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
                 .accessibilityIdentifier("task.diff")
             }
             if let error = model.transferError {
@@ -135,7 +136,10 @@ struct ConversationComposer: View {
                 }
             }
             .buttonStyle(.plain)
+            .padding(7)
+            .glassEffect(.regular, in: .rect(cornerRadius: 26))
         }
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
     }
 
     /// The expanded composer's attachment, model, and primary actions.

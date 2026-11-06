@@ -41,6 +41,7 @@ extension LaunchUITests {
         XCTAssertFalse(app.buttons["task.send"].isEnabled, "Sent input must clear after completion")
         XCTAssertFalse((input.value as? String ?? "").contains("Start the simulator conversation"))
         XCTAssertFalse(app.staticTexts["notice"].exists, "Successful completion must not leave an error")
+        captureScreen(app, named: "Native composer enclosure and translucent change capsule")
         app.buttons["task.new"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["task.empty"].waitUntilExists(timeout: 10))
         XCTAssertTrue(input.isHittable)
