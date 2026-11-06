@@ -126,14 +126,13 @@ final class ConversationListController: UIViewController {
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
         collectionView.isPrefetchingEnabled = false
-        collectionView.selfSizingInvalidation = .enabledIncludingConstraints
         collectionView.accessibilityIdentifier = "task.detail"
-        collectionView.register(ConversationListCell.self, forCellWithReuseIdentifier: "row")
-        data = UICollectionViewDiffableDataSource(collectionView: collectionView) { [weak self] view, path, id in
-            guard let cell = view.dequeueReusableCell(withReuseIdentifier: "row", for: path)
-                as? ConversationListCell else { preconditionFailure("Unexpected conversation cell type") }
-            self?.show(cell, id: id)
-            return cell
+        let row = UICollectionView
+            .CellRegistration<UICollectionViewCell, ConversationList.RowID> { [weak self] cell, _, id in
+                self?.show(cell, id: id)
+            }
+        data = UICollectionViewDiffableDataSource(collectionView: collectionView) { view, path, id in
+            view.dequeueConfiguredReusableCell(using: row, for: path, item: id)
         }
     }
 
@@ -197,8 +196,7 @@ final class ConversationListController: UIViewController {
     private func refreshVisibleRows() {
         guard active else { return }
         for path in collectionView.indexPathsForVisibleItems {
-            if let cell = collectionView.cellForItem(at: path) as? ConversationListCell,
-               let id = data.itemIdentifier(for: path) {
+            if let cell = collectionView.cellForItem(at: path), let id = data.itemIdentifier(for: path) {
                 show(cell, id: id)
             }
         }
@@ -206,9 +204,11 @@ final class ConversationListController: UIViewController {
         collectionView.layoutIfNeeded()
     }
 
-    private func show(_ cell: ConversationListCell, id: ConversationList.RowID) {
-        guard let index = indices[id] else { cell.unmount(); return }
-        cell.show(AnyView(source.row(index).id(id)), parent: self)
+    /// UIKit sizes the cell from the SwiftUI content itself, so rows need no separate measurement.
+    private func show(_ cell: UICollectionViewCell, id: ConversationList.RowID) {
+        guard let index = indices[id] else { cell.contentConfiguration = nil; return }
+        let row = source.row(index)
+        cell.contentConfiguration = UIHostingConfiguration { row.id(id) }.margins(.all, 0)
     }
 
     private func didLayoutCollectionView() {
@@ -288,24 +288,12 @@ final class ConversationListController: UIViewController {
         visibilityUpdate?.cancel()
         visibilityUpdate = nil
         for cell in collectionView.visibleCells {
-            (cell as? ConversationListCell)?.unmount()
+            cell.contentConfiguration = nil
         }
     }
 }
 
 extension ConversationListController: UICollectionViewDelegate {
-    func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell,
-                        forItemAt indexPath: IndexPath) {
-        if let cell = cell as? ConversationListCell, !cell.isMounted, let id = data.itemIdentifier(for: indexPath) {
-            show(cell, id: id)
-        }
-    }
-
-    func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
-                        forItemAt _: IndexPath) {
-        (cell as? ConversationListCell)?.unmount()
-    }
-
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         if !applying, !following, !scrollingToTop,
            scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
