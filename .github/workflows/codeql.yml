@@ -39,6 +39,9 @@ jobs:
         # none mode. Pass the same compiler and libraries as the native shell.
         run: |
           nix develop .#native --command bash -euo pipefail <<'RUST_ENV'
+          # The Rust extractor selects its compiler through rustup.
+          rustup toolchain link codeql "$(rustc --print sysroot)"
+          printf 'RUSTUP_TOOLCHAIN=codeql\n' >> "$GITHUB_ENV"
           for name in PATH LIBCLANG_PATH LD_LIBRARY_PATH PKG_CONFIG_PATH NIX_CFLAGS_COMPILE NIX_LDFLAGS CC CXX AR RANLIB CMAKE_PREFIX_PATH; do
             printf "%s=%s\n" "$name" "${!name-}" >> "$GITHUB_ENV"
           done
