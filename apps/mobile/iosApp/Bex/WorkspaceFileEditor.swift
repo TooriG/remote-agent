@@ -118,11 +118,11 @@ struct WorkspaceFileSheet: View {
     let entry: FileEntry
     let line: UInt32?
     let download: @MainActor (String) async throws -> URL
-    let share: (String) -> Void
     let aiEdit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
     @State private var busy = false
+    @State private var sharedFile: SharedFile?
     @State private var initialized = false
     @State private var confirmReload = false
     @State private var selection: TextSelection?
@@ -174,7 +174,7 @@ struct WorkspaceFileSheet: View {
                             load(restoreDraft: false)
                         }
                     }
-                    Button("ダウンロード") { share(entry.path) }.accessibilityIdentifier("file.download")
+                    Button("ダウンロード", action: share).disabled(busy).accessibilityIdentifier("file.download")
                     Button("AIで編集") { aiEdit(entry.path) }.accessibilityIdentifier("file.ai-edit")
                 }.padding()
             }
@@ -206,6 +206,20 @@ struct WorkspaceFileSheet: View {
                 Button("編集を破棄して再読込", role: .destructive) {
                     load(restoreDraft: false)
                 }
+            }
+            .shareSheet($sharedFile)
+        }
+    }
+
+    /// Shares the Host's saved file, not the unsaved draft.
+    private func share() {
+        busy = true; error = nil
+        Task {
+            defer { busy = false }
+            do {
+                sharedFile = try await SharedFile(url: download(entry.path))
+            } catch {
+                self.error = error.localizedDescription
             }
         }
     }

@@ -96,7 +96,8 @@ import SwiftUI
         image = nil
     }
 
-    func closeShare() {
+    /// The share sheet removes the file itself when sharing ends; a reset may end it earlier.
+    private func closeShare() {
         remove(sharedFile)
         sharedFile = nil
     }
@@ -134,9 +135,7 @@ struct ConversationMediaPresenter: ViewModifier {
                     presentation.closeImage()
                 }
             }))
-            .sheet(item: $presentation.sharedFile, onDismiss: presentation.closeShare) { file in
-                FileShareSheet(url: file.url)
-            }
+            .shareSheet($presentation.sharedFile)
             .sheet(item: $presentation.visualization) { document in
                 NavigationStack {
                     VisualizationWebView(html: document.html)

@@ -100,9 +100,6 @@ private struct WorkspaceDirectoryScreen: View {
     @State private var refreshCompletion: CheckedContinuation<Void, Never>?
     @State private var selected: FileEntry?
     @State private var selectedLine: UInt32?
-    @State private var sharedFile: SharedFile?
-    @State private var error: ErrorText?
-    @State private var busy = false
 
     private var root: String {
         fileHostPath(path: directory, home: home)
@@ -116,7 +113,7 @@ private struct WorkspaceDirectoryScreen: View {
         let tree = files.fileTree(key: key)
         ScrollViewReader { proxy in
             List {
-                if let error = error ?? tree.error {
+                if let error = tree.error {
                     AppNotice(text: error)
                 }
                 if tree.truncated {
@@ -185,13 +182,12 @@ private struct WorkspaceDirectoryScreen: View {
         }
         .sheet(item: $selected) { entry in
             WorkspaceFileSheet(files: files, text: fileDraft(entry.path), perform: perform,
-                               entry: entry, line: selectedLine, download: downloadFile, share: download) { path in
+                               entry: entry, line: selectedLine, download: downloadFile) { path in
                 aiEdit(path)
                 selected = nil
                 close()
             }
         }
-        .sheet(item: $sharedFile) { item in FileShareSheet(url: item.url) }
     }
 
     @ViewBuilder private func emptyState(pending: Bool, error: ErrorText?, query: String) -> some View {
@@ -248,17 +244,5 @@ private struct WorkspaceDirectoryScreen: View {
 
     private func send(_ action: FileTreeAction) {
         perform(.fileTree(key: key, action: action)) { _, _ in }
-    }
-
-    private func download(_ path: String) {
-        guard !busy else { return }
-        busy = true; error = nil
-        Task {
-            defer { busy = false }
-            do {
-                let url = try await downloadFile(path)
-                selected = nil; sharedFile = SharedFile(url: url)
-            } catch { self.error = errorText(error: error.localizedDescription) }
-        }
     }
 }

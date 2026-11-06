@@ -297,15 +297,36 @@ struct SharedFile: Identifiable {
     let url: URL
 }
 
-struct FileShareSheet: UIViewControllerRepresentable {
-    let url: URL
-    func makeUIViewController(context _: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        controller.completionWithItemsHandler = { _, _, _, _ in
-            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-        }
-        return controller
+extension View {
+    /// Shares a downloaded file through the system share sheet, presented modally as UIKit does,
+    /// and removes the file's temporary directory once sharing ends.
+    func shareSheet(_ file: Binding<SharedFile?>) -> some View {
+        background(ShareSheetPresenter(file: file))
+    }
+}
+
+private struct ShareSheetPresenter: UIViewControllerRepresentable {
+    @Binding var file: SharedFile?
+
+    func makeUIViewController(context _: Context) -> UIViewController {
+        UIViewController()
     }
 
-    func updateUIViewController(_: UIActivityViewController, context _: Context) {}
+    func updateUIViewController(_ anchor: UIViewController, context _: Context) {
+        let presented = anchor.presentedViewController as? UIActivityViewController
+        guard let file else {
+            presented?.dismiss(animated: true)
+            return
+        }
+        guard presented == nil, anchor.view.window != nil else { return }
+        let controller = UIActivityViewController(activityItems: [file.url], applicationActivities: nil)
+        controller.popoverPresentationController?.sourceView = anchor.view
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent())
+            if self.file?.id == file.id {
+                self.file = nil
+            }
+        }
+        anchor.present(controller, animated: true)
+    }
 }
