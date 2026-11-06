@@ -373,11 +373,38 @@ impl Threads {
         Ok(exists)
     }
 
-    fn list(&mut self, context: &Context, id: &Value, params: &Value) -> Result<()> {
+    fn list(&mut self, context: &Context, id: &Value, method: &str, params: &Value) -> Result<()> {
         if context.home.join("exit-on-list").exists() {
             std::process::exit(0);
         }
         let has_list_fixture = self.refresh(&context.home)?;
+        if method == "thread/loaded/list" {
+            let mut loaded: Vec<_> = self
+                .by_id
+                .values()
+                .filter_map(|thread| {
+                    let thread = thread.borrow();
+                    (self.list_contents.is_none()
+                        || thread.metadata.get("loaded") == Some(&Value::Bool(true))
+                        || thread.metadata["status"]["type"] == "active")
+                        .then(|| thread.metadata["id"].as_str().unwrap().to_owned())
+                })
+                .collect();
+            loaded.sort();
+            let offset = params["cursor"]
+                .as_str()
+                .and_then(|cursor| cursor.parse::<usize>().ok())
+                .unwrap_or(0)
+                .min(loaded.len());
+            let end = (offset + params["limit"].as_u64().unwrap_or(100) as usize).min(loaded.len());
+            let next = (end < loaded.len()).then(|| end.to_string());
+            context.trace(
+                method,
+                json!({"cursor":params["cursor"],"returned":end-offset}),
+            )?;
+            context.respond(id, &json!({"data":&loaded[offset..end],"nextCursor":next}))?;
+            return Ok(());
+        }
         if has_list_fixture && params["useStateDbOnly"] != true {
             context.error(id, -32602, "Title lists must not scan rollout history")?;
             return Ok(());
@@ -467,7 +494,7 @@ impl Threads {
                 turns: &[],
             })
             .collect();
-        context.trace("thread/list", json!({"useStateDbOnly":params["useStateDbOnly"] == true,"count":page.len(),"ancestorThreadId":params["ancestorThreadId"]}))?;
+        context.trace(method, json!({"useStateDbOnly":params["useStateDbOnly"] == true,"count":page.len(),"ancestorThreadId":params["ancestorThreadId"]}))?;
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Page<'a> {
@@ -997,7 +1024,7 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                             "isDefault":true,"hidden":false,"description":"Isolated test model"}]);
                     context.respond(id, &json!({"data":models,"nextCursor":null}))?;
                 }
-                "thread/list" => threads.list(&context, id, params)?,
+                "thread/list" | "thread/loaded/list" => threads.list(&context, id, method, params)?,
                 THREAD_START => threads.create(&context, id, params)?,
                 "thread/fork" => threads.fork(&context, id, params)?,
                 "thread/unsubscribe" => threads.unsubscribe(&context, id, params)?,

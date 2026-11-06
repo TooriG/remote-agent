@@ -153,6 +153,7 @@ impl SessionRouter {
     ) -> agent_protocol::live_activity::TaskActivityState {
         let tasks: Vec<_> = conversations
             .into_iter()
+            .filter(|thread| thread.parent_id.is_none())
             .filter_map(|thread| {
                 let target = thread.id.clone()?;
                 let actor = self.actor(&target);

@@ -60,7 +60,7 @@ impl HostRpcService {
                     session_pages(
                         agent.as_ref(),
                         "",
-                        SessionListScope::Roots,
+                        SessionListScope::Loaded,
                         100,
                         100,
                         None,
@@ -168,17 +168,23 @@ mod tests {
         std::fs::write(&program, r##"#!/usr/bin/env node
 const rl = require('node:readline').createInterface({input:process.stdin});
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
-let reads = 0;
+const reads = [];
 rl.on('line', line => {
   const m = JSON.parse(line), p = m.params;
   if (m.id === undefined) return;
   let result = {};
   if (m.method === 'initialize') result = {userAgent:'activity-fixture',codexHome:process.env.CODEX_HOME};
   if (m.method === 'fixture/reads') result = reads;
-  if (m.method === 'thread/read') reads++;
+  if (m.method === 'thread/loaded/list') result = {data:['running','child','grandchild'],nextCursor:null};
+  if (m.method === 'thread/read') {
+    reads.push(p.threadId);
+    result = {thread:{id:p.threadId,parentThreadId:{child:'native-root',grandchild:'child'}[p.threadId],
+      cwd:process.env.CODEX_HOME,status:{type:'active'}}};
+  }
   if (m.method === 'thread/list') {
     if (p.sourceKinds.includes('subAgentThreadSpawn')) throw new Error('Subagents are outside system activity');
-    result = {data:[{id:'running',status:{type:'active'}},{id:'native-root',status:{type:'idle'}}],nextCursor:null};
+    result = {data:['running','native-root'].map(id => ({id,name:id,cwd:process.env.CODEX_HOME,
+      status:{type:id === 'running' ? 'active' : 'idle'}})),nextCursor:null};
   }
   send({id:m.id,result});
 });
@@ -207,18 +213,34 @@ rl.on('line', line => {
         service.inner.conversations.save(conversation).unwrap();
         service.start();
 
+        let bootstrap = service.read_task_activity(false).await.unwrap();
+        assert!(bootstrap.unread.is_empty());
+        assert_eq!(bootstrap.display.current.label, "実行中 1件");
+        let listed = service
+            .list_sessions(&op::ListSessions::new(Default::default()))
+            .await
+            .unwrap();
+        assert!(
+            listed
+                .data
+                .iter()
+                .any(|thread| thread.id.as_ref() == Some(&root))
+        );
         let first = service.read_task_activity(false).await.unwrap();
         assert_eq!(first.unread, [(root, "completed".into())]);
         assert_eq!(first.display.current.label, "実行中 1件 · 完了 1件");
         let repeated = service.read_task_activity(false).await.unwrap();
         assert_eq!(repeated, first);
         let reads = server
-            .request::<_, u32>("fixture/reads", &serde_json::json!({}))
+            .request::<_, Vec<String>>("fixture/reads", &serde_json::json!({}))
             .await
             .unwrap()
             .outcome
             .unwrap();
-        assert_eq!(reads, 0, "activity never reads or classifies subagents");
+        assert!(
+            !reads.iter().any(|id| id == "native-root"),
+            "saved completions need no extra native reads"
+        );
         drop(service);
         server.shutdown().await.unwrap();
     }
