@@ -9,20 +9,20 @@ extension LaunchUITests {
         app.terminate(); app.launch()
         expandSimulatorProject(app)
         let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
-        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 30)); row.tap()
         let latest = app.descendants(matching: .any)["item.long-14-0"]
-        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
         message.tap(); message.typeText("[approval] Reopen while this turn is running")
         app.buttons["task.send"].tap()
         let running = prefixedButton(app, prefix: "turn.interrupt.")
-        XCTAssertTrue(running.waitForExistence(timeout: 10))
+        XCTAssertTrue(running.waitUntilExists(timeout: 10))
         let approval = app.buttons["request.accept"]
-        XCTAssertTrue(approval.waitForExistence(timeout: 10))
+        XCTAssertTrue(approval.waitUntilExists(timeout: 10))
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
-        XCTAssertTrue(running.waitForExistence(timeout: 10))
-        XCTAssertTrue(approval.waitForExistence(timeout: 10))
+        XCTAssertTrue(row.waitUntilExists(timeout: 10)); row.tap()
+        XCTAssertTrue(running.waitUntilExists(timeout: 10))
+        XCTAssertTrue(approval.waitUntilExists(timeout: 10))
         XCTAssertTrue(approval.isHittable, "Running history must render immediately after reopening")
         captureScreen(app, named: "Running long history reopened without a blank viewport")
     }
@@ -37,18 +37,18 @@ extension LaunchUITests {
         expandSimulatorProject(app)
 
         let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
-        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 30)); row.tap()
         let detail = app.descendants(matching: .any)["task.detail"]
-        XCTAssertTrue(detail.waitForExistence(timeout: 30))
-        XCTAssertTrue(app.descendants(matching: .any)["item.long-14-0"].waitForExistence(timeout: 20))
+        XCTAssertTrue(detail.waitUntilExists(timeout: 30))
+        XCTAssertTrue(app.descendants(matching: .any)["item.long-14-0"].waitUntilExists(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
-        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        XCTAssertTrue(message.waitUntilExists(timeout: 10))
         message.tap(); message.typeText("[delayed-input] Keep the reading position")
         let send = app.buttons["task.send"]
-        XCTAssertTrue(send.waitForExistence(timeout: 10)); send.tap()
+        XCTAssertTrue(send.waitUntilExists(timeout: 10)); send.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
         let running = prefixedButton(app, prefix: "turn.interrupt.")
-        XCTAssertTrue(running.waitForExistence(timeout: 10))
+        XCTAssertTrue(running.waitUntilExists(timeout: 10))
         let initialDetailValue = detail.value as? String ?? ""
         XCTAssertFalse(initialDetailValue.isEmpty)
 
@@ -84,7 +84,7 @@ extension LaunchUITests {
         if latestButton.exists {
             latestButton.tap()
         }
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 20))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 20))
     }
 
     func testSimulatorKeepsResponsesFromRepeatedTurnIDsWhenReopeningHistory() throws {
@@ -94,14 +94,14 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[duplicate] Preserve both persisted responses")
         let latest = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["task.detail"].waitForExistence(timeout: 30))
-        XCTAssertTrue(latest.waitForExistence(timeout: 20),
+        XCTAssertTrue(row.waitUntilExists(timeout: 30)); row.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["task.detail"].waitUntilExists(timeout: 30))
+        XCTAssertTrue(latest.waitUntilExists(timeout: 20),
                       "Reopening history must retain the latest AI response")
-        XCTAssertTrue(app.descendants(matching: .any)["item.duplicate-history-old"].waitForExistence(timeout: 20),
+        XCTAssertTrue(app.descendants(matching: .any)["item.duplicate-history-old"].waitUntilExists(timeout: 20),
                       "Opening history must retain the older AI response")
     }
 
@@ -112,14 +112,14 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[followups] Keep earlier replies")
         let latest = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
-        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitUntilExists(timeout: 20)); row.tap()
+        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
         for id in ["item.history-answer-1", "item.history-answer-2"] {
             let answer = app.descendants(matching: .any)[id]
-            XCTAssertTrue(answer.waitForExistence(timeout: 10), "Earlier replies must remain outside collapsed work")
+            XCTAssertTrue(answer.waitUntilExists(timeout: 10), "Earlier replies must remain outside collapsed work")
         }
         captureScreen(app, named: "Earlier answers between followups")
     }
@@ -128,27 +128,27 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[success] [visualize] Compare twelve icons")
         let expand = app.buttons["visualize.expand"]
-        XCTAssertTrue(expand.waitForExistence(timeout: 30))
+        XCTAssertTrue(expand.waitUntilExists(timeout: 30))
         let message = app.descendants(matching: .any)["task.message"]
         XCTAssertEqual(message.value as? String, message.placeholderValue)
         captureScreen(app, named: "Visualization loaded with twelve choices")
-        XCTAssertTrue(app.buttons["task.send"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["task.send"].waitUntilExists(timeout: 10))
         XCTAssertFalse(app.buttons["task.send"].isEnabled)
         XCTAssertFalse(prefixedButton(app, prefix: "turn.interrupt.").exists)
         XCTAssertFalse(app.staticTexts["notice"].exists)
         func verify() {
             let second = app.webViews.switches["02 ブランチ＋チェックをプレビュー"]
-            XCTAssertTrue(second.waitForExistence(timeout: 20))
+            XCTAssertTrue(second.waitUntilExists(timeout: 20))
             second.tap()
             XCTAssertEqual(second.value as? String, "1")
-            XCTAssertTrue(app.webViews.staticTexts["02 · ブランチ＋チェック"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.webViews.staticTexts["02 · ブランチ＋チェック"].waitUntilExists(timeout: 5))
         }
         verify()
         captureScreen(app, named: "Visualization selected second icon")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
-        XCTAssertTrue(expand.waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitUntilExists(timeout: 20)); row.tap()
+        XCTAssertTrue(expand.waitUntilExists(timeout: 20))
         verify()
         captureScreen(app, named: "Reopened visualization selected second icon")
     }
@@ -157,12 +157,12 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[success] [markdown-table] Render the table")
         let answer = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(answer.waitForExistence(timeout: 30))
+        XCTAssertTrue(answer.waitUntilExists(timeout: 30))
         let message = app.descendants(matching: .any)["task.message"]
         let emptyValue = try XCTUnwrap(message.placeholderValue)
         let cleared = expectation(for: NSPredicate(format: "value == %@", emptyValue), evaluatedWith: message)
         wait(for: [cleared], timeout: 10)
-        XCTAssertTrue(app.buttons["task.send"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["task.send"].waitUntilExists(timeout: 10))
         XCTAssertFalse(app.buttons["task.send"].isEnabled)
         XCTAssertFalse(prefixedButton(app, prefix: "turn.interrupt.").exists)
         XCTAssertFalse(app.staticTexts["notice"].exists)
@@ -170,15 +170,15 @@ extension LaunchUITests {
         captureScreen(app, named: "Japanese Markdown table right columns")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
-        XCTAssertTrue(message.waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitUntilExists(timeout: 20)); row.tap()
+        XCTAssertTrue(message.waitUntilExists(timeout: 20))
         verifyMarkdownTable(app)
         captureScreen(app, named: "Reopened Japanese Markdown table")
     }
 
     private func verifyMarkdownTable(_ app: XCUIApplication) {
         let table = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(table.waitForExistence(timeout: 15))
+        XCTAssertTrue(table.waitUntilExists(timeout: 15))
         let header = app.textViews["markdown.cell.0.0.0"]
         let first = app.textViews["markdown.cell.0.1.0"]
         let second = app.textViews["markdown.cell.0.2.0"]
@@ -211,7 +211,7 @@ extension LaunchUITests {
         #endif
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[long-markdown] Render the complete stream")
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 20))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
         let completed = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "MARKDOWN_STREAM_COMPLETE"))
             .firstMatch
@@ -220,10 +220,10 @@ extension LaunchUITests {
         waitForDraftText(message, text: "Keep this draft")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
-        XCTAssertTrue(message.waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitUntilExists(timeout: 20)); row.tap()
+        XCTAssertTrue(message.waitUntilExists(timeout: 20))
         waitForDraftText(message, text: "Keep this draft")
-        XCTAssertTrue(completed.waitForExistence(timeout: 30))
+        XCTAssertTrue(completed.waitUntilExists(timeout: 30))
         let visible = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: completed)
         wait(for: [visible], timeout: 5)
         XCTAssertFalse(app.buttons["task.latest"].exists,
@@ -233,7 +233,7 @@ extension LaunchUITests {
         app.buttons["task.top"].tap()
         let code = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Markdown stream fixture"))
             .firstMatch
-        XCTAssertTrue(code.waitForExistence(timeout: 10))
+        XCTAssertTrue(code.waitUntilExists(timeout: 10))
         message.tap()
         // Place the caret after the restored draft before appending.
         message.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
@@ -249,7 +249,7 @@ extension LaunchUITests {
 
     func focusComposerKeepingLatestVisible(in app: XCUIApplication, latestResponse: XCUIElement?) {
         app.descendants(matching: .any)["task.message"].tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitUntilExists(timeout: 5))
         if let latestResponse {
             assertConversationTextMargins(latestResponse, in: app)
             XCTAssertTrue(latestResponse.isHittable, "Opening the keyboard must keep the conversation visible")
@@ -260,7 +260,7 @@ extension LaunchUITests {
 
     func assertConversationTextMargins(_ text: XCUIElement, in app: XCUIApplication,
                                        file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertTrue(text.waitForExistence(timeout: 10), file: file, line: line)
+        XCTAssertTrue(text.waitUntilExists(timeout: 10), file: file, line: line)
         waitForStableFrame(text)
         let viewport = app.descendants(matching: .any)["task.detail"].frame
         XCTAssertEqual(text.frame.minX, viewport.minX + 16, accuracy: 1, file: file, line: line)
@@ -273,31 +273,31 @@ extension LaunchUITests {
         #endif
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[history] Reopen history")
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 15))
-        XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").waitForExistence(timeout: 10))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 15))
+        XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").waitUntilExists(timeout: 10))
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitUntilExists(timeout: 10))
         let newestTask = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(newestTask.waitForExistence(timeout: 10))
+        XCTAssertTrue(newestTask.waitUntilExists(timeout: 10))
         newestTask.tap()
 
-        XCTAssertTrue(app.descendants(matching: .any)["task.detail"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["task.detail"].waitUntilExists(timeout: 15))
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").exists)
         XCTAssertFalse(prefixedElement(app, prefix: "item.fixture-command-").exists)
         XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").exists)
-        XCTAssertTrue(app.buttons["task.diff"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["task.diff"].waitUntilExists(timeout: 10))
         captureScreen(app, named: "Reference conversation layout")
         let activity = prefixedButton(app, prefix: "turn.activity.fixture-turn-")
         activity.tap()
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-command-").waitForExistence(timeout: 5))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-command-").waitUntilExists(timeout: 5))
         captureScreen(app, named: "Expanded work rows")
         let command = app.buttons.matching(NSPredicate(format: "label == %@", "./gradlew test")).firstMatch
         command.tap()
         let fullOutput = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "DEFERRED_DETAIL_FULL_TEXT"))
             .firstMatch
         XCTAssertTrue(
-            fullOutput.waitForExistence(timeout: 10),
+            fullOutput.waitUntilExists(timeout: 10),
             "Reopening must preserve the full completed output"
         )
         captureScreen(app, named: "Completed activity loaded")
@@ -324,8 +324,8 @@ extension LaunchUITests {
         app.terminate(); app.launch()
         expandSimulatorProject(app)
         let persisted = app.descendants(matching: .any)["tasks.row.codex:fixture-thread-persisted"]
-        XCTAssertTrue(persisted.waitForExistence(timeout: 20)); persisted.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["item.fixture-final-persisted"].waitForExistence(timeout: 20))
+        XCTAssertTrue(persisted.waitUntilExists(timeout: 20)); persisted.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["item.fixture-final-persisted"].waitUntilExists(timeout: 20))
         XCTAssertFalse(app.buttons["turn.activity.fixture-turn-persisted"].exists)
         XCTAssertFalse(app.buttons["item.fixture-command-persisted"].exists)
         XCTAssertFalse(fullOutput.exists)

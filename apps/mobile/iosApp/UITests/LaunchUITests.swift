@@ -1,6 +1,13 @@
 import Foundation
 import XCTest
 
+extension XCUIElement {
+    func waitUntilExists(timeout: TimeInterval) -> Bool {
+        // Avoid XCTest's initial polling delay for elements that already exist.
+        exists || waitForExistence(timeout: timeout)
+    }
+}
+
 final class LaunchUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -25,7 +32,7 @@ final class LaunchUITests: XCTestCase {
     }
 
     func tapWhenStable(_ element: XCUIElement) {
-        XCTAssertTrue(element.waitForExistence(timeout: 10))
+        XCTAssertTrue(element.waitUntilExists(timeout: 10))
         waitForStableFrame(element)
         element.tap()
     }
@@ -39,7 +46,7 @@ final class LaunchUITests: XCTestCase {
 
     func expandSimulatorProject(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let project = app.buttons["tasks.project.simulator-project"]
-        guard project.waitForExistence(timeout: 10) else {
+        guard project.waitUntilExists(timeout: 10) else {
             XCTFail("The fixture project did not appear", file: file, line: line)
             return
         }
@@ -121,7 +128,7 @@ final class LaunchUITests: XCTestCase {
         }
         if app.buttons["tasks.connect"].exists {
             app.buttons["tasks.connect"].tap()
-            XCTAssertTrue(manualPairing.waitForExistence(timeout: 10))
+            XCTAssertTrue(manualPairing.waitUntilExists(timeout: 10))
         }
         if manualPairing.exists {
             let payload = try simulatorPairingPayload()
@@ -133,7 +140,7 @@ final class LaunchUITests: XCTestCase {
 
         let notice = app.staticTexts["notice"]
         XCTAssertTrue(
-            taskList.waitForExistence(timeout: 30),
+            taskList.waitUntilExists(timeout: 30),
             "Task list did not appear after connecting; notice: \(notice.exists ? notice.label : "(none)")"
         )
         return app
@@ -141,7 +148,7 @@ final class LaunchUITests: XCTestCase {
 
     func confirmPairing(_ app: XCUIApplication) {
         let confirm = app.buttons["pairing.confirm"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        XCTAssertTrue(confirm.waitUntilExists(timeout: 10))
         XCTAssertTrue(app.staticTexts["pairing.host"].exists)
         XCTAssertEqual(app.staticTexts["pairing.host"].label, "検証 Host")
         XCTAssertTrue(app.staticTexts["pairing.recipients"].exists)
@@ -172,19 +179,19 @@ final class LaunchUITests: XCTestCase {
     func startSimulatorConversation(_ app: XCUIApplication, promptText: String) throws {
         let projectCompose = app.buttons["tasks.new.project.simulator-project"]
         XCTAssertTrue(
-            projectCompose.waitForExistence(timeout: 10),
+            projectCompose.waitUntilExists(timeout: 10),
             "No project creation button appeared: \(app.debugDescription)"
         )
         projectCompose.tap()
 
         let prompt = app.descendants(matching: .any)["task.message"]
-        XCTAssertTrue(prompt.waitForExistence(timeout: 10))
+        XCTAssertTrue(prompt.waitUntilExists(timeout: 10))
         chooseFixtureModel(app)
         prompt.tap()
         prompt.typeText(promptText)
 
         let start = app.buttons["task.send"]
-        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        XCTAssertTrue(start.waitUntilExists(timeout: 10))
         let startEnabled = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: start)
         wait(for: [startEnabled], timeout: 10)
         start.tap()
@@ -192,7 +199,7 @@ final class LaunchUITests: XCTestCase {
         let taskDetail = app.descendants(matching: .any)["task.detail"]
         let notice = app.staticTexts["notice"]
         XCTAssertTrue(
-            taskDetail.waitForExistence(timeout: 30),
+            taskDetail.waitUntilExists(timeout: 30),
             "Conversation did not open; notice: \(notice.exists ? notice.label : "(none)")"
         )
         waitForStableFrame(prompt)
@@ -217,12 +224,12 @@ final class LaunchUITests: XCTestCase {
         scrolling scrollView: XCUIElement
     ) -> Bool {
         let element = prefixedElement(app, prefix: prefix)
-        if element.waitForExistence(timeout: 1) {
+        if element.waitUntilExists(timeout: 1) {
             return true
         }
         for _ in 0 ..< 14 {
             scrollView.swipeUp()
-            if element.waitForExistence(timeout: 1) {
+            if element.waitUntilExists(timeout: 1) {
                 return true
             }
         }
@@ -232,7 +239,7 @@ final class LaunchUITests: XCTestCase {
     func allowFirstSystemPermissionIfPresent() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let alert = springboard.alerts.firstMatch
-        guard alert.waitForExistence(timeout: 3) else { return }
+        guard alert.waitUntilExists(timeout: 3) else { return }
 
         let positiveLabels = [
             "許可",
@@ -294,14 +301,14 @@ extension LaunchUITests {
         }
         dismissWorkbenchMenu(app)
         app.buttons["workbench.add"].tap()
-        XCTAssertTrue(tool.waitForExistence(timeout: 5)); tool.tap()
+        XCTAssertTrue(tool.waitUntilExists(timeout: 5)); tool.tap()
     }
 
     func closeWorkbench(_ app: XCUIApplication) {
         for _ in 0 ..< 10 where !app.buttons["task.tools"].exists {
             tapWhenStable(app.navigationBars.buttons["BackButton"].firstMatch)
         }
-        XCTAssertTrue(app.buttons["task.tools"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["task.tools"].waitUntilExists(timeout: 5))
         XCTAssertTrue(app.textFields["task.message"].exists)
     }
 }

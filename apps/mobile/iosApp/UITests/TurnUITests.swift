@@ -9,8 +9,8 @@ extension LaunchUITests {
         app.terminate(); app.launch()
         expandSimulatorProject(app)
         let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
-        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["item.long-14-0"].waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitUntilExists(timeout: 30)); row.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["item.long-14-0"].waitUntilExists(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
         let latestButton = app.buttons["task.latest"]
         let approval = app.buttons["request.accept"]
@@ -18,7 +18,7 @@ extension LaunchUITests {
         for attempt in 0 ..< 3 {
             if attempt > 0 {
                 app.navigationBars.buttons.element(boundBy: 0).tap()
-                XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+                XCTAssertTrue(row.waitUntilExists(timeout: 10)); row.tap()
                 let reopened = expectation(for: NSPredicate { _, _ in
                     answers.allElementsBoundByIndex.last?.isHittable == true
                 }, evaluatedWith: app)
@@ -38,7 +38,7 @@ extension LaunchUITests {
             XCTAssertTrue(app.keyboards.firstMatch.exists)
             app.buttons["task.send"].tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
-            XCTAssertTrue(approval.waitForExistence(timeout: 20))
+            XCTAssertTrue(approval.waitUntilExists(timeout: 20))
             XCTAssertTrue(approval.isHittable, "New rows must stay visible after the keyboard and draft shrink")
             XCTAssertFalse(latestButton.exists, "Sending at the bottom must continue following the latest content")
             captureScreen(app, named: "Long history submission \(attempt) remains visible")
@@ -64,20 +64,20 @@ extension LaunchUITests {
     func testSimulatorSelectsPluginAndSkillFromComposer() throws {
         let app = try connectedSimulatorApp()
         let compose = app.buttons["tasks.new.project.simulator-project"]
-        XCTAssertTrue(compose.waitForExistence(timeout: 10)); compose.tap()
+        XCTAssertTrue(compose.waitUntilExists(timeout: 10)); compose.tap()
         let input = app.textFields["task.message"]
-        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap()
+        XCTAssertTrue(input.waitUntilExists(timeout: 10)); input.tap()
         input.typeText("/fixture")
         let skill = app.buttons["composer.invocation.fixture-review"]
-        XCTAssertTrue(skill.waitForExistence(timeout: 15)); skill.tap()
+        XCTAssertTrue(skill.waitUntilExists(timeout: 15)); skill.tap()
         XCTAssertEqual(input.value as? String, "$fixture-review ")
         input.typeText("@Fixture")
         let plugin = app.buttons["composer.invocation.Fixture Plugin"]
-        XCTAssertTrue(plugin.waitForExistence(timeout: 15)); plugin.tap()
+        XCTAssertTrue(plugin.waitUntilExists(timeout: 15)); plugin.tap()
         XCTAssertEqual(input.value as? String, "$fixture-review @Fixture Plugin ")
         input.typeText("[success] Use the selected tools")
         app.buttons["task.send"].tap()
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 30))
         XCTAssertFalse((input.value as? String ?? "").contains("fixture-review"))
     }
 
@@ -85,25 +85,25 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[success] [selection] Verify assistant selection")
         let answer = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(answer.waitForExistence(timeout: 30))
+        XCTAssertTrue(answer.waitUntilExists(timeout: 30))
         let text = answer.textViews["message.assistant-text"]
-        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertTrue(text.waitUntilExists(timeout: 5))
         XCTAssertTrue((text.value as? String ?? "").contains("Second paragraph"))
         text.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 25, dy: 10)).press(forDuration: 1.2)
         let copy = app.menuItems["コピー"]
-        XCTAssertTrue(copy.waitForExistence(timeout: 5)); copy.tap()
+        XCTAssertTrue(copy.waitUntilExists(timeout: 5)); copy.tap()
         let message = app.textFields["task.message"]
         // Focus expands the idle composer before its edit menu opens.
         message.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitUntilExists(timeout: 5))
         message.press(forDuration: 1.2)
         let paste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
-        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        XCTAssertTrue(paste.waitUntilExists(timeout: 5)); paste.tap()
         XCTAssertEqual(message.value as? String, "Needle")
         text.tap()
         text.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 25, dy: 10)).press(forDuration: 1.2)
         let add = app.menuItems["チャットに追加"]
-        XCTAssertTrue(add.waitForExistence(timeout: 5)); add.tap()
+        XCTAssertTrue(add.waitUntilExists(timeout: 5)); add.tap()
         let expected = "Needle\n\n> Needle\n\n"
         let inserted = expectation(for: NSPredicate(format: "value == %@", expected), evaluatedWith: message)
         wait(for: [inserted], timeout: 5)
@@ -111,9 +111,9 @@ extension LaunchUITests {
         app.terminate()
         let reopened = try connectedSimulatorApp()
         let row = prefixedElement(reopened, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 10)); row.tap()
         let restored = reopened.textFields["task.message"]
-        XCTAssertTrue(restored.waitForExistence(timeout: 10))
+        XCTAssertTrue(restored.waitUntilExists(timeout: 10))
         XCTAssertEqual(restored.value as? String, expected)
     }
 
@@ -129,7 +129,7 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[success] [selection] Original conversation")
         let original = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(original.waitForExistence(timeout: 30))
+        XCTAssertTrue(original.waitUntilExists(timeout: 30))
         let originalID = original.identifier
         let message = app.textFields["task.message"]
         message.tap(); message.typeText("Keep my original draft")
@@ -145,7 +145,7 @@ extension LaunchUITests {
         openAssistantSelectionSideChat(app)
         if retryRead {
             let retry = app.buttons["再試行"]
-            XCTAssertTrue(retry.waitForExistence(timeout: 10))
+            XCTAssertTrue(retry.waitUntilExists(timeout: 10))
             retry.tap()
         }
         let sideMessage = app.textFields["task.message"]
@@ -161,7 +161,7 @@ extension LaunchUITests {
             openWorkbenchTool(app, "sideChat")
             waitForDraftText(sideMessage, text: "> Needle\n\nKeep my side draft")
             closeWorkbench(app)
-            XCTAssertTrue(app.descendants(matching: .any)[originalID].waitForExistence(timeout: 15))
+            XCTAssertTrue(app.descendants(matching: .any)[originalID].waitUntilExists(timeout: 15))
             waitForDraftText(message, text: "Keep my original draft")
             XCTAssertFalse(app.staticTexts["notice"].exists)
             app.buttons["task.tools"].tap()
@@ -176,7 +176,7 @@ extension LaunchUITests {
         app.buttons["task.tools"].tap()
         openWorkbenchTool(app, "sideChat")
         let input = app.textFields["task.message"]
-        XCTAssertTrue(input.waitForExistence(timeout: 15))
+        XCTAssertTrue(input.waitUntilExists(timeout: 15))
         waitForDraftText(input, text: input.placeholderValue ?? "")
         closeWorkbench(app)
         waitForDraftText(app.textFields["task.message"], text: "Keep my original draft", timeout: 10)
@@ -187,10 +187,10 @@ extension LaunchUITests {
             .matching(NSPredicate(format: "label == %@", "サイドチャットで質問")).firstMatch
         if !side.exists {
             let forward = app.buttons["Forward"]
-            XCTAssertTrue(forward.waitForExistence(timeout: 5)); forward.tap()
+            XCTAssertTrue(forward.waitUntilExists(timeout: 5)); forward.tap()
         }
-        XCTAssertTrue(side.waitForExistence(timeout: 5)); side.tap()
-        XCTAssertTrue(app.navigationBars["サイドチャット"].waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(side.waitUntilExists(timeout: 5)); side.tap()
+        XCTAssertTrue(app.navigationBars["サイドチャット"].waitUntilExists(timeout: 15), app.debugDescription)
         XCTAssertTrue(app.buttons["workbench.add"].exists)
         XCTAssertTrue(app.navigationBars.buttons["BackButton"].exists)
     }
@@ -209,7 +209,7 @@ extension LaunchUITests {
         app.buttons["task.send"].tap()
         let final = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", "item.fixture-final-")).firstMatch
-        XCTAssertTrue(final.waitForExistence(timeout: 30))
+        XCTAssertTrue(final.waitUntilExists(timeout: 30))
         let sideID = final.identifier
         XCTAssertNotEqual(sideID, originalID)
         let sent = app.textViews.matching(NSPredicate(
@@ -225,15 +225,15 @@ extension LaunchUITests {
         captureScreen(app, named: "Selected quote submitted in side chat")
         let message = app.textFields["task.message"]
         closeWorkbench(app)
-        XCTAssertTrue(app.descendants(matching: .any)[originalID].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)[originalID].waitUntilExists(timeout: 15))
         waitForDraftText(message, text: "Keep my original draft", timeout: 10)
         app.terminate()
         let reopened = try connectedSimulatorApp()
         let number = try XCTUnwrap(sideID.split(separator: "-").dropLast().last)
         let row = try reopened
             .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
-        XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
-        XCTAssertTrue(reopened.descendants(matching: .any)[sideID].waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitUntilExists(timeout: 15)); row.tap()
+        XCTAssertTrue(reopened.descendants(matching: .any)[sideID].waitUntilExists(timeout: 20))
         XCTAssertTrue(reopened.textViews.matching(NSPredicate(
             format: "identifier == %@ AND value == %@", "message.user-text", "Needle\n[success] Explain this selection"
         )).firstMatch.exists)
@@ -243,7 +243,7 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         let text = "Needle Alpha Bravo [success]"
         try startSimulatorConversation(app, promptText: text)
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 30))
         let sent = app.textViews.matching(NSPredicate(
             format: "identifier == %@ AND value == %@", "message.user-text", text
         )).firstMatch
@@ -251,25 +251,25 @@ extension LaunchUITests {
         // User messages select in place like answers.
         sent.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 25, dy: 10)).press(forDuration: 1.2)
         let copy = app.menuItems["コピー"]
-        XCTAssertTrue(copy.waitForExistence(timeout: 5)); copy.tap()
+        XCTAssertTrue(copy.waitUntilExists(timeout: 5)); copy.tap()
         let composer = app.textFields["task.message"]
         composer.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitUntilExists(timeout: 5))
         composer.press(forDuration: 1.2)
         let paste = app.menuItems.matching(NSPredicate(format: "label IN %@", ["Paste", "ペースト"])).firstMatch
-        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        XCTAssertTrue(paste.waitUntilExists(timeout: 5)); paste.tap()
         let selectedText = expectation(for: NSPredicate(format: "value == %@", "Needle"), evaluatedWith: composer)
         wait(for: [selectedText], timeout: 5)
         composer.press(forDuration: 1.2)
         let selectAll = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == 'Select All' OR label == 'すべてを選択'")).firstMatch
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 5)); selectAll.tap()
+        XCTAssertTrue(selectAll.waitUntilExists(timeout: 5)); selectAll.tap()
         composer.typeText(XCUIKeyboardKey.delete.rawValue)
         waitForDraftText(composer, text: composer.placeholderValue ?? "")
         let fullCopy = app.buttons["発言をコピー"]
-        XCTAssertTrue(fullCopy.waitForExistence(timeout: 5)); fullCopy.tap()
+        XCTAssertTrue(fullCopy.waitUntilExists(timeout: 5)); fullCopy.tap()
         composer.press(forDuration: 1.2)
-        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        XCTAssertTrue(paste.waitUntilExists(timeout: 5)); paste.tap()
         let fullText = expectation(for: NSPredicate(format: "value == %@", text), evaluatedWith: composer)
         wait(for: [fullText], timeout: 5)
         XCTAssertFalse(app.staticTexts["notice"].exists)
@@ -285,7 +285,7 @@ extension LaunchUITests {
         prompt.tap(); prompt.typeText("[success] Keep this chat unassigned")
         app.buttons["task.send"].tap()
         let answer = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(answer.waitForExistence(timeout: 30))
+        XCTAssertTrue(answer.waitUntilExists(timeout: 30))
         let answerID = answer.identifier
         let completed = expectation(
             for: NSPredicate(format: "label CONTAINS %@", "件の過去のメッセージ"),
@@ -303,9 +303,9 @@ extension LaunchUITests {
         let number = try XCTUnwrap(answerID.split(separator: "-").dropLast().last)
         let row = try app
             .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
-        XCTAssertTrue(row.waitForExistence(timeout: 20), "The chat must be outside collapsed projects")
+        XCTAssertTrue(row.waitUntilExists(timeout: 20), "The chat must be outside collapsed projects")
         row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)[answerID].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.descendants(matching: .any)[answerID].waitUntilExists(timeout: 20))
         XCTAssertFalse(app.staticTexts["notice"].exists)
         captureScreen(app, named: "Unassigned chat after reopening")
         app.buttons["task.new"].tap()
@@ -316,17 +316,17 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[approval] Verify approvals")
         let accept = app.buttons["request.accept"]
-        XCTAssertTrue(accept.waitForExistence(timeout: 15))
+        XCTAssertTrue(accept.waitUntilExists(timeout: 15))
         accept.tap()
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 15))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 15))
 
         let message = app.descendants(matching: .any)["task.message"]
         message.tap(); message.typeText("Keep this draft")
         openFiles(app)
         let file = app.buttons["file.hello.txt"]
-        XCTAssertTrue(file.waitForExistence(timeout: 10)); file.tap()
+        XCTAssertTrue(file.waitUntilExists(timeout: 10)); file.tap()
         let editor = app.textViews["file.editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertTrue(editor.waitUntilExists(timeout: 10))
         editor.tap(); editor.typeText("Saved from iPhone\n")
         XCTAssertTrue(
             (editor.value as? String ?? "").contains("Saved from iPhone"),
@@ -342,22 +342,22 @@ extension LaunchUITests {
         wait(for: [saved], timeout: 10)
         app.buttons["file.close"].tap()
         file.tap()
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertTrue(editor.waitUntilExists(timeout: 10))
         XCTAssertTrue((editor.value as? String ?? "").contains("Saved from iPhone"))
         app.buttons["file.close"].tap()
         openWorkbenchTool(app, "diff")
         let savedDiff = app.staticTexts
             .matching(NSPredicate(format: "label BEGINSWITH '+' AND label CONTAINS 'Saved from iPhone'")).firstMatch
-        XCTAssertTrue(savedDiff.waitForExistence(timeout: 10))
+        XCTAssertTrue(savedDiff.waitUntilExists(timeout: 10))
         closeWorkbench(app)
         XCTAssertEqual(message.value as? String, "Keep this draft")
 
         app.terminate()
         let reopened = try connectedSimulatorApp()
         let row = prefixedElement(reopened, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 10)); row.tap()
         let restored = reopened.descendants(matching: .any)["task.message"]
-        XCTAssertTrue(restored.waitForExistence(timeout: 10))
+        XCTAssertTrue(restored.waitUntilExists(timeout: 10))
         XCTAssertEqual(restored.value as? String, "Keep this draft")
     }
 }

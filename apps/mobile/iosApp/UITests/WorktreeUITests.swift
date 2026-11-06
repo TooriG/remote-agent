@@ -7,21 +7,21 @@ extension LaunchUITests {
         // Refresh updates the open project while retaining closed project pages.
         refreshSimulatorTaskList(app)
         let project = app.buttons["tasks.project.simulator-project"]
-        XCTAssertTrue(project.waitForExistence(timeout: 10))
+        XCTAssertTrue(project.waitUntilExists(timeout: 10))
         let running = app.descendants(matching: .any)["tasks.running.codex:merge-active"]
-        XCTAssertTrue(running.waitForExistence(timeout: 10))
+        XCTAssertTrue(running.waitUntilExists(timeout: 10))
         let merged = app.descendants(matching: .any)["tasks.merged.codex:merge-active"]
         let unmerged = app.descendants(matching: .any)["tasks.unmerged.codex:merge-active"]
         XCTAssertFalse(merged.exists || unmerged.exists)
         try simulatorFixture("merge-worktree/dirty")
         refreshSimulatorTaskList(app)
-        XCTAssertTrue(unmerged.waitForExistence(timeout: 10))
+        XCTAssertTrue(unmerged.waitUntilExists(timeout: 10))
         XCTAssertTrue(running.exists)
         XCTAssertGreaterThan(unmerged.frame.minX, running.frame.maxX)
         try simulatorFixture("merge-worktree/clean")
         try simulatorFixture("merge-worktree/merged")
         refreshSimulatorTaskList(app)
-        XCTAssertTrue(merged.waitForExistence(timeout: 10))
+        XCTAssertTrue(merged.waitUntilExists(timeout: 10))
         XCTAssertFalse(unmerged.exists)
         XCTAssertTrue(running.exists)
         XCTAssertGreaterThan(merged.frame.minX, running.frame.maxX)
@@ -33,14 +33,14 @@ extension LaunchUITests {
         app.terminate()
         app.launch()
         expandSimulatorProject(app)
-        XCTAssertTrue(merged.waitForExistence(timeout: 10))
+        XCTAssertTrue(merged.waitUntilExists(timeout: 10))
         try simulatorFixture("merge-worktree/dirty")
         refreshSimulatorTaskList(app)
-        XCTAssertTrue(unmerged.waitForExistence(timeout: 10))
+        XCTAssertTrue(unmerged.waitUntilExists(timeout: 10))
         XCTAssertFalse(merged.exists)
         try simulatorFixture("merge-worktree/clean")
         refreshSimulatorTaskList(app)
-        XCTAssertTrue(merged.waitForExistence(timeout: 10))
+        XCTAssertTrue(merged.waitUntilExists(timeout: 10))
         try simulatorFixture("merge-worktree/new-work")
         refreshSimulatorTaskList(app)
         let removed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: merged)
@@ -117,7 +117,7 @@ extension LaunchUITests {
         paths.tap(); paths.typeText(".env\nconfig/local")
         directory.tap(); directory.typeText("relative")
         app.buttons["worktree.save"].tap()
-        XCTAssertTrue(app.staticTexts["worktree.error"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["worktree.error"].waitUntilExists(timeout: 10))
         XCTAssertEqual(directory.value as? String, "relative")
         XCTAssertEqual(create.value as? String, "1")
         let destination = "/tmp/agent-worktree-ui-\(UUID().uuidString)"
@@ -153,9 +153,9 @@ extension LaunchUITests {
             menu.tap()
             app.buttons["tasks.settings"].tap()
         }
-        XCTAssertTrue(worktrees.waitForExistence(timeout: 10)); worktrees.tap()
+        XCTAssertTrue(worktrees.waitUntilExists(timeout: 10)); worktrees.tap()
         let save = app.buttons["worktree.save"]
-        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        XCTAssertTrue(save.waitUntilExists(timeout: 10))
         let loaded = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: save)
         wait(for: [loaded], timeout: 10)
     }
@@ -182,7 +182,7 @@ extension LaunchUITests {
         directory.press(forDuration: 1.2)
         let selectAll = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == 'Select All' OR label == 'すべてを選択'")).firstMatch
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 5))
+        XCTAssertTrue(selectAll.waitUntilExists(timeout: 5))
         selectAll.tap()
         directory.typeText(XCUIKeyboardKey.delete.rawValue)
         XCTAssertEqual(directory.value as? String, directory.placeholderValue)
@@ -207,9 +207,9 @@ extension LaunchUITests {
         refreshSimulatorTaskList(app)
         expandSimulatorProject(app)
         let row = app.descendants(matching: .any)["tasks.row.codex:fixture-review-thread"]
-        XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 15)); row.tap()
         let changes = app.buttons["task.diff"]
-        XCTAssertTrue(changes.waitForExistence(timeout: 15))
+        XCTAssertTrue(changes.waitUntilExists(timeout: 15))
         let staleWorkspace = expectation(for: NSPredicate(format: "exists == true"),
                                          evaluatedWith: app.staticTexts["検証プロジェクト · 検証 Mac"])
         staleWorkspace.isInverted = true
@@ -220,18 +220,18 @@ extension LaunchUITests {
         try openDiffAfterRetry(app)
         assertWorkspaceDiffTabs(app)
         closeWorkbench(app)
-        XCTAssertTrue(changes.waitForExistence(timeout: 10))
+        XCTAssertTrue(changes.waitUntilExists(timeout: 10))
         XCTAssertFalse(app.staticTexts["notice"].exists)
         openFiles(app)
-        XCTAssertTrue(app.buttons["file.tracked.txt"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["file.tracked.txt"].waitUntilExists(timeout: 10))
         openWorkbenchTool(app, "diff")
-        XCTAssertTrue(app.staticTexts["+Session worktree first"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["+Session worktree first"].waitUntilExists(timeout: 10))
         closeWorkbench(app)
         let input = app.descendants(matching: .any)["task.message"]
         input.tap(); input.typeText("[workspace-edit] Update the worktree while running")
         app.buttons["task.send"].tap()
         let running = prefixedButton(app, prefix: "turn.interrupt.")
-        XCTAssertTrue(running.waitForExistence(timeout: 10))
+        XCTAssertTrue(running.waitUntilExists(timeout: 10))
         let updated = expectation(
             for: NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@ AND label CONTAINS %@",
                              "2件のファイル", "+4", "−1"),
@@ -241,22 +241,22 @@ extension LaunchUITests {
         XCTAssertTrue(running.exists, "Counts must update before the turn finishes")
         captureScreen(app, named: "Live worktree counts before turn completion")
         try simulatorFixture("release-inputs")
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 10))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 10))
     }
 
     private func assertWorkspaceDiffTabs(_ app: XCUIApplication) {
-        XCTAssertTrue(app.staticTexts["+Session worktree first"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["+Session worktree first"].waitUntilExists(timeout: 10))
         XCTAssertFalse(app.buttons["file.tracked.txt"].exists)
         let card = app.buttons["diff.file.tracked.txt"]
         card.tap()
         wait(for: [expectation(for: NSPredicate(format: "exists == false"),
                                evaluatedWith: app.staticTexts["+Session worktree first"])], timeout: 5)
         card.tap()
-        XCTAssertTrue(app.staticTexts["+Session worktree first"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["+Session worktree first"].waitUntilExists(timeout: 10))
         openWorkbenchTool(app, "files")
-        XCTAssertTrue(app.buttons["file.tracked.txt"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["file.tracked.txt"].waitUntilExists(timeout: 10))
         openWorkbenchTool(app, "diff")
-        XCTAssertTrue(app.staticTexts["+Session worktree first"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["+Session worktree first"].waitUntilExists(timeout: 10))
         XCTAssertTrue(app.staticTexts["+Session worktree second"].exists)
         XCTAssertTrue(app.staticTexts["-original"].exists)
         XCTAssertFalse(app.staticTexts["+Project-only change"].exists)
@@ -273,7 +273,7 @@ extension LaunchUITests {
         }
         app.buttons["task.diff"].tap()
         let retry = app.buttons["files.diff.retry"]
-        XCTAssertTrue(retry.waitForExistence(timeout: 10))
+        XCTAssertTrue(retry.waitUntilExists(timeout: 10))
         XCTAssertFalse(app.buttons["file.tracked.txt"].exists)
         try simulatorFixture("worktree/review/restore"); unavailable = false
         retry.tap()

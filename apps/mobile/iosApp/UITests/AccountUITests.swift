@@ -17,16 +17,16 @@ extension LaunchUITests {
         composer.tap(); composer.typeText("[success] Inherit this question")
         app.buttons["task.send"].tap()
         let answer = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(answer.waitForExistence(timeout: 25))
+        XCTAssertTrue(answer.waitUntilExists(timeout: 25))
         let originalAnswerID = answer.identifier
         let firstFork = app.buttons["response.fork." + String(originalAnswerID.dropFirst("item.".count))]
-        XCTAssertTrue(firstFork.waitForExistence(timeout: 10))
+        XCTAssertTrue(firstFork.waitUntilExists(timeout: 10))
         switchFixtureAccount(app)
         XCTAssertTrue(app.descendants(matching: .any)[originalAnswerID].exists)
         composer.tap(); composer.typeText("[success] This later question stays in the original")
         app.buttons["task.send"].tap()
         let nextID = String(originalAnswerID.dropLast()) + "2"
-        XCTAssertTrue(app.descendants(matching: .any)[nextID].waitForExistence(timeout: 25))
+        XCTAssertTrue(app.descendants(matching: .any)[nextID].waitUntilExists(timeout: 25))
         // Fork the earlier completed turn after the original has a later turn.
         let list = app.descendants(matching: .any)["task.detail"]
         for _ in 0 ..< 6 where !firstFork.isHittable {
@@ -38,22 +38,22 @@ extension LaunchUITests {
             evaluatedWith: app.descendants(matching: .any)[nextID]
         )
         wait(for: [disappeared], timeout: 20)
-        XCTAssertTrue(app.descendants(matching: .any)[originalAnswerID].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.descendants(matching: .any)[originalAnswerID].waitUntilExists(timeout: 20))
         composer.tap(); composer.typeText("[success] Continue the fork")
         app.buttons["task.send"].tap()
         let forkAnswer = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH 'item.fixture-final-' AND identifier != %@",
             originalAnswerID
         )).firstMatch
-        XCTAssertTrue(forkAnswer.waitForExistence(timeout: 25))
+        XCTAssertTrue(forkAnswer.waitUntilExists(timeout: 25))
         XCTAssertNotEqual(forkAnswer.identifier, nextID)
         captureScreen(app, named: "Fork inherits the selected answer and accepts a new turn")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let number = try XCTUnwrap(originalAnswerID.split(separator: "-").dropLast().last)
         let original = try app
             .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
-        XCTAssertTrue(original.waitForExistence(timeout: 15)); original.tap()
-        XCTAssertTrue(app.descendants(matching: .any)[nextID].waitForExistence(timeout: 20))
+        XCTAssertTrue(original.waitUntilExists(timeout: 15)); original.tap()
+        XCTAssertTrue(app.descendants(matching: .any)[nextID].waitUntilExists(timeout: 20))
     }
 
     func testSimulatorAddsClaudeAccountAndKeepsCodexSelected() throws {
@@ -61,11 +61,11 @@ extension LaunchUITests {
         app.buttons["tasks.new.project.simulator-project"].tap()
         app.buttons["model.settings"].tap()
         _ = addFixtureClaudeAccount(app)
-        XCTAssertTrue(app.staticTexts["5時間枠"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["Fable · 週間枠"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["5時間枠"].waitUntilExists(timeout: 15))
+        XCTAssertTrue(app.staticTexts["Fable · 週間枠"].waitUntilExists(timeout: 15))
         XCTAssertTrue(app.staticTexts["残り 66%"].exists)
         openModelChoices(app)
-        XCTAssertTrue(app.buttons["model.choice.default"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["model.choice.default"].waitUntilExists(timeout: 15))
         selectFixtureProvider(app, "Codex")
         openAccountManagement(app)
         XCTAssertEqual(app.buttons["model.account.desktop"].value as? String, "選択中")
@@ -84,17 +84,17 @@ extension LaunchUITests {
             )).allElementsBoundByIndex.map(\.identifier).sorted()
             for attempt in 0 ..< 2 {
                 let add = app.buttons["model.account.add"]
-                XCTAssertTrue(add.waitForExistence(timeout: 10)); add.tap()
+                XCTAssertTrue(add.waitUntilExists(timeout: 10)); add.tap()
                 if attempt == 1 {
                     let code = provider == "Codex"
                         ? app.staticTexts["model.login.code"] : app.secureTextFields["model.login.input"]
-                    XCTAssertTrue(code.waitForExistence(timeout: 15))
+                    XCTAssertTrue(code.waitUntilExists(timeout: 15))
                     if provider == "Claude" {
                         code.tap(); code.typeText("unfinished-code")
                     }
                 }
                 let back = app.navigationBars.buttons["model.back"]
-                XCTAssertTrue(back.waitForExistence(timeout: 10))
+                XCTAssertTrue(back.waitUntilExists(timeout: 10))
                 XCTAssertTrue(back.isEnabled && back.isHittable)
                 XCTAssertFalse(app.buttons["model.login.cancel"].exists)
                 back.tap()
@@ -108,7 +108,7 @@ extension LaunchUITests {
             }
         }
         dismissModelSettings(app)
-        XCTAssertTrue(app.textFields["task.message"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["task.message"].waitUntilExists(timeout: 10))
     }
 
     func testSimulatorSignsInDirectlyFromModelSettings() throws {
@@ -124,7 +124,7 @@ extension LaunchUITests {
         XCTAssertTrue(actions.isHittable); actions.tap()
         app.buttons["account.logout." + id].tap()
         let confirm = app.alerts.buttons.matching(identifier: "account.logout.confirm").firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirm.waitUntilExists(timeout: 5))
         app.alerts.buttons.matching(identifier: "account.logout.cancel").firstMatch.tap()
         XCTAssertTrue(actions.exists)
         actions.tap()
@@ -148,7 +148,7 @@ extension LaunchUITests {
     }
 
     func assertAccountQuota(_ app: XCUIApplication, label: String, remaining: Int) {
-        XCTAssertTrue(app.staticTexts[label].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts[label].waitUntilExists(timeout: 15))
         XCTAssertTrue(app.staticTexts[label].isHittable)
         XCTAssertTrue(app.staticTexts["残り \(remaining)%"].exists)
     }
@@ -159,9 +159,9 @@ extension LaunchUITests {
         let existingIDs = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'model.account.claude:'"))
             .allElementsBoundByIndex.map(\.identifier)
         let add = app.buttons["model.account.add"]
-        XCTAssertTrue(add.waitForExistence(timeout: 10)); XCTAssertTrue(add.isHittable); add.tap()
+        XCTAssertTrue(add.waitUntilExists(timeout: 10)); XCTAssertTrue(add.isHittable); add.tap()
         let code = app.secureTextFields["model.login.input"]
-        XCTAssertTrue(code.waitForExistence(timeout: 15))
+        XCTAssertTrue(code.waitUntilExists(timeout: 15))
         XCTAssertTrue(app.navigationBars["Claude Code"].exists)
         captureScreen(app, named: "Claude sign in from account management")
         code.tap(); code.typeText("fixture-code")
@@ -169,14 +169,14 @@ extension LaunchUITests {
         let logout = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH 'model.account.claude:' AND NOT (identifier IN %@)", existingIDs
         )).firstMatch
-        XCTAssertTrue(logout.waitForExistence(timeout: 20))
+        XCTAssertTrue(logout.waitUntilExists(timeout: 20))
         return String(logout.identifier.dropFirst("model.account.".count))
     }
 
     func testSimulatorOpensAccountManagementFromSettingsAndModelPicker() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.menu"].tap(); app.buttons["tasks.settings"].tap()
-        XCTAssertTrue(app.buttons["settings.providers"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["settings.providers"].waitUntilExists(timeout: 10))
         XCTAssertTrue(app.buttons["settings.connections"].exists)
         XCTAssertTrue(app.buttons["settings.worktrees"].exists)
         XCTAssertFalse(app.segmentedControls["account.provider"].exists)
@@ -185,10 +185,10 @@ extension LaunchUITests {
         app.buttons["settings.providers"].tap()
         let environment = app.buttons["settings.scope.environment"]
         XCTAssertTrue(environment.label.contains("検証 Host"))
-        XCTAssertTrue(app.buttons["provider.codex"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["provider.codex"].waitUntilExists(timeout: 10))
         XCTAssertTrue(app.switches["provider.enabled.codex"].exists)
         app.buttons["provider.codex"].tap()
-        XCTAssertTrue(app.buttons["account.actions.desktop"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["account.actions.desktop"].waitUntilExists(timeout: 15))
         let scope = app.descendants(matching: .any).matching(NSPredicate(
             format: "label CONTAINS %@ OR value == %@", "すべてのプロジェクト", "すべてのプロジェクト"
         )).firstMatch
@@ -205,16 +205,16 @@ extension LaunchUITests {
         app.navigationBars["Codex"].buttons["BackButton"].tap()
         app.navigationBars["プロバイダー"].buttons["BackButton"].tap()
         app.buttons["settings.connections"].tap()
-        XCTAssertTrue(app.buttons["profiles.add"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["profiles.add"].waitUntilExists(timeout: 10))
         XCTAssertTrue(app.buttons["pairing.scan"].exists)
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'profiles.' AND identifier != 'profiles.add'"))
             .firstMatch.tap()
-        XCTAssertTrue(app.switches["environment.enabled"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.switches["environment.enabled"].waitUntilExists(timeout: 10))
         XCTAssertTrue(app.buttons["providers.refresh"].exists)
         app.navigationBars["検証 Host"].buttons["BackButton"].tap()
         app.navigationBars["環境"].buttons["BackButton"].tap()
         app.buttons["settings.close"].tap()
-        XCTAssertTrue(app.buttons["tasks.new.project.simulator-project"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["tasks.new.project.simulator-project"].waitUntilExists(timeout: 10))
         verifyConversationAccountControls(app)
     }
 
@@ -238,7 +238,7 @@ extension LaunchUITests {
         let prompt = app.textFields["task.message"]
         prompt.tap(); prompt.typeText("[success] Keep the conversation agent")
         app.buttons["task.send"].tap()
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 25))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 25))
         expandComposer(app)
         app.buttons["model.settings"].tap()
         XCTAssertTrue(app.segmentedControls["model.provider"].buttons["Codex"].isSelected)
@@ -253,9 +253,9 @@ extension LaunchUITests {
         app.buttons["tasks.menu"].tap()
         app.buttons["tasks.refresh"].tap()
         let row = app.buttons["tasks.row.codex:fixture-external-thread"]
-        XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 15)); row.tap()
         XCTAssertTrue(app.descendants(matching: .any)["item.answer-fixture-external-thread"]
-            .waitForExistence(timeout: 15))
+            .waitUntilExists(timeout: 15))
         expandComposer(app)
         captureScreen(app, named: "Model controls on an externally created conversation")
         let model = app.buttons["model.settings"]
@@ -265,18 +265,18 @@ extension LaunchUITests {
         let prompt = app.textFields["task.message"]
         prompt.tap(); prompt.typeText("[delayed-input] Keep model settings available while working")
         app.buttons["task.send"].tap()
-        XCTAssertTrue(prefixedButton(app, prefix: "turn.interrupt.").waitForExistence(timeout: 10))
+        XCTAssertTrue(prefixedButton(app, prefix: "turn.interrupt.").waitUntilExists(timeout: 10))
         expandComposer(app)
         XCTAssertTrue(model.isHittable)
         XCTAssertEqual(model.value as? String, "Fixture Model")
         captureScreen(app, named: "Model selection remains visible during a running turn")
         model.tap()
         let selected = app.buttons["model.choice.fixture-model"]
-        XCTAssertTrue(selected.waitForExistence(timeout: 10))
+        XCTAssertTrue(selected.waitUntilExists(timeout: 10))
         XCTAssertEqual(selected.value as? String, "選択中")
         dismissModelSettings(app)
         try simulatorFixture("release-inputs")
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 25))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 25))
     }
 
     func testSimulatorComposerOffersFastModelAndEffortBeforeMicrophone() throws {
@@ -331,16 +331,16 @@ extension LaunchUITests {
         expandComposer(app)
         app.buttons["model.settings"].tap()
         openAccountManagement(app)
-        XCTAssertTrue(app.buttons["account.actions.desktop"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["account.actions.desktop"].waitUntilExists(timeout: 10))
         app.buttons["model.account.add"].tap()
-        XCTAssertTrue(app.staticTexts["model.login.code"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["model.login.code"].waitUntilExists(timeout: 10))
         XCUIDevice.shared.press(.home)
         app.activate()
         let second = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'model.account.account-'"))
             .firstMatch
-        XCTAssertTrue(second.waitForExistence(timeout: 20))
+        XCTAssertTrue(second.waitUntilExists(timeout: 20))
         let id = String(second.identifier.dropFirst("model.account.".count))
-        XCTAssertTrue(app.buttons["model.account.desktop"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["model.account.desktop"].waitUntilExists(timeout: 5))
         app.buttons["model.account.desktop"].tap()
         let choice = app.buttons["model.account." + id]
         for _ in 0 ..< 6 where !choice.isHittable {

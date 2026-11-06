@@ -24,7 +24,7 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[generated-images] Show generated images and links")
         let finalAnswer = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(finalAnswer.waitForExistence(timeout: 25))
+        XCTAssertTrue(finalAnswer.waitUntilExists(timeout: 25))
         let finalID = finalAnswer.identifier
         func showGeneratedImage(_ name: String) {
             let image = app.images.matching(NSPredicate(
@@ -37,7 +37,7 @@ extension LaunchUITests {
                 }
                 app.swipeDown()
             }
-            XCTAssertTrue(image.waitForExistence(timeout: 10), "Generated image did not decode")
+            XCTAssertTrue(image.waitUntilExists(timeout: 10), "Generated image did not decode")
             XCTAssertTrue(image.isHittable)
             XCTAssertFalse(app.staticTexts["生成画像"].exists, "Generated images must not render a redundant caption")
         }
@@ -54,11 +54,11 @@ extension LaunchUITests {
             verifyWorkspaceFileLink(app, index: offset + 3, filename: "fixture \(fixture.0)", expected: fixture.1)
         }
         app.terminate(); _ = try connectedSimulatorApp()
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitUntilExists(timeout: 30))
         let number = try XCTUnwrap(finalID.split(separator: "-").dropLast().last)
         let row = try app
             .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
-        XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 20)); row.tap()
         showGeneratedImage("inline")
         showGeneratedImage("saved")
         verifyWorkspaceFileLink(app, index: 0, filename: "fixture image.png")
@@ -72,7 +72,7 @@ extension LaunchUITests {
         showConversationElement(link, in: app, upward: true)
         link.tap()
         let done = app.buttons["file.close"]
-        XCTAssertTrue(done.waitForExistence(timeout: 15), "The Host file did not open")
+        XCTAssertTrue(done.waitUntilExists(timeout: 15), "The Host file did not open")
         XCTAssertTrue(app.navigationBars[filename].exists)
         verifyWorkspacePreview(app, expected: expected)
         let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
@@ -97,7 +97,7 @@ extension LaunchUITests {
             )
         case .truncated:
             let preview = app.textViews["file.preview.text"]
-            XCTAssertTrue(preview.waitForExistence(timeout: 15))
+            XCTAssertTrue(preview.waitUntilExists(timeout: 15))
             XCTAssertTrue((preview.value as? String)?.hasPrefix("Large text fixture") == true)
             XCTAssertFalse((preview.value as? String)?.contains("END OF FULL FILE") == true)
             XCTAssertFalse(app.buttons["file.save"].isEnabled)
@@ -111,7 +111,7 @@ extension LaunchUITests {
             let contrast = image.map { renderedTextContrast($0, region: area) } ?? 0
             XCTAssertGreaterThan(contrast, 128, "The long unbroken line must actually be drawn")
         case .unavailable:
-            XCTAssertTrue(app.descendants(matching: .any)["file.error"].waitForExistence(timeout: 15))
+            XCTAssertTrue(app.descendants(matching: .any)["file.error"].waitUntilExists(timeout: 15))
             XCTAssertTrue(app.buttons["file.download"].exists)
             XCTAssertFalse(app.buttons["file.save"].isEnabled)
         default:
@@ -120,14 +120,14 @@ extension LaunchUITests {
     }
 
     private func verifyNativeWorkspacePreview(_ app: XCUIApplication, expected: WorkspacePreview) {
-        XCTAssertTrue(app.buttons["file.share"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["file.share"].waitUntilExists(timeout: 15))
         XCTAssertFalse(app.textViews["file.editor"].exists, "Binary files must bypass the text editor")
         XCTAssertTrue(app.buttons["file.reload"].exists)
         XCTAssertTrue(app.buttons["file.ai-edit"].exists)
         switch expected {
         case .image:
             let preview = app.images["conversation.preview.image"]
-            XCTAssertTrue(preview.waitForExistence(timeout: 15))
+            XCTAssertTrue(preview.waitUntilExists(timeout: 15))
             XCTAssertTrue(preview.isHittable)
         case .media:
             let play = app.buttons.matching(NSPredicate(format: "label IN %@", ["Play", "再生"])).firstMatch
@@ -147,7 +147,7 @@ extension LaunchUITests {
             wait(for: [paused], timeout: 5)
         case .web:
             let content = app.webViews.firstMatch
-            XCTAssertTrue(content.waitForExistence(timeout: 15))
+            XCTAssertTrue(content.waitUntilExists(timeout: 15))
             XCTAssertTrue(content.isHittable)
             XCTAssertGreaterThan(content.frame.height, 100)
         case .document:
@@ -160,16 +160,16 @@ extension LaunchUITests {
     func testSimulatorOpensOnlyTheTappedImageAndSavesIt() throws {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[generated-images] [gallery] Open only the tapped image")
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 25))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 25))
         let image = app.images.matching(NSPredicate(
             format: "identifier BEGINSWITH %@",
             "message.image.fixture-generated-inline-"
         )).firstMatch
         showConversationElement(image, in: app, upward: false)
         image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(app.buttons["conversation.preview.close"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["conversation.preview.close"].waitUntilExists(timeout: 10))
         let preview = app.images["conversation.preview.image"]
-        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        XCTAssertTrue(preview.waitUntilExists(timeout: 10))
         XCTAssertTrue(preview.isHittable)
         preview.pinch(withScale: 2, velocity: 1)
         XCTAssertFalse(app.staticTexts["conversation.preview.position"].exists)
@@ -189,14 +189,14 @@ extension LaunchUITests {
         XCTAssertFalse(save.isEnabled)
         XCTAssertFalse(app.staticTexts["conversation.preview.position"].exists)
         app.buttons["conversation.preview.close"].tap()
-        XCTAssertTrue(image.waitForExistence(timeout: 10))
+        XCTAssertTrue(image.waitUntilExists(timeout: 10))
     }
 
     func testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening() throws {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[images] Display the attached images")
         let finalAnswer = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(finalAnswer.waitForExistence(timeout: 25))
+        XCTAssertTrue(finalAnswer.waitUntilExists(timeout: 25))
         let finalID = finalAnswer.identifier
         let messageImage = app.images.matching(NSPredicate(format: "identifier BEGINSWITH %@", "message.image."))
             .firstMatch
@@ -206,24 +206,24 @@ extension LaunchUITests {
         inlineImage.tap()
         let save = app.buttons["conversation.preview.save"]
         let close = app.buttons["conversation.preview.close"]
-        XCTAssertTrue(close.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.images["conversation.preview.image"].waitForExistence(timeout: 10))
+        XCTAssertTrue(close.waitUntilExists(timeout: 10))
+        XCTAssertTrue(app.images["conversation.preview.image"].waitUntilExists(timeout: 10))
         XCTAssertTrue(save.exists)
         XCTAssertLessThan(save.frame.midX, close.frame.midX)
         XCTAssertGreaterThan(save.frame.midX, app.frame.midX)
         captureScreen(app, named: "Expanded image with Save and Close at top right")
         close.tap()
-        XCTAssertTrue(inlineImage.waitForExistence(timeout: 5))
+        XCTAssertTrue(inlineImage.waitUntilExists(timeout: 5))
         captureScreen(app, named: "Markdown image decoded in the conversation")
         showConversationElement(hostImage, in: app, upward: false)
         showConversationElement(messageImage, in: app, upward: false)
         captureScreen(app, named: "Host attachment decoded in the user message")
         app.terminate(); _ = try connectedSimulatorApp()
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitUntilExists(timeout: 30))
         let threadNumber = try XCTUnwrap(finalID.split(separator: "-").dropLast().last)
         let row = try app
             .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(threadNumber)")]
-        XCTAssertTrue(row.waitForExistence(timeout: 20)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 20)); row.tap()
         showConversationElement(inlineImage, in: app, upward: true)
         showConversationElement(hostImage, in: app, upward: false)
         showConversationElement(messageImage, in: app, upward: false)
@@ -243,7 +243,7 @@ extension LaunchUITests {
                     withNormalizedOffset: CGVector(dx: 0.5, dy: below ? 0.35 : 0.55)
                 ))
         }
-        XCTAssertTrue(element.waitForExistence(timeout: 10))
+        XCTAssertTrue(element.waitUntilExists(timeout: 10))
         XCTAssertTrue(element.isHittable)
         XCTAssertGreaterThanOrEqual(element.frame.midY, visible.lowerBound)
         XCTAssertLessThan(element.frame.midY, visible.upperBound)

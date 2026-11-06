@@ -57,7 +57,7 @@ extension LaunchUITests {
         XCTAssertEqual(app.buttons["model.fast"].value as? String, "オン")
         app.buttons["BackButton"].tap()
         app.terminate(); app.launch()
-        XCTAssertTrue(app.buttons["tasks.menu"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["tasks.menu"].waitUntilExists(timeout: 20))
         app.buttons["tasks.new.chat"].tap()
         XCTAssertEqual(app.buttons["model.effort"].value as? String, "medium")
         XCTAssertEqual(app.buttons["model.fast"].value as? String, "オフ")
@@ -67,7 +67,7 @@ extension LaunchUITests {
     func testSimulatorWeeklyUsageNamesFableAndSettingsOmitModelDefaults() throws {
         let app = try connectedSimulatorApp()
         app.buttons["tasks.menu"].tap(); app.buttons["tasks.settings"].tap()
-        XCTAssertTrue(app.buttons["settings.providers"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["settings.providers"].waitUntilExists(timeout: 10))
         XCTAssertFalse(app.buttons["settings.models"].exists)
         app.buttons["settings.close"].tap()
         app.buttons["tasks.new.project.simulator-project"].tap()

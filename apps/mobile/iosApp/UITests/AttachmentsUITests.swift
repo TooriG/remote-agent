@@ -6,9 +6,9 @@ extension LaunchUITests {
     func testSimulatorCanAddASecondPhoto() throws {
         let app = try connectedSimulatorApp()
         let compose = app.buttons["tasks.new.project.simulator-project"]
-        XCTAssertTrue(compose.waitForExistence(timeout: 10)); compose.tap()
+        XCTAssertTrue(compose.waitUntilExists(timeout: 10)); compose.tap()
         let folder = app.buttons["task.folder"]
-        XCTAssertTrue(folder.waitForExistence(timeout: 10))
+        XCTAssertTrue(folder.waitUntilExists(timeout: 10))
         XCTAssertTrue(app.buttons["task.environment"].isHittable)
         let prompt = app.descendants(matching: .any)["task.message"]
         XCTAssertLessThan(folder.frame.maxY, prompt.frame.minY)
@@ -36,7 +36,7 @@ extension LaunchUITests {
         captureScreen(app, named: "Two separately selected photos staged")
         prompt.tap(); prompt.typeText("[success] Read both photos")
         app.buttons["task.send"].tap()
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 30))
         XCTAssertEqual(removals.count, 0)
         selectPhotos([.photo], in: app)
         confirmPhotoSelection(in: app)
@@ -44,7 +44,7 @@ extension LaunchUITests {
         wait(for: [nextAttachment], timeout: 60)
         XCTAssertTrue(app.buttons["task.send"].isEnabled)
         let thumbnail = app.images["composer.attachment.0"]
-        XCTAssertTrue(thumbnail.waitForExistence(timeout: 20))
+        XCTAssertTrue(thumbnail.waitUntilExists(timeout: 20))
         let remove = removals.firstMatch
         XCTAssertGreaterThan(remove.frame.midX, thumbnail.frame.midX)
         XCTAssertLessThan(remove.frame.midY, thumbnail.frame.midY)
@@ -60,15 +60,15 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         try useAutomaticWorktrees(app)
         let compose = app.buttons["tasks.new.chat"]
-        XCTAssertTrue(compose.waitForExistence(timeout: 10)); compose.tap()
+        XCTAssertTrue(compose.waitUntilExists(timeout: 10)); compose.tap()
         XCTAssertEqual(app.buttons["task.folder"].label, "フォルダ: チャット")
         app.buttons["task.attach"].tap()
-        XCTAssertTrue(app.buttons["task.attach.photos"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["task.attach.photos"].waitUntilExists(timeout: 5))
         XCTAssertTrue(app.buttons["task.attach.camera"].exists)
         XCTAssertTrue(app.buttons["task.attach.file"].exists)
         captureScreen(app, named: "Photo video camera and file attachment menu")
         app.buttons["task.attach.camera"].tap()
-        XCTAssertTrue(app.staticTexts["この端末ではカメラを利用できません。"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["この端末ではカメラを利用できません。"].waitUntilExists(timeout: 5))
         selectPhotos([.photo, .video], in: app)
         captureScreen(app, named: "Photo and video selected together")
         confirmPhotoSelection(in: app)
@@ -79,13 +79,13 @@ extension LaunchUITests {
         prompt.tap(); prompt.typeText("[success] Read selected media")
         app.buttons["task.send"].tap()
         let photo = app.images.matching(NSPredicate(format: "identifier BEGINSWITH %@", "message.image.")).firstMatch
-        XCTAssertTrue(photo.waitForExistence(timeout: 30), "Uploaded image did not decode in the conversation")
+        XCTAssertTrue(photo.waitUntilExists(timeout: 30), "Uploaded image did not decode in the conversation")
         XCTAssertTrue(app.textViews.matching(NSPredicate(
             format: "identifier == %@ AND value CONTAINS %@", "message.user-text", "添付:"
         )).firstMatch
-            .waitForExistence(timeout: 20))
+            .waitUntilExists(timeout: 20))
         XCTAssertEqual(removals.count, 0)
-        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitForExistence(timeout: 30))
+        XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 30))
         let completed = expectation(
             for: NSPredicate(format: "label CONTAINS %@", "件の過去のメッセージ"),
             evaluatedWith: prefixedButton(app, prefix: "turn.activity.fixture-turn-")
@@ -102,9 +102,9 @@ extension LaunchUITests {
         app.buttons["tasks.menu"].tap(); app.buttons["tasks.refresh"].tap()
         expandSimulatorProject(app)
         let row = app.descendants(matching: .any)["tasks.row.codex:fixture-upload-thread"]
-        XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 15)); row.tap()
         let prompt = app.textFields["task.message"]
-        XCTAssertTrue(prompt.waitForExistence(timeout: 10))
+        XCTAssertTrue(prompt.waitUntilExists(timeout: 10))
         prompt.tap(); prompt.typeText("[success] Retry selected photos")
         try simulatorFixture("uploads/unavailable")
         var unavailable = true
@@ -116,7 +116,7 @@ extension LaunchUITests {
         selectPhotos([.photo, .video], in: app)
         confirmPhotoSelection(in: app)
         let notices = app.staticTexts.matching(identifier: "notice")
-        XCTAssertTrue(notices.firstMatch.waitForExistence(timeout: 30))
+        XCTAssertTrue(notices.firstMatch.waitUntilExists(timeout: 30))
         let attach = app.buttons["task.attach"]
         let recovered = expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: attach)
         wait(for: [recovered], timeout: 10)
@@ -131,15 +131,15 @@ extension LaunchUITests {
         XCTAssertEqual(notices.count, 0)
         app.buttons["task.send"].tap()
         let final = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(final.waitForExistence(timeout: 30))
+        XCTAssertTrue(final.waitUntilExists(timeout: 30))
         let finalID = final.identifier
         XCTAssertEqual(removals.count, 0)
         XCTAssertNotEqual(prompt.value as? String, "[success] Retry selected photos")
         app.terminate(); _ = try connectedSimulatorApp()
-        XCTAssertTrue(row.waitForExistence(timeout: 15)); row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)[finalID].waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitUntilExists(timeout: 15)); row.tap()
+        XCTAssertTrue(app.descendants(matching: .any)[finalID].waitUntilExists(timeout: 20))
         XCTAssertTrue(app.images.matching(NSPredicate(format: "identifier BEGINSWITH %@", "message.image."))
-            .firstMatch.waitForExistence(timeout: 15))
+            .firstMatch.waitUntilExists(timeout: 15))
         XCTAssertEqual(notices.count, 0)
         captureScreen(app, named: "Recovered media upload survives reopening")
     }
@@ -163,7 +163,7 @@ extension LaunchUITests {
             let (japanese, english) = kind.labels
             let media = app.images
                 .matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", japanese, english)).firstMatch
-            XCTAssertTrue(media.waitForExistence(timeout: 15), app.debugDescription)
+            XCTAssertTrue(media.waitUntilExists(timeout: 15), app.debugDescription)
             media.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
     }
@@ -172,7 +172,7 @@ extension LaunchUITests {
         let confirm = app.navigationBars.buttons.matching(
             NSPredicate(format: "label IN %@", ["Add", "Done", "追加", "完了"])
         ).firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        XCTAssertTrue(confirm.waitUntilExists(timeout: 10))
         let enabled = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: confirm)
         wait(for: [enabled], timeout: 10)
         confirm.tap()
@@ -184,37 +184,37 @@ extension LaunchUITests {
         let attachment = app.cells["attachment-fixture, txt"]
         // The picker restores the app's Documents directory asynchronously.
         // Wait for that destination before navigating a transient Browse page.
-        if !attachment.waitForExistence(timeout: 10) {
+        if !attachment.waitUntilExists(timeout: 10) {
             let browse = app.buttons.matching(NSPredicate(format: "label IN %@", ["ブラウズ", "Browse"])).firstMatch
-            if browse.waitForExistence(timeout: 3) {
+            if browse.waitUntilExists(timeout: 3) {
                 browse.tap()
             }
             let onPhone = app.staticTexts.matching(
                 NSPredicate(format: "label IN %@", ["このiPhone内", "On My iPhone"])
             ).firstMatch
-            if onPhone.waitForExistence(timeout: 3) {
+            if onPhone.waitUntilExists(timeout: 3) {
                 onPhone.tap()
             }
             let folder = app.staticTexts["bex"]
-            if folder.waitForExistence(timeout: 3) {
+            if folder.waitUntilExists(timeout: 3) {
                 folder.tap()
             }
         }
-        XCTAssertTrue(attachment.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(attachment.waitUntilExists(timeout: 10), app.debugDescription)
         attachment.tap()
     }
 
     func testSimulatorCanAttachDownloadAndPrepareAIEdit() throws {
         let app = try connectedSimulatorApp()
         try startSimulatorConversation(app, promptText: "[success] Prepare file operations")
-        XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").waitForExistence(timeout: 20))
+        XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").waitUntilExists(timeout: 20))
         selectAttachmentFixture(in: app)
-        XCTAssertTrue(app.staticTexts["attachment-fixture.txt"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["attachment-fixture.txt"].waitUntilExists(timeout: 15))
         app.terminate()
         let reopened = try connectedSimulatorApp()
         let row = prefixedElement(reopened, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
-        XCTAssertTrue(reopened.staticTexts["attachment-fixture.txt"].waitForExistence(timeout: 10))
+        XCTAssertTrue(row.waitUntilExists(timeout: 10)); row.tap()
+        XCTAssertTrue(reopened.staticTexts["attachment-fixture.txt"].waitUntilExists(timeout: 10))
         let message = reopened.descendants(matching: .any)["task.message"]
         message.tap(); message.typeText("Read the attached file")
         reopened.buttons["task.send"].tap()
@@ -222,22 +222,22 @@ extension LaunchUITests {
             format: "identifier == %@ AND value CONTAINS %@",
             "message.user-text", "添付: attachment-fixture.txt"
         )).firstMatch
-        XCTAssertTrue(historyAttachment.waitForExistence(timeout: 15))
+        XCTAssertTrue(historyAttachment.waitUntilExists(timeout: 15))
         openFiles(reopened)
         let file = reopened.buttons["file.hello.txt"]
-        XCTAssertTrue(file.waitForExistence(timeout: 10)); file.tap()
-        XCTAssertTrue(reopened.textViews["file.editor"].waitForExistence(timeout: 10))
+        XCTAssertTrue(file.waitUntilExists(timeout: 10)); file.tap()
+        XCTAssertTrue(reopened.textViews["file.editor"].waitUntilExists(timeout: 10))
         reopened.buttons["ダウンロード"].tap()
         let shareName = reopened.otherElements["LP.CaptionBar.TopCaption"]
-        XCTAssertTrue(shareName.waitForExistence(timeout: 15), reopened.debugDescription)
+        XCTAssertTrue(shareName.waitUntilExists(timeout: 15), reopened.debugDescription)
         XCTAssertEqual(shareName.label, "hello")
         let screenshot = XCTAttachment(screenshot: reopened.screenshot())
         screenshot.name = "Downloaded file in native share sheet"; screenshot.lifetime = .keepAlways; add(screenshot)
         reopened.buttons["header.closeButton"].tap()
-        XCTAssertTrue(file.waitForExistence(timeout: 10)); file.tap()
-        XCTAssertTrue(reopened.buttons["file.ai-edit"].waitForExistence(timeout: 10))
+        XCTAssertTrue(file.waitUntilExists(timeout: 10)); file.tap()
+        XCTAssertTrue(reopened.buttons["file.ai-edit"].waitUntilExists(timeout: 10))
         reopened.buttons["file.ai-edit"].tap()
-        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        XCTAssertTrue(message.waitUntilExists(timeout: 10))
         XCTAssertTrue((message.value as? String ?? "").contains("hello.txt"))
     }
 }

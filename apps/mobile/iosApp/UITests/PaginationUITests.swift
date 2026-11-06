@@ -12,11 +12,11 @@ extension LaunchUITests {
         app.terminate(); app.launch()
         expandSimulatorProject(app)
         let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
-        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 30)); row.tap()
         let detail = app.descendants(matching: .any)["task.detail"]
-        XCTAssertTrue(detail.waitForExistence(timeout: 30))
+        XCTAssertTrue(detail.waitUntilExists(timeout: 30))
         let latest = app.descendants(matching: .any)["item.long-14-0"]
-        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
         let visible = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: latest)
         wait(for: [visible], timeout: 5)
         captureScreen(app, named: "Long interrupted history at latest message")
@@ -52,14 +52,14 @@ extension LaunchUITests {
         assertHistoryTopNavigation(app, latest: latest)
         XCTAssertTrue(latest.isHittable)
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
-        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitUntilExists(timeout: 10)); row.tap()
+        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
         XCTAssertTrue(latest.isHittable, "Every reopen must render the latest message in the viewport")
     }
 
     private func assertHistoryTopNavigation(_ app: XCUIApplication, latest: XCUIElement) {
         let latestButton = app.buttons["task.latest"]
-        XCTAssertTrue(latestButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(latestButton.waitUntilExists(timeout: 5))
         latestButton.tap()
         for scrollToTop in [
             { app.buttons["task.top"].tap() },
@@ -69,7 +69,7 @@ extension LaunchUITests {
             XCTAssertTrue(latest.isHittable)
             XCTAssertFalse(latestButton.exists)
             scrollToTop()
-            XCTAssertTrue(latestButton.waitForExistence(timeout: 5))
+            XCTAssertTrue(latestButton.waitUntilExists(timeout: 5))
             XCTAssertFalse(latest.isHittable, "Top navigation must not snap back to the latest message")
             latestButton.tap()
         }
@@ -81,13 +81,13 @@ extension LaunchUITests {
         app.terminate(); app.launch()
         expandSimulatorProject(app)
         let row = app.descendants(matching: .any)["tasks.row.codex:\(conversationId)"]
-        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
+        XCTAssertTrue(row.waitUntilExists(timeout: 30)); row.tap()
         let detail = app.descendants(matching: .any)["task.detail"]
-        XCTAssertTrue(detail.waitForExistence(timeout: 30))
+        XCTAssertTrue(detail.waitUntilExists(timeout: 30))
         let latest = app.descendants(matching: .any)["item.long-latest-message"]
-        XCTAssertTrue(latest.waitForExistence(timeout: 20))
+        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
         let loadEarlier = app.buttons["history.load"]
-        XCTAssertTrue(loadEarlier.waitForExistence(timeout: 10))
+        XCTAssertTrue(loadEarlier.waitUntilExists(timeout: 10))
         XCTAssertTrue(loadEarlier.isHittable, "A short initial page must keep the manual control visible")
         let initialItems = loadedItems(in: detail)
         XCTAssertGreaterThan(initialItems, 0)
@@ -127,7 +127,7 @@ extension LaunchUITests {
         app.buttons["tasks.menu"].tap()
         app.buttons["tasks.refresh"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.row.codex:pagination-chat-16"]
-            .waitForExistence(timeout: 20))
+            .waitUntilExists(timeout: 20))
         scrollToListElement(
             app.descendants(matching: .any)["tasks.row.codex:pagination-chat-12"],
             in: app
@@ -138,7 +138,7 @@ extension LaunchUITests {
         XCTAssertEqual(project.value as? String, "閉じています")
         project.tap()
         let newest = app.descendants(matching: .any)["tasks.row.codex:pagination-project-thread-16-16"]
-        XCTAssertTrue(newest.waitForExistence(timeout: 15))
+        XCTAssertTrue(newest.waitUntilExists(timeout: 15))
         let lastInitial = app.descendants(matching: .any)["tasks.row.codex:pagination-project-thread-16-12"]
         scrollToListElement(lastInitial, in: app)
         XCTAssertFalse(app.descendants(matching: .any)["tasks.row.codex:pagination-project-thread-16-11"]
@@ -170,9 +170,9 @@ extension LaunchUITests {
                                                          oldest: XCUIElement, more: XCUIElement) {
         oldest.tap()
         XCTAssertTrue(app.descendants(matching: .any)["item.answer-pagination-project-thread-16-1"]
-            .waitForExistence(timeout: 15))
+            .waitUntilExists(timeout: 15))
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.list"].waitUntilExists(timeout: 15))
         scrollToEarlierListElement(project, in: app, attempts: 30)
         XCTAssertEqual(project.value as? String, "開いています")
         scrollToListElement(oldest, in: app)
@@ -203,7 +203,7 @@ extension LaunchUITests {
         app.buttons["tasks.menu"].tap()
         app.buttons["tasks.refresh"].tap()
         let newest = app.buttons["tasks.project.pagination-project-16"]
-        XCTAssertTrue(newest.waitForExistence(timeout: 20))
+        XCTAssertTrue(newest.waitUntilExists(timeout: 20))
         scrollToListElement(app.buttons["tasks.project.pagination-project-12"], in: app)
         XCTAssertFalse(app.buttons["tasks.project.pagination-project-11"].exists)
         let projectMore = app.buttons["tasks.projects.more"]
@@ -216,7 +216,7 @@ extension LaunchUITests {
         XCTAssertFalse(projectMore.exists)
 
         let newestChat = app.descendants(matching: .any)["tasks.row.codex:pagination-chat-16"]
-        XCTAssertTrue(newestChat.waitForExistence(timeout: 20))
+        XCTAssertTrue(newestChat.waitUntilExists(timeout: 20))
         scrollToListElement(app.descendants(matching: .any)["tasks.row.codex:pagination-chat-12"], in: app)
         let chatMore = app.buttons["tasks.chats.more"]
         scrollToListElement(chatMore, in: app)
@@ -231,7 +231,7 @@ extension LaunchUITests {
         XCTAssertFalse(chatMore.exists)
         app.descendants(matching: .any)["tasks.row.codex:pagination-chat-1"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["item.answer-pagination-chat-1"]
-            .waitForExistence(timeout: 20))
+            .waitUntilExists(timeout: 20))
         XCTAssertFalse(app.staticTexts["notice"].exists)
         captureScreen(app, named: "Oldest chat opened after separate project and chat pagination")
     }
