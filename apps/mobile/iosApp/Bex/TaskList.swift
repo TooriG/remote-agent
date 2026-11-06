@@ -81,8 +81,6 @@ struct ThreadsScreen: View {
                                     colorRGB: project.iconColor
                                 )
                                 Text(project.name).font(.title3).lineLimit(1)
-                                    .accessibilityIdentifier("tasks.project.\(project.id)")
-                                    .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                                 Spacer(minLength: 0)
                                 Button { model.openNewThread(cwd: project.roots.first?.path ?? "", on: project.hostId)
                                 } label: {
@@ -95,6 +93,8 @@ struct ThreadsScreen: View {
                                 .accessibilityIdentifier("tasks.new.project.\(project.id)")
                             }
                             .frame(minHeight: 44)
+                            .accessibilityIdentifier("tasks.project.\(project.id)")
+                            .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                         }
                         .taskListRowStyle()
                     }
