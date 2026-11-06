@@ -312,7 +312,7 @@ extension LaunchUITests {
         XCTAssertTrue(activity.exists && activity.isHittable)
         activity.tap()
         app.buttons["回答をコピー"].firstMatch.tap()
-        XCTAssertTrue(app.buttons["コピーしました"].firstMatch.exists)
+        XCTAssertTrue(app.buttons["コピーしました"].firstMatch.waitUntilExists(timeout: 5))
 
         try verifyUncachedHistoryDetails(app, fullOutput: fullOutput)
     }
