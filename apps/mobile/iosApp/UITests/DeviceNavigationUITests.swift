@@ -301,7 +301,8 @@ extension LaunchUITests {
         XCTAssertFalse(app.staticTexts["PCとペアリング"].exists)
 
         let notice = app.staticTexts["notice"]
-        let project = prefixedButton(app, prefix: "tasks.project.")
+        let project = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tasks.project."))
+            .firstMatch
         if project.exists, project.value as? String == "閉じています" {
             project.tap()
         }

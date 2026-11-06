@@ -80,7 +80,10 @@ struct ThreadsScreen: View {
                                     monogram: project.monogram,
                                     colorRGB: project.iconColor
                                 )
+                                // Keep this identity separate from the group's rows and create button.
                                 Text(project.name).font(.title3).lineLimit(1)
+                                    .accessibilityIdentifier("tasks.project.\(project.id)")
+                                    .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                                 Spacer(minLength: 0)
                                 Button { model.openNewThread(cwd: project.roots.first?.path ?? "", on: project.hostId)
                                 } label: {
@@ -93,8 +96,6 @@ struct ThreadsScreen: View {
                                 .accessibilityIdentifier("tasks.new.project.\(project.id)")
                             }
                             .frame(minHeight: 44)
-                            .accessibilityIdentifier("tasks.project.\(project.id)")
-                            .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                         }
                         .taskListRowStyle()
                     }

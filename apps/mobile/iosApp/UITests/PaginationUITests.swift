@@ -127,7 +127,7 @@ extension LaunchUITests {
             in: app
         )
         XCTAssertFalse(app.descendants(matching: .any)["tasks.row.codex:pagination-chat-11"].exists)
-        let project = app.buttons["tasks.project.pagination-project-16"]
+        let project = app.staticTexts["tasks.project.pagination-project-16"]
         scrollToListElement(project, in: app)
         XCTAssertEqual(project.value as? String, "閉じています")
         project.tap()
@@ -174,7 +174,7 @@ extension LaunchUITests {
     }
 
     private func assertOtherProjectRemainsAtInitialPage(in app: XCUIApplication) {
-        let otherProject = app.buttons["tasks.project.pagination-project-15"]
+        let otherProject = app.staticTexts["tasks.project.pagination-project-15"]
         scrollToListElement(otherProject, in: app)
         XCTAssertEqual(otherProject.value as? String, "閉じています")
         otherProject.tap()
@@ -196,16 +196,16 @@ extension LaunchUITests {
         try useSimulatorListFixture("list-fixture")
         app.buttons["tasks.menu"].tap()
         app.buttons["tasks.refresh"].tap()
-        let newest = app.buttons["tasks.project.pagination-project-16"]
+        let newest = app.staticTexts["tasks.project.pagination-project-16"]
         XCTAssertTrue(newest.waitUntilExists(timeout: 20))
-        scrollToListElement(app.buttons["tasks.project.pagination-project-12"], in: app)
-        XCTAssertFalse(app.buttons["tasks.project.pagination-project-11"].exists)
+        scrollToListElement(app.staticTexts["tasks.project.pagination-project-12"], in: app)
+        XCTAssertFalse(app.staticTexts["tasks.project.pagination-project-11"].exists)
         let projectMore = app.buttons["tasks.projects.more"]
         for last in [2, 1] {
             scrollToListElement(projectMore, in: app)
             projectMore.tap()
             scrollToEarlierListElement(newest, in: app, attempts: 30)
-            scrollToListElement(app.buttons["tasks.project.pagination-project-\(last)"], in: app)
+            scrollToListElement(app.staticTexts["tasks.project.pagination-project-\(last)"], in: app)
         }
         XCTAssertFalse(projectMore.exists)
 

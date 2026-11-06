@@ -50,7 +50,7 @@ final class LaunchUITests: XCTestCase {
     }
 
     func expandSimulatorProject(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        let project = app.buttons["tasks.project.simulator-project"]
+        let project = app.staticTexts["tasks.project.simulator-project"]
         guard project.waitUntilExists(timeout: 10) else {
             XCTFail("The fixture project did not appear.\n\(app.debugDescription)", file: file, line: line)
             return
