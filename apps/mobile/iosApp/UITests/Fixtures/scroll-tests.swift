@@ -9,6 +9,7 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
     func application(_: UIApplication,
                      didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         Task {
+            await checkComposerUnderlay()
             await checkRecyclingAndAnchoring()
             await checkDetachedTail()
             await checkFollowingTallRows()
@@ -36,14 +37,14 @@ final class ConversationScrollTests: UIResponder, UIApplicationDelegate {
             + "inset=\(view.adjustedContentInset), content=\(view.contentSize)"
     }
 
-    private func mount(_ controller: ConversationListController) {
+    private func mount(_ controller: UIViewController) {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
         self.window = window
         window.rootViewController = controller
         window.makeKeyAndVisible()
     }
 
-    private func layout(_ controller: ConversationListController) async {
+    private func layout(_ controller: UIViewController) async {
         // Complete the actual UIKit transaction rather than simulating content heights or retrying assertions.
         await withCheckedContinuation { continuation in
             CATransaction.begin()
@@ -353,5 +354,30 @@ extension ConversationScrollTests {
             else { return false }
             return abs(attributes.size.width - width) < 1
         }, "Resizing must replace offscreen rows' cached widths as well as the visible row widths")
+    }
+}
+
+extension ConversationScrollTests {
+    private func checkComposerUnderlay() async {
+        for height: CGFloat in [60, 100, 180] {
+            let controller = ConversationContainerController(scroll: ConversationScrollState())
+            mount(controller)
+            let view = controller.list.collectionView
+            controller.list.update(ids: [.message("long")], following: true, accessibilityValue: "") { _ in
+                AnyView(Text("Scrollable conversation").frame(height: 1200))
+            }
+            controller.updateControls(composer: AnyView(Text("Composer").frame(height: height)),
+                                      latest: AnyView(EmptyView()))
+            await layout(controller)
+            check(view.frame == controller.view.bounds, "Conversation must draw behind the entire composer")
+            let composerFrame = controller.children[1].view.frame
+            check(abs(composerFrame.height - height) < 1, "Native hosting must size the composer")
+            check(abs(view.adjustedContentInset.bottom - view.bounds.height + composerFrame.minY) < 1,
+                  "Native insets must follow the composer edge: \(geometry(view)), composer=\(composerFrame)")
+            let last = view.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))!
+            check(abs(view.contentOffset.y + view.bounds.height - view.adjustedContentInset.bottom
+                      - last.frame.maxY - 6) < 1,
+            "The latest message must remain readable above the composer: \(geometry(view))")
+        }
     }
 }

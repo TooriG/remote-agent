@@ -78,8 +78,11 @@ struct ThreadScreen: View {
                 let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
                 let hasHistory = thread.id != nil && history != nil
                 let ids: [ConversationList.RowID] = (hasHistory ? [.history] : []) + rows.map { .message($0.id) }
+                let showLatest = !scroll.latestVisible && !rows.isEmpty
                 ConversationList(ids: ids, scroll: scroll, following: scroll.following,
-                                 accessibilityValue: threadAccessibilityValue(thread)) { index in
+                                 accessibilityValue: threadAccessibilityValue(thread),
+                                 composer: AnyView(composer),
+                                 latest: AnyView(latestButton(visible: showLatest))) { index in
                     let row = index - (hasHistory ? 1 : 0)
                     return AnyView(Group {
                         if row < 0, let session = thread.id, let history {
@@ -93,21 +96,6 @@ struct ThreadScreen: View {
                     .environment(\.locale, locale))
                 }
                 .id(model.draftKey)
-                .overlay(alignment: .bottom) {
-                    if !scroll.latestVisible, !rows.isEmpty {
-                        Button {
-                            scroll.following = true
-                        } label: {
-                            Image(systemName: "arrow.down").font(.title3.weight(.medium))
-                                .frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .accessibilityLabel("最新のメッセージへ")
-                        .accessibilityIdentifier("task.latest")
-                        .padding(.bottom, 6)
-                    }
-                }
             } else if model.isNewThread {
                 ScrollView {
                     newThreadContext
@@ -130,10 +118,32 @@ struct ThreadScreen: View {
             }
         }
         .background(Color(UIColor.systemBackground))
+        .ignoresSafeArea(conversation == nil ? [] : .keyboard, edges: .bottom)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ConversationComposer(model: model, mediaPresentation: mediaPresentation,
-                                 hasConversation: conversation != nil,
-                                 isSideChat: isSideChat, openTools: openTools)
+            if conversation == nil {
+                composer
+            }
+        }
+    }
+
+    private var composer: some View {
+        ConversationComposer(model: model, mediaPresentation: mediaPresentation,
+                             hasConversation: conversation != nil,
+                             isSideChat: isSideChat, openTools: openTools)
+            .environment(\.locale, locale)
+    }
+
+    @ViewBuilder private func latestButton(visible: Bool) -> some View {
+        if visible {
+            Button { scroll.following = true } label: {
+                Image(systemName: "arrow.down").font(.title3.weight(.medium))
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("最新のメッセージへ")
+            .accessibilityIdentifier("task.latest")
+            .environment(\.locale, locale)
         }
     }
 }

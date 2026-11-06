@@ -8,31 +8,6 @@ import UIKit
     var latestVisible = true
 }
 
-struct ConversationList: UIViewControllerRepresentable {
-    enum RowID: Hashable {
-        case history
-        case message(String)
-    }
-
-    let ids: [RowID]
-    let scroll: ConversationScrollState
-    let following: Bool
-    let accessibilityValue: String
-    let row: (Int) -> AnyView
-
-    func makeUIViewController(context _: Context) -> ConversationListController {
-        ConversationListController(scroll: scroll)
-    }
-
-    func updateUIViewController(_ controller: ConversationListController, context _: Context) {
-        controller.update(ids: ids, following: following, accessibilityValue: accessibilityValue, row: row)
-    }
-
-    static func dismantleUIViewController(_ controller: ConversationListController, coordinator _: ()) {
-        controller.stop()
-    }
-}
-
 /// Observe the collection's actual layout, including inset changes that do not resize its controller.
 private final class ConversationCollectionView: UICollectionView {
     var didLayout: (() -> Void)?

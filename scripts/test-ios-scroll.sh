@@ -51,5 +51,5 @@ PLIST
     fi
     "$executable"
 }
-run_test scroll-tests apps/mobile/iosApp/Bex/ConversationList.swift apps/mobile/iosApp/Bex/ConversationListLayout.swift
+run_test scroll-tests apps/mobile/iosApp/Bex/ConversationContainer.swift apps/mobile/iosApp/Bex/ConversationList.swift apps/mobile/iosApp/Bex/ConversationListLayout.swift
 run_test text-view-tests apps/mobile/iosApp/Bex/ConversationTextLayout.swift
