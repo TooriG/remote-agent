@@ -8,7 +8,9 @@ use objc2::{
     runtime::ProtocolObject,
 };
 use objc2_core_foundation::{CGRect, CGSize};
-use objc2_foundation::{NSArray, NSIndexPath, NSInteger, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{
+    NSArray, NSData, NSIndexPath, NSInteger, NSObject, NSObjectProtocol, NSString,
+};
 use objc2_ui_kit::*;
 use std::{cell::RefCell, ptr::NonNull, rc::Rc};
 
@@ -185,11 +187,14 @@ define_class!(
             if let Some(row) = self.ivars().items.borrow().get(index.row() as usize) {
                 cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
                 config.setText(Some(&NSString::from_str(&row.title)));
-                let image = if let Some(asset) = &row.asset {
+                let image = if let Some(png) = &row.png {
+                    UIImage::imageWithData(&NSData::with_bytes(png))
+                } else if let Some(asset) = &row.asset {
                     UIImage::imageNamed(&NSString::from_str(asset))
                 } else {
-                    UIImage::systemImageNamed(&NSString::from_str(&row.symbol))
-                };
+                    None
+                }
+                .or_else(|| UIImage::systemImageNamed(&NSString::from_str(&row.symbol)));
                 config.setImage(image.as_deref());
                 config
                     .imageProperties()

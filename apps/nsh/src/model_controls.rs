@@ -62,5 +62,7 @@ pub(crate) fn controls() -> impl Element {
             _ => None,
         };
         if let Some(intent) = intent { connection.dispatch(intent); }
-    }).prop("title", move || json!(label.get())).prop("label", move || json!(label.get())).min_h(px(44.0))
+    }).prop("title", move || json!(label.get())).prop("label", move || json!(label.get()))
+        .prop("enabled", move || json!(publication.with(|p| p.composer.controls.connected && !p.composer.controls.sending)))
+        .min_h(px(44.0))
 }

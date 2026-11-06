@@ -80,7 +80,6 @@ impl NativeComponent for Button {
                         .and_then(symbol)
                         .as_deref(),
                 );
-                self.view.setImagePosition(NSCellImagePosition::ImageOnly);
             }
             "label" => self.view.setAccessibilityLabel(
                 value
@@ -108,6 +107,11 @@ impl NativeComponent for Button {
             }
             _ => {}
         }
+        self.view.setImagePosition(if self.view.title().is_empty() {
+            NSCellImagePosition::ImageOnly
+        } else {
+            NSCellImagePosition::ImageLeft
+        });
         let size = self.view.intrinsicContentSize();
         self.context
             .set_size(size.width.max(0.0) as f32, size.height.max(0.0) as f32);
@@ -198,6 +202,9 @@ impl NativeComponent for Menu {
                     );
                 }
             }
+            "enabled" => self
+                .view
+                .setEnabled(value.and_then(JsonValue::as_bool).unwrap_or(true)),
             "items" => {
                 while self.view.numberOfItems() > 1 {
                     self.view.removeItemAtIndex(1);

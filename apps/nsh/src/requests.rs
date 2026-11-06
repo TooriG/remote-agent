@@ -7,7 +7,7 @@ use agent_protocol::requests::{Answer, ElicitationAnswer, ElicitationInput, Requ
 use nsh_core::{element::input, prelude::*};
 use serde_json::json;
 
-pub(crate) fn panels() -> impl IntoElement {
+pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     view()
         .gap_2()
@@ -28,7 +28,10 @@ pub(crate) fn panels() -> impl IntoElement {
                 let response = signal(request_input_default(initial.request_body));
                 let error = signal(None::<String>);
                 let enabled = move || {
-                    request.with(|request| request.can_respond)
+                    connection
+                        .publication
+                        .with(|p| p.composer.controls.connected)
+                        && request.with(|request| request.can_respond)
                         && !connection.publication.with(|p| {
                             matches!(
                                 p.composer
@@ -38,6 +41,7 @@ pub(crate) fn panels() -> impl IntoElement {
                         })
                 };
                 let respond = move |answer| {
+                    following.set(true);
                     connection.dispatch(Intent::Respond(op::Respond {
                         request_id: request.with_untracked(|r| r.id.clone()),
                         answer,
@@ -204,7 +208,10 @@ pub(crate) fn panels() -> impl IntoElement {
             },
             move |prompt, _| {
                 let enabled = move || {
-                    prompt.with(|p| p.can_respond)
+                    connection
+                        .publication
+                        .with(|p| p.composer.controls.connected)
+                        && prompt.with(|p| p.can_respond)
                         && !connection.publication.with(|p| {
                             matches!(
                                 p.composer
@@ -221,6 +228,10 @@ pub(crate) fn panels() -> impl IntoElement {
                     .child(text(move || {
                         prompt.with(|p| p.progress.clone().unwrap_or_default())
                     }))
+                    .child(when(
+                        move || prompt.with(|p| p.status.is_some()),
+                        move || text(move || prompt.with(|p| p.status.clone().unwrap_or_default())),
+                    ))
                     .child(each(
                         move || prompt.with(|p| p.question.choices.clone()),
                         |choice: &agent_protocol::requests::QuestionChoice| choice.id.clone(),
@@ -231,6 +242,7 @@ pub(crate) fn panels() -> impl IntoElement {
                                     native::text_button(
                                         move || json!(choice.with(|c| c.label.clone())),
                                         move || {
+                                            following.set(true);
                                             connection.dispatch(Intent::AnswerQuestion {
                                                 request_id: prompt
                                                     .with_untracked(|p| p.request_id.clone()),
@@ -256,19 +268,21 @@ pub(crate) fn panels() -> impl IntoElement {
                                 .child(text(move || choice.with(|c| c.description.clone())))
                         },
                     ))
-                    .child(
-                        native::text_button(json!("前の質問へ"), move || {
-                            connection.dispatch(Intent::AnswerQuestion {
-                                request_id: prompt.with_untracked(|p| p.request_id.clone()),
-                                action: agent_core::questions::QuestionAction::Back,
+                    .child(when(
+                        move || prompt.with(|p| p.can_go_back),
+                        move || {
+                            native::text_button(json!("前の質問へ"), move || {
+                                connection.dispatch(Intent::AnswerQuestion {
+                                    request_id: prompt.with_untracked(|p| p.request_id.clone()),
+                                    action: agent_core::questions::QuestionAction::Back,
+                                })
                             })
-                        })
-                        .prop("enabled", move || {
-                            json!(prompt.with(|p| p.can_go_back) && enabled())
-                        }),
-                    )
+                            .prop("enabled", move || json!(enabled()))
+                        },
+                    ))
                     .child(
                         native::text_button(json!("スキップ"), move || {
+                            following.set(true);
                             connection.dispatch(Intent::Respond(op::Respond {
                                 request_id: prompt.with_untracked(|p| p.request_id.clone()),
                                 answer: Answer::SkipQuestions,

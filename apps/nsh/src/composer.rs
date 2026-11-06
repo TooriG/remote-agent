@@ -7,60 +7,95 @@ use agent_core::{
 use nsh_core::{GlassEffect, element::input, prelude::*};
 use serde_json::json;
 
-pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElement {
+pub(crate) fn composer(
+    publication: Memo<Shared<Presentation>>,
+    following: Signal<bool>,
+) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let files = use_context::<crate::files::Browser>().unwrap();
     let composing = signal(false);
     let focused = signal(false);
+    let field_ref = element_ref();
     let file_pick = signal(0_u64);
     let file_target = stored(None::<(String, agent_core::state::DraftKey)>);
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     let dictation = crate::dictation::Dictation::new();
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let (recording, requesting) = (dictation.active, dictation.requesting);
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let (recording, requesting) = (signal(false), signal(false));
     let composer = computed(move || publication.with(|p| Shared(p.composer.clone())));
     let controls = computed(move || composer.with(|c| c.controls.clone()));
     let draft = computed(move || composer.with(|c| c.draft.text.clone()));
-    let stopping = move || {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if dictation.active.get() {
-            return false;
+    let answering = computed(move || {
+        if recording.get() || requesting.get() || controls.with(|c| c.transcribing) {
+            None
+        } else {
+            controls.with(|c| c.question.clone())
         }
-        controls.with(|c| c.running_turn.is_some() && c.question.is_none())
+    });
+    let stopping = move || {
+        !recording.get()
+            && !requesting.get()
+            && !controls.with(|c| c.transcribing)
+            && controls.with(|c| c.running_turn.is_some())
+            && answering.with(Option::is_none)
             && composer.with(|c| c.draft.text.trim().is_empty() && c.draft.attachments.is_empty())
     };
-    let enabled = move || {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if dictation.requesting.get() {
-            return false;
+    let stop_label = move || {
+        controls.with(|c| {
+            if c.interrupt_phase == Some(op::OperationPhase::Running) {
+                "停止中"
+            } else {
+                "停止"
+            }
+        })
+    };
+    let primary_label = computed(move || {
+        if let Some(question) = answering.get() {
+            question.action
+        } else if stopping() {
+            stop_label().into()
+        } else if recording.get() {
+            "文字起こしして送信".into()
+        } else {
+            "送信".into()
         }
+    });
+    let enabled = move || {
         !composing.get()
-            && controls
-                .with(|c| c.connected && !c.sending && !c.transcribing && c.unavailable.is_none())
-            && controls
-                .with(|c| c.question.as_ref().map(|question| question.can_advance))
-                .unwrap_or_else(|| {
-                    #[cfg(any(target_os = "macos", target_os = "ios"))]
-                    if dictation.active.get() {
-                        return true;
-                    }
-                    stopping()
-                        || composer.with(|c| {
-                            !c.draft.text.trim().is_empty() || !c.draft.attachments.is_empty()
-                        })
-                })
+            && !requesting.get()
+            && composer.with(|c| {
+                if answering.with(Option::is_some) {
+                    c.can_advance_question()
+                } else if stopping() {
+                    c.can_interrupt()
+                } else {
+                    !connection.uploading.get() && c.can_submit(recording.get())
+                }
+            })
     };
     let collapsed = move || {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if dictation.active.get() || dictation.requesting.get() {
-            return false;
-        }
-        !focused.get()
+        !recording.get()
+            && !requesting.get()
+            && !focused.get()
+            && !connection.uploading.get()
             && draft.with(String::is_empty)
             && composer.with(|c| {
                 c.draft.attachments.is_empty()
                     && c.controls.navigation.thread_id.is_some()
                     && c.controls.question.is_none()
                     && !c.controls.transcribing
+                    && !c.controls.transferring
             })
+    };
+    let interrupt = move || {
+        if composer.with_untracked(|c| c.can_interrupt())
+            && let Some((thread_id, turn_id)) = controls
+                .with_untracked(|c| c.navigation.thread_id.clone().zip(c.running_turn.clone()))
+        {
+            connection.dispatch(Intent::Interrupt(op::Interrupt { thread_id, turn_id }));
+        }
     };
     let submit = move || {
         if !enabled() {
@@ -68,46 +103,56 @@ pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElem
         }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         if dictation.active.get_untracked() {
+            following.set(true);
             dictation.finish(connection.client.get(), true);
             return;
         }
-        let controls = controls.get_untracked();
-        if let Some(question) = controls.question {
+        if let Some(question) = answering.get_untracked() {
+            following.set(true);
             connection.dispatch(Intent::AnswerQuestion {
                 request_id: question.request_id,
                 action: agent_core::questions::QuestionAction::Advance,
             });
-        } else if stopping()
-            && let Some(turn_id) = controls.running_turn
-        {
-            if let Some(thread_id) = controls.navigation.thread_id {
-                connection.dispatch(Intent::Interrupt(op::Interrupt { thread_id, turn_id }));
-            }
+        } else if stopping() {
+            interrupt();
         } else if !composing.get_untracked() {
+            following.set(true);
             connection.dispatch(Intent::Submit {
-                thread_id: controls.navigation.thread_id,
+                thread_id: controls.with_untracked(|c| c.navigation.thread_id.clone()),
                 client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
             });
         }
     };
     let field = move || {
         input()
+            .element_ref(&field_ref)
             .multiline(true)
             .value(move || {
-                controls
-                    .with(|c| c.question.as_ref().map(|q| q.text.clone()))
+                answering
+                    .with(|q| q.as_ref().map(|q| q.text.clone()))
                     .unwrap_or_else(|| draft.get())
             })
             .placeholder(move || {
-                controls.with(|c| {
-                    c.question
+                answering.with(|question| {
+                    question
                         .as_ref()
                         .map(|question| question.placeholder.clone())
                         .unwrap_or_else(|| "メッセージを入力".into())
                 })
             })
-            .masked(move || {
-                controls.with(|c| c.question.as_ref().is_some_and(|q| q.question.secret))
+            .masked(move || answering.with(|q| q.as_ref().is_some_and(|q| q.question.secret)))
+            .readonly(move || {
+                recording.get()
+                    || requesting.get()
+                    || controls.with(|c| c.transcribing)
+                    || answering.with(|q| {
+                        q.as_ref().is_some_and(|q| {
+                            !q.can_respond
+                                || !q.question.allow_free_text
+                                || composer.with(|c| c.request_phase(q.request_id.clone()))
+                                    == Some(op::OperationPhase::Running)
+                        })
+                    })
             })
             .text_color(move || nsh_base::theme().foreground)
             .placeholder_color(move || color(nsh_base::theme().muted_foreground))
@@ -118,15 +163,16 @@ pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElem
             })
             .on_submit(move |_: &str| submit())
             .on_change(move |text: &str| {
-                if let Some(question) = controls.with_untracked(|c| c.question.clone()) {
+                if let Some(question) = answering.get_untracked() {
                     connection.dispatch(Intent::AnswerQuestion {
                         request_id: question.request_id,
                         action: agent_core::questions::QuestionAction::Edit { text: text.into() },
                     });
                 } else {
-                    connection.dispatch(Intent::SetDraftText {
+                    connection.dispatch(Intent::EditComposer {
                         thread_id: controls.with_untracked(|c| c.navigation.draft_key.clone()),
                         text: text.into(),
+                        cursor: text.len() as u32,
                     });
                 }
             })
@@ -179,31 +225,43 @@ pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElem
                         if item == "写真を選択" {
                             let picked = pick_images(nsh_core::picker::PickRequest::new(true, 10));
                             spawn(async move {
-                                for file in picked.await {
-                                    connection.client.with(|client| {
-                                        client.upload(
-                                            host.clone(),
-                                            key.clone(),
-                                            file.name,
-                                            file.data.to_vec(),
-                                        )
-                                    });
-                                }
+                                connection.attach(
+                                    host,
+                                    key,
+                                    picked
+                                        .await
+                                        .into_iter()
+                                        .map(|file| crate::client::AttachmentSource::Image {
+                                            name: file.name,
+                                            bytes: file.data.to_vec(),
+                                        })
+                                        .collect(),
+                                );
                             });
                         } else if !is_desktop() {
                             file_target.replace(Some((host, key)));
                             file_pick.update(|value| *value += 1);
                         } else {
-                            let picked = pick_paths(nsh_core::file_dialog::OpenDialog::default());
+                            let picked = pick_paths(
+                                nsh_core::file_dialog::OpenDialog::files().multiple(true),
+                            );
                             spawn(async move {
                                 match picked.await {
                                     Ok(Some(paths)) => {
-                                        for path in paths {
-                                            let is_image = native::image_file(&path);
-                                            connection.client.with(|client| {
-                                                client.attach(&host, key.clone(), path, is_image)
-                                            });
-                                        }
+                                        connection.attach(
+                                            host,
+                                            key,
+                                            paths
+                                                .into_iter()
+                                                .map(|path| {
+                                                    let is_image = native::image_file(&path);
+                                                    crate::client::AttachmentSource::File {
+                                                        path,
+                                                        is_image,
+                                                    }
+                                                })
+                                                .collect(),
+                                        );
                                     }
                                     Ok(None) => {}
                                     Err(reason) => native::message("添付", reason),
@@ -212,6 +270,18 @@ pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElem
                         }
                     },
                 )
+                .prop("enabled", move || {
+                    json!(
+                        controls.with(|c| c.connected
+                            && !c.sending
+                            && !c.transcribing
+                            && !c.transferring)
+                            && !recording.get()
+                            && !requesting.get()
+                            && !connection.uploading.get()
+                            && answering.with(Option::is_none)
+                    )
+                })
                 .min_h(px(44.0))
                 .min_w(px(44.0))
                 .col_start(1)
@@ -222,7 +292,26 @@ pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElem
                 || crate::model_controls::controls().col_start(3).row_start(2),
             ))
             .child(
-                dictation_button()
+                view()
+                    .child(when(
+                        move || answering.with(Option::is_none),
+                        dictation_button,
+                    ))
+                    .child(when(
+                        move || {
+                            answering.with(Option::is_some)
+                                && controls.with(|c| c.running_turn.is_some())
+                        },
+                        move || {
+                            native::button("stop.fill", "停止", interrupt)
+                                .min_w(px(44.0))
+                                .min_h(px(44.0))
+                                .prop("enabled", move || {
+                                    json!(composer.with(|c| c.can_interrupt()))
+                                })
+                                .prop("label", move || json!(stop_label()))
+                        },
+                    ))
                     .col_start(move || if collapsed() { 3_i16 } else { 4_i16 })
                     .row_start(move || if collapsed() { 1_i16 } else { 2_i16 }),
             )
@@ -233,11 +322,19 @@ pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElem
                     .col_start(move || if collapsed() { 4_i16 } else { 5_i16 })
                     .row_start(move || if collapsed() { 1_i16 } else { 2_i16 })
                     .prop("symbol", move || {
-                        json!(if stopping() { "stop.fill" } else { "arrow.up" })
+                        json!(if answering.with(Option::is_some) {
+                            None
+                        } else {
+                            Some(if stopping() { "stop.fill" } else { "arrow.up" })
+                        })
                     })
-                    .prop("label", move || {
-                        json!(if stopping() { "停止" } else { "送信" })
+                    .prop("title", move || {
+                        json!(
+                            answering
+                                .with(|q| q.as_ref().map(|q| q.action.clone()).unwrap_or_default())
+                        )
                     })
+                    .prop("label", move || json!(primary_label.get()))
                     .prop("appearance", json!("prominent"))
                     .prop("enabled", move || json!(enabled())),
             )
@@ -248,7 +345,21 @@ pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElem
         .self_center()
         .p_3()
         .gap_2()
-        .child(crate::requests::panels())
+        .child(crate::requests::panels(following))
+        .child(when(
+            move || {
+                !composing.get()
+                    && !recording.get()
+                    && !requesting.get()
+                    && !controls.with(|c| c.transcribing)
+                    && answering.with(Option::is_none)
+            },
+            move || crate::invocations::suggestions(move || field_ref.focus()),
+        ))
+        .child(when(
+            move || connection.uploading.get() || controls.with(|c| c.transferring),
+            || text("添付ファイルを転送中…"),
+        ))
         .child(when(
             move || !is_desktop(),
             move || {
@@ -259,28 +370,27 @@ pub(crate) fn composer(publication: Memo<Shared<Presentation>>) -> impl IntoElem
                         if &*event.name == "picked"
                             && let Some((host, key)) = file_target.replace(None)
                         {
-                            for path in event
+                            let sources = event
                                 .data
                                 .as_array()
                                 .into_iter()
                                 .flatten()
                                 .filter_map(serde_json::Value::as_str)
-                            {
-                                connection.client.with(|client| {
-                                    client.attach(
-                                        &host,
-                                        key.clone(),
-                                        path.into(),
-                                        native::image_file(std::path::Path::new(path)),
-                                    )
-                                });
-                            }
+                                .map(|path| crate::client::AttachmentSource::File {
+                                    path: path.into(),
+                                    is_image: native::image_file(std::path::Path::new(path)),
+                                })
+                                .collect();
+                            connection.attach(host, key, sources);
                         }
                     })
             },
         ))
         .child(when(
-            move || composer.with(|c| !c.draft.attachments.is_empty()),
+            move || {
+                answering.with(Option::is_none)
+                    && composer.with(|c| !c.draft.attachments.is_empty())
+            },
             move || {
                 scroll()
                     .horizontal()

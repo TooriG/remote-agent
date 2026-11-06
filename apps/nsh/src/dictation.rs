@@ -303,10 +303,12 @@ impl Dictation {
                 .prop("enabled", move || {
                     json!(
                         !self.requesting.get()
+                            && !connection.uploading.get()
                             && connection
                                 .publication
                                 .with(|p| p.composer.controls.connected
                                     && !p.composer.controls.sending
+                                    && !p.composer.controls.transferring
                                     && !p.composer.controls.transcribing)
                     )
                 })

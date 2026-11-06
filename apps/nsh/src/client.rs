@@ -16,30 +16,18 @@ use std::{
     },
 };
 
+mod transfers;
+pub(crate) use transfers::{AttachmentSource, LocalFile};
+
 pub(crate) enum Update {
     Hosts(Vec<Host>),
+    AttachmentsFinished(uuid::Uuid),
     Presentation {
         host: String,
         value: Arc<Presentation>,
     },
     Error(String),
     Paired(Result<String, String>),
-}
-
-pub(crate) struct LocalFile {
-    _directory: tempfile::TempDir,
-    pub path: PathBuf,
-}
-
-impl LocalFile {
-    fn create(root: PathBuf, filename: &str) -> Result<Self, AgentError> {
-        agent_local_host::create_state_directory(&root).map_err(error)?;
-        let directory = tempfile::tempdir_in(root).map_err(error)?;
-        Ok(Self {
-            path: directory.path().join(filename),
-            _directory: directory,
-        })
-    }
 }
 
 pub(crate) struct Client {
@@ -226,69 +214,6 @@ impl Client {
         receive
     }
 
-    pub fn download(
-        self: &Arc<Self>,
-        host: String,
-        source: String,
-    ) -> async_channel::Receiver<Result<Arc<LocalFile>, AgentError>> {
-        let (send, receive) = async_channel::bounded(1);
-        let owner = self.clone();
-        self.spawn(async move {
-            let result = owner.download_file(&host, source).await;
-            // If the view went away, dropping the result releases only this transfer's directory.
-            let _ = send.send(result).await;
-        });
-        receive
-    }
-
-    async fn download_file(
-        &self,
-        host: &str,
-        source: String,
-    ) -> Result<Arc<LocalFile>, AgentError> {
-        let root = self.root.join("downloads");
-        let filename = source
-            .rsplit(['/', '\\'])
-            .next()
-            .filter(|name| !["", ".", ".."].contains(name))
-            .unwrap_or("file")
-            .to_owned();
-        let file = tokio::task::spawn_blocking(move || LocalFile::create(root, &filename))
-            .await
-            .map_err(error)??;
-        self.execute(
-            host,
-            Intent::DownloadFile(agent_core::state::operations::DownloadFile {
-                source,
-                destination: file.path.to_string_lossy().into_owned(),
-            }),
-        )?
-        .wait()
-        .await?;
-        Ok(Arc::new(file))
-    }
-
-    pub fn cache_image(
-        self: &Arc<Self>,
-        bytes: Vec<u8>,
-        extension: String,
-    ) -> async_channel::Receiver<Result<Arc<LocalFile>, AgentError>> {
-        let (send, receive) = async_channel::bounded(1);
-        let root = self.root.join("downloads");
-        self.spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                let file = LocalFile::create(root, &format!("image.{extension}"))?;
-                agent_local_host::save_private_bytes(&file.path, &bytes).map_err(error)?;
-                Ok::<_, AgentError>(Arc::new(file))
-            })
-            .await
-            .map_err(error)
-            .and_then(|result| result);
-            let _ = send.send(result).await;
-        });
-        receive
-    }
-
     pub fn reconnect(self: &Arc<Self>, host: String) {
         let owner = self.clone();
         self.spawn(async move {
@@ -388,31 +313,6 @@ impl Client {
         }
     }
 
-    pub fn attach(
-        &self,
-        host: &str,
-        draft_key: agent_core::state::DraftKey,
-        path: PathBuf,
-        is_image: bool,
-    ) {
-        let name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-        self.dispatch(
-            host,
-            Intent::UploadAttachment(agent_core::state::operations::UploadAttachment {
-                draft_key,
-                attachment: agent_core::state::Attachment {
-                    path: path.to_string_lossy().into_owned(),
-                    name,
-                    is_image,
-                },
-            }),
-        );
-    }
-
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn prepare_dictation(
         &self,
@@ -454,49 +354,6 @@ impl Client {
             }
             Err(reason) => self.report(reason),
         }
-    }
-
-    pub fn upload(
-        self: &Arc<Self>,
-        host: String,
-        draft_key: agent_core::state::DraftKey,
-        name: String,
-        bytes: Vec<u8>,
-    ) {
-        let owner = self.clone();
-        self.spawn(async move {
-            let root = owner.root.join("uploads");
-            let result = tokio::task::spawn_blocking(move || {
-                let file = LocalFile::create(root, "image")?;
-                agent_local_host::save_private_bytes(&file.path, &bytes).map_err(error)?;
-                Ok::<_, AgentError>(file)
-            })
-            .await
-            .map_err(error)
-            .and_then(|result| result);
-            match result {
-                Ok(file) => {
-                    match owner.execute(
-                        &host,
-                        Intent::UploadAttachment(agent_core::state::operations::UploadAttachment {
-                            draft_key,
-                            attachment: agent_core::state::Attachment {
-                                path: file.path.to_string_lossy().into_owned(),
-                                name,
-                                is_image: true,
-                            },
-                        }),
-                    ) {
-                        Ok(receipt) => {
-                            let _ = receipt.wait().await;
-                        }
-                        Err(reason) => owner.report(reason),
-                    }
-                    drop(file);
-                }
-                Err(reason) => owner.report(reason),
-            }
-        });
     }
 
     pub async fn shutdown(&self) -> Result<(), AgentError> {
@@ -557,6 +414,160 @@ mod tests {
         })
         .await
         .expect("client publication stalled")
+    }
+
+    #[test]
+    fn failed_attachment_batches_finish_once_and_release_only_their_own_staging_files() {
+        let directory = tempfile::tempdir().unwrap();
+        saved_host(directory.path());
+        let selected = directory.path().join("selected.txt");
+        std::fs::write(&selected, "保持する日本語 👋").unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let initial = runtime.block_on(publication(&incoming, ""));
+        let id = uuid::Uuid::new_v4();
+        client.attach_batch(
+            id,
+            "missing-host".into(),
+            initial.composer.controls.navigation.draft_key.clone(),
+            vec![
+                AttachmentSource::Image {
+                    name: "first.png".into(),
+                    bytes: b"first fixture".to_vec(),
+                },
+                AttachmentSource::File {
+                    path: selected.clone(),
+                    is_image: false,
+                },
+                AttachmentSource::Image {
+                    name: "last.png".into(),
+                    bytes: b"last fixture".to_vec(),
+                },
+            ],
+        );
+        runtime.block_on(async {
+            let errors = tokio::time::timeout(Duration::from_secs(10), async {
+                let mut errors = Vec::new();
+                loop {
+                    match incoming.recv().await.unwrap() {
+                        Update::AttachmentsFinished(finished) => {
+                            assert_eq!(finished, id);
+                            break errors;
+                        }
+                        Update::Error(reason) => errors.push(reason),
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                errors.len(),
+                1,
+                "a failed selection stops the batch and retains the error for retry"
+            );
+            assert!(errors.iter().all(|reason| reason.contains("接続先")));
+            assert_eq!(
+                std::fs::read_dir(directory.path().join("uploads"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+            assert_eq!(
+                std::fs::read_to_string(&selected).unwrap(),
+                "保持する日本語 👋"
+            );
+            let retry = uuid::Uuid::new_v4();
+            client.attach_batch(
+                retry,
+                "missing-host".into(),
+                initial.composer.controls.navigation.draft_key.clone(),
+                vec![AttachmentSource::File {
+                    path: selected.clone(),
+                    is_image: false,
+                }],
+            );
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let mut errors = 0;
+                loop {
+                    match incoming.recv().await.unwrap() {
+                        Update::Error(_) => errors += 1,
+                        Update::AttachmentsFinished(finished) => {
+                            assert_eq!(finished, retry);
+                            assert_eq!(errors, 1);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(selected).unwrap(),
+                "保持する日本語 👋"
+            );
+            client.shutdown().await.unwrap();
+            while let Ok(update) = incoming.try_recv() {
+                assert!(!matches!(update, Update::AttachmentsFinished(_)));
+            }
+        });
+    }
+
+    #[test]
+    fn failed_core_upload_retains_its_notice_without_staging_later_selections() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = saved_host(directory.path());
+        let selected = directory.path().join("selected.txt");
+        std::fs::write(&selected, "keep").unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let initial = runtime.block_on(publication(&incoming, ""));
+        let draft_key = initial.composer.controls.navigation.draft_key.clone();
+        let id = uuid::Uuid::new_v4();
+        client.attach_batch(
+            id,
+            host.id.clone(),
+            draft_key.clone(),
+            vec![
+                AttachmentSource::File {
+                    path: selected.clone(),
+                    is_image: false,
+                },
+                AttachmentSource::Image {
+                    name: "not-started.png".into(),
+                    bytes: b"fixture".to_vec(),
+                },
+            ],
+        );
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    match incoming.recv().await.unwrap() {
+                        Update::Error(reason) => panic!("duplicate core error: {reason}"),
+                        Update::AttachmentsFinished(finished) => {
+                            assert_eq!(finished, id);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let snapshot = client.sessions.session(host.id).unwrap().snapshot();
+            assert!(
+                snapshot
+                    .operation_error(agent_core::state::operations::OperationKey::Attachment {
+                        draft_key
+                    })
+                    .is_some()
+            );
+            assert!(
+                !directory.path().join("uploads").exists(),
+                "later selections must not replace the failed upload's notice"
+            );
+            assert_eq!(std::fs::read_to_string(selected).unwrap(), "keep");
+            client.shutdown().await.unwrap();
+        });
     }
 
     #[test]

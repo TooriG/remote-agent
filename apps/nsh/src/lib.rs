@@ -8,11 +8,13 @@ mod conversation;
 mod dictation;
 mod editor;
 mod files;
+mod invocations;
 mod media;
 mod model_controls;
 mod native;
 mod notices;
 mod requests;
+mod rich_text;
 mod shared;
 mod storage;
 mod threads;
@@ -34,9 +36,28 @@ pub(crate) struct Connection {
     host: Signal<String>,
     publication: Memo<Shared<Presentation>>,
     pairing: Signal<bool>,
+    uploads: Signal<BTreeMap<uuid::Uuid, (String, agent_core::state::DraftKey)>>,
+    uploading: Memo<bool>,
 }
 
 impl Connection {
+    fn attach(
+        self,
+        host: String,
+        draft: agent_core::state::DraftKey,
+        sources: Vec<client::AttachmentSource>,
+    ) {
+        if sources.is_empty() {
+            return;
+        }
+        let id = uuid::Uuid::new_v4();
+        self.uploads.update(|uploads| {
+            uploads.insert(id, (host.clone(), draft.clone()));
+        });
+        self.client
+            .with(|client| client.attach_batch(id, host, draft, sources));
+    }
+
     fn dispatch(self, intent: Intent) {
         self.client
             .with(|client| client.dispatch(&self.host.get_untracked(), intent));
@@ -63,11 +84,23 @@ pub fn App() -> impl IntoElement {
             .with(|all| all.get(&host.get()).cloned())
             .unwrap_or_else(|| empty.get())
     });
+    let uploads = signal(BTreeMap::<uuid::Uuid, (String, agent_core::state::DraftKey)>::new());
+    let uploading = computed(move || {
+        let host = host.get();
+        let draft = publication.with(|p| p.composer.controls.navigation.draft_key.clone());
+        uploads.with(|uploads| {
+            uploads
+                .values()
+                .any(|(target_host, target_draft)| target_host == &host && target_draft == &draft)
+        })
+    });
     let connection = Connection {
         client,
         host,
         publication,
         pairing: signal(false),
+        uploads,
+        uploading,
     };
     provide_context(connection);
     let preview = media::Preview::new();
@@ -89,6 +122,9 @@ pub fn App() -> impl IntoElement {
     spawn(async move {
         while let Ok(update) = updates.recv().await {
             match update {
+                client::Update::AttachmentsFinished(id) => uploads.update(|uploads| {
+                    uploads.remove(&id);
+                }),
                 client::Update::Hosts(next) => {
                     if host.get_untracked().is_empty()
                         || !next.iter().any(|item| item.id == host.get_untracked())
@@ -152,12 +188,13 @@ pub fn App() -> impl IntoElement {
         _ => settings.set(true),
     };
     let content = move || {
+        let following = signal(true);
         view()
             .flex_1()
             .min_w_0()
             .pb_keyboard()
-            .child(conversation::list(publication))
-            .child(composer::composer(publication))
+            .child(conversation::list(publication, following))
+            .child(composer::composer(publication, following))
     };
     let notices = move || {
         view()

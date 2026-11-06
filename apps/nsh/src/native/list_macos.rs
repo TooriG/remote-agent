@@ -11,7 +11,8 @@ use objc2::{
 use objc2_app_kit::*;
 use objc2_core_foundation::{CGRect, CGSize};
 use objc2_foundation::{
-    NSArray, NSBundle, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString,
+    NSArray, NSBundle, NSData, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol,
+    NSString,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -146,7 +147,10 @@ define_class!(
                         field.setStringValue(&NSString::from_str(&row.title));
                     }
                     if let Some(view) = cell.imageView() {
-                        let image = if let Some(asset) = &row.asset {
+                        let image = if let Some(png) = &row.png {
+                            NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(png))
+                                .inspect(|image| image.setSize(CGSize::new(17.0, 17.0)))
+                        } else if let Some(asset) = &row.asset {
                             NSBundle::mainBundle()
                                 .URLForResource_withExtension(
                                     Some(&NSString::from_str(asset)),
@@ -157,8 +161,8 @@ define_class!(
                                 })
                                 .inspect(|image| image.setSize(CGSize::new(17.0, 17.0)))
                         } else {
-                            symbol(&row.symbol)
-                        };
+                            None
+                        }.or_else(|| symbol(&row.symbol));
                         view.setImage(image.as_deref());
                     }
                 }

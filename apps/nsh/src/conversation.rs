@@ -9,13 +9,19 @@ use agent_core::{
     },
     state::{Intent, operations as op},
 };
-use nsh_base::{
-    text_view::{MarkdownOptions, text_view},
-    theme,
-};
+use nsh_base::theme;
+use nsh_core::geometry::{Point, Points};
 use nsh_core::prelude::*;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+
+const FOLLOW_END_THRESHOLD: f32 = 60.0;
+
+pub(crate) fn reveal_row(list: ElementRef, index: u32) {
+    after_answer(move || {
+        list.scroll_to_index(index, nsh_core::geometry::Percentage(0.0), px(0.0), false);
+    });
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -127,13 +133,16 @@ fn project(
         .collect()
 }
 
-pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement {
+pub(crate) fn list(
+    publication: Memo<Shared<Presentation>>,
+    following: Signal<bool>,
+) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
-    let preview = use_context::<crate::media::Preview>().unwrap();
-    let files = use_context::<crate::files::Browser>().unwrap();
+    let list = element_ref();
     let expanded = signal(HashMap::<String, String>::new());
     let expanded_items = signal(HashSet::<String>::new());
-    let list = element_ref();
+    let dragging = stored(false);
+    let scroll_pending = stored(false);
     let clock = signal(std::time::SystemTime::now());
     spawn(async move {
         loop {
@@ -154,6 +163,7 @@ pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement 
     });
     effect(move || {
         target.get();
+        following.set(true);
         expanded.set(HashMap::new());
         expanded_items.set(HashSet::new());
     });
@@ -164,6 +174,23 @@ pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement 
                 .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
                 .unwrap_or_default()
         })
+    });
+    effect(move || {
+        target.get();
+        if rows.with(|rows| !rows.is_empty())
+            && following.get()
+            && !dragging.get()
+            && !scroll_pending.get()
+        {
+            scroll_pending.replace(true);
+            // Row keys must reach the list before its end can be targeted.
+            after_answer(move || {
+                scroll_pending.replace(false);
+                if following.get_untracked() && !dragging.get() {
+                    list.scroll_to_end(false);
+                }
+            });
+        }
     });
     let history = computed(move || publication.with(|p| p.context.history()));
     view()
@@ -186,6 +213,7 @@ pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement 
                                 }))
                             },
                             move || {
+                                following.set(false);
                                 if let Some(thread_id) =
                                     publication.with_untracked(|p| p.context.navigation().thread_id)
                                 {
@@ -259,6 +287,7 @@ pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement 
                                                             all.get(&activity.id).cloned(),
                                                         )
                                                     });
+                                                    following.set(false);
                                                     expanded.update(|all| {
                                                         if opening {
                                                             all.insert(
@@ -276,14 +305,14 @@ pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement 
                                                             .dispatch(Intent::LoadTurnItems(load));
                                                     }
                                                     if opening {
-                                                        list.scroll_to_index(at.index() as u32, nsh_core::geometry::Percentage(0.0), px(0.0), false);
+                                                        reveal_row(list, at.index() as u32);
                                                     }
                                                 }
                                             },
                                         )
                                     },
                                 ))
-                                .child(when(move || detail.get().is_some(), move || crate::activity::details(detail, expanded_items, list, at)))
+                                .child(when(move || detail.get().is_some(), move || crate::activity::details(detail, expanded_items, list, at, following)))
                                 .child(
                                     view()
                                         .max_w(relative(1.0))
@@ -296,28 +325,13 @@ pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement 
                                         })
                                         .style_when(move || !user(), |s| s.w_full())
                                         .child(
-                                            text_view()
-                                                .on_image_press(move |image: &nsh_base::text_view::Image| {
-                                                    preview.load(crate::media::load_image(connection.client.get(), connection.host.get_untracked(), connection.publication.with_untracked(|p| p.composer.controls.navigation.cwd.clone()), image.src.clone()));
-                                                })
-                                                .on_link_press(move |event: &nsh_base::text_view::TextViewLinkPressEvent| files.open(event.url.to_string(), connection.publication.with_untracked(|p| p.composer.controls.navigation.cwd.clone()), connection.publication.with_untracked(|p| p.context.home()), connection.host.get_untracked(), connection.client.get()))
-                                                .render_image(
-                                                    |image: &nsh_base::text_view::Image| {
-                                                        let source = image.src.to_string();
-                                                        crate::media::image_view(move || {
-                                                            source.clone()
-                                                        }, 320.0, 240.0)
-                                                    },
-                                                )
-                                                .markdown(label)
-                                                .selectable(true)
+                                            crate::rich_text::view()
+                                                .document(move || label().map(|text| crate::rich_text::document(
+                                                    agent_core::presentation::markdown::markdown_blocks(text.to_string())
+                                                )))
                                                 .font_weight(FontWeight::NORMAL)
                                                 .text_size(move || {
                                                     if is_desktop() { px(14.0) } else { px(16.0) }
-                                                })
-                                                .options(MarkdownOptions {
-                                                    streaming: true,
-                                                    ..Default::default()
                                                 })
                                                 .style_when(activity, |s| {
                                                     s.text_color(move || theme().muted_foreground)
@@ -410,6 +424,7 @@ pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement 
                             },
                             move || {
                                 native::text_button(json!("再試行"), move || {
+                                    following.set(true);
                                     if let Some(retry) = row.with_untracked(|row| {
                                         row.as_ref().and_then(|row| row.retry.clone())
                                     }) {
@@ -423,10 +438,23 @@ pub(crate) fn list(publication: Memo<Shared<Presentation>>) -> impl IntoElement 
             .keys(move || rows.with(|rows| rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>()))
             .element_ref(&list)
             .estimated_item_size(px(170.0))
-            .follow_end(px(60.0))
+            .follow_end(px(FOLLOW_END_THRESHOLD))
+            .on_scroll_drag_start(move |_: &Point<Points>| { dragging.replace(true); })
+            .on_scroll(move |event: &ScrollEvent| {
+                if dragging.get() {
+                    following.set(event.offset.y + event.size.height >= event.content_size.height - px(FOLLOW_END_THRESHOLD));
+                }
+            })
+            .on_scroll_end(move |_: &Point<Points>| { dragging.replace(false); })
+            .on_momentum_end(move |_: &Point<Points>| { dragging.replace(false); })
             .flex_1()
             .min_h_0(),
         )
+        .child(when(move || !following.get(), move || {
+            native::button("arrow.down", "最新のメッセージへ", move || following.set(true))
+                .prop("appearance", json!("glass"))
+                .absolute().self_center().bottom(px(6.0)).w(px(44.0)).h(px(44.0))
+        }))
 }
 
 #[cfg(test)]

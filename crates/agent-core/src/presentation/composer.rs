@@ -10,6 +10,9 @@ use crate::{
 };
 use std::sync::{Arc, OnceLock};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct RequestControl {
@@ -26,6 +29,7 @@ pub struct ComposerControls {
     pub selected_model: Option<ModelRef>,
     pub quick: ModelQuickControls,
     pub sending: bool,
+    pub transferring: bool,
     pub transcribing: bool,
     pub running_turn: Option<agent_protocol::ids::TurnId>,
     pub interrupt_phase: Option<OperationPhase>,
@@ -75,6 +79,9 @@ impl ComposerPresentation {
             }),
             quick: snapshot.model_quick_controls(key.clone()),
             sending: snapshot.operation_running(OperationKey::Submission {
+                draft_key: key.clone(),
+            }),
+            transferring: snapshot.operation_running(OperationKey::Attachment {
                 draft_key: key.clone(),
             }),
             transcribing: snapshot.operation_running(OperationKey::Dictation {
@@ -145,6 +152,32 @@ impl ComposerPresentation {
     }
     pub fn current_model(&self) -> Option<Model> {
         super::model_settings::current_model(&self.models, self.draft.model.as_ref()).cloned()
+    }
+    /// Recording is native UI state; all Host and draft readiness is owned here.
+    pub fn can_submit(&self, recording: bool) -> bool {
+        let controls = &self.controls;
+        controls.connected
+            && controls.provider.is_some()
+            && !controls.sending
+            && !controls.transferring
+            && !controls.transcribing
+            && controls.unavailable.is_none()
+            && (recording
+                || !self.draft.text.trim().is_empty()
+                || !self.draft.attachments.is_empty())
+    }
+    pub fn can_interrupt(&self) -> bool {
+        self.controls.connected
+            && self.controls.running_turn.is_some()
+            && self.controls.interrupt_phase != Some(OperationPhase::Running)
+    }
+    pub fn can_advance_question(&self) -> bool {
+        self.controls.connected
+            && self.controls.question.as_ref().is_some_and(|question| {
+                question.can_advance
+                    && self.request_phase(question.request_id.clone())
+                        != Some(OperationPhase::Running)
+            })
     }
     pub fn request_phase(&self, id: agent_protocol::ids::RequestId) -> Option<OperationPhase> {
         self.controls

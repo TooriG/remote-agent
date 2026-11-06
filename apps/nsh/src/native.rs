@@ -10,6 +10,7 @@ pub(super) struct ListRow {
     pub title: String,
     pub symbol: String,
     pub asset: Option<String>,
+    pub png: Option<Vec<u8>>,
     pub level: u32,
     pub disclosure: bool,
     #[cfg(target_os = "macos")]

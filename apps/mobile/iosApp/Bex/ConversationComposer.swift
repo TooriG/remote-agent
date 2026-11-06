@@ -186,7 +186,7 @@ struct ConversationComposer: View {
                 ComposerStopButton(turnId: runningTurnId, interrupting: model.interruptingTurnId == runningTurnId,
                                    stop: model.interrupt)
             } else {
-                sendButton(hasAttachments: hasAttachments)
+                sendButton()
             }
         }
     }
@@ -217,7 +217,7 @@ struct ConversationComposer: View {
         .accessibilityIdentifier("dictation.toggle")
     }
 
-    func sendButton(hasAttachments: Bool) -> some View {
+    func sendButton() -> some View {
         Button {
             // Commit native text before Store can clear the accepted draft.
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -234,12 +234,9 @@ struct ConversationComposer: View {
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.circle)
         .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "文字起こしして送信" : "送信"))
-        .disabled(!model.isConnected || (!model.isNewThread && !hasConversation) || model
-            .composerControls.provider == nil || model
-            .sending || model.transferring || preparingMedia || dictation.requestingPermission || model
-            .transcribing ||
-            (!dictation.isRecording && model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty && !hasAttachments))
+        .disabled(!model.composer.canSubmit(recording: dictation.isRecording)
+            || (!model.isNewThread && !hasConversation) || model.transferring
+            || preparingMedia || dictation.requestingPermission)
         .accessibilityIdentifier("task.send")
     }
 

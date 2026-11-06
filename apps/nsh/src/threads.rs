@@ -22,6 +22,7 @@ enum Action {
 struct Row {
     title: String,
     symbol: &'static str,
+    png: Option<Vec<u8>>,
     level: u32,
     disclosure: bool,
     expanded: bool,
@@ -39,13 +40,14 @@ fn thread_row(thread: &ThreadSummary, level: u32) -> Row {
         } else {
             "bubble.left"
         },
+        png: None,
         level,
         disclosure: false,
         expanded: false,
         action: Action::Open(thread.id.clone()),
     }
 }
-fn rows(list: Option<&ThreadList>) -> Vec<Row> {
+fn rows(list: Option<&ThreadList>, dark: bool) -> Vec<Row> {
     let Some(list) = list else {
         return Vec::new();
     };
@@ -54,6 +56,14 @@ fn rows(list: Option<&ThreadList>) -> Vec<Row> {
         rows.push(Row {
             title: project.name.clone(),
             symbol: "folder",
+            png: project.icon.as_ref().map(|icon| {
+                if dark {
+                    &icon.dark_png
+                } else {
+                    &icon.light_png
+                }
+                .clone()
+            }),
             level: 0,
             disclosure: true,
             expanded: project.expanded,
@@ -67,6 +77,7 @@ fn rows(list: Option<&ThreadList>) -> Vec<Row> {
                 rows.push(Row {
                     title: "さらに表示".into(),
                     symbol: "ellipsis",
+                    png: None,
                     level: 1,
                     disclosure: false,
                     expanded: false,
@@ -77,6 +88,7 @@ fn rows(list: Option<&ThreadList>) -> Vec<Row> {
                 rows.push(Row {
                     title: "新しいチャット".into(),
                     symbol: "plus",
+                    png: None,
                     level: 1,
                     disclosure: false,
                     expanded: false,
@@ -95,6 +107,7 @@ fn rows(list: Option<&ThreadList>) -> Vec<Row> {
         rows.push(Row {
             title: "さらに表示".into(),
             symbol: "ellipsis",
+            png: None,
             level: 0,
             disclosure: false,
             expanded: false,
@@ -105,6 +118,7 @@ fn rows(list: Option<&ThreadList>) -> Vec<Row> {
         rows.push(Row {
             title: "プロジェクトをさらに表示".into(),
             symbol: "folder.badge.plus",
+            png: None,
             level: 0,
             disclosure: false,
             expanded: false,
@@ -133,8 +147,8 @@ pub(crate) fn list(
             }
         }
     });
-    let entries = computed(move || publication.with(|p| rows(p.list.as_deref())));
-    let table = native("bex.list").prop("items", move || entries.with(|entries| json!(entries.iter().map(|row| json!({"id": row_id(&row.action), "title": row.title, "symbol": row.symbol, "asset": null, "level": row.level, "disclosure": row.disclosure, "group": row.level == 0 && row.disclosure, "expanded": row.expanded})).collect::<Vec<_>>())));
+    let entries = computed(move || publication.with(|p| rows(p.list.as_deref(), dark())));
+    let table = native("bex.list").prop("items", move || entries.with(|entries| json!(entries.iter().map(|row| json!({"id": row_id(&row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "level": row.level, "disclosure": row.disclosure, "group": row.level == 0 && row.disclosure, "expanded": row.expanded})).collect::<Vec<_>>())));
     let table = if is_desktop() {
         table.prop("selected", move || {
             publication.with(|p| {
@@ -228,7 +242,10 @@ mod tests {
                 name: "プロジェクト".into(),
                 coordinator_url: None,
                 roots: Vec::new(),
-                icon: None,
+                icon: Some(agent_core::presentation::list::ProjectIconImages {
+                    light_png: vec![1, 2],
+                    dark_png: vec![3, 4],
+                }),
                 monogram: "PR".into(),
                 icon_color: 0,
                 pinned: false,
@@ -244,17 +261,21 @@ mod tests {
             has_more: false,
             has_more_projects: false,
         };
-        let collapsed = rows(Some(&list));
+        let collapsed = rows(Some(&list), false);
         assert_eq!(collapsed.len(), 1);
+        assert_eq!(collapsed[0].png, Some(vec![1, 2]));
+        let dark = rows(Some(&list), true);
+        assert_eq!(dark[0].png, Some(vec![3, 4]));
+        assert_eq!(row_id(&collapsed[0].action), row_id(&dark[0].action));
         list.projects[0].expanded = true;
-        let expanded = rows(Some(&list));
+        let expanded = rows(Some(&list), false);
         assert_eq!(row_id(&collapsed[0].action), row_id(&expanded[0].action));
         assert!(expanded[0].expanded);
         let selected = row_id(&expanded[1].action);
         let mut new_thread = thread;
         new_thread.id = serde_json::from_value(json!({"provider": "codex", "id": "new"})).unwrap();
         list.projects[0].threads.insert(0, new_thread);
-        let inserted = rows(Some(&list));
+        let inserted = rows(Some(&list), false);
         assert_eq!(selected, row_id(&inserted[2].action));
         assert_ne!(selected, row_id(&inserted[1].action));
 
@@ -269,7 +290,7 @@ mod tests {
         let mut other = list.projects[0].clone();
         other.id = "other-provider-project".into();
         list.projects.push(other);
-        let ids = rows(Some(&list))
+        let ids = rows(Some(&list), false)
             .iter()
             .map(|row| row_id(&row.action))
             .collect::<Vec<_>>();
