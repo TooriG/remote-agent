@@ -63,7 +63,7 @@ struct WorkspaceScreen: View {
             downloadFile: model.download,
             aiEdit: { model.perform(.setDraftText(
                 threadId: draft,
-                text: "このファイルを編集してください: \($0)\n変更内容: "
+                text: fileEditPrompt(path: $0)
             )) },
             close: close
         )

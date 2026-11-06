@@ -126,16 +126,8 @@ struct WorkspaceFileSheet: View {
     @State private var initialized = false
     @State private var confirmReload = false
     @State private var selection: TextSelection?
-    private var file: FileContent? {
-        files.file().flatMap { $0.path == entry.path ? $0 : nil }
-    }
-
-    private var revision: String {
-        files.fileDraft(path: entry.path)?.revision ?? file?.revision ?? ""
-    }
-
-    private var savedText: String {
-        file?.text ?? ""
+    private var controls: FileEditorPresentation {
+        files.fileEditor(path: entry.path)
     }
 
     var body: some View {
@@ -156,19 +148,19 @@ struct WorkspaceFileSheet: View {
                 if busy {
                     ProgressView().padding()
                 }
-                if let file, file.truncated {
+                if controls.truncated {
                     AppText(filePreviewTruncationNotice()).font(.caption).padding(.horizontal)
-                    FileTextPreview(text: file.text, line: line)
+                    FileTextPreview(text: controls.text, line: line)
                 } else {
                     BufferedTextInput(value: $text) { TextEditor(text: $0, selection: $selection) }
                         .font(.body.monospaced())
                         .textInputAutocapitalization(.never).disableAutocorrection(true)
                         .accessibilityIdentifier("file.editor")
-                        .disabled(revision.isEmpty)
+                        .disabled(!controls.canEdit)
                 }
                 HStack {
                     Button("再読込") {
-                        if text != savedText {
+                        if controls.modified {
                             confirmReload = true
                         } else {
                             load(restoreDraft: false)
@@ -192,11 +184,11 @@ struct WorkspaceFileSheet: View {
                                 error = failure.localizedDescription
                             }
                         }
-                    }.disabled(busy || revision.isEmpty || file?.truncated == true || text == savedText)
+                    }.disabled(busy || !controls.canSave)
                         .accessibilityIdentifier("file.save")
                 }
             }
-            .onChange(of: file?.revision) { moveToLine() }
+            .onChange(of: controls.loadedRevision) { moveToLine() }
             .onAppear {
                 if !initialized {
                     load(restoreDraft: true)
@@ -238,9 +230,8 @@ struct WorkspaceFileSheet: View {
                 error = failure.localizedDescription; return
             }
             initialized = true
-            if let file = snapshot.files().file(), file.path == entry.path,
-               (snapshot.files().fileDraft(path: entry.path)?.revision ?? file.revision) != file.revision {
-                error = "ホストのファイルが変更されています。下書きは保持しました。再読込すると下書きを破棄します。"
+            if let notice = snapshot.files().fileEditor(path: entry.path).conflictNotice {
+                error = notice
             }
         }
     }
@@ -278,8 +269,7 @@ private struct FileWebPreview: View {
 }
 
 private func fileLineStart(_ text: String, line: UInt32) -> String.Index {
-    let starts = [text.startIndex] + text.indices.filter { text[$0] == "\n" }.map { text.index(after: $0) }
-    return starts[min(max(0, Int(line) - 1), starts.count - 1)]
+    String.Index(utf16Offset: Int(fileLineStartUtf16(text: text, line: line)), in: text)
 }
 
 private struct FileTextPreview: UIViewRepresentable {

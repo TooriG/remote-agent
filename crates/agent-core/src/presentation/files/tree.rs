@@ -48,6 +48,11 @@ pub enum FileTreeAction {
     Toggle {
         path: String,
     },
+    /// An OS outline reports its resulting state, which may precede publication.
+    SetExpanded {
+        path: String,
+        expanded: bool,
+    },
     Focus {
         path: String,
     },
@@ -456,7 +461,13 @@ impl Tree {
                     return search;
                 }
             }
-            FileTreeAction::Toggle { path } if valid_tree_path(&path) => self.toggle(path),
+            FileTreeAction::Toggle { path } if valid_tree_path(&path) => {
+                let expanded = !self.expanded.contains(&path);
+                self.set_expanded(path, expanded);
+            }
+            FileTreeAction::SetExpanded { path, expanded } if valid_tree_path(&path) => {
+                self.set_expanded(path, expanded);
+            }
             FileTreeAction::Focus { path } if valid_tree_path(&path) => self.focused = Some(path),
             FileTreeAction::SelectPaths {
                 paths,
@@ -577,7 +588,8 @@ impl Tree {
             self.request_selected_file(previous, ticket);
         }
         if click && directory && !(additive || range) {
-            self.toggle(path);
+            let expanded = !self.expanded.contains(&path);
+            self.set_expanded(path, expanded);
         }
         self.retain_discoveries();
         if click && self.surface == FileTreeSurface::Desktop {
@@ -600,17 +612,18 @@ impl Tree {
             });
         }
     }
-    fn toggle(&mut self, path: String) {
+    fn set_expanded(&mut self, path: String, expanded: bool) {
         // Pierre re-expands search matches after every tree mutation.
         // The normal expansion is restored when search closes.
-        if self.desktop_search() {
+        if self.desktop_search() || self.expanded.contains(&path) == expanded {
             return;
         }
-        if !self.expanded.remove(&path) {
+        if expanded {
             self.load_ancestors(&path, true);
             self.expanded.insert(path.clone());
             self.request([path], true);
         } else {
+            self.expanded.remove(&path);
             self.expand_all = false;
             self.bound(true);
         }

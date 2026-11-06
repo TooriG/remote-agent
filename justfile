@@ -49,6 +49,17 @@ typescript:
 # macOS-only unit tests; CI runs these separately from portable validation.
 apple-unit-tests: macos-unit-tests ios-unit-tests
 
+# Build and open the separate NSH evaluation app on Mac.
+nsh-macos:
+    cargo build --locked -p agent-nsh --target aarch64-apple-darwin
+    bash apps/nsh/package.sh macos
+    open "${CARGO_TARGET_DIR:-target}/nsh-preview/macos/Bex NSH Preview.app"
+
+# Build the separate NSH evaluation app for an iPhone simulator.
+nsh-ios-simulator:
+    CC=/usr/bin/clang CXX=/usr/bin/clang++ CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER=/usr/bin/clang cargo build --locked -p agent-nsh --target aarch64-apple-ios-sim
+    bash apps/nsh/package.sh ios-simulator
+
 macos-unit-tests:
     cargo test --locked -p native-focus --test native_focus
 

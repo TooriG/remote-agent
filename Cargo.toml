@@ -2,6 +2,7 @@
 members = [
     "apps/desktop",
     "apps/desktop/native-focus",
+    "apps/nsh",
     "crates/agent-core",
     "crates/agent-protocol",
     "crates/agent-transport",

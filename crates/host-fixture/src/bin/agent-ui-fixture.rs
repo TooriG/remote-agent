@@ -22,6 +22,20 @@ async fn main() {
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
     let directory = dunce::canonicalize(&directory).unwrap();
+    // Opt in to the normal local-client discovery contract for native debugging.
+    // The scoped lease and keys stay inside the explicitly supplied fixture root.
+    let local =
+        std::env::var_os("AGENT_FIXTURE_LOCAL_HOST").as_deref() == Some(std::ffi::OsStr::new("1"));
+    let lease = local.then(|| agent_local_host::HostLease::isolated(&directory).unwrap());
+    let memory = Arc::new(Memory::default());
+    if local {
+        use host_daemon::CredentialStore;
+        match std::fs::read(agent_local_host::identity_path(&directory)) {
+            Ok(bytes) => memory.save(&zeroize::Zeroizing::new(bytes)).unwrap(),
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => {}
+            Err(reason) => panic!("fixture keys are unavailable: {reason}"),
+        }
+    }
     agent_transport::diagnostics::initialize(
         &directory,
         agent_transport::diagnostics::Component::Host,
@@ -82,13 +96,22 @@ async fn main() {
     let host = HostFixture::start(
         &directory,
         config,
-        Arc::new(Memory::default()),
+        memory.clone(),
         "検証 Host",
         true,
         std::env::args_os().nth(5).map(PathBuf::from).as_deref(),
     )
     .await
     .unwrap();
+    if let Some(lease) = &lease {
+        use host_daemon::CredentialStore;
+        agent_local_host::save_private_bytes(
+            &agent_local_host::identity_path(&directory),
+            memory.load().unwrap().as_ref().unwrap(),
+        )
+        .unwrap();
+        lease.publish(&host.ticket).unwrap();
+    }
     #[cfg(target_os = "macos")]
     let mut browser_desktop = None;
     if let Some(argument) = std::env::args_os().nth(6) {

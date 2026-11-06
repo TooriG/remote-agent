@@ -60,6 +60,80 @@ fn toggle(trees: &mut FileTrees, path: &str) -> Vec<TreeWork> {
 }
 
 #[test]
+fn native_expansion_notifications_are_idempotent_and_keep_lazy_loading() {
+    for surface in [FileTreeSurface::Desktop, FileTreeSurface::Mobile] {
+        let mut trees = FileTrees::default();
+        let root = open(&mut trees, ROOT, surface);
+        complete(
+            &mut trees,
+            &root[0],
+            vec![entry("src", EntryKind::Directory)],
+        );
+        let expand = || FileTreeAction::SetExpanded {
+            path: "src".into(),
+            expanded: true,
+        };
+        let pending = action(&mut trees, expand());
+        assert_eq!(pending.len(), 1);
+        assert!(trees.view(&key(ROOT)).rows[0].expanded);
+        assert!(action(&mut trees, expand()).is_empty());
+        complete(
+            &mut trees,
+            &pending[0],
+            vec![entry("src/file.rs", EntryKind::File)],
+        );
+        assert_eq!(paths(&trees), ["src", "src/file.rs"]);
+        assert!(action(&mut trees, expand()).is_empty());
+        for _ in 0..2 {
+            assert!(
+                action(
+                    &mut trees,
+                    FileTreeAction::SetExpanded {
+                        path: "src".into(),
+                        expanded: false
+                    }
+                )
+                .is_empty()
+            );
+            assert_eq!(paths(&trees), ["src"]);
+            assert!(!trees.view(&key(ROOT)).rows[0].expanded);
+        }
+    }
+}
+
+#[test]
+fn collapsing_before_a_native_expansion_finishes_rejects_late_visibility() {
+    let mut trees = FileTrees::default();
+    let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
+    complete(
+        &mut trees,
+        &root[0],
+        vec![entry("src", EntryKind::Directory)],
+    );
+    let pending = action(
+        &mut trees,
+        FileTreeAction::SetExpanded {
+            path: "src".into(),
+            expanded: true,
+        },
+    );
+    action(
+        &mut trees,
+        FileTreeAction::SetExpanded {
+            path: "src".into(),
+            expanded: false,
+        },
+    );
+    complete(
+        &mut trees,
+        &pending[0],
+        vec![entry("src/file.rs", EntryKind::File)],
+    );
+    assert_eq!(paths(&trees), ["src"]);
+    assert!(!trees.view(&key(ROOT)).rows[0].expanded);
+}
+
+#[test]
 fn replacing_a_directory_prunes_only_its_removed_or_changed_descendants() {
     let mut tree = Tree::default();
     let directories = ["src/keep", "src/change", "src/gone", "src2"];
@@ -692,11 +766,24 @@ fn desktop_search_preserves_normal_expansion_and_defers_expand_all_until_search_
     );
     let a = toggle(&mut trees, "a");
     complete(&mut trees, &a[0], vec![entry("a/main.rs", EntryKind::File)]);
+    assert!(trees.view(&key(ROOT)).can_change_expansion);
     action(
         &mut trees,
         FileTreeAction::Query {
             text: "main".into(),
         },
+    );
+    assert!(trees.view(&key(ROOT)).rows[0].expanded);
+    assert!(!trees.view(&key(ROOT)).can_change_expansion);
+    assert!(
+        action(
+            &mut trees,
+            FileTreeAction::SetExpanded {
+                path: "a".into(),
+                expanded: false
+            }
+        )
+        .is_empty()
     );
     assert!(trees.view(&key(ROOT)).rows[0].expanded);
     assert!(!trees.view(&key(ROOT)).all_expanded);
@@ -723,6 +810,7 @@ fn desktop_search_preserves_normal_expansion_and_defers_expand_all_until_search_
             .any(|work| matches!(work, TreeWork::Directory { path, .. } if path == "b"))
     );
     assert!(trees.view(&key(ROOT)).all_expanded);
+    assert!(trees.view(&key(ROOT)).can_change_expansion);
     action(
         &mut trees,
         FileTreeAction::Query {
@@ -808,6 +896,7 @@ fn query_bounds_and_host_folder_controls_follow_each_surface() {
         },
     );
     assert!(matches!(&work[0], TreeWork::Search { query, .. } if query == &"🦀".repeat(128)));
+    assert!(trees.view(&key(ROOT)).can_change_expansion);
     trees.tree_mut(&key(ROOT)).unwrap().surface = FileTreeSurface::Desktop;
     let work = action(
         &mut trees,

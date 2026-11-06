@@ -1,7 +1,9 @@
 mod actions;
 mod chip_color;
 pub use chip_color::{desktop_file_chip_color, mobile_file_chip_color};
+mod editor;
 mod explorer;
+pub use editor::{FileEditorPresentation, file_edit_prompt, file_line_start_utf16};
 mod icons;
 mod metadata;
 mod mobile;

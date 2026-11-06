@@ -58,7 +58,10 @@ impl PairingServer {
                 };
                 let response = Response::from_data(body)
                     .with_status_code(status)
-                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/json; charset=utf-8")
+                            .unwrap(),
+                    )
                     .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap());
                 // A disconnected Simulator request must not stop the fixture.
                 let _ = request.respond(response);

@@ -101,6 +101,7 @@ jobs:
               # Mac runs the runner's unit tests; iPhone exercises its Simulator lifecycle.
               crates/xtask/src/ios_e2e.rs) area='iphone-mac' ;;
               scripts/test-ios-scroll.sh) area=iphone ;;
+              apps/nsh/*) area='iphone-mac' ;;
               apps/mobile/src/* | apps/mobile/build.gradle.kts | build.gradle.kts | settings.gradle.kts | \
                 gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh | \
                 scripts/build-agent-android.ts) area=android ;;
@@ -327,6 +328,7 @@ jobs:
           nix develop .#native --command bash -euo pipefail <<'CHECKS' 2>&1 | tee target/qa/quality.log
           just quality rust
           just macos-unit-tests
+          cargo build --locked -p agent-nsh --target aarch64-apple-darwin
           just macos-e2e
           CHECKS
       - &finish-local-rust-cache
@@ -443,6 +445,7 @@ jobs:
           export AGENT_IOS_USE_CACHED_HOST_GRAPH="${{ steps.dependency-cache.outputs.cache-hit == 'true' && steps.local-rust-cache.outputs.cache-matched-key != '' }}"
           mkdir -p target/qa
           nix develop .#ios-build --command just ios-unit-tests 2>&1 | tee target/qa/quality.log
+          nix develop .#ios-build --command just nsh-ios-simulator 2>&1 | tee -a target/qa/quality.log
           if [[ -n "$AGENT_IOS_TESTS" ]]; then
             read -r -a ios_tests <<< "$AGENT_IOS_TESTS"
             nix develop .#ios-build --command just ios-e2e --build-only "${ios_tests[@]}" 2>&1 | tee -a target/qa/quality.log
