@@ -255,7 +255,7 @@ extension LaunchUITests {
         app.buttons["file.close"].tap()
         XCTAssertTrue(child.waitUntilExists(timeout: 10))
         XCTAssertEqual(app.navigationBars.count, 1)
-        app.scrollViews.firstMatch.swipeDown()
+        app.collectionViews["files.list"].swipeDown()
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitUntilExists(timeout: 10))
         search.tap(); search.typeText("child\n")
