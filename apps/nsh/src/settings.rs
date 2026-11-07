@@ -7,6 +7,8 @@ use agent_protocol::session::ProviderKind;
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::json;
 
+mod worktrees;
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Page {
     General,
@@ -116,7 +118,7 @@ pub(crate) fn overlay(hosts: Memo<Vec<Host>>) -> View {
                                     ))
                                     .child(when(
                                         move || page.get() == Page::Worktrees,
-                                        move || worktrees(connection),
+                                        move || worktrees::page(connection),
                                     )),
                             ),
                         ),
@@ -360,16 +362,4 @@ fn environments(connection: Connection, hosts: Memo<Vec<Host>>) -> View {
             environment::connection_switch(connection),
         )]))
         .child(crate::connections::screen(hosts))
-}
-
-fn worktrees(connection: Connection) -> View {
-    ui::card(vec![ui::setting(
-        "ワークツリー設定",
-        || {
-            "新しい会話をワークツリーで始めるか、引き継ぐファイル、自動削除を設定します。"
-                .to_owned()
-        },
-        ui::text_button("開く", crate::worktrees::open)
-            .enabled(move || connection.settings.with(|p| p.connected())),
-    )])
 }

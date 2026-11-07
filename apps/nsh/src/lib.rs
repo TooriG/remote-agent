@@ -382,7 +382,6 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                 .bg(ui::colors::BACKGROUND)
                 .text_color(ui::colors::FOREGROUND)
                 .child(media::preview())
-                .child(worktrees::presenter(|| {}))
                 .child(native("bex.browser.host").w(px(0.0)).h(px(0.0)))
                 .child(when(
                     move || sidebar.get(),

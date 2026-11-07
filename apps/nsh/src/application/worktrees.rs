@@ -8,7 +8,7 @@ use agent_core::{
 use agent_protocol::{models::WorktreeSettings, session::SessionRef};
 use std::sync::Arc;
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, PartialEq, serde::Serialize)]
 pub(crate) struct WorktreeEditor {
     pub id: String,
     pub host: String,
@@ -18,10 +18,10 @@ pub(crate) struct WorktreeEditor {
     pub receipt: Option<SaveReceipt>,
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, PartialEq, serde::Serialize)]
 pub(crate) struct SaveReceipt {
-    id: String,
-    succeeded: bool,
+    pub id: String,
+    pub succeeded: bool,
 }
 
 #[derive(serde::Deserialize)]
