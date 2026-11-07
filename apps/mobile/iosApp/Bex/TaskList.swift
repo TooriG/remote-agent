@@ -93,9 +93,9 @@ struct ThreadsScreen: View {
                                 .accessibilityIdentifier("tasks.new.project.\(project.id)")
                             }
                             .frame(minHeight: 44)
+                            .accessibilityIdentifier("tasks.project.\(project.id)")
+                            .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                         }
-                        .accessibilityIdentifier("tasks.project.\(project.id)")
-                        .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                         .taskListRowStyle()
                     }
                     .listSectionSeparator(.hidden)
