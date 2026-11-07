@@ -17713,22 +17713,6 @@
         }
       }
     },
-    "{0} · 週間枠": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0} · 週間枠"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0} · Weekly allowance"
-          }
-        }
-      }
-    },
     "{0} 残り {1}%": {
       "localizations": {
         "ja": {
@@ -19745,34 +19729,50 @@
         }
       }
     },
-    "OpenCode Go · 5時間枠": {
+    "月間枠": {
       "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenCode Go · 5時間枠"
-          }
-        },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenCode Go · 5-hour allowance"
+            "value": "Monthly allowance"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "月間枠"
           }
         }
       }
     },
-    "OpenCode Go · 月間枠": {
+    "usage.period.hours": {
       "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenCode Go · 月間枠"
-          }
-        },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "OpenCode Go · Monthly allowance"
+            "value": "{0}-hour allowance"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間枠"
+          }
+        }
+      }
+    },
+    "usage.period.minutes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}-minute allowance"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}分枠"
           }
         }
       }

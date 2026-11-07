@@ -533,9 +533,15 @@ struct AccountUsage {
     pub fetched_at: i64,
     pub error: Option<String>,
 }
+#[uniffi::remote(Enum)]
+enum UsagePeriod {
+    Minutes { minutes: u64 },
+    Monthly,
+}
 #[uniffi::remote(Record)]
 struct UsageWindow {
-    pub label: String,
+    pub period: UsagePeriod,
+    pub name: Option<String>,
     pub remaining_percent: u32,
     pub resets_at: Option<i64>,
 }

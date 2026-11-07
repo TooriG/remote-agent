@@ -188,6 +188,12 @@ mod tests {
         );
         assert_eq!(UiLanguage::Japanese.text("README.md"), "README.md");
         assert_eq!(UiLanguage::English.text(""), "");
+        for source in ["echo 5時間枠", "Fable · 週間枠"] {
+            assert_eq!(
+                localized_ui_text(UiLanguage::English, source.into()),
+                source
+            );
+        }
     }
 
     #[test]
@@ -228,10 +234,6 @@ mod tests {
 
     #[test]
     fn formatted_presentation_labels_preserve_inserted_values() {
-        assert_eq!(
-            localized_ui_text(UiLanguage::English, "Fable · 週間枠".into()),
-            "Fable · Weekly allowance"
-        );
         assert_eq!(
             localized_ui_text(UiLanguage::English, "残り 42%".into()),
             "42% remaining"

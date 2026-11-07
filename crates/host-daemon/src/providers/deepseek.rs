@@ -1707,7 +1707,13 @@ mod tests {
         let original = first
             .read(async {
                 Ok(vec![
-                    op::UsageWindow::from_used("OpenCode Go · 週間枠".into(), 20., None).unwrap(),
+                    op::UsageWindow::from_used(
+                        agent_protocol::operations::UsagePeriod::Minutes { minutes: 10080 },
+                        Some("OpenCode Go".into()),
+                        20.,
+                        None,
+                    )
+                    .unwrap(),
                 ])
             })
             .await;
@@ -1723,7 +1729,13 @@ mod tests {
         let refreshed = replacement
             .read(async {
                 Ok(vec![
-                    op::UsageWindow::from_used("OpenCode Go · 週間枠".into(), 55., None).unwrap(),
+                    op::UsageWindow::from_used(
+                        agent_protocol::operations::UsagePeriod::Minutes { minutes: 10080 },
+                        Some("OpenCode Go".into()),
+                        55.,
+                        None,
+                    )
+                    .unwrap(),
                 ])
             })
             .await;

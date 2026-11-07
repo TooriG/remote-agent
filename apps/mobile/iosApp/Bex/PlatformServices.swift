@@ -58,7 +58,7 @@ final class MobileSessionStorage: ClientStorage, ClientPlatform, @unchecked Send
 
 /// These locations belong to the application, including before its first Host opens.
 final class MobilePreferenceStorage: PreferenceStorage, @unchecked Sendable {
-    func load(key: PreferenceKey) throws -> Data {
+    func load(key: AgentCore.PreferenceKey) throws -> Data {
         switch key {
         case .models: return UserDefaults.standard.data(forKey: "bex.model-preferences") ?? Data()
         case .editor: return UserDefaults.standard.data(forKey: "bex.editor-preferences") ?? Data()
@@ -68,7 +68,7 @@ final class MobilePreferenceStorage: PreferenceStorage, @unchecked Sendable {
         }
     }
 
-    func save(key: PreferenceKey, bytes: Data) throws {
+    func save(key: AgentCore.PreferenceKey, bytes: Data) throws {
         switch key {
         case .models: UserDefaults.standard.set(bytes, forKey: "bex.model-preferences")
         case .editor: UserDefaults.standard.set(bytes, forKey: "bex.editor-preferences")

@@ -42,7 +42,11 @@ struct WeeklyUsageView: View {
             }
             ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
                 HStack(spacing: 8) {
-                    AppText(window.label)
+                    Text(verbatim: usageWindowLabel(
+                        language: locale.appLanguage,
+                        period: window.period,
+                        name: window.name
+                    ))
                     ProgressView(value: Double(window.remainingPercent), total: 100)
                         .tint(window.remainingPercent <= 20 ? .orange : .accentColor)
                     Text("\(window.remainingPercent)%").monospacedDigit()
@@ -51,8 +55,10 @@ struct WeeklyUsageView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(localizedUiFormat(
                     language: locale.appLanguage, source: "{0} 残り {1}%",
-                    arguments: [localizedUiText(language: locale.appLanguage, source: window.label),
-                                String(window.remainingPercent)]
+                    arguments: [
+                        usageWindowLabel(language: locale.appLanguage, period: window.period, name: window.name),
+                        String(window.remainingPercent)
+                    ]
                 ))
             }
         }
@@ -80,12 +86,13 @@ struct ReasoningStrengthIcon: View {
 }
 
 private struct UsageWindowView: View {
+    @Environment(\.locale) private var locale
     let window: UsageWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                AppText(window.label)
+                Text(verbatim: usageWindowLabel(language: locale.appLanguage, period: window.period, name: window.name))
                 Spacer()
                 Text("残り \(window.remainingPercent)%").monospacedDigit()
             }.font(.caption)

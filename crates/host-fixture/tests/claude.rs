@@ -1628,7 +1628,8 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         assert_eq!(usage.windows.len(), 3);
         assert_eq!(usage.windows[0].remaining_percent, 28);
         assert_eq!(usage.windows[1].remaining_percent, 61);
-        assert_eq!(usage.windows[2].label, "Fable · 週間枠");
+        assert_eq!(usage.windows[2].name.as_deref(), Some("Fable"));
+        assert_eq!(usage.windows[2].period, agent_protocol::operations::UsagePeriod::Minutes { minutes: 10080 });
         assert_eq!(usage.windows[2].remaining_percent, 66);
         assert_eq!(usage.windows[2].resets_at, Some(2000518400));
 

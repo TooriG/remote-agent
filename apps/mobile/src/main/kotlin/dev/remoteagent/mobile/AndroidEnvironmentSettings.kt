@@ -198,7 +198,10 @@ private fun AccountSettings(
                     }
                     account.planType?.let { Text(it) }
                     account.usage?.let { usage ->
-                        usage.windows.forEach { window -> Text("${window.label}: ${window.remainingPercent}%") }
+                        usage.windows.forEach { window ->
+                            val label = dev.remoteagent.core.usageWindowLabel(language, window.period, window.name)
+                            Text("$label: ${window.remainingPercent}%")
+                        }
                         usage.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     }
                     TextButton(onClick = { signingOut = account }, enabled = settings.connected()) {

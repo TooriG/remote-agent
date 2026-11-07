@@ -261,18 +261,33 @@ pub struct AccountUsage {
     pub error: Option<String>,
 }
 
+/// Provider facts; clients format the period in the selected UI language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UsagePeriod {
+    Minutes { minutes: u64 },
+    Monthly,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
-    pub label: String,
+    pub period: UsagePeriod,
+    pub name: Option<String>,
     pub remaining_percent: u32,
     pub resets_at: Option<i64>,
 }
 
 impl UsageWindow {
-    pub fn from_used(label: String, used: f64, resets_at: Option<i64>) -> Option<Self> {
+    pub fn from_used(
+        period: UsagePeriod,
+        name: Option<String>,
+        used: f64,
+        resets_at: Option<i64>,
+    ) -> Option<Self> {
         used.is_finite().then(|| Self {
-            label,
+            period,
+            name,
             remaining_percent: (100.0 - used.clamp(0.0, 100.0)).floor() as u32,
             resets_at,
         })
@@ -674,4 +689,40 @@ pub struct Submission {
 #[serde(rename_all = "camelCase")]
 pub struct SubmissionReceipt {
     pub turn_id: Option<crate::ids::TurnId>,
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn usage_windows_carry_period_facts_without_a_display_language() {
+        for (period, name, expected) in [
+            (
+                UsagePeriod::Minutes { minutes: 10080 },
+                Some("設定".into()),
+                json!({
+                    "period":{"kind":"minutes","minutes":10080},"name":"設定","remainingPercent":86,"resetsAt":12
+                }),
+            ),
+            (
+                UsagePeriod::Monthly,
+                None,
+                json!({
+                    "period":{"kind":"monthly"},"name":null,"remainingPercent":86,"resetsAt":12
+                }),
+            ),
+        ] {
+            let value = UsageWindow::from_used(period, name, 13.2, Some(12)).unwrap();
+            assert_eq!(serde_json::to_value(&value).unwrap(), expected);
+            assert_eq!(
+                serde_json::from_value::<UsageWindow>(expected).unwrap(),
+                value
+            );
+        }
+        for used in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(UsageWindow::from_used(UsagePeriod::Monthly, None, used, None).is_none());
+        }
+    }
 }

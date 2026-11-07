@@ -1419,7 +1419,11 @@ fn weekly_usage_view(
                 .w_full()
                 .gap_3()
                 .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                    agent_core::localization::localized_ui_text(language, window.label.clone()),
+                    agent_core::presentation::model_settings::usage_window_label(
+                        language,
+                        window.period,
+                        window.name,
+                    ),
                 ))
                 .child(usage_bar(window.remaining_percent, rgb(appearance::ACCENT)).flex_1())
                 .child(
@@ -1445,10 +1449,13 @@ fn usage_window_view(
             h_flex()
                 .justify_between()
                 .gap_2()
-                .child(agent_core::localization::localized_ui_text(
-                    language,
-                    window.label.clone(),
-                ))
+                .child(
+                    agent_core::presentation::model_settings::usage_window_label(
+                        language,
+                        window.period,
+                        window.name.clone(),
+                    ),
+                )
                 .child(agent_core::localization::localized_ui_format(
                     language,
                     "残り {0}%".into(),
@@ -1570,7 +1577,7 @@ mod tests {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({
-                    "accounts":[{"provider":"codex","id":"first","email":"first@example.invalid","usage":{"windows":[{"label":"週間枠","remainingPercent":42}],"fetchedAt":1}},
+                    "accounts":[{"provider":"codex","id":"first","email":"first@example.invalid","usage":{"windows":[{"period":{"kind":"minutes","minutes":10080},"remainingPercent":42}],"fetchedAt":1}},
                     {"provider":"claude","id":"claude:second"}],"selected":{"codex":"first","claude":"claude:second"}
                 })).unwrap()));
                 snapshot.catalog.models = Arc::new(serde_json::from_value(serde_json::json!([

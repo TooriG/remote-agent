@@ -1,10 +1,11 @@
 //! Model-picker and quick-control decisions shared by native clients.
+use crate::localization::{UiLanguage, localized_ui_format};
 use crate::{
     models::{Model, ModelRef},
     session::ProviderKind,
     state::Snapshot,
 };
-use agent_protocol::operations::UsageWindow;
+use agent_protocol::operations::{UsagePeriod, UsageWindow};
 
 pub(crate) fn current_model<'a>(
     models: &'a [Model],
@@ -49,6 +50,33 @@ pub(crate) fn matching_models<'a>(
         .collect()
 }
 
+/// Names come from the provider and remain verbatim, including catalog-like text.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn usage_window_label(
+    language: UiLanguage,
+    period: UsagePeriod,
+    name: Option<String>,
+) -> String {
+    let period = match period {
+        UsagePeriod::Monthly => language.text("月間枠").to_owned(),
+        UsagePeriod::Minutes { minutes: 10080 } => language.text("週間枠").to_owned(),
+        UsagePeriod::Minutes { minutes } if minutes % 60 == 0 => localized_ui_format(
+            language,
+            "usage.period.hours".into(),
+            vec![(minutes / 60).to_string()],
+        ),
+        UsagePeriod::Minutes { minutes } => localized_ui_format(
+            language,
+            "usage.period.minutes".into(),
+            vec![minutes.to_string()],
+        ),
+    };
+    match name.filter(|name| !name.is_empty()) {
+        Some(name) => format!("{name} · {period}"),
+        None => period,
+    }
+}
+
 pub(crate) fn weekly_usage(
     accounts: Option<&agent_protocol::operations::Accounts>,
     provider: ProviderKind,
@@ -67,7 +95,7 @@ pub(crate) fn weekly_usage(
             usage
                 .windows
                 .iter()
-                .filter(|window| window.label.contains("週間枠"))
+                .filter(|window| window.period == UsagePeriod::Minutes { minutes: 10080 })
                 .cloned()
                 .collect()
         })
@@ -279,6 +307,58 @@ mod tests {
     use crate::state::Draft;
     use std::sync::Arc;
 
+    #[test]
+    fn usage_periods_format_in_both_languages_without_translating_provider_names() {
+        for (period, name, japanese, english) in [
+            (
+                UsagePeriod::Minutes { minutes: 300 },
+                None,
+                "5時間枠",
+                "5-hour allowance",
+            ),
+            (
+                UsagePeriod::Minutes { minutes: 90 },
+                None,
+                "90分枠",
+                "90-minute allowance",
+            ),
+            (
+                UsagePeriod::Minutes { minutes: 10080 },
+                Some("Fable"),
+                "Fable · 週間枠",
+                "Fable · Weekly allowance",
+            ),
+            (
+                UsagePeriod::Minutes { minutes: 10080 },
+                Some(""),
+                "週間枠",
+                "Weekly allowance",
+            ),
+            (
+                UsagePeriod::Monthly,
+                Some("OpenCode Go"),
+                "OpenCode Go · 月間枠",
+                "OpenCode Go · Monthly allowance",
+            ),
+            (
+                UsagePeriod::Minutes { minutes: 10080 },
+                Some("設定\n{0}"),
+                "設定\n{0} · 週間枠",
+                "設定\n{0} · Weekly allowance",
+            ),
+        ] {
+            for (language, expected) in [
+                (UiLanguage::Japanese, japanese),
+                (UiLanguage::English, english),
+            ] {
+                assert_eq!(
+                    usage_window_label(language, period, name.map(str::to_owned)),
+                    expected
+                );
+            }
+        }
+    }
+
     #[rstest::rstest]
     #[case(ProviderKind::Codex, "shared", vec![("週間枠", 86)])]
     #[case(ProviderKind::Claude, "shared", vec![("Fable · 週間枠", 66), ("Sonnet · 週間枠", 42)])]
@@ -292,13 +372,14 @@ mod tests {
             serde_json::from_value(serde_json::json!({
                 "accounts":[
                     {"id":"shared","provider":"codex","usage":{"fetchedAt":1,"windows":[
-                        {"label":"5時間枠","remainingPercent":72},
-                        {"label":"週間枠","remainingPercent":86}
+                        {"period":{"kind":"minutes","minutes":300},"remainingPercent":72},
+                        {"period":{"kind":"minutes","minutes":10080},"remainingPercent":86}
                     ]}},
                     {"id":"shared","provider":"claude","usage":{"fetchedAt":1,"windows":[
-                        {"label":"Fable · 5時間枠","remainingPercent":50},
-                        {"label":"Fable · 週間枠","remainingPercent":66},
-                        {"label":"Sonnet · 週間枠","remainingPercent":42}
+                        {"period":{"kind":"minutes","minutes":300},"name":"Fable","remainingPercent":50},
+                        {"period":{"kind":"minutes","minutes":300},"name":"週間枠というモデル名","remainingPercent":99},
+                        {"period":{"kind":"minutes","minutes":10080},"name":"Fable","remainingPercent":66},
+                        {"period":{"kind":"minutes","minutes":10080},"name":"Sonnet","remainingPercent":42}
                     ]}}
                 ],"selected":{}
             }))
@@ -307,9 +388,15 @@ mod tests {
         assert_eq!(
             windows
                 .iter()
-                .map(|window| (window.label.as_str(), window.remaining_percent))
+                .map(|window| (
+                    usage_window_label(UiLanguage::Japanese, window.period, window.name.clone()),
+                    window.remaining_percent
+                ))
                 .collect::<Vec<_>>(),
             expected
+                .into_iter()
+                .map(|(label, remaining)| (label.to_owned(), remaining))
+                .collect::<Vec<_>>()
         );
         for account in &mut accounts.accounts {
             account.usage.as_mut().unwrap().error = Some("unavailable".into());
