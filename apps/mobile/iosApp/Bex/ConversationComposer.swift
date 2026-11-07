@@ -66,18 +66,21 @@ struct ConversationComposer: View {
             if !isSideChat, !model.isNewThread, let review = model.files.review(), review.fileCount() > 0 {
                 Button { openTools?(.diff) } label: {
                     HStack(spacing: 10) {
-                        Text("\(review.fileCount())件のファイル")
+                        Text("\(review.fileCount())件のファイル").foregroundStyle(.tint)
                         Text("+\(review.additions())").foregroundColor(.green)
                         Text("−\(review.deletions())").foregroundColor(.red)
                     }
                     .font(.subheadline.monospacedDigit())
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
                 .accessibilityIdentifier("task.diff")
             }
             if let error = model.transferError {
                 AppNotice(text: error)
+            }
+            if let reason = controls.unavailable {
+                AppNotice(text: reason)
             }
             if let request = model.dockedRequest {
                 RequestPanel(
@@ -139,7 +142,7 @@ struct ConversationComposer: View {
             .padding(7)
             .glassEffect(.regular, in: .rect(cornerRadius: 26))
         }
-        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
+        .padding(.horizontal, 12)
     }
 
     /// The expanded composer's attachment, model, and primary actions.

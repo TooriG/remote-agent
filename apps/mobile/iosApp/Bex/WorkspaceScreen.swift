@@ -164,7 +164,6 @@ private struct WorkspaceToolsScreen: View {
                         ForEach(panel.surfaces, id: \.id) { surface in
                             Label(panelTitle(kind: surface.kind), systemImage: surface.kind.icon)
                                 .tag(Optional(surface.id))
-                                .accessibilityIdentifier("workbench.tab.\(surface.kind).\(surface.id)")
                         }
                     }
                     .pickerStyle(.inline).labelsHidden()
@@ -173,7 +172,6 @@ private struct WorkspaceToolsScreen: View {
                     Button(role: .destructive) { model.closeWorkbench(selected, scope: scope) } label: {
                         Label("このツールを閉じる", systemImage: "xmark")
                     }
-                    .accessibilityIdentifier("workbench.close.\(selected.id)")
                 }
             }
         }

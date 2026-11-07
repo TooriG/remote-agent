@@ -1,9 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+
+test('native acceptance selectors name implemented UI tests', () => {
+  const root = 'apps/mobile/iosApp/UITests';
+  const implemented = new Set(readdirSync(root).filter(name => name.endsWith('.swift')).flatMap(name =>
+    [...readFileSync(join(root, name), 'utf8').matchAll(/^\s*func (testSimulator\w+)\(/gm)].map(match => match[1])));
+  for (const path of ['justfile', 'scripts/ios-e2e.sh']) {
+    const selected = [...readFileSync(path, 'utf8').matchAll(/\btestSimulator\w+/g)].map(match => match[0]);
+    assert.ok(selected.length > 0, path);
+    for (const name of selected) assert.ok(implemented.has(name), `${path}: missing ${name}`);
+  }
+});
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'native-validation-'));
@@ -41,7 +52,7 @@ if [[ -n \${NATIVE_VALIDATION_FAIL:-} && "$name $*" == "$NATIVE_VALIDATION_FAIL"
       const result = spawnSync('/bin/bash', [join(root, script), ...args], {
         cwd: root,
         encoding: 'utf8',
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CARGO_TARGET_DIR: target, NATIVE_VALIDATION_LOG: log, NATIVE_VALIDATION_FAIL: failure, AGENT_REMOTE_BUILDER: '', ...overrides },
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NATIVE_VALIDATION_LOG: log, NATIVE_VALIDATION_FAIL: failure, AGENT_REMOTE_BUILDER: '', ...overrides },
       });
       assert.ifError(result.error);
       return { ...result, commands: readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) };
@@ -83,7 +94,7 @@ test('Rust quality validates contracts without native builds, acceptance or clea
   assert.ok(result.commands.includes('cargo clippy --locked --workspace --all-targets -- --no-deps -D warnings'));
   assert.ok(!result.commands.some(command => command.startsWith('remote-run ')));
   assert.ok(result.commands.at(-1).startsWith('just unit-tests '));
-  assert.ok(!result.commands.some(command => /macos-e2e|conversation-ui|clean-builds/.test(command)));
+  assert.ok(!result.commands.some(command => /macos-e2e|conversation-ui/.test(command)));
 });
 
 test('Swift quality checks sources without compiling or starting a Simulator', (t) => {

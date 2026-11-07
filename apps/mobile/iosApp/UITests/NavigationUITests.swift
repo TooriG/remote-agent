@@ -6,6 +6,8 @@ extension LaunchUITests {
     private func openConnectionSettings(_ app: XCUIApplication) {
         app.buttons["tasks.menu"].tap()
         app.buttons["tasks.settings"].tap()
+        XCTAssertTrue(app.buttons["settings.providers"].waitUntilExists(timeout: 10))
+        XCTAssertFalse(app.buttons["settings.models"].exists)
         app.buttons["settings.connections"].tap()
         XCTAssertTrue(app.buttons["profiles.add"].waitUntilExists(timeout: 10))
     }
@@ -177,6 +179,10 @@ extension LaunchUITests {
         XCTAssertGreaterThan(search.frame.midY, app.frame.height * 0.8)
         let project = app.buttons["tasks.project.simulator-project"]
         XCTAssertTrue(project.exists)
+        // Expansion persists across launches; this scenario begins with a closed project.
+        if project.value as? String == "開いています" {
+            project.tap()
+        }
         XCTAssertEqual(project.value as? String, "閉じています")
         let compose = app.buttons["tasks.new.project.simulator-project"]
         XCTAssertTrue(compose.isHittable)
@@ -186,10 +192,11 @@ extension LaunchUITests {
         XCTAssertFalse(app.buttons["tasks.new.chat"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(search.waitUntilExists(timeout: 10))
+        XCTAssertEqual(project.value as? String, "閉じています")
         search.tap(); search.typeText("no-matching-conversation-unique\n")
         XCTAssertFalse(app.buttons["tasks.project.simulator-project"].exists)
         search.buttons.firstMatch.tap()
-        app.buttons["close"].tap()
+        closeSearch(app)
         app.buttons["tasks.menu"].tap()
         app.buttons["tasks.refresh"].tap()
         XCTAssertTrue(project.waitUntilExists(timeout: 10))
@@ -257,12 +264,18 @@ extension LaunchUITests {
         wait(for: [dismissed], timeout: 10)
     }
 
-    /// An idle reply composer shows its model controls once focused.
+    /// Focus reveals model controls; their catalog must resolve before native taps.
     func expandComposer(_ app: XCUIApplication) {
         let settings = app.buttons["model.settings"]
         if !settings.exists {
             app.textFields["task.message"].tap()
             XCTAssertTrue(settings.waitUntilExists(timeout: 5))
+        }
+        // Catalog arrival adds the effort and speed controls beside this
+        // button. Wait for that state before resolving its tap coordinates.
+        if settings.value as? String == "モデル" {
+            let loaded = expectation(for: NSPredicate(format: "value != %@", "モデル"), evaluatedWith: settings)
+            wait(for: [loaded], timeout: 10)
         }
     }
 
@@ -336,6 +349,7 @@ extension LaunchUITests {
 
             XCTAssertTrue(row.waitUntilExists(timeout: 15)); row.tap()
             XCTAssertTrue(app.descendants(matching: .any)[answerID].waitUntilExists(timeout: 15))
+            assertComposerAtBottomWithKeyboardHidden(in: app)
             XCTAssertEqual(message.value as? String, "Keep this conversation draft")
             backToTaskList(app, swipe: !cycle.isMultiple(of: 2))
 
@@ -352,10 +366,9 @@ extension LaunchUITests {
             backToTaskList(app, swipe: !cycle.isMultiple(of: 2))
             row.tap()
             XCTAssertTrue(app.descendants(matching: .any)[answerID].waitUntilExists(timeout: 15))
+            assertComposerAtBottomWithKeyboardHidden(in: app)
         }
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Task reopened after repeated back and cancelled edge swipes"
-        screenshot.lifetime = .keepAlways; add(screenshot)
+        captureScreen(app, named: "Task reopened after repeated back and cancelled edge swipes")
     }
 
     private func assertUnavailableScannerCanBeCancelled(_ app: XCUIApplication) {

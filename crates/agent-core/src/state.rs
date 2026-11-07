@@ -1071,9 +1071,9 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         Intent::QuoteSelection { storage_scope, thread_id, text } => {
             if previous.connection.storage_scope == storage_scope {
                 let draft = previous.input.drafts.get(&thread_id)
-                    .map(|draft| draft.text.clone()).unwrap_or_default();
+                    .map(|draft| draft.text.as_str()).unwrap_or_default();
                 set_draft_text(&mut next, thread_id,
-                    crate::presentation::markdown::append_selection_quote(draft, text));
+                    crate::composer::append_selection_to_draft(draft, &text));
             }
         },
         Intent::AnswerQuestion { request_id, action } => {
@@ -1808,12 +1808,7 @@ fn submission(
     let mut next = previous.clone();
     if let Some(reason) = thread_id
         .as_ref()
-        .and_then(|id| {
-            previous
-                .thread_metadata(id)
-                .map(|thread| thread.can_accept_direct_input)
-        })
-        .and_then(crate::session::direct_input_unavailable_reason)
+        .and_then(|id| previous.submission_unavailable_reason(id, provider))
     {
         next.fail_operation(
             op::OperationKey::Submission {
@@ -1921,6 +1916,79 @@ mod workspace_navigation_tests {
 #[cfg(test)]
 mod submission_tests {
     use super::*;
+
+    #[rstest::rstest]
+    fn switching_a_busy_conversation_explains_the_block_and_retains_the_draft(
+        #[values(
+            crate::session::ProviderKind::Codex,
+            crate::session::ProviderKind::Claude
+        )]
+        active: crate::session::ProviderKind,
+        #[values(false, true)] busy: bool,
+        #[values(false, true)] switching: bool,
+    ) {
+        let session = crate::session::SessionRef::new(
+            crate::session::ProviderKind::Codex,
+            "conversation".into(),
+        )
+        .unwrap();
+        let key = DraftKey::from(session.clone());
+        let selected = if switching {
+            crate::session::ProviderKind::DeepSeek
+        } else {
+            active
+        };
+        let draft = Arc::new(Draft {
+            text: "Keep this message".into(),
+            model: Some(crate::models::ModelRef {
+                provider: selected,
+                id: "model".into(),
+            }),
+            ..Default::default()
+        });
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(
+            session.clone(),
+            Arc::new(Thread {
+                id: Some(session.clone()),
+                active_provider: Some(active),
+                status: if busy {
+                    crate::models::SessionStatus::Running
+                } else {
+                    crate::models::SessionStatus::Idle
+                },
+                capabilities: Some(crate::session::Capabilities {
+                    additional_input: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        Arc::make_mut(&mut snapshot.input.drafts).insert(key.clone(), draft.clone());
+        let reason = snapshot.input_unavailable_reason(session.clone(), Some(selected));
+        let (next, effects) = submission(
+            &snapshot,
+            Some(session),
+            key.clone(),
+            draft.clone(),
+            "send".into(),
+            None,
+        );
+        if busy && switching {
+            assert!(reason.unwrap().contains("新しいチャット"));
+            assert_eq!(next.input.drafts[&key], draft);
+            assert!(effects.is_empty());
+            assert!(next.sessions.pending_submissions.is_empty());
+            assert!(
+                next.operation_error(op::OperationKey::Submission { draft_key: key })
+                    .is_some()
+            );
+        } else {
+            assert!(reason.is_none());
+            assert_eq!(effects.len(), 1);
+            assert!(next.input.drafts[&key].text.is_empty());
+        }
+    }
 
     #[rstest::rstest]
     fn read_only_subagents_keep_drafts_without_dispatching_input(

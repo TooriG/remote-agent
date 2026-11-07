@@ -42,21 +42,25 @@ struct ThreadsScreen: View {
                 .listSectionSeparator(.hidden)
 
                 ForEach(projects, id: \.listKey) { project in
+                    let expanded = Binding(get: { project.expanded }, set: {
+                        model.perform(.setProjectExpanded(projectId: project.id, expanded: $0), on: project.hostId)
+                    })
                     Section {
-                        DisclosureGroup(isExpanded: Binding(get: { project.expanded }, set: {
-                            model.perform(.setProjectExpanded(projectId: project.id, expanded: $0), on: project.hostId)
-                        })) {
+                        DisclosureGroup(isExpanded: expanded) {
                             if project.loading, !project.hasMore {
-                                ProgressView().taskListRowStyle()
+                                ProgressView().taskListRowStyle(leading: 40)
                             }
                             if let error = project.error {
-                                AppNotice(text: error).taskListRowStyle()
+                                AppNotice(text: error).taskListRowStyle(leading: 40)
                                 Button("再試行") {
                                     model.perform(.refreshProject(projectId: project.id), on: project.hostId)
-                                }.taskListRowStyle()
+                                }.taskListRowStyle(leading: 40)
                             }
                             ForEach(project.threads, id: \.listKey) { thread in
-                                ThreadListRow(thread: thread) { model.openThread(thread.id, on: thread.hostId) }
+                                ThreadListRow(thread: thread, leadingInset: 40) { model.openThread(
+                                    thread.id,
+                                    on: thread.hostId
+                                ) }
                             }
                             if project.hasMore {
                                 Button {
@@ -71,17 +75,26 @@ struct ThreadsScreen: View {
                                 }
                                 .disabled(project.loading)
                                 .accessibilityIdentifier("tasks.project.\(project.id).more")
-                                .taskListRowStyle()
+                                .taskListRowStyle(leading: 40)
                             }
                         } label: {
                             HStack(spacing: 16) {
-                                ProjectIcon(
-                                    png: colorScheme == .dark ? project.icon?.darkPng : project.icon?.lightPng,
-                                    monogram: project.monogram,
-                                    colorRGB: project.iconColor
-                                )
-                                Text(project.name).font(.title3).lineLimit(1)
-                                Spacer(minLength: 0)
+                                Button { expanded.wrappedValue.toggle() } label: {
+                                    HStack(spacing: 16) {
+                                        ProjectIcon(
+                                            png: colorScheme == .dark ? project.icon?.darkPng : project.icon?.lightPng,
+                                            monogram: project.monogram,
+                                            colorRGB: project.iconColor
+                                        )
+                                        Text(project.name).font(.title3).lineLimit(1)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .frame(minHeight: 44)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("tasks.project.\(project.id)")
+                                .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                                 Button { model.openNewThread(cwd: project.roots.first?.path ?? "", on: project.hostId)
                                 } label: {
                                     Image(systemName: "square.and.pencil").font(.title3)
@@ -92,10 +105,8 @@ struct ThreadsScreen: View {
                                 .accessibilityLabel("\(project.name)で新しいタスク")
                                 .accessibilityIdentifier("tasks.new.project.\(project.id)")
                             }
-                            .frame(minHeight: 44)
-                            .accessibilityIdentifier("tasks.project.\(project.id)")
-                            .accessibilityValue(project.expanded ? "開いています" : "閉じています")
                         }
+                        .disclosureGroupStyle(ProjectDisclosureStyle())
                         .taskListRowStyle()
                     }
                     .listSectionSeparator(.hidden)
@@ -253,44 +264,29 @@ private extension ThreadSummary {
     }
 }
 
-private struct ProjectIcon: View {
-    let png: Data?
-    let monogram: String
-    let colorRGB: UInt32
-
-    var body: some View {
-        let color = Color(
-            red: Double((colorRGB >> 16) & 255) / 255,
-            green: Double((colorRGB >> 8) & 255) / 255,
-            blue: Double(colorRGB & 255) / 255
-        )
+/// Keep the standard group's rows while its label provides separate expand and compose buttons.
+private struct ProjectDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
         Group {
-            if let png, let image = UIImage(data: png) {
-                Image(uiImage: image).resizable().scaledToFit()
-            } else {
-                Text(monogram)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(color)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(color.opacity(0.15))
+            configuration.label
+            if configuration.isExpanded {
+                configuration.content
             }
         }
-        .frame(width: 24, height: 24)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .accessibilityHidden(true)
     }
 }
 
 private extension View {
-    func taskListRowStyle() -> some View {
+    func taskListRowStyle(leading: CGFloat = 20) -> some View {
         listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+            .listRowInsets(EdgeInsets(top: 0, leading: leading, bottom: 0, trailing: 20))
             .listRowBackground(Color.clear)
     }
 }
 
 private struct ThreadListRow: View {
     let thread: ThreadSummary
+    var leadingInset: CGFloat = 20
     let open: () -> Void
 
     private var accessibilityID: String {
@@ -339,7 +335,7 @@ private struct ThreadListRow: View {
         .accessibilityValue(LocalizedStringKey(
             activity.map { threadActivityLabel(activity: $0) } ?? ""
         ))
-        .taskListRowStyle()
+        .taskListRowStyle(leading: leadingInset)
     }
 }
 

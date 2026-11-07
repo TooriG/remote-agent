@@ -12,7 +12,6 @@ pub(in crate::app) struct ConversationModel {
     epoch: u64,
     connected: bool,
     busy: bool,
-    input_notice: Option<String>,
     history_notice: Option<String>,
     history: Option<agent_core::presentation::conversation::HistoryControl>,
     docked: Vec<agent_core::presentation::conversation::Request>,
@@ -157,9 +156,6 @@ impl Desktop {
             epoch: self.snapshot.connection.epoch,
             connected: self.snapshot.connection.connected,
             busy: self.busy > 0,
-            input_notice: self
-                .thread()
-                .and_then(|thread| agent_protocol::session::input_unavailable_reason(thread)),
             history_notice: self
                 .thread()
                 .and_then(|thread| agent_core::presentation::conversation::history_notice(thread)),
@@ -1848,10 +1844,7 @@ impl ConversationView {
                     |_, action, _, cx| cx.emit(ConversationAction::Notice(action)),
                 ),
             ));
-        for notice in [&self.model.input_notice, &self.model.history_notice]
-            .into_iter()
-            .flatten()
-        {
+        if let Some(notice) = &self.model.history_notice {
             body = body.child(div().px_4().py_2().text_sm().child(
                 agent_core::localization::localized_ui_text(language, notice.clone()),
             ));
@@ -1953,25 +1946,37 @@ impl ConversationView {
             let Some(desktop) = self.desktop.upgrade() else {
                 return div().into_any_element();
             };
-            let file_chips = super::markdown_file::FileChips::new(
-                presentation.files.into(),
-                &desktop,
-                self.model.epoch,
-                &self.metadata,
-                cx,
-            );
+            let previous = self.timeline.markdown.get(&id);
+            let same_files =
+                previous.is_some_and(|cached| *cached.file_chips.files == presentation.files);
+            let file_chips = previous
+                .filter(|_| same_files)
+                .map(|cached| cached.file_chips.clone())
+                .unwrap_or_else(|| {
+                    super::markdown_file::FileChips::new(
+                        presentation.files.into(),
+                        &desktop,
+                        self.model.epoch,
+                        &self.metadata,
+                        cx,
+                    )
+                });
+            // A new parser revision replaces the entire parsed document and its
+            // measured blocks. Ordinary streaming must keep the incremental parser.
+            let parser_revision = previous
+                .filter(|cached| same_files && *cached.definitions == presentation.definitions)
+                .map_or_else(
+                    || uuid::Uuid::new_v4().as_u64_pair().0,
+                    |cached| cached.parser_revision,
+                );
             let source: SharedString = source.to_owned().into();
             let rendered = match presentation.source {
                 std::borrow::Cow::Borrowed(_) => source.clone(),
                 std::borrow::Cow::Owned(rendered) => rendered.into(),
             };
-            let (wrap_code, compact_tables) = self
-                .timeline
-                .markdown
-                .get(&id)
-                .map_or((false, false), |cached| {
-                    (cached.wrap_code, cached.compact_tables)
-                });
+            let (wrap_code, compact_tables) = previous.map_or((false, false), |cached| {
+                (cached.wrap_code, cached.compact_tables)
+            });
             self.timeline.markdown.insert(
                 id.clone(),
                 MarkdownContent {
@@ -1980,7 +1985,7 @@ impl ConversationView {
                     definitions: Arc::new(presentation.definitions),
                     code_headers: Arc::new(presentation.code_headers),
                     file_chips,
-                    parser_revision: uuid::Uuid::new_v4().as_u64_pair().0,
+                    parser_revision,
                     diagrams: HashMap::new(),
                     wrap_code,
                     compact_tables,
@@ -2355,6 +2360,82 @@ mod rendering_tests {
     }
 
     #[gpui::test]
+    fn streaming_markdown_keeps_selected_text_and_grows_without_shrinking(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        let mut text = "Alpha Bravo\n\nA streamed response.".to_owned();
+        let thread = |text: &str| {
+            serde_json::from_value(serde_json::json!({
+                "id": {"provider":"codex", "id":"fixture"},
+                "turns": [{"id":"turn", "status":"running", "items": [{
+                    "id":"answer", "body":{"inline":{"body":{"assistantText":{
+                        "text":text, "phase":"final"
+                    }}}}
+                }]}]
+            }))
+            .unwrap()
+        };
+        let mut desktop = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let view =
+                cx.new(|cx| ConversationView::new(Snapshot::default(), thread(&text), window, cx));
+            desktop = Some(view.read(cx).desktop.clone());
+            gpui::component::Root::new(view, window, cx)
+        });
+        let desktop = desktop.unwrap();
+        window.simulate_resize(size(px(600.), px(650.)));
+        window.run_until_parked();
+        let row = "conversation-row-history-item:turn:answer:occurrence:0:turn:turn:0";
+        let bounds = window.debug_bounds(row).unwrap();
+        let start = gpui::point(bounds.left() + px(25.), bounds.top() + px(12.));
+        let end = start + gpui::point(px(200.), px(0.));
+        window.simulate_mouse_move(start, None, gpui::Modifiers::default());
+        window.simulate_mouse_down(start, gpui::MouseButton::Left, gpui::Modifiers::default());
+        window.simulate_mouse_move(
+            end,
+            Some(gpui::MouseButton::Left),
+            gpui::Modifiers::default(),
+        );
+        window.simulate_mouse_up(end, gpui::MouseButton::Left, gpui::Modifiers::default());
+        window.run_until_parked();
+        let selected = window.update(gpui::base::TextSelection::selected_text);
+        assert_eq!(selected.trim(), "Alpha Bravo");
+        let mut height = bounds.size.height;
+        for suffix in [
+            " More words.",
+            "\n\nAnother paragraph.",
+            "\n\n```rust\nfn main() {}\n```",
+        ] {
+            text.push_str(suffix);
+            desktop.update(window, |desktop, cx| {
+                let session = desktop.selected().unwrap().clone();
+                Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).sessions.conversations)
+                    .insert(session, Arc::new(thread(&text)));
+                desktop.project_fixture();
+                cx.notify();
+            });
+            for _ in 0..3 {
+                window.update(|window, cx| window.draw(cx).clear(cx));
+                let current = window.debug_bounds(row).unwrap().size.height;
+                assert!(
+                    current >= height,
+                    "an append must not collapse the message: {height:?} -> {current:?}"
+                );
+                height = current;
+                window.run_until_parked();
+            }
+            assert_eq!(
+                window.update(gpui::base::TextSelection::selected_text),
+                selected,
+                "appending Markdown must retain the selected earlier paragraph"
+            );
+        }
+        assert!(
+            height > bounds.size.height,
+            "new paragraphs must increase the message height"
+        );
+    }
+
+    #[gpui::test]
     fn streaming_keeps_an_unfinished_request_answer(cx: &mut TestAppContext) {
         let _runtime = init(cx);
         let mut source: agent_protocol::models::Thread =
@@ -2683,7 +2764,8 @@ mod rendering_tests {
                     .contains_key("answer-0")
             );
         });
-        let first_message = "conversation-row-history-item:long-turn:answer-0:occurrence:0";
+        let first_message =
+            "conversation-row-history-item:long-turn:answer-0:occurrence:0:turn:long%2Dturn:0";
         let before = window.debug_bounds(first_message).unwrap().top();
         view.update(window, |view, cx| {
             view.desktop.update(cx, |desktop, cx| {
@@ -2836,7 +2918,9 @@ mod rendering_tests {
                 if status == "running" {
                     let progress = progress.expect("background work must remain visible");
                     let response = window
-                        .debug_bounds("conversation-row-history-item:turn:answer:occurrence:0")
+                        .debug_bounds(
+                            "conversation-row-history-item:turn:answer:occurrence:0:turn:turn:0",
+                        )
                         .expect("the response must remain visible while background work runs");
                     assert!(window.debug_bounds("response-copy").is_none());
                     assert!(progress.top() >= response.bottom());
@@ -2868,7 +2952,11 @@ mod rendering_tests {
             ConversationView::new(Snapshot::default(), source, window, cx)
         });
         window.run_until_parked();
-        assert!(window.debug_bounds("work-turn").is_some());
+        assert!(
+            window
+                .debug_bounds("work-turn:occurrence:0:turn:turn:0")
+                .is_some()
+        );
         assert!(
             window.debug_bounds("conversation-in-progress").is_none(),
             "the in-progress header must not be followed by a second progress row"
@@ -3003,7 +3091,9 @@ mod rendering_tests {
         view.update(window, |_, cx| cx.notify());
         window.run_until_parked();
         let last = window
-            .debug_bounds("conversation-row-history-item:turn-19:answer-19:occurrence:0")
+            .debug_bounds(
+                "conversation-row-history-item:turn-19:answer-19:occurrence:0:turn:turn%2D19:0",
+            )
             .unwrap();
         view.update(window, |view, cx| {
             let desktop = view.0.read(cx);
@@ -3044,7 +3134,9 @@ mod rendering_tests {
             window.debug_bounds("change-files-0").is_none(),
             "completed work starts collapsed"
         );
-        let group = window.debug_bounds("work-turn").unwrap();
+        let group = window
+            .debug_bounds("work-turn:occurrence:0:turn:turn:0")
+            .unwrap();
         window.simulate_click(
             gpui_kit::point(group.left() + px(20.), group.center().y),
             gpui_kit::Modifiers::default(),
@@ -3112,6 +3204,47 @@ mod rendering_tests {
         assert!(
             image.bottom() + px(80.) < bubble.bottom(),
             "{image:?} in {bubble:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn streaming_a_reference_definition_resolves_the_earlier_image(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(40, 40),
+        )]));
+        let source = "![diagram][art]\n\nA paragraph after the image.";
+        let (snapshot, thread) = user_message_fixture(source, None, false);
+        let (view, window) = cx.add_window_view(|window, cx| {
+            let view = ConversationView::new(snapshot, thread, window, cx);
+            view.desktop.update(cx, |desktop, cx| {
+                desktop.publish_views(window, cx);
+                desktop.media.update(cx, |media, cx| {
+                    media.fixture_image("/fixture/image.png", image.into(), cx);
+                });
+            });
+            view
+        });
+        window.simulate_resize(size(px(780.), px(900.)));
+        window.run_until_parked();
+        assert!(window.debug_bounds("chat-image").is_none());
+        let desktop = view.read_with(window, |view, _| view.desktop.clone());
+        let (_, source) = user_message_fixture(
+            &format!("{source}\n\n[art]: /fixture/image.png"),
+            None,
+            false,
+        );
+        desktop.update(window, |desktop, cx| {
+            let session = desktop.selected().unwrap().clone();
+            Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).sessions.conversations)
+                .insert(session, Arc::new(source));
+            desktop.project_fixture();
+            cx.notify();
+        });
+        window.run_until_parked();
+        assert!(
+            window.debug_bounds("chat-image").is_some(),
+            "a streamed definition must resolve its earlier image instead of only reparsing the tail"
         );
     }
 

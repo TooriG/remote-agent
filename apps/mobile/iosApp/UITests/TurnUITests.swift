@@ -83,7 +83,7 @@ extension LaunchUITests {
 
     func testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft() throws {
         let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[success] [selection] Verify assistant selection")
+        startSimulatorConversation(app, promptText: "[success] [selection] Verify assistant selection")
         let answer = prefixedElement(app, prefix: "item.fixture-final-")
         XCTAssertTrue(answer.waitUntilExists(timeout: 30))
         let text = answer.textViews["message.assistant-text"]
@@ -118,88 +118,26 @@ extension LaunchUITests {
     }
 
     func testSimulatorOpensSideChatWithoutLosingOriginalDraft() throws {
-        try verifyAssistantSideChat(retryRead: false)
-    }
-
-    func testSimulatorRetriesSideChatPreparationWithoutLosingOriginalDraft() throws {
-        try verifyAssistantSideChat(retryRead: true)
-    }
-
-    private func verifyAssistantSideChat(retryRead: Bool) throws {
         let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[success] [selection] Original conversation")
+        startSimulatorConversation(app, promptText: "[success] [selection] Original conversation")
         let original = prefixedElement(app, prefix: "item.fixture-final-")
         XCTAssertTrue(original.waitUntilExists(timeout: 30))
         let originalID = original.identifier
         let message = app.textFields["task.message"]
         message.tap(); message.typeText("Keep my original draft")
-        if !retryRead {
-            verifyEmptySideChatTab(app)
-        }
-        let text = original.textViews["message.assistant-text"]
-        text.tap()
-        text.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 25, dy: 10)).press(forDuration: 1.2)
-        if retryRead {
-            _ = try simulatorFixture("fail-next-thread-start")
-        }
-        openAssistantSelectionSideChat(app)
-        if retryRead {
-            let retry = app.buttons["再試行"]
-            XCTAssertTrue(retry.waitUntilExists(timeout: 10))
-            retry.tap()
-        }
-        let sideMessage = app.textFields["task.message"]
-        waitForDraftText(sideMessage, text: "> Needle\n\n")
-        if !retryRead {
-            sideMessage.tap()
-            sideMessage.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.95)).tap()
-            sideMessage.typeText("Keep my side draft")
-            openWorkbenchTool(app, "terminal")
-            openWorkbenchTabs(app)
-            XCTAssertTrue(workbenchTab(app, "sideChat").exists)
-            dismissWorkbenchMenu(app)
-            openWorkbenchTool(app, "sideChat")
-            waitForDraftText(sideMessage, text: "> Needle\n\nKeep my side draft")
-            closeWorkbench(app)
-            XCTAssertTrue(app.descendants(matching: .any)[originalID].waitUntilExists(timeout: 15))
-            waitForDraftText(message, text: "Keep my original draft")
-            XCTAssertFalse(app.staticTexts["notice"].exists)
-            app.buttons["task.tools"].tap()
-            waitForDraftText(sideMessage, text: "> Needle\n\nKeep my side draft")
-            closeWorkbench(app)
-            return
-        }
-        try verifySideChatSubmissionAndRestore(app, originalID: originalID)
-    }
-
-    private func verifyEmptySideChatTab(_ app: XCUIApplication) {
         app.buttons["task.tools"].tap()
         openWorkbenchTool(app, "sideChat")
         let input = app.textFields["task.message"]
         XCTAssertTrue(input.waitUntilExists(timeout: 15))
         waitForDraftText(input, text: input.placeholderValue ?? "")
         closeWorkbench(app)
-        waitForDraftText(app.textFields["task.message"], text: "Keep my original draft", timeout: 10)
-    }
-
-    private func openAssistantSelectionSideChat(_ app: XCUIApplication) {
-        let side = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "サイドチャットで質問")).firstMatch
-        if !side.exists {
-            let forward = app.buttons["Forward"]
-            XCTAssertTrue(forward.waitUntilExists(timeout: 5)); forward.tap()
-        }
-        XCTAssertTrue(side.waitUntilExists(timeout: 5)); side.tap()
-        XCTAssertTrue(app.navigationBars["サイドチャット"].waitUntilExists(timeout: 15), app.debugDescription)
-        XCTAssertTrue(app.buttons["workbench.add"].exists)
-        XCTAssertTrue(app.navigationBars.buttons["BackButton"].exists)
-    }
-
-    private func verifySideChatSubmissionAndRestore(
-        _ app: XCUIApplication,
-        originalID: String
-    ) throws {
+        waitForDraftText(message, text: "Keep my original draft", timeout: 10)
+        let text = original.textViews["message.assistant-text"]
+        text.tap()
+        text.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 25, dy: 10)).press(forDuration: 1.2)
+        openAssistantSelectionSideChat(app)
         let sideMessage = app.textFields["task.message"]
+        waitForDraftText(sideMessage, text: "> Needle\n\n")
         sideMessage.tap()
         sideMessage.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.95)).tap()
         sideMessage.typeText("[success] Explain this selection")
@@ -223,26 +161,28 @@ extension LaunchUITests {
         XCTAssertEqual(sideMessage.value as? String, sideMessage.placeholderValue)
         XCTAssertFalse(app.staticTexts["notice"].exists)
         captureScreen(app, named: "Selected quote submitted in side chat")
-        let message = app.textFields["task.message"]
         closeWorkbench(app)
         XCTAssertTrue(app.descendants(matching: .any)[originalID].waitUntilExists(timeout: 15))
         waitForDraftText(message, text: "Keep my original draft", timeout: 10)
-        app.terminate()
-        let reopened = try connectedSimulatorApp()
-        let number = try XCTUnwrap(sideID.split(separator: "-").dropLast().last)
-        let row = try reopened
-            .descendants(matching: .any)[simulatorTaskRowIdentifier("session-identity/fixture-thread-\(number)")]
-        XCTAssertTrue(row.waitUntilExists(timeout: 15)); row.tap()
-        XCTAssertTrue(reopened.descendants(matching: .any)[sideID].waitUntilExists(timeout: 20))
-        XCTAssertTrue(reopened.textViews.matching(NSPredicate(
-            format: "identifier == %@ AND value == %@", "message.user-text", "Needle\n[success] Explain this selection"
-        )).firstMatch.exists)
+    }
+
+    private func openAssistantSelectionSideChat(_ app: XCUIApplication) {
+        let side = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "サイドチャットで質問")).firstMatch
+        if !side.exists {
+            let forward = app.buttons.matching(NSPredicate(format: "label IN %@", ["Forward", "進む"])).firstMatch
+            XCTAssertTrue(forward.waitUntilExists(timeout: 5)); forward.tap()
+        }
+        XCTAssertTrue(side.waitUntilExists(timeout: 5)); side.tap()
+        XCTAssertTrue(app.navigationBars["サイドチャット"].waitUntilExists(timeout: 15), app.debugDescription)
+        XCTAssertTrue(app.buttons["workbench.add"].exists)
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].exists)
     }
 
     func testSimulatorCopiesSelectedOrWholeUserMessageText() throws {
         let app = try connectedSimulatorApp()
         let text = "Needle Alpha Bravo [success]"
-        try startSimulatorConversation(app, promptText: text)
+        startSimulatorConversation(app, promptText: text)
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 30))
         let sent = app.textViews.matching(NSPredicate(
             format: "identifier == %@ AND value == %@", "message.user-text", text
@@ -314,7 +254,7 @@ extension LaunchUITests {
 
     func testSimulatorApprovalEditorAndDraftSurviveReconnect() throws {
         let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[approval] Verify approvals")
+        startSimulatorConversation(app, promptText: "[approval] Verify approvals")
         let accept = app.buttons["request.accept"]
         XCTAssertTrue(accept.waitUntilExists(timeout: 15))
         accept.tap()

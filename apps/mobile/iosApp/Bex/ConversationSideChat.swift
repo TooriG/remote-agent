@@ -32,17 +32,16 @@ final class SideChatRequest {
         error = nil
         defer { preparing = false }
         do {
-            let model: ConversationModel
-            if let chat {
-                model = chat
+            let pane: AgentPane
+            if let existing = chat?.pane {
+                pane = existing
             } else {
                 let store = try await session.ready()
-                let pane = try await store.openPane(cwd: cwd)
-                model = ConversationModel(host: host, session: session, pane: pane)
-                chat = model
+                pane = try await store.openPane(cwd: cwd)
+                chat = ConversationModel(host: host, session: session, pane: pane)
             }
-            try await model.prepareSideChat(provider: provider, selection: text)
-            model.composerFocusRequest = UUID()
+            try await pane.prepareSideChat(provider: provider, text: text)
+            chat?.composerFocusRequest = UUID()
         } catch {
             if !Task.isCancelled {
                 self.error = errorText(error: error.localizedDescription)
@@ -53,7 +52,7 @@ final class SideChatRequest {
 
 extension ConversationModel {
     func addSelectionToChat(_ text: String) {
-        draft = AgentCore.appendSelectionQuote(draft: draft, text: text)
+        draft = appendSelectionToDraft(draft: draft, selection: text)
         composerFocusRequest = UUID()
     }
 

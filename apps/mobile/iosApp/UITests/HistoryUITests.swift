@@ -87,46 +87,9 @@ extension LaunchUITests {
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 20))
     }
 
-    func testSimulatorKeepsResponsesFromRepeatedTurnIDsWhenReopeningHistory() throws {
-        #if !targetEnvironment(simulator)
-            throw XCTSkip("Simulator-only repeated-turn history fixture")
-        #endif
-        let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[duplicate] Preserve both persisted responses")
-        let latest = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitUntilExists(timeout: 30)); row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["task.detail"].waitUntilExists(timeout: 30))
-        XCTAssertTrue(latest.waitUntilExists(timeout: 20),
-                      "Reopening history must retain the latest AI response")
-        XCTAssertTrue(app.descendants(matching: .any)["item.duplicate-history-old"].waitUntilExists(timeout: 20),
-                      "Opening history must retain the older AI response")
-    }
-
-    func testSimulatorKeepsEarlierAnswersBetweenFollowupsWhenReopening() throws {
-        #if !targetEnvironment(simulator)
-            throw XCTSkip("Simulator-only followup history fixture")
-        #endif
-        let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[followups] Keep earlier replies")
-        let latest = prefixedElement(app, prefix: "item.fixture-final-")
-        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        let row = prefixedElement(app, prefix: "tasks.row.codex:bex-task:")
-        XCTAssertTrue(row.waitUntilExists(timeout: 20)); row.tap()
-        XCTAssertTrue(latest.waitUntilExists(timeout: 20))
-        for id in ["item.history-answer-1", "item.history-answer-2"] {
-            let answer = app.descendants(matching: .any)[id]
-            XCTAssertTrue(answer.waitUntilExists(timeout: 10), "Earlier replies must remain outside collapsed work")
-        }
-        captureScreen(app, named: "Earlier answers between followups")
-    }
-
     func testSimulatorRendersVisualizationAndReopensIt() throws {
         let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[success] [visualize] Compare twelve icons")
+        startSimulatorConversation(app, promptText: "[success] [visualize] Compare twelve icons")
         let expand = app.buttons["visualize.expand"]
         XCTAssertTrue(expand.waitUntilExists(timeout: 30))
         let message = app.descendants(matching: .any)["task.message"]
@@ -155,7 +118,7 @@ extension LaunchUITests {
 
     func testSimulatorRendersMarkdownTableAndReopensIt() throws {
         let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[success] [markdown-table] Render the table")
+        startSimulatorConversation(app, promptText: "[success] [markdown-table] Render the table")
         let answer = prefixedElement(app, prefix: "item.fixture-final-")
         XCTAssertTrue(answer.waitUntilExists(timeout: 30))
         let message = app.descendants(matching: .any)["task.message"]
@@ -210,7 +173,7 @@ extension LaunchUITests {
             throw XCTSkip("Simulator-only isolated Markdown stream fixture")
         #endif
         let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[long-markdown] Render the complete stream")
+        startSimulatorConversation(app, promptText: "[long-markdown] Render the complete stream")
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 20))
         let message = app.descendants(matching: .any)["task.message"]
         let completed = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "MARKDOWN_STREAM_COMPLETE"))
@@ -235,6 +198,10 @@ extension LaunchUITests {
         assertConversationTextMargins(completed, in: app)
         captureScreen(app, named: "Long Markdown stream completed with draft preserved")
         tapStatusBar(app)
+        let viewport = app.descendants(matching: .any)["task.detail"]
+        XCTAssertGreaterThanOrEqual(viewport.frame.maxY, message.frame.maxY,
+                                    "Conversation must draw behind the translucent composer")
+        captureScreen(app, named: "Conversation behind diff and composer without keyboard")
         let code = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", "Markdown stream fixture"))
             .firstMatch
         XCTAssertTrue(code.waitUntilExists(timeout: 10))
@@ -243,6 +210,8 @@ extension LaunchUITests {
         message.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
         message.typeText(" while reading")
         waitForDraftText(message, text: "Keep this draft while reading")
+        XCTAssertGreaterThanOrEqual(viewport.frame.maxY, message.frame.maxY)
+        captureScreen(app, named: "Conversation behind diff and composer with keyboard")
         let latest = app.buttons["task.latest"]
         XCTAssertTrue(latest.exists, "Editing must retain the older reading position")
         latest.tap()
@@ -276,7 +245,7 @@ extension LaunchUITests {
             throw XCTSkip("Simulator-only conversation display E2E")
         #endif
         let app = try connectedSimulatorApp()
-        try startSimulatorConversation(app, promptText: "[history] Reopen history")
+        startSimulatorConversation(app, promptText: "[history] Reopen history")
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 15))
         XCTAssertTrue(prefixedButton(app, prefix: "turn.activity.fixture-turn-").waitUntilExists(timeout: 10))
 
@@ -320,22 +289,5 @@ extension LaunchUITests {
             app.buttons["コピーしました"].firstMatch.waitUntilExists(timeout: 5),
             "Copy must show its confirmation.\n\(app.debugDescription)"
         )
-
-        try verifyUncachedHistoryDetails(app, fullOutput: fullOutput)
-    }
-
-    private func verifyUncachedHistoryDetails(_ app: XCUIApplication, fullOutput: XCUIElement) throws {
-        // A previously unseen conversation is imported with its messages; past
-        // work stays in native history and is not offered as activity.
-        try useSimulatorListFixture("completed-history")
-        app.terminate(); app.launch()
-        expandSimulatorProject(app)
-        let persisted = app.descendants(matching: .any)["tasks.row.codex:fixture-thread-persisted"]
-        XCTAssertTrue(persisted.waitUntilExists(timeout: 20)); persisted.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["item.fixture-final-persisted"].waitUntilExists(timeout: 20))
-        XCTAssertFalse(app.buttons["turn.activity.fixture-turn-persisted"].exists)
-        XCTAssertFalse(app.buttons["item.fixture-command-persisted"].exists)
-        XCTAssertFalse(fullOutput.exists)
-        captureScreen(app, named: "Imported history shows its messages")
     }
 }

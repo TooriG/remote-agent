@@ -248,10 +248,8 @@ pub(super) fn append_to_composer(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let value = agent_core::presentation::markdown::append_selection_quote(
-        composer.read(cx).value().to_string(),
-        text.to_owned(),
-    );
+    let value =
+        agent_core::composer::append_selection_to_draft(composer.read(cx).value().as_ref(), text);
     set_composer_text(composer, value.into(), window, cx);
 }
 

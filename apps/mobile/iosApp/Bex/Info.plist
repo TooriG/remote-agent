@@ -51,7 +51,7 @@
     <key>NSLocalNetworkUsageDescription</key>
     <string>同じネットワーク上のペアリング済みPCに接続して、会話やファイル、ターミナルを操作します。</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>会話の画像を写真ライブラリに保存します。</string>
+    <string>会話の画像・動画を写真ライブラリに保存します。</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>音声入力の文字起こしと、チャットに添付する動画の音声を録音するためにマイクを使用します。</string>
     <key>UIFileSharingEnabled</key>

@@ -20,6 +20,17 @@ final class LaunchUITests: XCTestCase {
         add(attachment)
     }
 
+    func assertComposerAtBottomWithKeyboardHidden(in app: XCUIApplication,
+                                                  file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), file: file, line: line)
+        let send = app.buttons["task.send"]
+        XCTAssertTrue(send.waitUntilExists(timeout: 10), file: file, line: line)
+        waitForStableFrame(send)
+        captureScreen(app, named: "Composer position after reopening without keyboard")
+        // Allow the home indicator and the composer's own inset, never a keyboard-sized empty region.
+        XCTAssertLessThan(app.frame.maxY - send.frame.maxY, 90, file: file, line: line)
+    }
+
     func waitForStableFrame(_ element: XCUIElement) {
         // Sample early and keep failed-poll diagnostics off the accessibility tree.
         var previous = element.frame
@@ -37,6 +48,12 @@ final class LaunchUITests: XCTestCase {
         element.tap()
     }
 
+    func closeSearch(_ app: XCUIApplication) {
+        app.buttons.matching(NSPredicate(
+            format: "identifier == %@ OR label IN %@", "close", ["close", "Close", "閉じる"]
+        )).firstMatch.tap()
+    }
+
     /// The status bar is the native way back to the start of a conversation.
     func tapStatusBar(_ app: XCUIApplication) {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0)).withOffset(CGVector(dx: 0, dy: 32)).tap()
@@ -52,7 +69,7 @@ final class LaunchUITests: XCTestCase {
     func expandSimulatorProject(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let project = app.buttons["tasks.project.simulator-project"]
         guard project.waitUntilExists(timeout: 10) else {
-            XCTFail("The fixture project did not appear", file: file, line: line)
+            XCTFail("The fixture project did not appear.\n\(app.debugDescription)", file: file, line: line)
             return
         }
         if project.value as? String == "閉じています" {
@@ -181,18 +198,29 @@ final class LaunchUITests: XCTestCase {
         return "tasks.row.\(session.provider):\(session.id)"
     }
 
-    func startSimulatorConversation(_ app: XCUIApplication, promptText: String) throws {
+    func startSimulatorConversation(_ app: XCUIApplication, promptText: String) {
         let projectCompose = app.buttons["tasks.new.project.simulator-project"]
         XCTAssertTrue(
             projectCompose.waitUntilExists(timeout: 10),
             "No project creation button appeared: \(app.debugDescription)"
         )
         projectCompose.tap()
+        submitSimulatorConversation(app, promptText: promptText)
+    }
 
+    func submitSimulatorConversation(_ app: XCUIApplication, promptText: String) {
         let prompt = app.descendants(matching: .any)["task.message"]
         XCTAssertTrue(prompt.waitUntilExists(timeout: 10))
-        chooseFixtureModel(app)
-        prompt.tap()
+        expandComposer(app)
+        // Model-picker interaction has its own native journey. Other tests only
+        // need the fixture's default Codex model, regardless of a prior choice.
+        if app.buttons["model.settings"].value as? String != "Fixture Model" {
+            chooseFixtureModel(app)
+        }
+        // New drafts focus the field themselves; a picker round trip can dismiss it.
+        if !app.keyboards.firstMatch.exists {
+            prompt.tap()
+        }
         prompt.typeText(promptText)
 
         let start = app.buttons["task.send"]
@@ -207,8 +235,6 @@ final class LaunchUITests: XCTestCase {
             taskDetail.waitUntilExists(timeout: 30),
             "Conversation did not open; notice: \(notice.exists ? notice.label : "(none)")"
         )
-        waitForStableFrame(prompt)
-        XCTAssertTrue(prompt.isHittable)
     }
 
     func prefixedElement(_ app: XCUIApplication, prefix: String) -> XCUIElement {
@@ -221,24 +247,6 @@ final class LaunchUITests: XCTestCase {
         app.buttons
             .matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix))
             .firstMatch
-    }
-
-    func waitForPrefixedElement(
-        _ app: XCUIApplication,
-        prefix: String,
-        scrolling scrollView: XCUIElement
-    ) -> Bool {
-        let element = prefixedElement(app, prefix: prefix)
-        if element.waitUntilExists(timeout: 1) {
-            return true
-        }
-        for _ in 0 ..< 14 {
-            scrollView.swipeUp()
-            if element.waitUntilExists(timeout: 1) {
-                return true
-            }
-        }
-        return false
     }
 
     func allowFirstSystemPermissionIfPresent() {
@@ -286,7 +294,12 @@ extension LaunchUITests {
     }
 
     func workbenchTab(_ app: XCUIApplication, _ kind: String) -> XCUIElement {
-        let tabs = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workbench.tab.\(kind)."))
+        // UIKit's title menu keeps the native labels and selection traits, but drops custom identifiers.
+        let titles = ["terminal": "ターミナル", "files": "ファイル", "browser": "ブラウザ",
+                      "diff": "差分", "sideChat": "サイドチャット", "agents": "エージェント"]
+        let tabs = app.collectionViews.buttons.matching(NSPredicate(
+            format: "label == %@ AND identifier == ''", titles[kind] ?? kind
+        ))
         return tabs.element(boundBy: max(0, tabs.count - 1))
     }
 

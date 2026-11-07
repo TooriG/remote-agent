@@ -57,7 +57,8 @@ impl Client {
                         owner.observe_pane(id, core.clone(), pane.stop.clone());
                         Ok::<_, AgentError>(core)
                     }).await?;
-                    core.prepare_side_chat(provider, selection).await
+                    core.prepare_side_chat(provider, selection).await?;
+                    core.presentation()
                 } => result.map_err(|reason| reason.to_string()),
             };
             let _ = owner.updates.send(Update::SideChatReady { id, result }).await;

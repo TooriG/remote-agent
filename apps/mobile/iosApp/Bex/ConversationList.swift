@@ -18,6 +18,7 @@ struct ConversationList: UIViewControllerRepresentable {
     let scroll: ConversationScrollState
     let following: Bool
     let accessibilityValue: String
+    let viewportHeight: CGFloat
     let row: (Int) -> AnyView
 
     func makeUIViewController(context _: Context) -> ConversationListController {
@@ -25,6 +26,7 @@ struct ConversationList: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: ConversationListController, context _: Context) {
+        controller.viewportHeight = viewportHeight
         controller.update(ids: ids, following: following, accessibilityValue: accessibilityValue, row: row)
     }
 
@@ -36,6 +38,11 @@ struct ConversationList: UIViewControllerRepresentable {
 /// Observe the collection's actual layout, including inset changes that do not resize its controller.
 private final class ConversationCollectionView: UICollectionView {
     var didLayout: (() -> Void)?
+
+    /// Content remains visible beneath the composer, but its controls own those touches.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        super.point(inside: point, with: event) && bounds.inset(by: adjustedContentInset).contains(point)
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -65,6 +72,7 @@ final class ConversationListController: UIViewController {
     private let scroll: ConversationScrollState
     private let layout: ConversationListLayout
     let collectionView: UICollectionView
+    var viewportHeight: CGFloat?
     private var source = Source(ids: [], row: { _ in AnyView(EmptyView()) })
     private var indices: [ConversationList.RowID: Int] = [:]
     private var pending: Source?
@@ -169,13 +177,17 @@ final class ConversationListController: UIViewController {
 
     private func refreshVisibleRows() {
         guard active else { return }
-        for path in collectionView.indexPathsForVisibleItems {
-            if let cell = collectionView.cellForItem(at: path), let id = data.itemIdentifier(for: path) {
-                show(cell, id: id)
+        // Self-sizing cell updates animate by default. During streaming their
+        // animated frames lag behind the measured height used to follow the tail.
+        UIView.performWithoutAnimation {
+            for path in collectionView.indexPathsForVisibleItems {
+                if let cell = collectionView.cellForItem(at: path), let id = data.itemIdentifier(for: path) {
+                    show(cell, id: id)
+                }
             }
+            collectionView.setNeedsLayout()
+            collectionView.layoutIfNeeded()
         }
-        collectionView.setNeedsLayout()
-        collectionView.layoutIfNeeded()
     }
 
     /// UIKit sizes the cell from the SwiftUI content itself, so rows need no separate measurement.
@@ -187,10 +199,21 @@ final class ConversationListController: UIViewController {
 
     private func didLayoutCollectionView() {
         guard active else { return }
+        updateViewportInsets()
         applyPending()
         guard !applying else { return }
         positionViewport()
         publishVisibility()
+    }
+
+    /// SwiftUI lays out the composer; only the collection extends beneath its safe-area inset.
+    private func updateViewportInsets() {
+        guard let viewportHeight else { return }
+        let inherited = view.safeAreaInsets.bottom - additionalSafeAreaInsets.bottom
+        let bottom = max(0, view.bounds.height - viewportHeight - inherited)
+        if additionalSafeAreaInsets.bottom != bottom {
+            additionalSafeAreaInsets.bottom = bottom
+        }
     }
 
     private var geometry: Geometry {

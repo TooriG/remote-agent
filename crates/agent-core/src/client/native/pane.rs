@@ -40,13 +40,10 @@ impl AgentPane {
     }
     pub async fn prepare_side_chat(
         &self,
-        provider: Option<agent_protocol::session::ProviderKind>,
-        selection: String,
-    ) -> Result<Arc<Presentation>, AgentError> {
-        self.pane
-            .prepare_side_chat(provider, selection)
-            .await
-            .map_err(error)
+        provider: Option<crate::session::ProviderKind>,
+        text: String,
+    ) -> Result<(), AgentError> {
+        self.pane.prepare_side_chat(provider, text).await
     }
     pub fn retire(&self) {
         self.pane.close();

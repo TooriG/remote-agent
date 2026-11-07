@@ -134,6 +134,7 @@ private struct WorkspaceDirectoryScreen: View {
                 }
             }
             .listStyle(.plain)
+            .accessibilityIdentifier("files.list")
             .overlay {
                 if tree.rows.isEmpty {
                     emptyState(pending: tree.pending, error: tree.error, query: tree.query)

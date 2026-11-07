@@ -132,7 +132,7 @@ mod tests {
     use proptest::prelude::*;
     proptest! {
         #[test]
-        fn valid_key_boundaries_are_accepted(provider in 0usize..9, length in 1usize..=4096) {
+        fn valid_key_boundaries_are_accepted(provider in 0..KeyProvider::ALL.len(), length in 1usize..=4096) {
             let key = "k".repeat(length);
             prop_assert!(validate_key(KeyProvider::ALL[provider], Some(&key)).is_ok());
             prop_assert!(validate_key(KeyProvider::ALL[provider], None).is_ok());

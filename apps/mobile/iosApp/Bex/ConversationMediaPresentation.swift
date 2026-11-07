@@ -1,5 +1,5 @@
+import AgentCore
 import Observation
-import QuickLook
 import SwiftUI
 
 /// User-initiated presentations outlive recycled rows. Inline loads remain owned by each image or web view.
@@ -14,7 +14,7 @@ import SwiftUI
         let message: String
     }
 
-    var image: SharedFile?
+    var preview: SharedFile?
     var sharedFile: SharedFile?
     var visualization: Visualization?
     var imageError: String?
@@ -24,27 +24,25 @@ import SwiftUI
 
     isolated deinit {
         pending?.cancel()
-        for url in [image?.url, sharedFile?.url].compactMap(\.self) {
-            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-        }
     }
 
     func openImage(_ data: Data) {
         imageError = nil
         load { try await writeConversationImage(data) } present: {
-            self.image = SharedFile(url: $0)
+            self.preview = $0
         } failed: { self.imageError = $0 }
     }
 
     func share(_ path: String, download: @escaping @MainActor (String) async throws -> URL) {
         shareFailure = nil
         load { try await download(path) } present: {
-            self.sharedFile = SharedFile(url: $0)
+            self.sharedFile = $0
         } failed: { self.shareFailure = FileFailure(path: path, message: $0) }
     }
 
     func openLink(_ target: String,
                   resolve: @escaping @MainActor (String) async throws -> ConversationMediaAccess.ResolvedFile,
+                  download: @escaping @MainActor (String) async throws -> URL,
                   openDirectory: @escaping @MainActor (String) -> Void,
                   openFile: @escaping @MainActor (String, UInt32?) -> Void) {
         linkFailure = nil
@@ -53,6 +51,10 @@ import SwiftUI
             try Task.checkCancellation()
             if entry.isDirectory {
                 openDirectory(entry.path)
+            } else if filePreviewMimeType(path: entry.path)?.hasPrefix("video/") == true {
+                let file = try await SharedFile(url: download(entry.path))
+                try Task.checkCancellation()
+                self.preview = file
             } else {
                 openFile(entry.path, entry.line)
             }
@@ -60,15 +62,12 @@ import SwiftUI
     }
 
     private func load(_ operation: @escaping @MainActor () async throws -> URL,
-                      present: @escaping @MainActor (URL) -> Void,
+                      present: @escaping @MainActor (SharedFile) -> Void,
                       failed: @escaping @MainActor (String) -> Void) {
         perform({
-            let url = try await operation()
-            guard !Task.isCancelled else {
-                try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-                return
-            }
-            present(url)
+            let file = try await SharedFile(url: operation())
+            guard !Task.isCancelled else { return }
+            present(file)
         }, failed: failed)
     }
 
@@ -91,17 +90,6 @@ import SwiftUI
         }
     }
 
-    func closeImage() {
-        remove(image)
-        image = nil
-    }
-
-    /// The share sheet removes the file itself when sharing ends; a reset may end it earlier.
-    private func closeShare() {
-        remove(sharedFile)
-        sharedFile = nil
-    }
-
     func cancelPending() {
         pending?.cancel()
         pending = nil
@@ -109,18 +97,12 @@ import SwiftUI
 
     func reset() {
         cancelPending()
-        closeImage()
-        closeShare()
+        preview = nil
+        sharedFile = nil
         visualization = nil
         imageError = nil
         shareFailure = nil
         linkFailure = nil
-    }
-
-    private func remove(_ file: SharedFile?) {
-        if let file {
-            try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent())
-        }
     }
 }
 
@@ -129,13 +111,10 @@ struct ConversationMediaPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            // QuickLook owns zooming, sharing and saving to Photos.
-            .quickLookPreview(Binding(get: { presentation.image?.url }, set: {
-                if $0 == nil {
-                    presentation.closeImage()
-                }
-            }))
-            .shareSheet($presentation.sharedFile)
+            .fullScreenCover(item: $presentation.preview) { file in
+                ConversationPreview(file: file)
+            }
+            .sheet(item: $presentation.sharedFile) { ShareSheet(file: $0) }
             .sheet(item: $presentation.visualization) { document in
                 NavigationStack {
                     VisualizationWebView(html: document.html)

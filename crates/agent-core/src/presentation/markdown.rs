@@ -18,45 +18,6 @@ pub use links::{
     pick_stripped_workspace_match, pick_workspace_basename_match, strip_repeated_workspace_prefix,
 };
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
-pub fn append_selection_quote(draft: String, text: String) -> String {
-    let quote = text
-        .split('\n')
-        .map(|line| format!("> {line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n\n";
-    if draft.is_empty() {
-        quote
-    } else {
-        format!("{draft}\n\n{quote}")
-    }
-}
-
-#[cfg(test)]
-mod selection_tests {
-    use super::append_selection_quote;
-
-    #[test]
-    fn selected_text_is_quoted_without_losing_blank_lines_or_existing_drafts() {
-        for (draft, selected, expected) in [
-            ("", "日本語 👋", "> 日本語 👋\n\n"),
-            (
-                "下書き",
-                "first\n\nlast\n",
-                "下書き\n\n> first\n> \n> last\n> \n\n",
-            ),
-            ("line\n", "a\r\nb", "line\n\n\n> a\r\n> b\n\n"),
-            ("", "", "> \n\n"),
-        ] {
-            assert_eq!(
-                append_selection_quote(draft.into(), selected.into()),
-                expected
-            );
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum MarkdownBlock {

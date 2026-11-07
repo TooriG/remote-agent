@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 final class ConversationModel {
     let host: String
     @ObservationIgnored let session: ClientSession
-    @ObservationIgnored private let pane: AgentPane?
+    @ObservationIgnored let pane: AgentPane?
     @ObservationIgnored private(set) var publication = Presentation.empty()
     @ObservationIgnored private(set) var snapshot = AgentCore.Snapshot.empty()
     private(set) var settings = Presentation.empty().settings()
@@ -316,11 +316,6 @@ extension ConversationModel {
         try await withCheckedThrowingContinuation { continuation in
             perform(intent) { continuation.resume(with: $0) }
         }
-    }
-
-    func prepareSideChat(provider: ProviderKind?, selection: String) async throws {
-        guard let pane else { preconditionFailure("Side chat requires its own pane") }
-        try await publish(pane.prepareSideChat(provider: provider, selection: selection))
     }
 
     func forkAndOpen(through turnId: String, completion: @escaping (String?) -> Void) {

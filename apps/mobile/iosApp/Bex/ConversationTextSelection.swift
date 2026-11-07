@@ -66,8 +66,10 @@ struct AssistantSelectableText: UIViewRepresentable {
                     self?.parent.actions.askInSideChat?(text)
                 })
             }
-            // The system Copy stays; ConversationTextView.copy(_:) writes the message's source text.
-            return UIMenu(children: actions + suggestedActions)
+            // Keep the system Copy on the first page beside the chat actions.
+            let system = splitCopyCommand(suggestedActions)
+            let copy: [UIMenuElement] = system.copy.map { [$0] } ?? []
+            return UIMenu(children: copy + actions + system.others)
         }
 
         func textView(_: UITextView, menuConfigurationFor textItem: UITextItem,

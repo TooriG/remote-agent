@@ -418,8 +418,8 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
     };
     view().gap_3()
         .child(text("APIキー").text_size(px(18.0)))
-        .child(native::menu("key", "接続先", native::items(KeyProvider::ALL.into_iter().map(|provider| (provider.route(), provider.label()))), move |id| {
-            if let Some(provider) = KeyProvider::ALL.into_iter().find(|p| p.route() == id) { selected.set(provider); key.set(String::new()); }
+        .child(native::menu("key", "接続先", native::items(KeyProvider::ALL.into_iter().map(|provider| (provider.reference(), provider.label()))), move |id| {
+            if let Some(provider) = KeyProvider::ALL.into_iter().find(|p| p.reference() == id) { selected.set(provider); key.set(String::new()); }
         }).prop("title", move || json!(selected.get().label())).prop("enabled", move || json!(enabled())))
         .child(text(move || control.with(|c| c.as_ref().map(|c| c.status.clone()).unwrap_or_default())))
         .child(native::text_button(json!("キーの発行ページ"), move || { native::open_link(selected.get_untracked().key_url()); }))

@@ -49,6 +49,8 @@ pub struct RenderedConversation {
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct RenderedTurn {
     pub source: Arc<models::Turn>,
+    // Native turn IDs may repeat; the occurrence also belongs to this cache entry.
+    occurrence: usize,
     pending: PendingItems,
     requests: Vec<Arc<WireRequest>>,
     pub rows: Vec<ConversationRow>,
@@ -60,6 +62,18 @@ pub struct ConversationRow {
     pub id: String,
     pub content: ConversationRowContent,
     pub timestamp_ms: Option<u64>,
+}
+
+fn conversation_row_id(
+    turn: &str,
+    turn_occurrence: usize,
+    base: &str,
+    row_occurrence: usize,
+) -> String {
+    // Scope every key, including activity expansion, to one turn occurrence.
+    // Escaping the delimiter keeps provider IDs from aliasing another scope.
+    let scope = percent_encoding::utf8_percent_encode(turn, percent_encoding::NON_ALPHANUMERIC);
+    format!("{base}:occurrence:{row_occurrence}:turn:{scope}:{turn_occurrence}")
 }
 #[derive(Clone)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
@@ -359,7 +373,7 @@ pub fn project_conversation(
     let cached: HashMap<_, _> = previous
         .into_iter()
         .flat_map(|old| &old.turns)
-        .map(|turn| (turn.source.id.as_str(), turn))
+        .map(|turn| ((turn.source.id.as_str(), turn.occurrence), turn))
         .collect();
     let native = source.turns.as_deref().unwrap_or_default();
     let preparation_echoed = preparation.is_some_and(|preparation| {
@@ -405,10 +419,14 @@ pub fn project_conversation(
             session_requests.push(request);
         }
     }
+    let mut occurrences = HashMap::new();
     let turns = native
         .iter()
         .enumerate()
         .map(|(index, turn)| {
+            let next = occurrences.entry(turn.id.as_str()).or_insert(0usize);
+            let occurrence = *next;
+            *next += 1;
             let handoff = index
                 .checked_sub(1)
                 .and_then(|previous| native[previous].provider)
@@ -425,7 +443,7 @@ pub fn project_conversation(
                 .into_iter()
                 .flatten()
                 .copied();
-            let old = cached.get(turn.id.as_str()).copied();
+            let old = cached.get(&(turn.id.as_str(), occurrence)).copied();
             if let Some(old) = old
                 && Arc::ptr_eq(turn, &old.source)
                 && (turn.supports_fork.is_some() || supports_fork == previous_supports_fork)
@@ -448,7 +466,7 @@ pub fn project_conversation(
                 source.id.as_ref(),
                 supports_fork,
                 handoff,
-                turn.clone(),
+                (turn.clone(), occurrence),
                 pending.cloned().collect(),
                 requests.cloned().collect(),
                 old,
@@ -880,7 +898,7 @@ fn render_turn(
     session: Option<&crate::session::SessionRef>,
     supports_fork: bool,
     handoff: Option<String>,
-    source: Arc<models::Turn>,
+    (source, turn_occurrence): (Arc<models::Turn>, usize),
     pending: PendingItems,
     requests: Vec<Arc<WireRequest>>,
     previous: Option<&Arc<RenderedTurn>>,
@@ -955,7 +973,7 @@ fn render_turn(
     use ConversationRowContent::*;
     let mut rows = Vec::new();
     let mut occurrences = HashMap::new();
-    let mut push = |content: ConversationRowContent| {
+    let mut push = |mut content: ConversationRowContent| {
         let id = match &content {
             ProviderHandoff { .. } => format!("history-handoff:{}", source.id),
             User { item } | Activity { item, .. } | Response { item, .. } => {
@@ -968,8 +986,11 @@ fn render_turn(
             Preparation { .. } => "preparation".into(),
         };
         let occurrence = occurrences.entry(id.clone()).or_insert(0usize);
-        let id = format!("{id}:occurrence:{occurrence}");
+        let id = conversation_row_id(source.id.as_str(), turn_occurrence, &id, *occurrence);
         *occurrence += 1;
+        if let ActivityHeader { activity } = &mut content {
+            activity.id = id.clone();
+        }
         let started = source.started_at_ms.or_else(|| {
             source
                 .started_at
@@ -1087,6 +1108,7 @@ fn render_turn(
     }
     Arc::new(RenderedTurn {
         source,
+        occurrence: turn_occurrence,
         pending,
         requests,
         rows: images::without_repeated_generated_images(rows),
@@ -1353,6 +1375,247 @@ mod tests {
     use crate::state::{Draft, Snapshot};
     use serde_json::json;
     use std::collections::HashSet;
+
+    proptest::proptest! {
+        #[test]
+        fn row_identity_distinguishes_every_source_component(
+            source in (proptest::prelude::any::<String>(), proptest::prelude::any::<usize>(), proptest::prelude::any::<String>(), proptest::prelude::any::<usize>()),
+            other in (proptest::prelude::any::<String>(), proptest::prelude::any::<usize>(), proptest::prelude::any::<String>(), proptest::prelude::any::<usize>()),
+        ) {
+            let source = (source.0.as_str(), source.1, source.2.as_str(), source.3);
+            let other = (other.0.as_str(), other.1, other.2.as_str(), other.3);
+            let original = conversation_row_id(source.0, source.1, source.2, source.3);
+            for candidate in [
+                (other.0, source.1, source.2, source.3),
+                (source.0, other.1, source.2, source.3),
+                (source.0, source.1, other.2, source.3),
+                (source.0, source.1, source.2, other.3),
+                other,
+            ] {
+                if candidate != source {
+                    let changed = conversation_row_id(candidate.0, candidate.1, candidate.2, candidate.3);
+                    proptest::prop_assert_ne!(&original, &changed);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn row_identity_keeps_provider_delimiters_opaque() {
+        assert_ne!(
+            conversation_row_id("a:occurrence:0:turn:b", 0, "item", 0),
+            conversation_row_id("b", 0, "item:occurrence:0:turn:a", 0),
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::plan(json!({"plan":{"text":"Plan"}}), true)]
+    #[case::mcp(json!({"toolCall":{"kind":"mcp","tool":"read","arguments":{},"content":[]}}), true)]
+    #[case::dynamic(json!({"toolCall":{"kind":"dynamic","tool":"search","arguments":{},"content":[]}}), true)]
+    #[case::subagent(json!({"subagent":{"tool":"spawn_agent","receivers":[],"states":[]}}), true)]
+    #[case::web(json!({"webSearch":{"query":"Query"}}), true)]
+    #[case::image(json!({"imageGeneration":{"savedPath":"/fixture/image.png"}}), true)]
+    #[case::compaction(json!({"compaction":{}}), true)]
+    #[case::sleep(json!({"sleep":{}}), false)]
+    #[case::reasoning(json!({"reasoning":{"content":["private"],"summary":[]}}), false)]
+    #[case::review_entered(json!({"review":{"entering":true,"text":"Review"}}), false)]
+    #[case::review_left(json!({"review":{"entering":false,"text":"Review"}}), false)]
+    fn item_families_project_visible_content_without_exposing_state_only_events(
+        #[case] body: serde_json::Value,
+        #[case] visible: bool,
+        #[values(models::TurnStatus::Running, models::TurnStatus::Completed)]
+        status: models::TurnStatus,
+    ) {
+        let source = Arc::new(models::Thread {
+            turns: Some(vec![Arc::new(models::Turn {
+                id: "work".into(),
+                status,
+                items: Some(vec![
+                    Arc::new(models::Item::new(
+                        "family".into(),
+                        Default::default(),
+                        serde_json::from_value(body).unwrap(),
+                    )),
+                    Arc::new(models::Item::new(
+                        "answer".into(),
+                        Default::default(),
+                        models::ItemBody::AssistantText {
+                            text: "Final answer".into(),
+                            phase: models::AssistantPhase::Final,
+                        },
+                    )),
+                ]),
+                ..Default::default()
+            })]),
+            ..Default::default()
+        });
+        let snapshot = Snapshot::default();
+        let rendered = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            source,
+            &None,
+        );
+        let ids = rendered.turns[0]
+            .items()
+            .map(|item| item.data.native_id.as_deref().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            if visible {
+                vec!["family", "answer"]
+            } else {
+                vec!["answer"]
+            }
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::distinct_turns(false)]
+    #[case::repeated_turn_ids(true)]
+    fn reopening_history_retains_each_answer_and_its_native_row_identity(#[case] repeated: bool) {
+        let user = |text: &str| models::ItemBody::UserMessage {
+            text: Some(text.into()),
+            content: Vec::new(),
+        };
+        let reply = |text: &str, phase| models::ItemBody::AssistantText {
+            text: text.into(),
+            phase,
+        };
+        let source = Arc::new(models::Thread {
+            turns: Some(
+                [("old", "Earlier answer"), ("latest", "Latest answer")]
+                    .into_iter()
+                    .map(|(id, text)| {
+                        Arc::new(models::Turn {
+                            id: if repeated { "repeated" } else { id }.into(),
+                            status: models::TurnStatus::Completed,
+                            items: Some(
+                                [
+                                    ("question", user("First question")),
+                                    (
+                                        "work",
+                                        models::ItemBody::CommandExecution {
+                                            command: "pwd".into(),
+                                            cwd: None,
+                                            output: "/fixture".into(),
+                                            exit_code: Some(0),
+                                        },
+                                    ),
+                                    (
+                                        "early",
+                                        reply("Earlier reply", models::AssistantPhase::Unknown),
+                                    ),
+                                    ("followup", user("Next question")),
+                                    (
+                                        "commentary",
+                                        reply(
+                                            "Reply before the next instruction",
+                                            models::AssistantPhase::Commentary,
+                                        ),
+                                    ),
+                                    ("last-question", user("One more question")),
+                                    ("answer", reply(text, models::AssistantPhase::Final)),
+                                ]
+                                .into_iter()
+                                .map(|(item_id, body)| {
+                                    Arc::new(models::Item::new(
+                                        format!("{id}-{item_id}").into(),
+                                        Default::default(),
+                                        body,
+                                    ))
+                                })
+                                .collect(),
+                            ),
+                            ..Default::default()
+                        })
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        });
+        let snapshot = Snapshot::default();
+        let live = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            source.clone(),
+            &None,
+        );
+        let restored: Arc<models::Thread> =
+            Arc::new(serde_json::from_slice(&serde_json::to_vec(&source).unwrap()).unwrap());
+        let live_ids: Vec<_> = live
+            .turns
+            .iter()
+            .flat_map(|turn| turn.conversation_rows())
+            .map(|row| row.id)
+            .collect();
+        for previous in [None, Some(live.clone())] {
+            let reopened = project_conversation(
+                &snapshot.pane.navigation.draft_key,
+                &snapshot.sessions.pending_submissions,
+                restored.clone(),
+                &previous,
+            );
+            let rows = reopened
+                .turns
+                .iter()
+                .flat_map(|turn| turn.conversation_rows())
+                .collect::<Vec<_>>();
+            let answers = rows
+                .iter()
+                .filter_map(|row| match &row.content {
+                    ConversationRowContent::Response { item, .. } => item.data.body.as_deref(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                answers,
+                [
+                    "Earlier reply",
+                    "Reply before the next instruction",
+                    "Earlier answer",
+                    "Earlier reply",
+                    "Reply before the next instruction",
+                    "Latest answer",
+                ]
+            );
+            assert_eq!(
+                rows.iter().map(|row| &row.id).collect::<HashSet<_>>().len(),
+                rows.len()
+            );
+            assert_eq!(
+                rows.iter().map(|row| &row.id).collect::<Vec<_>>(),
+                live_ids.iter().collect::<Vec<_>>()
+            );
+            let activities: Vec<_> = rows
+                .iter()
+                .filter_map(|row| match &row.content {
+                    ConversationRowContent::ActivityHeader { activity } => Some(activity),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(activities.len(), 2);
+            assert_eq!(
+                activities
+                    .iter()
+                    .map(|activity| &activity.id)
+                    .collect::<HashSet<_>>()
+                    .len(),
+                activities.len()
+            );
+        }
+        let mut changed = source.clone();
+        Arc::make_mut(&mut Arc::make_mut(&mut changed).turns.as_mut().unwrap()[1]).status =
+            models::TurnStatus::Interrupted;
+        let updated = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            changed,
+            &Some(live.clone()),
+        );
+        assert!(Arc::ptr_eq(&live.turns[0], &updated.turns[0]));
+        assert!(!Arc::ptr_eq(&live.turns[1], &updated.turns[1]));
+    }
 
     #[test]
     fn work_expansion_requires_an_explicit_choice_for_the_current_status() {
@@ -1855,12 +2118,12 @@ mod tests {
                 Some(&crate::session::SessionRef::new(crate::session::ProviderKind::Codex, "session".into()).unwrap()),
                 false,
                 None,
-                Arc::new(models::Turn {
+                (Arc::new(models::Turn {
                     id: "turn".into(),
                     status: models::TurnStatus::Completed,
                     items: Some(vec![item, Arc::new(serde_json::from_value(json!({"id":"answer","status":"completed","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"Here is the image","phase":"final"}}}}})).unwrap())]),
                     ..Default::default()
-                }),
+                }), 0),
                 vec![],
                 vec![],
                 None,
@@ -2806,6 +3069,7 @@ mod progress_tests {
             let source = Arc::new(serde_json::from_value(value).unwrap());
             let turn = RenderedTurn {
                 source,
+                occurrence: 0,
                 pending: Default::default(),
                 requests: vec![],
                 rows: vec![],

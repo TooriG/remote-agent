@@ -7,7 +7,7 @@ pub struct Pane {
     id: String,
     presentations: watch::Receiver<Arc<Presentation>>,
     stop: CancellationToken,
-    selection_quoted: tokio::sync::Mutex<bool>,
+    side_chat_preparation: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Store {
@@ -17,7 +17,7 @@ impl Store {
             id: String::new(),
             presentations: self.subscribe_presentation(),
             stop: self.stop.child_token(),
-            selection_quoted: Default::default(),
+            side_chat_preparation: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -30,7 +30,7 @@ impl Store {
             id,
             presentations,
             stop,
-            selection_quoted: Default::default(),
+            side_chat_preparation: Arc::new(tokio::sync::Mutex::new(())),
         }))
     }
 }
@@ -79,63 +79,57 @@ impl Pane {
         self.store.prepare_dictation()
     }
 
-    /// Preparation belongs to the pane, including when its native view unmounts.
-    /// Serializing retries prevents duplicate sessions and preserves an edited quote.
-    pub fn prepare_side_chat(
+    /// Creation and quote initialization are one operation on this pane. A retry
+    /// or a second view task must never replace an already editable draft.
+    pub async fn prepare_side_chat(
         self: &Arc<Self>,
-        provider: Option<agent_protocol::session::ProviderKind>,
-        selection: String,
-    ) -> impl Future<Output = Result<Arc<Presentation>, PeerError>> + Send + use<> {
-        let pane = self.clone();
-        let task = tokio::spawn(async move {
-            tokio::select! {
-                _ = pane.stop.cancelled() => Err(PeerError::ConnectionClosed("pane is closed".into())),
-                result = pane.initialize_side_chat(provider, selection) => result,
-            }
-        });
-        async move {
-            task.await
-                .map_err(|reason| PeerError::ConnectionClosed(reason.to_string()))?
-        }
-    }
-
-    async fn initialize_side_chat(
-        &self,
-        provider: Option<agent_protocol::session::ProviderKind>,
-        selection: String,
-    ) -> Result<Arc<Presentation>, PeerError> {
-        let mut quoted = self.selection_quoted.lock().await;
-        let snapshot = self.snapshot()?;
-        if snapshot.pane.navigation.thread_id.is_none() {
-            let provider = provider
-                .or_else(|| {
-                    snapshot.model_provider_for_draft(snapshot.pane.navigation.draft_key.clone())
+        provider: Option<crate::session::ProviderKind>,
+        text: String,
+    ) -> Result<(), crate::client::AgentError> {
+        use crate::client::error;
+        let pane = Arc::downgrade(self);
+        let preparation = self.side_chat_preparation.clone();
+        // Finish an admitted preparation if its waiter is cancelled, but do not
+        // keep a closed view alive while the Host is creating the session.
+        tokio::spawn(async move {
+            let _preparation = preparation.lock().await;
+            let creation = {
+                let pane = pane.upgrade().ok_or_else(|| error("pane is closed"))?;
+                let snapshot = pane.snapshot().map_err(error)?;
+                if snapshot.pane.navigation.thread_id.is_some() {
+                    return Ok(());
+                }
+                let provider = provider
+                    .or_else(|| {
+                        snapshot
+                            .model_provider_for_draft(snapshot.pane.navigation.draft_key.clone())
+                    })
+                    .ok_or_else(|| error("利用可能なエージェントを選択してください。"))?;
+                pane.dispatch(Intent::CreateSession(op::CreateSession {
+                    provider,
+                    cwd: Some(snapshot.pane.navigation.cwd.clone()),
+                    model: None,
+                    initial_input: None,
+                }))
+            };
+            let outcome = creation.await.map_err(error)?;
+            let Outcome::StartedThread { id } = outcome else {
+                return Err(error("サイドチャットを開始できませんでした。"));
+            };
+            let pane = pane.upgrade().ok_or_else(|| error("pane is closed"))?;
+            pane.snapshot().map_err(error)?;
+            if !text.is_empty() {
+                pane.dispatch(Intent::SetDraftText {
+                    thread_id: id.into(),
+                    text: crate::composer::append_selection_to_draft("", &text),
                 })
-                .ok_or_else(|| {
-                    PeerError::InvalidMessage("利用可能なエージェントを選択してください。".into())
-                })?;
-            self.dispatch(Intent::CreateSession(op::CreateSession {
-                provider,
-                cwd: Some(snapshot.pane.navigation.cwd.clone()),
-                model: None,
-                initial_input: None,
-            }))
-            .await?;
-        }
-        if !*quoted {
-            if !selection.is_empty() {
-                self.dispatch(Intent::SetDraftText {
-                    thread_id: self.snapshot()?.pane.navigation.draft_key.clone(),
-                    text: crate::presentation::markdown::append_selection_quote(
-                        String::new(),
-                        selection,
-                    ),
-                })
-                .await?;
+                .await
+                .map_err(error)?;
             }
-            *quoted = true;
-        }
-        self.presentation()
+            Ok(())
+        })
+        .await
+        .map_err(error)?
     }
 
     pub fn close(&self) {

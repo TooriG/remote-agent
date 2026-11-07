@@ -42,9 +42,11 @@ struct VisualizationWebView: View {
     @State private var page: WebPage?
 
     var body: some View {
-        Group {
+        ZStack {
             if let page {
                 WebView(page).webViewContentBackground(.hidden)
+            } else {
+                ProgressView()
             }
         }
         .accessibilityIdentifier("visualize.webview")

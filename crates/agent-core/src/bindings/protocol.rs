@@ -888,6 +888,7 @@ enum KeyProvider {
     DeepSeek,
     OpenRouter,
     NanoGpt,
+    OpenCode,
     OpenAI,
     Anthropic,
     Gemini,
