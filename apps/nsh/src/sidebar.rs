@@ -108,7 +108,11 @@ pub(crate) fn header(expanded: bool, toggle: impl Fn() + 'static) -> View {
                 .flex_shrink_0(),
         )
         .child(expanded.then(|| view().flex_1()))
-        .child(ui::icon_button(glyph, label, toggle).window_drag(false))
+        .child(
+            view()
+                .window_drag(false)
+                .child(ui::icon_button(glyph, label, toggle)),
+        )
 }
 
 /// The conversation's title bar: its title and the right panel's toggle; the
@@ -143,8 +147,11 @@ pub(crate) fn conversation_header(
         .child(when(
             move || !panel_open(),
             move || {
-                ui::icon_button(Icon::PanelRight, "右パネルを切り替え", toggle_panel)
-                    .window_drag(false)
+                view().window_drag(false).child(ui::icon_button(
+                    Icon::PanelRight,
+                    "右パネルを切り替え",
+                    toggle_panel,
+                ))
             },
         ))
 }

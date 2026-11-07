@@ -1,9 +1,7 @@
 //! The app's controls, drawn with NSH's views in the existing desktop client's look.
 //! Text input, scrolling, menus, alerts and web views stay the platform's.
 use nsh_core::{
-    element::{
-        AccessibilityRole, AccessibilityState, ImageSrc, Rgba, desktop::MenuItem, rgb, rgba,
-    },
+    element::{ImageSrc, Prop, Rgba, desktop::MenuItem, rgb, rgba},
     prelude::*,
 };
 use serde_json::Value;
@@ -118,39 +116,28 @@ pub(crate) fn spinner() -> impl IntoElement {
         .child(icon(Icon::Loader, 14.0))
 }
 
-/// Dims a control and stops its presses while `enabled` is false.
-fn enabled_when(control: View, enabled: impl Fn() -> bool + Copy + 'static) -> View {
-    control
-        .style_when(move || !enabled(), |s| s.opacity(0.5))
-        .pointer_events(move || {
-            if enabled() {
-                PointerEvents::Auto
-            } else {
-                PointerEvents::None
-            }
-        })
-        .accessibility_state(move || AccessibilityState {
-            disabled: !enabled(),
-            ..AccessibilityState::default()
-        })
-}
+/// A control: nsh-base's button (focus, keys, accessibility) in the desktop client's
+/// ghost look, its content filling it.
+pub(crate) type Control = nsh_base::ButtonElement;
 
-fn ghost(control: View, label: impl IntoReactive<SharedString>) -> View {
-    control
+fn ghost(label: impl IntoReactive<SharedString>, content: View) -> Control {
+    nsh_base::button()
+        .accessibility_label(Prop::from(label.into_reactive().map(Some)))
+        .flex_shrink_0()
         .flex_row()
         .items_center()
         .justify_center()
-        .flex_shrink_0()
+        .gap_2()
         .rounded(px(RADIUS))
         .text_color(colors::FOREGROUND)
-        .role(AccessibilityRole::Button)
-        .label(label)
         .hover(|s| s.bg(colors::GHOST_HOVER))
         .active(|s| s.bg(colors::SELECTED))
+        .disabled_style(|s| s.opacity(0.5))
+        .child(content.flex_row().items_center().min_w_0())
 }
 
 /// A small ghost icon button (24 pt, a 14 pt icon) with its label as tooltip.
-pub(crate) fn icon_button(icon: Icon, label: &'static str, press: impl Fn() + 'static) -> View {
+pub(crate) fn icon_button(icon: Icon, label: &'static str, press: impl Fn() + 'static) -> Control {
     icon_button_sized(icon, label, 24.0, 14.0, press)
 }
 
@@ -159,7 +146,7 @@ pub(crate) fn small_icon_button(
     icon: Icon,
     label: &'static str,
     press: impl Fn() + 'static,
-) -> View {
+) -> Control {
     icon_button_sized(icon, label, 20.0, 12.0, press)
 }
 
@@ -169,13 +156,14 @@ pub(crate) fn icon_button_sized(
     size: f32,
     icon_size: f32,
     press: impl Fn() + 'static,
-) -> View {
-    ghost(view(), label)
-        .w(px(size))
-        .h(px(size))
-        .tooltip(tooltip(label))
-        .on_press(press)
-        .child(icon(glyph, icon_size))
+) -> Control {
+    ghost(
+        label,
+        view().tooltip(tooltip(label)).child(icon(glyph, icon_size)),
+    )
+    .w(px(size))
+    .h(px(size))
+    .on_press(press)
 }
 
 /// A hint over a control, as the desktop client's tooltips.
@@ -199,13 +187,15 @@ fn tooltip(label: &'static str) -> AnyElement {
 pub(crate) fn text_button(
     title: impl IntoReactive<SharedString>,
     press: impl Fn() + 'static,
-) -> View {
+) -> Control {
     let title = title.into_reactive();
-    ghost(view(), title.clone())
-        .h(px(24.0))
-        .px_2()
-        .on_press(press)
-        .child(text(title).text_size(px(14.0)).number_of_lines(1))
+    ghost(
+        title.clone(),
+        view().child(text(title).text_size(px(14.0)).number_of_lines(1)),
+    )
+    .h(px(24.0))
+    .px_2()
+    .on_press(press)
 }
 
 /// A ghost button with an icon and a label (32 pt), as the composer's folder.
@@ -213,25 +203,29 @@ pub(crate) fn labeled_button(
     glyph: Icon,
     title: impl Fn() -> String + Copy + 'static,
     press: impl Fn() + 'static,
-) -> View {
-    ghost(view(), move || SharedString::from(title()))
-        .h(px(32.0))
-        .px_2()
-        .gap_2()
-        .min_w_0()
-        .max_w(px(260.0))
-        .on_press(press)
-        .child(icon(glyph, 16.0))
-        .child(text(title).text_size(px(14.0)).number_of_lines(1).min_w_0())
+) -> Control {
+    ghost(
+        move || SharedString::from(title()),
+        view()
+            .gap_2()
+            .min_w_0()
+            .child(icon(glyph, 16.0))
+            .child(text(title).text_size(px(14.0)).number_of_lines(1).min_w_0()),
+    )
+    .h(px(32.0))
+    .px_2()
+    .min_w_0()
+    .max_w(px(260.0))
+    .on_press(press)
 }
 
 pub(crate) trait Enabled {
     fn enabled(self, enabled: impl Fn() -> bool + Copy + 'static) -> Self;
 }
 
-impl Enabled for View {
+impl Enabled for Control {
     fn enabled(self, enabled: impl Fn() -> bool + Copy + 'static) -> Self {
-        enabled_when(self, enabled)
+        self.disabled(move || !enabled())
     }
 }
 

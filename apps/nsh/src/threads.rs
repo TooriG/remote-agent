@@ -495,7 +495,8 @@ fn desktop_rows(
                     let id = item["id"].as_str().unwrap_or_default().to_owned();
                     let title =
                         format!("一覧に戻す: {}", item["title"].as_str().unwrap_or_default());
-                    menu_row(view().on_press(move || activate("menu", &id, None)))
+                    menu_row()
+                        .on_press(move || activate("menu", &id, None))
                         .mt_1()
                         .child(row_label(title))
                         .into_element()
@@ -564,7 +565,8 @@ fn desktop_row(
                 .items_center()
                 .gap_1()
                 .child(
-                    view()
+                    nsh_base::button()
+                        .accessibility_label(Some(SharedString::from(row.title.clone())))
                         .flex_1()
                         .min_w_0()
                         .h(px(44.0))
@@ -574,8 +576,6 @@ fn desktop_row(
                         .items_center()
                         .rounded(px(ui::RADIUS))
                         .text_color(colors::FOREGROUND)
-                        .role(AccessibilityRole::Button)
-                        .label(row.title.clone())
                         .hover(|s| s.bg(colors::GHOST_HOVER))
                         .active(|s| s.bg(colors::SELECTED))
                         .on_press(move || activate("expand", &toggle, None))
@@ -603,7 +603,7 @@ fn desktop_row(
             let enabled = row.enabled;
             let selected_id = id.clone();
             let active = move || selected.with(|ids| ids.contains(&selected_id));
-            menu_row(view())
+            menu_row()
                 .style_when(active, |s| {
                     s.bg(colors::SELECTED)
                         .text_color(colors::FOREGROUND)
@@ -631,17 +631,18 @@ fn section(title: String) -> View {
 }
 
 /// A sidebar menu item: 28 pt, a fill under the pointer.
-fn menu_row(row: View) -> View {
+fn menu_row() -> crate::ui::Control {
     use crate::ui::{self, colors};
-    row.flex_row()
+    nsh_base::button()
+        .flex_row()
         .items_center()
         .gap_2()
         .h(px(28.0))
         .px_2()
         .rounded(px(ui::RADIUS))
         .text_color(colors::FOREGROUND)
-        .role(AccessibilityRole::Button)
         .hover(|s| s.bg(colors::ROW_HOVER))
+        .disabled_style(|s| s.opacity(0.5))
 }
 
 fn row_label(title: String) -> impl IntoElement {
