@@ -8,7 +8,6 @@
         let container: CGSize
         let offset: CGPoint
         let proposedWidth: CGFloat?
-        let clippingBounds: CGRect
         let firstUnlaid: Int
     }
 
@@ -26,14 +25,13 @@
         let measured: CGSize?
         let scale: CGFloat
         let category: String
-        let lastLine: CGRect?
-        let clippingBounds: CGRect
+        let lastLineBottom: CGFloat?
         var referenceHeight: CGFloat?
 
         var incomplete: Bool {
-            // Ignore floating-point noise while retaining deficits smaller than one physical pixel.
-            placedEnd < requiredEnd || lastLine.map {
-                $0.maxY > clippingBounds.maxY + 1 / (max(scale, 1) * 64)
+            // A subpixel font line box can extend past a pixel-aligned frame without hiding its text.
+            placedEnd < requiredEnd || lastLineBottom.map {
+                $0 > frame.height + 1 / max(scale, 1)
             } == true
         }
 

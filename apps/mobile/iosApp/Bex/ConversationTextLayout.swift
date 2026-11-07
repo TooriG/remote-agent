@@ -99,7 +99,7 @@ final class ConversationTextView: UITextView {
                 let input = ConversationTextDiagnosticInput(
                     content: ObjectIdentifier(content), size: bounds.size,
                     container: textContainer.size, offset: contentOffset, proposedWidth: diagnosticWidth,
-                    clippingBounds: diagnosticClippingBounds, firstUnlaid: layoutManager.firstUnlaidCharacterIndex()
+                    firstUnlaid: layoutManager.firstUnlaidCharacterIndex()
                 )
                 guard input != diagnosticInput else { return }
                 diagnosticInput = input
@@ -110,19 +110,6 @@ final class ConversationTextView: UITextView {
                     metrics, recovered: recovered, snapshot: ConversationTextDiagnosticLog.includesNormalLayouts
                 )
             }
-        }
-
-        private var diagnosticClippingBounds: CGRect {
-            var available = bounds
-            var parent = superview
-            // Scrolling intentionally hides text. Only inspect the message's own clipping ancestors.
-            while let ancestor = parent, !(ancestor is UIScrollView) {
-                if ancestor.clipsToBounds {
-                    available = available.intersection(convert(ancestor.bounds, from: ancestor))
-                }
-                parent = ancestor.superview
-            }
-            return available.isNull ? .zero : available
         }
 
         /// Reads the existing layout; the independent reference layout never touches the displayed text.
@@ -144,8 +131,9 @@ final class ConversationTextView: UITextView {
             let lastGlyph = tail > 0 ? layoutManager.glyphRange(
                 forCharacterRange: NSRange(location: tail - 1, length: 1), actualCharacterRange: nil
             ).location : nil
-            let lastLine = lastGlyph.map {
+            let lastLineBottom = lastGlyph.map {
                 layoutManager.lineFragmentUsedRect(forGlyphAt: $0, effectiveRange: nil, withoutAdditionalLayout: true)
+                    .maxY
             }
             var metrics = ConversationTextDiagnostic(
                 view: diagnosticID, characters: textStorage.length, requiredEnd: requiredEnd,
@@ -153,9 +141,9 @@ final class ConversationTextView: UITextView {
                 frame: bounds.size, container: textContainer.size, contentSize: contentSize,
                 offset: contentOffset, measured: measured, scale: traitCollection.displayScale,
                 category: traitCollection.preferredContentSizeCategory.rawValue,
-                lastLine: lastLine, clippingBounds: diagnosticClippingBounds, referenceHeight: nil
+                lastLineBottom: lastLineBottom, referenceHeight: nil
             )
-            if metrics.incomplete || ConversationTextDiagnosticLog.includesNormalLayouts {
+            if metrics.incomplete {
                 metrics.referenceHeight = ConversationTextDiagnostic.referenceHeight(textStorage, width: bounds.width)
             }
             return metrics

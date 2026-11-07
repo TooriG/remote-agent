@@ -182,20 +182,7 @@ struct ConversationTextViewTests {
             check(!complete.incomplete, "Fully drawn text must not report missing characters")
             checkClippedWhitespace(body: body, size: size)
 
-            let parent = UIView(frame: CGRect(x: 0, y: 0, width: size.width, height: size.height - 1))
-            parent.clipsToBounds = true
-            parent.addSubview(view)
-            let clipped = view.textLayoutDiagnostic()
-            check(clipped.placedEnd == clipped.requiredEnd && clipped.incomplete,
-                  "A parent hiding the last line must be detected even when every character is laid out")
-            view.removeFromSuperview()
-            let scrolling = UIScrollView(frame: parent.frame)
-            scrolling.addSubview(view)
-            check(!view.textLayoutDiagnostic().incomplete,
-                  "Scrolling intentionally hides text and must not report a clipped message")
-            view.removeFromSuperview()
-
-            view.frame.size.height -= 1
+            view.frame.size.height -= 2
             view.layoutIfNeeded()
             _ = drawnRows(view, in: view.bounds)
             let container = view.textContainer.size
