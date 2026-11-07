@@ -38,6 +38,8 @@ mod document_picker;
 pub mod ios;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "macos")]
+pub(crate) mod split;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple;

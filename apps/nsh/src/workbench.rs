@@ -1,23 +1,20 @@
-use crate::{Connection, native, shared::Shared};
-use agent_core::{
-    panels::{PanelKind, PanelScope, PanelState, Panels},
-    state::Intent,
-};
+use crate::{Connection, application::Application, native, shared::Shared};
+use agent_core::panels::{PanelKind, PanelLayout, PanelScope, PanelState};
 use nsh_core::prelude::*;
 use serde_json::json;
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Workbench {
-    panels: Signal<Shared<Panels>>,
+    application: Stored<Arc<Application>>,
     pub scope: Memo<PanelScope>,
     pub state: Memo<PanelState>,
-    instance: Stored<uuid::Uuid>,
 }
 
 impl Workbench {
     pub fn new() -> Self {
         let connection = use_context::<Connection>().unwrap();
-        let panels = signal(Shared(Panels::new()));
+        let panels = computed(move || connection.state.with(|state| Shared(state.panels.clone())));
         let scope = computed(move || {
             connection.publication.with(|p| {
                 p.snapshot
@@ -26,69 +23,39 @@ impl Workbench {
         });
         let state = computed(move || panels.with(|panels| panels.get(scope.get())));
         Self {
-            panels,
+            application: connection.application,
             scope,
             state,
-            instance: stored(uuid::Uuid::new_v4()),
         }
     }
 
-    pub fn rekey(self, before: PanelScope, after: PanelScope) {
-        let next = self
-            .panels
-            .with_untracked(|panels| panels.0.clone().rekey(before, after));
-        self.panels.set(Shared(next));
-    }
-
-    pub fn open(self, kind: PanelKind, path: Option<String>) -> u64 {
-        let next = self.panels.with_untracked(|panels| {
-            panels
-                .0
-                .clone()
-                .open(self.scope.get_untracked(), kind, path)
-        });
-        self.panels.set(Shared(next.panels));
-        next.id
+    pub fn open(self, kind: PanelKind, path: Option<String>, line: Option<u32>) -> u64 {
+        self.application.with(|application| {
+            application.open_panel(self.scope.get_untracked(), kind, path, line)
+        })
     }
 
     pub fn hide(self) {
-        let next = self
-            .panels
-            .with_untracked(|panels| panels.0.clone().set_open(self.scope.get_untracked(), false));
-        self.panels.set(Shared(next));
+        self.application
+            .with(|application| application.set_panel_open(self.scope.get_untracked(), false));
     }
 
     fn activate(self, id: u64) {
-        let next = self
-            .panels
-            .with_untracked(|panels| panels.0.clone().activate(self.scope.get_untracked(), id));
-        self.panels.set(Shared(next.panels));
+        self.application
+            .with(|application| application.activate_panel(self.scope.get_untracked(), id));
     }
 
     pub fn close_selected(self) {
         let Some(surface) = self.state.with_untracked(|state| state.selected().cloned()) else {
             return;
         };
-        let scope = self.scope.get_untracked();
-        let next = self
-            .panels
-            .with_untracked(|panels| panels.0.clone().close(scope.clone(), surface.id));
-        self.panels.set(Shared(next));
-        if surface.kind == PanelKind::Terminal {
-            let connection = use_context::<Connection>().unwrap();
-            connection.client.with(|client| {
-                client.dispatch(
-                    &scope.host,
-                    Intent::CloseTerminal {
-                        handle: self.terminal_handle(surface.id),
-                    },
-                )
-            });
-        }
+        self.application
+            .with(|application| application.close_panel(self.scope.get_untracked(), surface.id));
     }
 
     pub fn terminal_handle(self, id: u64) -> String {
-        format!("agent-terminal-{}-{id}", self.instance.get())
+        self.application
+            .with(|application| application.terminal_handle(id))
     }
 }
 
@@ -157,7 +124,7 @@ pub(crate) fn open_tool(key: &str) {
                 p.context.home(),
             )
         });
-        workspace.open(tool.kind, Some(directory));
+        workspace.open(tool.kind, Some(directory), None);
     }
 }
 
@@ -173,6 +140,13 @@ pub(crate) fn screen() -> impl IntoElement {
                 .prop("symbol", move || json!(workspace.state.with(|state| symbol(state.kind()))))
                 .prop("title", move || json!(title())).min_h(px(44.0)).flex_1())
             .child(native::menu("plus", "ツールを追加", move || json!(tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "symbol": symbol(tool.kind), "enabled": tool.enabled})).collect::<Vec<_>>()), open_tool).w(px(44.0)).h(px(44.0)))
+            .child(when(is_desktop, move || native::menu("rectangle.split.2x1", "表示位置", move || {
+                let selected = workspace.state.with(|s| s.layout);
+                json!([(PanelLayout::Right, "right", "右に表示", "rectangle.righthalf.inset.filled"), (PanelLayout::Bottom, "bottom", "下に表示", "rectangle.bottomhalf.inset.filled"), (PanelLayout::Expanded, "expanded", "拡大表示", "arrow.up.left.and.arrow.down.right")].into_iter().map(|(layout, id, title, symbol)| json!({"id": id, "title": title, "symbol": symbol, "selected": layout == selected})).collect::<Vec<_>>())
+            }, move |id| {
+                let layout = match id { "right" => PanelLayout::Right, "bottom" => PanelLayout::Bottom, "expanded" => PanelLayout::Expanded, _ => return };
+                workspace.application.with(|app| app.set_panel_layout(workspace.scope.get_untracked(), layout));
+            }).w(px(44.0)).h(px(44.0))))
             .child(native::button("xmark.square", "タブを閉じる", move || workspace.close_selected()).prop("enabled", move || json!(workspace.state.with(|s| s.active.is_some()))).w(px(44.0)).h(px(44.0))))
         .child(each(move || workspace.state.with(|s| s.selected().cloned().into_iter().collect::<Vec<_>>()),
             |surface: &agent_core::panels::PanelSurface| surface.id,

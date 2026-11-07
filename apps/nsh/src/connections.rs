@@ -1,10 +1,10 @@
-use crate::{Connection, native, storage::Host};
+use crate::{Connection, application::Host, native};
 use nsh_core::{element::input, prelude::*};
 use serde_json::json;
 
 pub(crate) fn selector(
-    hosts: Signal<Vec<Host>>,
-    selected: Signal<String>,
+    hosts: Memo<Vec<Host>>,
+    selected: Memo<String>,
 ) -> nsh_core::element::NativeView {
     let connection = use_context::<Connection>().unwrap();
     native::menu(
@@ -20,15 +20,9 @@ pub(crate) fn selector(
             })
         },
         move |name| {
-            if let Some(host) = hosts.with(|hosts| {
-                hosts
-                    .iter()
-                    .find(|host| host.id == name)
-                    .map(|host| host.id.clone())
-            }) {
-                selected.set(host.clone());
-                connection.client.with(|client| client.reconnect(host));
-            }
+            connection
+                .application
+                .with(|application| application.select_host(name.to_owned()));
         },
     )
     .prop("title", move || {
@@ -43,11 +37,7 @@ pub(crate) fn selector(
     .min_h(px(44.0))
 }
 
-pub(crate) fn screen(
-    hosts: Signal<Vec<Host>>,
-    selected: Signal<String>,
-    close: impl Fn() + 'static,
-) -> impl IntoElement {
+pub(crate) fn screen(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let invitation = signal(String::new());
     let confirmation = signal(None::<agent_protocol::models::Invitation>);
@@ -68,10 +58,9 @@ pub(crate) fn screen(
                     .gap_2()
                     .child(text(host.name))
                     .child(native::text_button(json!("接続"), move || {
-                        selected.set(id.clone());
                         connection
-                            .client
-                            .with(|client| client.reconnect(id.clone()));
+                            .application
+                            .with(|application| application.select_host(id.clone()));
                     }))
             },
         ))
@@ -108,8 +97,7 @@ pub(crate) fn screen(
                 .child(text("共有PCでは、管理者などが内容を閲覧できる場合があります。"))
                 .child(native::text_button(json!("同意して接続"), move || {
                     if !connection.pairing.get_untracked() && let Some(invitation) = confirmation.get_untracked() {
-                        connection.pairing.set(true);
-                        connection.client.with(|client| client.pair(invitation));
+                        connection.application.with(|application| application.pair(invitation));
                     }
                 }).prop("enabled", move || json!(!connection.pairing.get())))
                 .child(native::text_button(json!("変更"), move || {

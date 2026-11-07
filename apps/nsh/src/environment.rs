@@ -1,15 +1,9 @@
-use crate::{Connection, connections, native, storage::Host};
+use crate::{Connection, application::Host, connections, native};
 use agent_core::state::{Intent, operations as op};
-use agent_protocol::session::ProviderKind;
 use nsh_core::prelude::*;
 use serde_json::json;
 
-pub(crate) fn overview(
-    hosts: Signal<Vec<Host>>,
-    selected: Signal<String>,
-    provider: Signal<Option<ProviderKind>>,
-    close: impl Fn() + 'static,
-) -> impl IntoElement {
+pub(crate) fn overview(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let publication = connection.publication;
     let ready = computed(move || {
@@ -121,7 +115,11 @@ pub(crate) fn overview(
                                     native::text_button(
                                         move || json!(agent.with(|a| a.name.clone())),
                                         move || {
-                                            provider.set(Some(agent.with_untracked(|a| a.provider)))
+                                            connection.application.with(|app| {
+                                                app.navigate(crate::Navigation::Provider(Some(
+                                                    agent.with_untracked(|a| a.provider),
+                                                )))
+                                            });
                                         },
                                     )
                                     .prop("asset", move || {
@@ -163,6 +161,6 @@ pub(crate) fn overview(
             .child(text(
                 "選択したPCに適用され、同じ環境を使う端末にも反映されます。",
             ))
-            .child(connections::screen(hosts, selected, close)),
+            .child(connections::screen(hosts, close)),
     )
 }

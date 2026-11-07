@@ -1,10 +1,13 @@
 //! Native UI over the same ClientSession and presentation as the existing apps.
 mod accounts;
 mod activity;
+mod application;
 mod client;
 mod composer;
 mod connections;
 mod conversation;
+#[cfg(target_os = "macos")]
+mod desktop;
 mod details;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod dictation;
@@ -24,43 +27,41 @@ mod terminal;
 mod threads;
 mod workbench;
 
+#[cfg(target_os = "macos")]
+pub use desktop::run as run_macos;
 #[cfg(target_os = "ios")]
 pub use native::ios::register as register_ios;
 #[cfg(target_os = "macos")]
 pub use native::macos::register as register_macos;
 
 use agent_core::{presentation::view::Presentation, state::Intent};
+use application::Navigation;
 use nsh_core::{HeaderSystemItem, platform::Lifecycle, prelude::*};
 use serde_json::json;
 use shared::Shared;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Connection {
+    application: Stored<Arc<application::Application>>,
+    state: ReadSignal<Shared<application::State>>,
     client: Stored<Arc<client::Client>>,
-    host: Signal<String>,
+    host: Memo<String>,
     publication: Memo<Shared<Presentation>>,
-    pairing: Signal<bool>,
-    uploads: Signal<BTreeMap<uuid::Uuid, (String, agent_core::state::DraftKey)>>,
-    uploading: Memo<bool>,
+    pairing: Memo<bool>,
 }
 
 impl Connection {
-    fn attach(
-        self,
-        host: String,
-        draft: agent_core::state::DraftKey,
-        sources: Vec<client::AttachmentSource>,
-    ) {
-        if sources.is_empty() {
-            return;
-        }
-        let id = uuid::Uuid::new_v4();
-        self.uploads.update(|uploads| {
-            uploads.insert(id, (host.clone(), draft.clone()));
-        });
-        self.client
-            .with(|client| client.attach_batch(id, host, draft, sources));
+    fn uploading(self) -> bool {
+        // Read the owner as well as tracking its publication, so a second input
+        // event cannot submit while a newly staged batch is waiting to render.
+        self.state.with(|_| ());
+        let host = self.host.get();
+        let draft = self
+            .publication
+            .with(|p| p.composer.controls.navigation.draft_key.clone());
+        self.application
+            .with(|application| application.snapshot().uploading(&host, &draft))
     }
 
     fn dispatch(self, intent: Intent) {
@@ -71,41 +72,51 @@ impl Connection {
 
 #[component]
 pub fn App() -> impl IntoElement {
-    let service = storage::directory().and_then(client::Client::new);
-    let (runtime, service, updates) = match service {
+    let service = storage::directory().and_then(application::Application::new);
+    let (runtime, service) = match service {
         Ok(service) => service,
         Err(reason) => return view().p_4().child(text(reason.to_string())).into_element(),
     };
-    let client = stored(service.clone());
-    let hosts = signal_with(Vec::<storage::Host>::new(), SignalEquals::Never);
-    let host = signal(String::new());
-    let publications = signal_with(
-        BTreeMap::<String, Shared<Presentation>>::new(),
-        SignalEquals::Never,
-    );
+    let stored_service = service.clone();
+    cleanup(move || {
+        let _ = runtime.block_on(service.shutdown());
+    });
+    app_view(stored_service, Area::Mobile)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Area {
+    Mobile,
+    #[cfg(target_os = "macos")]
+    Shell,
+    #[cfg(target_os = "macos")]
+    Sidebar,
+    #[cfg(target_os = "macos")]
+    Conversation,
+    #[cfg(target_os = "macos")]
+    Workbench,
+}
+
+fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
+    let application = stored(service.clone());
+    let client = stored(service.client.clone());
+    let mut updates = service.subscribe();
+    let state = signal(Shared(updates.borrow_and_update().clone()));
+    let hosts = computed(move || state.with(|state| state.hosts.clone()));
+    let host = computed(move || state.with(|state| state.host.clone()));
     let empty = stored(Shared(Presentation::empty()));
     let publication = computed(move || {
-        publications
-            .with(|all| all.get(&host.get()).cloned())
+        state
+            .with(|state| state.publications.get(&host.get()).cloned())
             .unwrap_or_else(|| empty.get())
     });
-    let uploads = signal(BTreeMap::<uuid::Uuid, (String, agent_core::state::DraftKey)>::new());
-    let uploading = computed(move || {
-        let host = host.get();
-        let draft = publication.with(|p| p.composer.controls.navigation.draft_key.clone());
-        uploads.with(|uploads| {
-            uploads
-                .values()
-                .any(|(target_host, target_draft)| target_host == &host && target_draft == &draft)
-        })
-    });
     let connection = Connection {
+        application,
+        state: state.read_only(),
         client,
         host,
         publication,
-        pairing: signal(false),
-        uploads,
-        uploading,
+        pairing: computed(move || state.with(|state| state.pairing)),
     };
     provide_context(connection);
     let preview = media::Preview::new();
@@ -114,84 +125,27 @@ pub fn App() -> impl IntoElement {
     provide_context(workspace);
     let files = files::Browser::new(preview);
     provide_context(files);
-    let failure = signal(None::<String>);
+    let failure = computed(move || state.with(|state| state.failure.clone()));
     let routes = signal(vec![0_u8]);
-    let settings = signal(false);
-    let provider = signal(None::<agent_protocol::session::ProviderKind>);
-    let account_pending = signal(false);
-    let account_locked = computed(move || {
-        account_pending.get()
-            || publication.with(|p| {
-                p.settings.account_login().is_some()
-                    || provider.get().is_some_and(|provider| {
-                        p.snapshot.operation_running(
-                            agent_core::state::operations::OperationKey::AccountLogin { provider },
-                        )
-                    })
-            })
-    });
-    let close_settings = move || {
-        provider.set(None);
-        settings.set(false);
-    };
-    let sidebar = signal(true);
+    let settings = computed(move || state.with(|state| state.settings));
+    let provider = computed(move || state.with(|state| state.provider));
+    let navigate = move |action| application.with(|application| application.navigate(action));
+    let account_locked = computed(move || state.with(|state| state.account_locked()));
+    let close_settings = move || navigate(Navigation::Settings(false));
+    #[cfg(target_os = "macos")]
+    let sidebar = computed(move || state.with(|state| state.sidebar));
     let searching = signal(false);
     let query = signal(String::new());
-    effect(move || {
-        client.with(|client| client.scene(lifecycle() == Lifecycle::Active));
-    });
-    cleanup(move || {
-        let _ = runtime.block_on(service.shutdown());
-    });
+    let primary = area == Area::Mobile;
+    #[cfg(target_os = "macos")]
+    let primary = primary || area == Area::Shell;
+    if primary {
+        effect(move || client.with(|client| client.scene(lifecycle() == Lifecycle::Active)));
+    }
     spawn(async move {
-        while let Ok(update) = updates.recv().await {
-            match update {
-                client::Update::AttachmentsFinished(id) => uploads.update(|uploads| {
-                    uploads.remove(&id);
-                }),
-                client::Update::Hosts(next) => {
-                    if host.get_untracked().is_empty()
-                        || !next.iter().any(|item| item.id == host.get_untracked())
-                    {
-                        host.set(next.first().map(|item| item.id.clone()).unwrap_or_default());
-                    }
-                    hosts.set(next);
-                }
-                client::Update::Presentation { host, value } => {
-                    let before = publications.with_untracked(|all| {
-                        all.get(&host).map(|p| {
-                            p.snapshot
-                                .panel_scope(host.clone(), p.context.navigation().draft_key)
-                        })
-                    });
-                    if let Some(before) = before
-                        && let Some(session) =
-                            value.snapshot.submitted_session(before.draft.clone())
-                    {
-                        workspace.rekey(
-                            before,
-                            value.snapshot.panel_scope(
-                                host.clone(),
-                                agent_core::state::DraftKey::Session { session },
-                            ),
-                        );
-                    }
-                    publications.update(|all| {
-                        all.insert(host, Shared(value));
-                    });
-                }
-                client::Update::Error(reason) => failure.set(Some(reason)),
-                client::Update::Paired(result) => {
-                    connection.pairing.set(false);
-                    match result {
-                        Ok(id) => {
-                            host.set(id);
-                            settings.set(false);
-                        }
-                        Err(reason) => failure.set(Some(reason)),
-                    }
-                }
-            }
+        while updates.changed().await.is_ok() {
+            let next = updates.borrow_and_update().clone();
+            state.set(Shared(next));
         }
     });
     let title = computed(move || {
@@ -208,11 +162,11 @@ pub fn App() -> impl IntoElement {
         })
     };
     let toolbar_action = move |action: &str| {
-        if account_locked.get_untracked() {
+        if application.with(|app| app.snapshot().account_locked()) {
             return;
         }
         match action {
-            "sidebar" => sidebar.update(|open| *open = !*open),
+            "sidebar" => navigate(Navigation::ToggleSidebar),
             "search" => searching.update(|open| *open = !*open),
             "files" | "terminal" | "diff" | "agents" => workbench::open_tool(action),
             "compose" => {
@@ -223,22 +177,23 @@ pub fn App() -> impl IntoElement {
                     routes.set(vec![0, 1]);
                 }
             }
-            _ => settings.set(true),
+            _ => navigate(Navigation::Settings(true)),
         }
     };
+    #[cfg(target_os = "macos")]
     let environment = move || {
         view()
             .flex_1()
             .child(when(
                 move || provider.get().is_none(),
-                move || environment::overview(hosts, host, provider, close_settings),
+                move || environment::overview(hosts, close_settings),
             ))
             .child(each(
                 move || provider.get().into_iter().collect::<Vec<_>>(),
                 |provider: &agent_protocol::session::ProviderKind| *provider,
                 move |selected, _| {
-                    accounts::screen(selected.get_untracked(), account_pending, move || {
-                        provider.set(None)
+                    accounts::screen(selected.get_untracked(), move || {
+                        navigate(Navigation::Provider(None))
                     })
                 },
             ))
@@ -267,77 +222,97 @@ pub fn App() -> impl IntoElement {
                         .p_2()
                         .child(text(move || failure.get().unwrap_or_default()))
                         .child(native::text_button(json!("閉じる"), move || {
-                            failure.set(None)
+                            application.with(|application| application.dismiss_failure())
                         }))
                 },
             ))
     };
-    if is_desktop() {
-        return view()
-            .flex_1()
-            .text_color(move || nsh_base::theme().foreground)
-            .child(media::preview())
-            .child(native::toolbar(title, toolbar_action).h(px(0.0)))
-            .child(notices())
-            .child(
-                view()
-                    .flex_1()
-                    .flex_row()
-                    .child(
-                        view()
-                            .w(px(280.0))
-                            .p_2()
-                            .gap_2()
-                            .style_when(move || !sidebar.get(), |s| s.hidden())
-                            .child(
-                                connections::selector(hosts, host)
-                                    .prop("enabled", move || json!(!account_locked.get())),
+    match area {
+        #[cfg(target_os = "macos")]
+        Area::Shell => {
+            return view()
+                .flex_1()
+                .child(native::toolbar(title, toolbar_action).h(px(0.0)))
+                .child(notices())
+                .child(
+                    native("bex.split")
+                        .flex_1()
+                        .prop("sidebar", move || json!(sidebar.get()))
+                        .prop("tools", move || {
+                            json!(
+                                !settings.get()
+                                    && !hosts.with(Vec::is_empty)
+                                    && workspace.state.with(|s| s.open)
                             )
-                            .child(native::search(query).w_full())
-                            .child(list())
-                            .child(each(
-                                workbench::tools,
-                                |tool: &agent_core::panels::PanelTool| tool.key.clone(),
-                                move |tool, _| {
-                                    native::text_button(
-                                        move || json!(tool.with(|t| t.label.clone())),
-                                        move || {
-                                            toolbar_action(&tool.with_untracked(|t| t.key.clone()))
-                                        },
-                                    )
-                                    .prop("symbol", move || {
-                                        json!(tool.with(|t| workbench::symbol(t.kind)))
-                                    })
-                                    .prop(
-                                        "enabled",
-                                        move || {
-                                            json!(!account_locked.get() && tool.with(|t| t.enabled))
-                                        },
-                                    )
-                                },
-                            ))
-                            .child(native::text_button(json!("環境"), move || {
-                                settings.set(true)
-                            })),
-                    )
-                    .child(when(
-                        move || settings.get() || hosts.with(Vec::is_empty),
-                        environment,
-                    ))
-                    .child(when(
-                        move || {
-                            !settings.get()
-                                && !hosts.with(Vec::is_empty)
-                                && !workspace.state.with(|state| state.open)
-                        },
-                        content,
-                    ))
-                    .child(when(
-                        move || !settings.get() && workspace.state.with(|state| state.open),
-                        workbench::screen,
-                    )),
-            )
-            .into_element();
+                        })
+                        .prop("layout", move || {
+                            json!(format!("{:?}", workspace.state.with(|s| s.layout)))
+                        }),
+                )
+                .into_element();
+        }
+        #[cfg(target_os = "macos")]
+        Area::Sidebar => {
+            return view()
+                .flex_1()
+                .p_2()
+                .gap_2()
+                .child(
+                    connections::selector(hosts, host)
+                        .prop("enabled", move || json!(!account_locked.get())),
+                )
+                .child(native::search(query).w_full())
+                .child(list())
+                .child(each(
+                    workbench::tools,
+                    |tool: &agent_core::panels::PanelTool| tool.key.clone(),
+                    move |tool, _| {
+                        native::text_button(
+                            move || json!(tool.with(|t| t.label.clone())),
+                            move || toolbar_action(&tool.with_untracked(|t| t.key.clone())),
+                        )
+                        .prop("symbol", move || {
+                            json!(tool.with(|t| workbench::symbol(t.kind)))
+                        })
+                        .prop("enabled", move || {
+                            json!(!account_locked.get() && tool.with(|t| t.enabled))
+                        })
+                    },
+                ))
+                .child(native::text_button(json!("環境"), move || {
+                    navigate(Navigation::Settings(true))
+                }))
+                .into_element();
+        }
+        #[cfg(target_os = "macos")]
+        Area::Conversation => {
+            return view()
+                .flex_1()
+                .min_w_0()
+                .child(media::preview())
+                .child(when(
+                    move || settings.get() || hosts.with(Vec::is_empty),
+                    environment,
+                ))
+                .child(when(
+                    move || !settings.get() && !hosts.with(Vec::is_empty),
+                    content,
+                ))
+                .into_element();
+        }
+        #[cfg(target_os = "macos")]
+        Area::Workbench => {
+            return view()
+                .flex_1()
+                .min_w_0()
+                .child(media::preview())
+                .child(when(
+                    move || workspace.state.with(|s| s.open),
+                    workbench::screen,
+                ))
+                .into_element();
+        }
+        Area::Mobile => {}
     }
     let navigation = nsh_base::nav_stack().flex_1().child(each(
         move || {
@@ -384,7 +359,7 @@ pub fn App() -> impl IntoElement {
                 2 => nsh_base::nav_page()
                     .title("環境")
                     .child(notices())
-                    .child(environment::overview(hosts, host, provider, close_settings)),
+                    .child(environment::overview(hosts, close_settings)),
                 5 => nsh_base::nav_page()
                     .title(move || {
                         publication.with(|p| {
@@ -403,8 +378,7 @@ pub fn App() -> impl IntoElement {
                     .child(notices())
                     .child(accounts::screen(
                         provider.get_untracked().unwrap(),
-                        account_pending,
-                        move || provider.set(None),
+                        move || navigate(Navigation::Provider(None)),
                     )),
                 3 => nsh_base::nav_page()
                     .title(workbench::title)
@@ -418,7 +392,7 @@ pub fn App() -> impl IntoElement {
                     .child(notices())
                     .child(when(
                         move || hosts.with(Vec::is_empty),
-                        move || connections::screen(hosts, host, || {}),
+                        move || connections::screen(hosts, || {}),
                     ))
                     .child(when(
                         move || !hosts.with(Vec::is_empty),
@@ -440,7 +414,7 @@ pub fn App() -> impl IntoElement {
                     close_settings();
                 }
                 if route.get_untracked() == 5 {
-                    provider.set(None);
+                    navigate(Navigation::Provider(None));
                 }
                 if route.get_untracked() == 3 {
                     files.close();

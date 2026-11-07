@@ -71,7 +71,7 @@ pub(crate) fn composer(
                 } else if stopping() {
                     c.can_interrupt()
                 } else {
-                    !connection.uploading.get() && c.can_submit(recording.get())
+                    !connection.uploading() && c.can_submit(recording.get())
                 }
             })
     };
@@ -79,7 +79,7 @@ pub(crate) fn composer(
         !recording.get()
             && !requesting.get()
             && !focused.get()
-            && !connection.uploading.get()
+            && !connection.uploading()
             && draft.with(String::is_empty)
             && composer.with(|c| {
                 c.draft.attachments.is_empty()
@@ -225,18 +225,20 @@ pub(crate) fn composer(
                         if item == "写真を選択" {
                             let picked = pick_images(nsh_core::picker::PickRequest::new(true, 10));
                             spawn(async move {
-                                connection.attach(
-                                    host,
-                                    key,
-                                    picked
-                                        .await
-                                        .into_iter()
-                                        .map(|file| crate::client::AttachmentSource::Image {
-                                            name: file.name,
-                                            bytes: file.data.to_vec(),
-                                        })
-                                        .collect(),
-                                );
+                                let images = picked.await;
+                                connection.application.with(|app| {
+                                    app.attach(
+                                        host,
+                                        key,
+                                        images
+                                            .into_iter()
+                                            .map(|file| crate::client::AttachmentSource::Image {
+                                                name: file.name,
+                                                bytes: file.data.to_vec(),
+                                            })
+                                            .collect(),
+                                    )
+                                });
                             });
                         } else if !is_desktop() {
                             file_target.replace(Some((host, key)));
@@ -248,20 +250,22 @@ pub(crate) fn composer(
                             spawn(async move {
                                 match picked.await {
                                     Ok(Some(paths)) => {
-                                        connection.attach(
-                                            host,
-                                            key,
-                                            paths
-                                                .into_iter()
-                                                .map(|path| {
-                                                    let is_image = native::image_file(&path);
-                                                    crate::client::AttachmentSource::File {
-                                                        path,
-                                                        is_image,
-                                                    }
-                                                })
-                                                .collect(),
-                                        );
+                                        connection.application.with(|app| {
+                                            app.attach(
+                                                host,
+                                                key,
+                                                paths
+                                                    .into_iter()
+                                                    .map(|path| {
+                                                        let is_image = native::image_file(&path);
+                                                        crate::client::AttachmentSource::File {
+                                                            path,
+                                                            is_image,
+                                                        }
+                                                    })
+                                                    .collect(),
+                                            )
+                                        });
                                     }
                                     Ok(None) => {}
                                     Err(reason) => native::message("添付", reason),
@@ -278,7 +282,7 @@ pub(crate) fn composer(
                             && !c.transferring)
                             && !recording.get()
                             && !requesting.get()
-                            && !connection.uploading.get()
+                            && !connection.uploading()
                             && answering.with(Option::is_none)
                     )
                 })
@@ -357,7 +361,7 @@ pub(crate) fn composer(
             move || crate::invocations::suggestions(move || field_ref.focus()),
         ))
         .child(when(
-            move || connection.uploading.get() || controls.with(|c| c.transferring),
+            move || connection.uploading() || controls.with(|c| c.transferring),
             || text("添付ファイルを転送中…"),
         ))
         .child(when(
@@ -381,7 +385,9 @@ pub(crate) fn composer(
                                     is_image: native::image_file(std::path::Path::new(path)),
                                 })
                                 .collect();
-                            connection.attach(host, key, sources);
+                            connection
+                                .application
+                                .with(|app| app.attach(host, key, sources));
                         }
                     })
             },

@@ -18,7 +18,6 @@ pub(crate) struct Browser {
     pub file: Memo<Option<TextFile>>,
     workspace: Workbench,
     target: Memo<(PanelScope, (bool, Option<u64>))>,
-    line: Signal<Option<(u64, Option<u32>)>>,
     preview: Preview,
     owner: Owner,
 }
@@ -38,12 +37,13 @@ impl Browser {
 
     pub fn show(self, path: String) {
         self.preview.close();
-        self.workspace.open(PanelKind::Files, Some(path));
+        self.workspace.open(PanelKind::Files, Some(path), None);
     }
 
     pub fn new(preview: Preview) -> Self {
         let workspace = use_context::<Workbench>().unwrap();
-        let line = signal(None::<(u64, Option<u32>)>);
+        let connection = use_context::<Connection>().unwrap();
+        let line = computed(move || connection.state.with(|state| state.file_line));
         let root = computed(move || {
             workspace.state.with(|state| {
                 state
@@ -84,7 +84,6 @@ impl Browser {
             file,
             workspace,
             target,
-            line,
             preview,
             owner: Owner::current(),
         }
@@ -155,8 +154,8 @@ impl Browser {
                 .load(crate::media::receive(client.download(host, path)));
         } else {
             self.preview.close();
-            let id = self.workspace.open(PanelKind::File, Some(path.clone()));
-            self.line.set(Some((id, line)));
+            self.workspace
+                .open(PanelKind::File, Some(path.clone()), line);
             client.dispatch(
                 &host,
                 Intent::ReadFile(agent_core::state::operations::ReadFile {

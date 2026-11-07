@@ -14,7 +14,6 @@ pub(crate) fn icon(provider: ProviderKind) -> &'static str {
 
 pub(crate) fn screen(
     provider: ProviderKind,
-    pending: Signal<bool>,
     close: impl Fn() + Copy + 'static,
 ) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
@@ -29,18 +28,11 @@ pub(crate) fn screen(
         })
     });
     let host = stored(connection.host.get_untracked());
+    let pending = computed(move || connection.state.with(|state| state.account_pending));
     let perform = move |intent| {
-        if pending.get_untracked() {
-            return;
-        }
-        pending.set(true);
-        let response = connection
-            .client
-            .with(|client| client.request(&host.get(), intent));
-        spawn(async move {
-            let _ = response.recv().await;
-            pending.set(false);
-        });
+        connection
+            .application
+            .with(|app| app.account_request(host.get(), intent))
     };
     let login = computed(move || publication.with(|p| p.settings.account_login()));
     let busy = computed(move || {
@@ -263,7 +255,7 @@ fn usage(account: ReadSignal<agent_protocol::operations::Account>) -> impl IntoE
 
 fn login_panel(
     login: Memo<Option<agent_protocol::operations::AccountLogin>>,
-    pending: Signal<bool>,
+    pending: Memo<bool>,
     perform: impl Fn(Intent) + Copy + 'static,
 ) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
