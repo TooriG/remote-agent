@@ -1,5 +1,5 @@
-//! GPUI focus and AppKit's first responder are separate. A native child must
-//! return keyboard input to its parent when hidden or when GPUI is clicked.
+//! A native child must release AppKit's keyboard destination when hidden or
+//! when its surrounding client takes focus.
 //! A separate crate keeps its AppKit test from building the desktop app.
 #![cfg(target_os = "macos")]
 use objc2_app_kit::NSView;
@@ -20,6 +20,11 @@ pub fn release(view: &NSView) {
         && let Some(parent) = (unsafe { view.superview() })
     {
         window.makeFirstResponder(Some(&parent));
+        // Native containers such as NSSplitView can refuse keyboard focus.
+        // AppKit may report success while leaving the old responder in place.
+        if has_focus(view) {
+            window.makeFirstResponder(None);
+        }
     }
 }
 

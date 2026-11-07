@@ -153,59 +153,11 @@ private struct DiffCard: View {
     }
 }
 
-#if os(iOS)
-    /// NSH owns the outer UIView; the native hosting controller joins its parent controller.
-    @MainActor private final class DetailsHost: UIView {
-        let controller = UIHostingController(rootView: DetailsView(content: .diff(files: [])))
-
-        init() {
-            super.init(frame: .zero)
-            let content = controller.view!
-            content.backgroundColor = .clear
-            content.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(content)
-            NSLayoutConstraint.activate([
-                content.leadingAnchor.constraint(equalTo: leadingAnchor),
-                content.trailingAnchor.constraint(equalTo: trailingAnchor),
-                content.topAnchor.constraint(equalTo: topAnchor),
-                content.bottomAnchor.constraint(equalTo: bottomAnchor)
-            ])
-        }
-
-        @available(*, unavailable)
-        required init?(coder _: NSCoder) {
-            fatalError("init(coder:) is unavailable")
-        }
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard window != nil else { detach(); return }
-            guard controller.parent == nil else { return }
-            var responder: UIResponder? = next
-            while let current = responder {
-                if let parent = current as? UIViewController {
-                    parent.addChild(controller)
-                    controller.didMove(toParent: parent)
-                    return
-                }
-                responder = current.next
-            }
-        }
-
-        func detach() {
-            if controller.parent != nil {
-                controller.willMove(toParent: nil)
-                controller.removeFromParent()
-            }
-        }
-    }
-#endif
-
 @MainActor private final class DetailsOwner {
     #if os(macOS)
         let view = NSHostingView(rootView: DetailsView(content: .diff(files: [])))
     #else
-        let view = DetailsHost()
+        let view = NativeHostingView(rootView: DetailsView(content: .diff(files: [])))
     #endif
 
     func update(_ data: Data) {
@@ -221,7 +173,10 @@ private struct DiffCard: View {
 }
 
 @_cdecl("bex_nsh_details_create")
-@MainActor public func detailsCreate() -> UnsafeMutableRawPointer {
+@MainActor public func detailsCreate(
+    _: UnsafeMutableRawPointer?,
+    _: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
+) -> UnsafeMutableRawPointer {
     Unmanaged.passRetained(DetailsOwner()).toOpaque()
 }
 

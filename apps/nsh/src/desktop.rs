@@ -71,14 +71,23 @@ pub fn run() -> std::process::ExitCode {
         ..Default::default()
     };
     let owner = application.clone();
+    let browser =
+        crate::native::browser_macos::Service::new(application.clone(), runtime.handle().clone());
+    let native_browser = browser.clone();
     options.components.register(
         "bex.split",
-        Rc::new(move |_| Box::new(crate::native::split::Split::new(owner.clone()))),
+        Rc::new(move |_| {
+            Box::new(crate::native::split::Split::new(
+                owner.clone(),
+                native_browser.clone(),
+            ))
+        }),
     );
     let result = run_app(
         AppSource::Rust(root(application.clone(), Area::Shell)),
         options,
     );
+    runtime.block_on(browser.shutdown().wait());
     if let Err(reason) = runtime.block_on(application.shutdown()) {
         eprintln!("{reason}");
         return std::process::ExitCode::FAILURE;

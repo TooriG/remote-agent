@@ -1,4 +1,4 @@
-// Generated from apps/desktop/src/browser/native/element.ts; run npm run build.
+// Generated from apps/native-browser/src/macos/element.ts; run npm run build.
 (selector, operation, value) => {
   let e;
   if (selector.startsWith("ref=")) {

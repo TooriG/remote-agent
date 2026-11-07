@@ -3,6 +3,9 @@
 
     /// AppKit owns dividers, constraints, collapse and standard keyboard/accessibility behavior.
     @MainActor private final class WorkspaceSplit {
+        // Background WebKit pages are owned by this native container and never
+        // become extra arranged panes of the split view controller.
+        let view = NSView()
         let outer = NSSplitViewController()
         let workspace = NSSplitViewController()
         let sidebar: NSSplitViewItem
@@ -39,6 +42,15 @@
             outer.splitView.autosaveName = "BexNshSidebarSplit"
             outer.addSplitViewItem(self.sidebar)
             outer.addSplitViewItem(NSSplitViewItem(viewController: workspace))
+            let content = outer.view
+            content.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(content)
+            NSLayoutConstraint.activate([
+                content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                content.topAnchor.constraint(equalTo: view.topAnchor),
+                content.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            ])
         }
 
         func update(sidebar: Bool, tools: Bool, layout: String) {
@@ -66,7 +78,7 @@
                 conversation.isCollapsed = true
             }
             if restore, tools, !expanded {
-                outer.view.layoutSubtreeIfNeeded()
+                view.layoutSubtreeIfNeeded()
                 let extent = vertical ? split.bounds.width : split.bounds.height
                 // AppKit owns resizing and constraints. Restore its divider after a
                 // collapsed pane reopens, retaining each orientation independently.
@@ -90,7 +102,7 @@
 
     @_cdecl("bex_nsh_split_view")
     @MainActor public func splitView(_ handle: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer {
-        Unmanaged.passUnretained(Unmanaged<WorkspaceSplit>.fromOpaque(handle).takeUnretainedValue().outer.view)
+        Unmanaged.passUnretained(Unmanaged<WorkspaceSplit>.fromOpaque(handle).takeUnretainedValue().view)
             .toOpaque()
     }
 

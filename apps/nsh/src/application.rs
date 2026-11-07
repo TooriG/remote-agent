@@ -48,6 +48,7 @@ pub(crate) struct State {
     pub sidebar: bool,
     pub file_line: Option<(u64, Option<u32>)>,
     pub side_chats: BTreeMap<u64, SideChat>,
+    pub browser_renderer: String,
     uploads: BTreeMap<uuid::Uuid, (String, DraftKey)>,
 }
 
@@ -66,6 +67,7 @@ impl Default for State {
             sidebar: true,
             file_line: None,
             side_chats: BTreeMap::new(),
+            browser_renderer: String::new(),
             uploads: BTreeMap::new(),
         }
     }
@@ -176,6 +178,12 @@ pub(crate) struct Application {
 }
 
 impl Application {
+    #[cfg(target_os = "macos")]
+    pub fn set_browser_renderer(&self, id: String) {
+        self.state
+            .send_modify(|state| Arc::make_mut(state).browser_renderer = id);
+    }
+
     pub fn new(root: PathBuf) -> Result<(tokio::runtime::Runtime, Arc<Self>), AgentError> {
         let (runtime, client, incoming) = Client::new(root)?;
         let (state, _) = watch::channel(Arc::new(State::default()));

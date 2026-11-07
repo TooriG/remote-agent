@@ -35,7 +35,7 @@ jobs:
           just typescript
           pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1
           node --test lp/download.test.cjs scripts/*.test.mjs
-          node --test crates/agent-protocol/src/browser_input.test.cjs crates/host-daemon/src/browser/password-fill.test.cjs apps/desktop/src/browser/native/snapshot.test.cjs
+          node --test crates/agent-protocol/src/browser_input.test.cjs crates/host-daemon/src/browser/password-fill.test.cjs apps/native-browser/src/macos/snapshot.test.cjs
           npm --prefix crates/host-daemon/src/visualize ci --ignore-scripts --no-audit
           npm --prefix crates/host-daemon/src/visualize run vendor
           git diff --exit-code -- crates/host-daemon/src/visualize

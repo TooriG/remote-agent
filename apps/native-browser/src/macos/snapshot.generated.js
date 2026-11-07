@@ -1,4 +1,4 @@
-// Generated from apps/desktop/src/browser/native/snapshot.ts; run npm run build.
+// Generated from apps/native-browser/src/macos/snapshot.ts; run npm run build.
 (() => {
   const refs = /* @__PURE__ */ new Map(), lines = [], secrets = [];
   const token = crypto.randomUUID();

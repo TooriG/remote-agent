@@ -152,7 +152,7 @@ impl Delegate {
         if agent_protocol::browser::browser_url(&url).is_err() {
             return None;
         }
-        // SAFETY: GPUI owns the parent until window shutdown drops its Wry
+        // SAFETY: the native owner retains the parent until shutdown drops its Wry
         // children, which detach themselves. This callback runs on the main
         // thread, so the parent cannot be destroyed while we retain it.
         let parent = unsafe { web.superview() }?;

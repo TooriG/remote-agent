@@ -251,6 +251,31 @@ impl Client {
         });
     }
 
+    pub fn browser(
+        &self,
+        host: String,
+        request: agent_protocol::browser::BrowserRequest,
+    ) -> async_channel::Receiver<Result<agent_protocol::browser::BrowserFrame, AgentError>> {
+        let session = self.sessions.session(host);
+        let closing = self.closing.load(Ordering::SeqCst);
+        let (send, receive) = async_channel::bounded(1);
+        self.spawn(async move {
+            let result = async {
+                if closing {
+                    return Err(error("client is closing"));
+                }
+                let store = session
+                    .ok_or_else(|| error("接続先が選択されていません"))?
+                    .ready()
+                    .await?;
+                store.browser(request).await
+            }
+            .await;
+            let _ = send.send(result).await;
+        });
+        receive
+    }
+
     pub fn pair(self: &Arc<Self>, invitation: agent_protocol::models::Invitation) {
         let owner = self.clone();
         self.spawn(async move {

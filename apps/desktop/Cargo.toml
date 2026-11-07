@@ -41,16 +41,13 @@ raw-window-handle = "0.6"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-native-focus = { path = "native-focus" }
-# WKWebView is unconditional on macOS; the defaults pull in unused GTK/X11 dependencies.
-wry = { version = "=0.57.1", default-features = false }
-zeroize.workspace = true
+native-browser = { path = "../native-browser" }
+raw-window-handle = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-core-foundation", "NSResponder", "NSView", "NSImage"] }
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "AVCaptureDevice", "AVMediaFormat"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSBundle"] }
 block2 = "0.6"
-objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration", "WKHTTPCookieStore", "WKUIDelegate", "WKFrameInfo", "WKNavigationAction", "WKWindowFeatures", "WKOpenPanelParameters"] }
 
 [dev-dependencies]
 gpui-kit = { version = "=0.9.0", features = ["test-support"] }

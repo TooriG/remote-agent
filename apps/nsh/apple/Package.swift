@@ -5,9 +5,18 @@ let package = Package(
     name: "BexNshNative",
     platforms: [.macOS("26.0"), .iOS("26.0")],
     products: [.library(name: "BexNshNative", type: .dynamic, targets: ["BexNshNative"])],
-    dependencies: [.package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.99.1")],
+    dependencies: [
+        .package(path: "../../native-browser/apple-views"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.99.1")
+    ],
     targets: [
-        .target(name: "BexNshNative", dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")]),
+        .target(
+            name: "BexNshNative",
+            dependencies: [
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "NativeBrowserViews", package: "apple-views")
+            ]
+        ),
         .testTarget(name: "BexNshNativeTests", dependencies: ["BexNshNative"], resources: [.process("Fixtures")])
     ],
     swiftLanguageModes: [.v6]

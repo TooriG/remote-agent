@@ -17,7 +17,7 @@
     "crates/agent-protocol/src/browser_input.ts",
     "crates/host-daemon/src/browser/password-fill.ts",
     "crates/host-daemon/src/visualize/runtime.ts",
-    "apps/desktop/src/browser/native/*.ts",
+    "apps/native-browser/src/macos/*.ts",
     "apps/mobile/maestro/ios/*.ts",
     "lp/public/*.ts"
   ]

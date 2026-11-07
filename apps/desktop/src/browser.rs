@@ -797,9 +797,9 @@ impl Render for Browser {
                         ))
                         .when(native, |body| {
                             #[cfg(target_os="macos")]
-                            { let entity=native_entity.clone(); let scope=self.thread.to_string();let tab=self.frame.tab_id.clone();body.child(canvas(move |bounds,_,cx| {
+                            { let entity=native_entity.clone(); let scope=self.thread.to_string();let tab=self.frame.tab_id.clone();body.child(canvas(move |bounds,window,cx| {
                                 entity.update(cx, |view,_|view.bounds=bounds);
-                                native::layout(&scope,&tab,bounds,cx);
+                                native::layout(&scope,&tab,bounds,window,cx);
                             }, |_,_,_,_|{}).size_full()) }
                             #[cfg(not(target_os="macos"))]
                             { body }

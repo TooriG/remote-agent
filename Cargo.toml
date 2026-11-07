@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "apps/desktop",
-    "apps/desktop/native-focus",
+    "apps/native-focus",
+    "apps/native-browser",
     "apps/nsh",
     "crates/agent-core",
     "crates/agent-protocol",

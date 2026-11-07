@@ -91,6 +91,18 @@ mod appkit {
         focus::release(&page);
         assert!(window.firstResponder().unwrap().isEqual(Some(&other)));
 
+        // A native layout container need not accept keyboard focus. Hiding
+        // its child must still stop that hidden child receiving keystrokes.
+        let container = RefusingView::new(mtm);
+        parent.addSubview(&container);
+        container.addSubview(&page);
+        page.setHidden(false);
+        assert!(window.makeFirstResponder(Some(&field)));
+        focus::hide(&page);
+        assert!(!focus::has_focus(&page));
+        parent.addSubview(&page);
+        assert!(window.makeFirstResponder(Some(&other)));
+
         // Remote keys reach a hidden page's input and leave the field focused.
         let mut dispatched = false;
         assert!(focus::with_keyboard(&field, || {

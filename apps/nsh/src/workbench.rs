@@ -106,6 +106,7 @@ pub(crate) fn tools() -> Vec<agent_core::panels::PanelTool> {
             matches!(
                 tool.kind,
                 PanelKind::Files
+                    | PanelKind::Browser
                     | PanelKind::Terminal
                     | PanelKind::Diff
                     | PanelKind::Agents
@@ -141,7 +142,11 @@ pub(crate) fn open_tool(key: &str) {
                 )
             });
         } else {
-            workspace.open(tool.kind, Some(directory), None);
+            workspace.open(
+                tool.kind,
+                (tool.kind != PanelKind::Browser).then_some(directory),
+                None,
+            );
         }
     }
 }
@@ -176,6 +181,7 @@ pub(crate) fn screen() -> impl IntoElement {
                     PanelKind::Diff => crate::details::diff(surface.with_untracked(|s| s.path.clone().unwrap_or_default()), workspace.scope.get_untracked().host).into_element(),
                     PanelKind::Agents => crate::details::agents(workspace.scope.get_untracked().host).into_element(),
                     PanelKind::SideChat => crate::side_chat::screen(surface.with_untracked(|s| s.id), workspace.scope.get_untracked().host).into_element(),
+                    PanelKind::Browser => crate::browser::screen().into_element(),
                     _ => view().into_element(),
                 }
             }))

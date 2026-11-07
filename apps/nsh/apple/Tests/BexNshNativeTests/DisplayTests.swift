@@ -2,6 +2,22 @@
 import XCTest
 
 final class DisplayTests: XCTestCase {
+    func testBrowserPreservesNativePromptAndHostCredentialMetadata() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "browser", withExtension: "json"))
+        let content = try BrowserData(data: Data(contentsOf: url))
+        XCTAssertTrue(content.enabled)
+        XCTAssertEqual(content.image, "")
+        XCTAssertEqual(content.dialog?.message, "入力してください 👋")
+        XCTAssertEqual(content.dialog?.prompt, true)
+        let credentials = try XCTUnwrap(content.credentials)
+        XCTAssertEqual(credentials.profiles[0].id, "safari.test")
+        XCTAssertEqual(credentials.profiles[0].label, "検証プロファイル 👋")
+        XCTAssertEqual(credentials.importErrors[0].message, "権限を確認してください。")
+        XCTAssertEqual(credentials.origin, "https://example.invalid")
+        XCTAssertEqual(credentials.accounts, ["検証ユーザー"])
+        XCTAssertNil(credentials.passwordError)
+    }
+
     /// Rust asserts its actual encoder produces these same fixtures.
     private func content(_ name: String) throws -> DetailsContent {
         let url = try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json"))

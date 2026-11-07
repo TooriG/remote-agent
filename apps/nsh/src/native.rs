@@ -32,6 +32,8 @@ pub fn choices(titles: &[&str]) -> Value {
     items(titles.iter().map(|title| (*title, *title)))
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) mod browser_macos;
 #[cfg(target_os = "ios")]
 mod document_picker;
 #[cfg(target_os = "ios")]
@@ -44,7 +46,7 @@ pub(crate) mod split;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-mod details;
+mod hosted;
 #[cfg(target_os = "macos")]
 mod list_macos;
 #[cfg(target_os = "ios")]

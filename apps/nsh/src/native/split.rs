@@ -43,7 +43,7 @@ impl Drop for Split {
 }
 
 impl Split {
-    pub fn new(application: Arc<Application>) -> Self {
+    pub fn new(application: Arc<Application>, browser: Rc<super::browser_macos::Service>) -> Self {
         let mut views = Vec::new();
         let result = (|| {
             let bridge = unsafe {
@@ -56,7 +56,9 @@ impl Split {
             };
 
             for area in [Area::Sidebar, Area::Conversation, Area::Workbench] {
-                let view = AppView::new(MainThreadMarker::new().unwrap(), AppOptions::default());
+                let options = AppOptions::default();
+                super::browser_macos::register(&options.components, browser.clone());
+                let view = AppView::new(MainThreadMarker::new().unwrap(), options);
                 view.load(crate::desktop::root(application.clone(), area).into());
                 views.push(view);
             }
@@ -70,6 +72,7 @@ impl Split {
             .ok_or_else(|| "分割ビューを作成できませんでした。".to_owned())?;
             let view = unsafe { Retained::retain((bridge.view)(handle.as_ptr())) }
                 .expect("AppKit split controller owns a view");
+            browser.attach(&view);
             Ok::<_, String>((Surface { bridge, handle }, view))
         })();
         let (surface, view) = match result {

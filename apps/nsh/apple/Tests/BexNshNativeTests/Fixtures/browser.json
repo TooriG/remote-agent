@@ -1,0 +1,12 @@
+{
+  "image": "",
+  "enabled": true,
+  "dialog": { "message": "入力してください 👋", "prompt": true },
+  "credentials": {
+    "profiles": [{ "id": "safari.test", "label": "検証プロファイル 👋" }],
+    "import_errors": [{ "browser": "Fixture browser", "message": "権限を確認してください。" }],
+    "origin": "https://example.invalid",
+    "accounts": ["検証ユーザー"],
+    "password_error": null
+  }
+}

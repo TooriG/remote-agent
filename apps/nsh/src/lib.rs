@@ -2,6 +2,7 @@
 mod accounts;
 mod activity;
 mod application;
+mod browser;
 mod client;
 mod composer;
 mod connections;
@@ -171,7 +172,9 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         match action {
             "sidebar" => navigate(Navigation::ToggleSidebar),
             "search" => searching.update(|open| *open = !*open),
-            "files" | "terminal" | "diff" | "agents" | "sideChat" => workbench::open_tool(action),
+            "browser" | "files" | "terminal" | "diff" | "agents" | "sideChat" => {
+                workbench::open_tool(action)
+            }
             "compose" => {
                 connection.dispatch(Intent::NewChat {
                     cwd: publication.with(|p| p.snapshot.pane.navigation.cwd.clone()),
