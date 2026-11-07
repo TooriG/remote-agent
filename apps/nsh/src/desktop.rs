@@ -1,8 +1,8 @@
-//! AppKit owns pane containment and resizing; each NSH engine observes the same application.
+//! One NSH surface draws the whole window; WebKit's pages are owned by a hosted container.
 use crate::{Area, application::Application, shared::Shared};
 use nsh_core::element::*;
 use nsh_platform_macos::{AppOptions, AppSource, Root, run_app};
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
 struct ViewProps {
@@ -75,22 +75,12 @@ pub fn run() -> std::process::ExitCode {
         size: (1360, 900),
         ..Default::default()
     };
-    let owner = application.clone();
     let browser = crate::native::browser_macos::Service::new(
         application.clone(),
         runtime.handle().clone(),
         local_directory,
     );
-    let native_browser = browser.clone();
-    options.components.register(
-        "bex.split",
-        Rc::new(move |_| {
-            Box::new(crate::native::split::Split::new(
-                owner.clone(),
-                native_browser.clone(),
-            ))
-        }),
-    );
+    crate::native::browser_macos::register(&options.components, browser.clone());
     let result = run_app(
         AppSource::Rust(root(application.clone(), Area::Shell)),
         options,

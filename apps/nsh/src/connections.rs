@@ -48,6 +48,38 @@ pub(crate) fn selector(
     .min_h(px(if is_desktop() { 28.0 } else { 44.0 }))
 }
 
+/// The composer's destination: the Host the next chat runs on.
+pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> impl IntoElement {
+    use crate::ui::{self, Icon};
+    let connection = use_context::<Connection>().unwrap();
+    let name = move || {
+        hosts.with(|hosts| {
+            hosts
+                .iter()
+                .find(|host| host.id == selected.get())
+                .map(|host| {
+                    if host.id == "local" {
+                        "Local".into()
+                    } else {
+                        host.name.clone()
+                    }
+                })
+                .unwrap_or_else(|| "Local".into())
+        })
+    };
+    ui::labeled_button(Icon::Monitor, name, move || {
+        let items = json!(hosts.with_untracked(|hosts| hosts
+            .iter()
+            .map(|host| json!({"id": host.id, "title": host.name, "selected": host.id == selected.get_untracked()}))
+            .collect::<Vec<_>>()));
+        ui::popup(&items, move |id: &str| {
+            connection
+                .application
+                .with(|application| application.select_host(id.to_owned(), true))
+        })
+    })
+}
+
 pub(crate) fn screen(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let invitation = signal(String::new());

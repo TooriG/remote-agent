@@ -71,10 +71,14 @@ impl Service {
         )));
     }
 
-    pub fn attach(self: &Rc<Self>, parent: &NSView) {
-        let view = MountObserver::alloc(MainThreadMarker::new().unwrap()).set_ivars(self.clone());
+    /// Background pages live in this container once it is in a window.
+    fn container(self: &Rc<Self>) -> Retained<NSView> {
+        let mtm = MainThreadMarker::new().unwrap();
+        let container = NSView::new(mtm);
+        let view = MountObserver::alloc(mtm).set_ivars(self.clone());
         let view: Retained<MountObserver> = unsafe { msg_send![super(view), init] };
-        parent.addSubview(&view);
+        container.addSubview(&view);
+        container
     }
 
     pub fn shutdown(&self) -> TaskTracker {
@@ -203,7 +207,20 @@ impl NativeComponent for NativeSurface {
     }
 }
 
+struct Host(Retained<NSView>);
+impl NativeComponent for Host {
+    fn view(&self) -> Retained<NSView> {
+        self.0.clone()
+    }
+    fn set_prop(&mut self, _: &str, _: Option<&JsonValue>) {}
+}
+
 pub fn register(components: &Components, service: Rc<Service>) {
+    let host = service.clone();
+    components.register(
+        "bex.browser.host",
+        Rc::new(move |_| Box::new(Host(host.container()))),
+    );
     components.register(
         "bex.browser.native",
         Rc::new(move |context| Box::new(NativeSurface::new(context, service.clone()))),

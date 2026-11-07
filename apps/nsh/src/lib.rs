@@ -27,9 +27,12 @@ mod requests;
 mod rich_text;
 mod shared;
 mod side_chat;
+#[cfg(target_os = "macos")]
+mod sidebar;
 mod storage;
 mod terminal;
 mod threads;
+mod ui;
 mod workbench;
 mod worktrees;
 
@@ -98,12 +101,6 @@ pub(crate) enum Area {
     Mobile,
     #[cfg(target_os = "macos")]
     Shell,
-    #[cfg(target_os = "macos")]
-    Sidebar,
-    #[cfg(target_os = "macos")]
-    Conversation,
-    #[cfg(target_os = "macos")]
-    Workbench,
 }
 
 fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
@@ -224,13 +221,34 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
             .flex_1()
             .min_w_0()
             .pb_keyboard()
-            .child(when(move || !welcome.get(), move || conversation::list(publication, following)))
-            .child(when(move || welcome.get(), move || {
-                native("bex.details").prop("data", move || {
-                    let directory = publication.with(|p| p.context.selected_directory());
-                    json!({"welcome": {"directory": agent_core::presentation::markdown::file_basename(&directory)}})
-                }).flex_1()
-            }))
+            .child(when(
+                move || !welcome.get(),
+                move || conversation::list(publication, following),
+            ))
+            .child(when(
+                move || welcome.get(),
+                move || {
+                    view()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .gap_4()
+                        .child(text("何から始めましょうか？").text_size(px(24.0)))
+                        .child(
+                            text(move || {
+                                let directory =
+                                    publication.with(|p| p.context.selected_directory());
+                                if directory.is_empty() {
+                                    "メッセージを入力して、作業を始めましょう。".to_owned()
+                                } else {
+                                    agent_core::presentation::markdown::file_basename(&directory)
+                                        .to_owned()
+                                }
+                            })
+                            .text_size(px(14.0)),
+                        )
+                },
+            ))
             .child(composer::composer(publication, following))
     };
     let notices = move || {
@@ -256,92 +274,102 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
     match area {
         #[cfg(target_os = "macos")]
         Area::Shell => {
-            return view()
-                .flex_1()
-                .child(native::toolbar(title, toolbar_action).h(px(0.0)))
-                .child(worktrees::presenter(|| {}))
-                .child(notices())
-                .child(
-                    native("bex.split")
-                        .flex_1()
-                        .prop("sidebar", move || json!(sidebar.get()))
-                        .prop("tools", move || {
-                            json!(
-                                !settings.get()
-                                    && !hosts.with(Vec::is_empty)
-                                    && workspace.state.with(|s| s.open)
-                            )
-                        })
-                        .prop("layout", move || {
-                            json!(format!("{:?}", workspace.state.with(|s| s.layout)))
-                        }),
-                )
-                .into_element();
-        }
-        #[cfg(target_os = "macos")]
-        Area::Sidebar => {
-            return view()
-                .flex_1()
-                .pt_5().pb_3()
-                .gap_1()
-                .child(when(move || hosts.with(|hosts| hosts.len() > 1) || state.with(|state| state.all_hosts), move || connections::selector(hosts, host, true).w_full()))
-                .child(
-                    view().flex_row().items_center().gap_1().px_3()
-                        .child(native::search(query).prop("appearance", json!("plain")).flex_1())
-                        .child(native::button("square.and.pencil", "新しいチャット", move || toolbar_action("compose"))
-                            .prop("appearance", json!("plain")).w(px(32.0)).h(px(32.0)))
-                )
-                .child(list())
-                .child(view().flex_row().items_center().px_3()
-                    .child(native::button("gearshape", "設定を開く", move || navigate(Navigation::Settings(true)))
-                        .prop("appearance", json!("plain")).w(px(32.0)).h(px(32.0)))
-                    .child(view().flex_1())
-                    .child(native::menu("square.split.2x2", "ツール", move || json!(workbench::tools().into_iter().map(|tool| json!({
-                        "id": tool.key, "title": tool.label, "symbol": workbench::symbol(tool.kind), "enabled": tool.enabled
-                    })).collect::<Vec<_>>()), toolbar_action).prop("appearance", json!("plain"))
-                        .prop("enabled", move || json!(!account_locked.get())).w(px(32.0)).h(px(32.0)))
-                    .child(native::button("arrow.clockwise", "会話を更新", move || connection.application.with(|application| { application.request_list(application::ListRequest::Refresh); }))
-                        .prop("appearance", json!("plain")).w(px(32.0)).h(px(32.0))))
-                .into_element();
-        }
-        #[cfg(target_os = "macos")]
-        Area::Conversation => {
-            return view()
-                .flex_1()
-                .min_w_0()
-                .child(media::preview())
-                .child(when(
-                    move || settings.get() || hosts.with(Vec::is_empty),
-                    environment,
-                ))
-                .child(when(
-                    move || !settings.get() && !hosts.with(Vec::is_empty),
-                    move || {
+            use nsh_core::{desktop::TitleBarStyle, element::desktop::set_title_bar};
+            set_title_bar(TitleBarStyle::Hidden, Some(px(sidebar::HEADER_HEIGHT)));
+            let tools = move || {
+                !settings.get() && !hosts.with(Vec::is_empty) && workspace.state.with(|s| s.open)
+            };
+            let layout = move || workspace.state.with(|s| s.layout);
+            let main = move || {
+                view()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex_row()
+                    .style_when(
+                        move || layout() == agent_core::panels::PanelLayout::Bottom,
+                        |s| s.flex_col(),
+                    )
+                    .child(when(
+                        move || !tools() || layout() != agent_core::panels::PanelLayout::Expanded,
+                        move || {
+                            view()
+                                .flex_1()
+                                .min_w_0()
+                                .child(sidebar::conversation_header(
+                                    title,
+                                    sidebar,
+                                    tools,
+                                    move || navigate(Navigation::ToggleSidebar),
+                                    move || {
+                                        application.with(|application| {
+                                            application.set_panel_open(
+                                                workspace.scope.get_untracked(),
+                                                true,
+                                            )
+                                        })
+                                    },
+                                ))
+                                .child(view().flex_1().min_h_0().flex_row().child(content()).child(
+                                    when(
+                                        move || window().width.0 >= 1080.0 && !tools(),
+                                        desktop_workspace::card,
+                                    ),
+                                ))
+                        },
+                    ))
+                    .child(when(tools, move || {
                         view()
-                            .flex_row()
-                            .flex_1()
-                            .min_w_0()
-                            .child(content())
-                            .child(when(
-                                move || {
-                                    window().width.0 >= 1000.0 && !workspace.state.with(|s| s.open)
+                            .style_when(
+                                move || layout() == agent_core::panels::PanelLayout::Right,
+                                |s| {
+                                    s.w(px(540.0))
+                                        .border_l_1()
+                                        .border_l_color(ui::colors::BORDER)
                                 },
-                                desktop_workspace::card,
-                            ))
-                    },
-                ))
-                .into_element();
-        }
-        #[cfg(target_os = "macos")]
-        Area::Workbench => {
+                            )
+                            .style_when(
+                                move || layout() == agent_core::panels::PanelLayout::Bottom,
+                                |s| {
+                                    s.h(px(360.0))
+                                        .border_t_1()
+                                        .border_t_color(ui::colors::BORDER)
+                                },
+                            )
+                            .style_when(
+                                move || layout() == agent_core::panels::PanelLayout::Expanded,
+                                |s| s.flex_1(),
+                            )
+                            .min_w_0()
+                            .child(workbench::screen())
+                    }))
+            };
             return view()
                 .flex_1()
-                .min_w_0()
+                .flex_row()
+                .bg(ui::colors::BACKGROUND)
+                .text_color(ui::colors::FOREGROUND)
                 .child(media::preview())
+                .child(worktrees::presenter(|| {}))
+                .child(native("bex.browser.host").w(px(0.0)).h(px(0.0)))
                 .child(when(
-                    move || workspace.state.with(|s| s.open),
-                    workbench::screen,
+                    move || sidebar.get(),
+                    move || sidebar::sidebar(publication, hosts, move || toolbar_action("compose")),
                 ))
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w_0()
+                        .child(notices())
+                        .child(when(
+                            move || settings.get() || hosts.with(Vec::is_empty),
+                            environment,
+                        ))
+                        .child(when(
+                            move || !settings.get() && !hosts.with(Vec::is_empty),
+                            main,
+                        )),
+                )
                 .into_element();
         }
         Area::Mobile => {}

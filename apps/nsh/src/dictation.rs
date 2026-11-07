@@ -1,4 +1,5 @@
 //! Capture is AVFAudio's; preparation, transcription and draft updates are core's.
+use crate::ui::Enabled;
 use crate::{Connection, native};
 use agent_core::{client::DictationPreparation, state::DraftKey};
 use block2::RcBlock;
@@ -6,7 +7,6 @@ use nsh_core::{platform::Lifecycle, prelude::*};
 use objc2::{AnyThread, rc::Retained, runtime::Bool};
 use objc2_avf_audio::*;
 use objc2_foundation::{NSString, NSURL};
-use serde_json::json;
 use std::sync::Arc;
 
 struct Capture {
@@ -247,87 +247,79 @@ impl Dictation {
             .flex_row()
             .items_center()
             .child(
-                native::button("mic", "音声入力", move || {
-                    if self.active.get_untracked() {
-                        self.finish(connection.client.get(), false);
-                    } else {
-                        let (host, draft) = self.target.get_untracked();
-                        let preparation = match connection
-                            .client
-                            .with(|client| client.prepare_dictation(&host, connection.pane))
-                        {
-                            Ok(preparation) => preparation,
-                            Err(reason) => {
-                                native::message("音声入力", reason.to_string());
-                                return;
-                            }
-                        };
-                        self.requesting.set(true);
-                        let current = self.generation.get_untracked();
-                        spawn(async move {
-                            let permission = Capture::request_permission().await;
-                            if current != self.generation.get_untracked()
-                                || self.target.get_untracked() != (host.clone(), draft.clone())
+                crate::ui::icon_button_sized(
+                    crate::ui::Icon::Microphone,
+                    "音声をCodexで文字起こし",
+                    40.0,
+                    20.0,
+                    move || {
+                        if self.active.get_untracked() {
+                            self.finish(connection.client.get(), false);
+                        } else {
+                            let (host, draft) = self.target.get_untracked();
+                            let preparation = match connection
+                                .client
+                                .with(|client| client.prepare_dictation(&host, connection.pane))
                             {
-                                return;
-                            }
-                            self.requesting.set(false);
-                            let result = permission.and_then(|()| Capture::start());
-                            match result {
-                                Ok(capture) => {
-                                    self.recording.replace(Some(Recording {
-                                        capture,
-                                        preparation,
-                                        host,
-                                        pane: connection.pane,
-                                        draft,
-                                    }));
-                                    self.active.set(true);
+                                Ok(preparation) => preparation,
+                                Err(reason) => {
+                                    native::message("音声入力", reason.to_string());
+                                    return;
                                 }
-                                Err(reason) => native::message("音声入力", reason),
-                            }
-                        });
-                    }
-                })
-                .prop(
-                    "appearance",
-                    json!(if is_desktop() { "plain" } else { "automatic" }),
+                            };
+                            self.requesting.set(true);
+                            let current = self.generation.get_untracked();
+                            spawn(async move {
+                                let permission = Capture::request_permission().await;
+                                if current != self.generation.get_untracked()
+                                    || self.target.get_untracked() != (host.clone(), draft.clone())
+                                {
+                                    return;
+                                }
+                                self.requesting.set(false);
+                                let result = permission.and_then(|()| Capture::start());
+                                match result {
+                                    Ok(capture) => {
+                                        self.recording.replace(Some(Recording {
+                                            capture,
+                                            preparation,
+                                            host,
+                                            pane: connection.pane,
+                                            draft,
+                                        }));
+                                        self.active.set(true);
+                                    }
+                                    Err(reason) => native::message("音声入力", reason),
+                                }
+                            });
+                        }
+                    },
                 )
-                .prop("symbol", move || {
-                    json!(if self.active.get() {
-                        "stop.fill"
-                    } else {
-                        "mic"
-                    })
+                .enabled(move || {
+                    !self.requesting.get()
+                        && !connection.uploading()
+                        && connection.publication.with(|p| {
+                            p.composer.controls.connected
+                                && !p.composer.controls.sending
+                                && !p.composer.controls.transferring
+                                && !p.composer.controls.transcribing
+                        })
                 })
-                .prop("label", move || {
-                    json!(if self.active.get() {
-                        "録音を終了して文字起こし"
-                    } else {
-                        "音声をCodexで文字起こし"
-                    })
-                })
-                .prop("enabled", move || {
-                    json!(
-                        !self.requesting.get()
-                            && !connection.uploading()
-                            && connection
-                                .publication
-                                .with(|p| p.composer.controls.connected
-                                    && !p.composer.controls.sending
-                                    && !p.composer.controls.transferring
-                                    && !p.composer.controls.transcribing)
-                    )
-                })
-                .min_w(px(44.0))
-                .min_h(px(44.0)),
+                .style_when(
+                    move || self.active.get(),
+                    |s| s.bg(crate::ui::colors::SELECTED),
+                ),
             )
             .child(when(
                 move || self.active.get(),
                 move || {
-                    native::button("xmark", "録音を取り消す", move || self.cancel())
-                        .min_w(px(44.0))
-                        .min_h(px(44.0))
+                    crate::ui::icon_button_sized(
+                        crate::ui::Icon::Close,
+                        "録音を取り消す",
+                        40.0,
+                        20.0,
+                        move || self.cancel(),
+                    )
                 },
             ))
             .child(when(

@@ -292,7 +292,7 @@ pub(crate) fn list(
     publication: Memo<Shared<Presentation>>,
     query: Signal<String>,
     open: impl Fn() + Copy + 'static,
-) -> impl IntoElement {
+) -> AnyElement {
     let connection = use_context::<Connection>().unwrap();
     let sources = computed(move || connection.state.with(|state| state.list_sources()));
     let inputs = computed(move || connection.state.with(|state| state.list_inputs()));
@@ -319,28 +319,81 @@ pub(crate) fn list(
         let host = connection.host.get();
         list.with(|list| rows(list.as_deref(), dark(), &sources.get(), &host, is_desktop()))
     });
-    let table = if is_desktop() {
-        native("bex.list")
-            .prop("items", move || {
-                entries.with(|entries| native_rows(entries, &sources.get()))
+    let activate = move |name: &str, id: &str, expanded: Option<bool>| {
+        if name == "menu" {
+            projects.select(id);
+            return;
+        }
+        let Some((action, was_expanded, scope)) = entries.with_untracked(|rows| {
+            rows.iter().filter(|row| row.enabled).find_map(|row| {
+                let action = if name == "compose" {
+                    row.compose.as_ref()
+                } else {
+                    Some(&row.action)
+                }?;
+                (row_id(row.scope.as_ref(), action) == id)
+                    .then(|| (action.clone(), row.expanded, row.scope.clone()))
             })
-            .prop("sidebar", json!(true))
-            .prop("selected", move || {
-                publication.with(|p| {
-                    let navigation = &p.composer.controls.navigation;
-                    let scope = ListScope {
-                        host: connection.host.get(),
-                        storage: p.snapshot.connection.storage_scope.clone(),
-                    };
-                    json!(entries.with(|rows| selected_rows(
-                        rows,
-                        &scope,
-                        navigation.thread_id.as_ref()
-                    )))
-                })
+        }) else {
+            return;
+        };
+        let global = match &action {
+            Action::Projects => Some(ListRequest::MoreProjects),
+            Action::More(None) => Some(ListRequest::MoreChats),
+            _ => None,
+        };
+        if let Some(request) = global {
+            connection
+                .application
+                .with(|application| application.request_list(request));
+            return;
+        }
+        let Some(scope) = scope.as_ref() else {
+            return;
+        };
+        let navigate = matches!(&action, Action::Open { .. } | Action::New { .. });
+        let intent = match action {
+            Action::Open { thread, .. } => Intent::ReadThread(op::ReadThread::open(thread)),
+            Action::Expand(id) => Intent::SetProjectExpanded {
+                project_id: id,
+                expanded: expanded.unwrap_or(!was_expanded),
+            },
+            Action::New { cwd, .. } => Intent::NewChat { cwd },
+            Action::More(project_id) => Intent::ExpandThreadList { project_id },
+            Action::Retry(project_id) => Intent::RefreshProject { project_id },
+            Action::Projects
+            | Action::Heading(_)
+            | Action::ProjectHeader
+            | Action::Notice(_)
+            | Action::Loading(_) => return,
+        };
+        let accepted = connection
+            .application
+            .with(|application| application.list_action(scope, intent, navigate));
+        if navigate && accepted {
+            open();
+        }
+    };
+    if is_desktop() {
+        let selected = computed(move || {
+            publication.with(|p| {
+                let navigation = &p.composer.controls.navigation;
+                let scope = ListScope {
+                    host: connection.host.get(),
+                    storage: p.snapshot.connection.storage_scope.clone(),
+                };
+                entries.with(|rows| selected_rows(rows, &scope, navigation.thread_id.as_ref()))
             })
-    } else {
-        native("bex.details").prop("data", move || {
+        });
+        return view()
+            .flex_1()
+            .min_h_0()
+            .child(desktop_rows(entries, sources, selected, activate))
+            .child(projects.view())
+            .into_element();
+    }
+    let table = native("bex.details")
+        .prop("data", move || {
             let menu = list.with(|list| {
                 crate::projects::header_menu(
                     list.as_ref()
@@ -352,81 +405,307 @@ pub(crate) fn list(
             });
             entries.with(|entries| task_list_data(entries, &sources.get(), menu))
         })
-    };
-    let table = table
         .on_native_event(move |event: &NativeEvent| {
             let name = if &*event.name == "action" {
                 event.data["action"].as_str().unwrap_or_default()
             } else {
                 &*event.name
             };
-            let id = event.data.as_str().or_else(|| event.data["id"].as_str());
-            if name == "menu" {
-                if let Some(command) = id {
-                    projects.select(command);
-                }
+            let Some(id) = event.data.as_str().or_else(|| event.data["id"].as_str()) else {
                 return;
-            }
-            if matches!(name, "select" | "expand" | "compose")
-                && let Some(id) = id
-                && let Some(action) = entries.with_untracked(|rows| {
-                    rows.iter().filter(|row| row.enabled).find_map(|row| {
-                        let action = if name == "compose" {
-                            row.compose.as_ref()
-                        } else {
-                            Some(&row.action)
-                        }?;
-                        (row_id(row.scope.as_ref(), action) == id)
-                            .then(|| (action.clone(), row.expanded, row.scope.clone()))
-                    })
-                })
-            {
-                let global = match &action.0 {
-                    Action::Projects => Some(ListRequest::MoreProjects),
-                    Action::More(None) => Some(ListRequest::MoreChats),
-                    _ => None,
-                };
-                if let Some(request) = global {
-                    connection
-                        .application
-                        .with(|application| application.request_list(request));
-                    return;
-                }
-                let Some(scope) = action.2.as_ref() else {
-                    return;
-                };
-                let navigate = matches!(&action.0, Action::Open { .. } | Action::New { .. });
-                let intent = match action.0 {
-                    Action::Open { thread, .. } => Intent::ReadThread(op::ReadThread::open(thread)),
-                    Action::Expand(id) => Intent::SetProjectExpanded {
-                        project_id: id,
-                        expanded: event
-                            .data
-                            .get("expanded")
-                            .and_then(|value| {
-                                value.as_bool().or_else(|| value.as_str()?.parse().ok())
-                            })
-                            .unwrap_or(!action.1),
-                    },
-                    Action::New { cwd, .. } => Intent::NewChat { cwd },
-                    Action::More(project_id) => Intent::ExpandThreadList { project_id },
-                    Action::Retry(project_id) => Intent::RefreshProject { project_id },
-                    Action::Projects => return,
-                    Action::Heading(_)
-                    | Action::ProjectHeader
-                    | Action::Notice(_)
-                    | Action::Loading(_) => return,
-                };
-                let accepted = connection
-                    .application
-                    .with(|application| application.list_action(scope, intent, navigate));
-                if navigate && accepted {
-                    open();
-                }
+            };
+            if matches!(name, "menu" | "select" | "expand" | "compose") {
+                let expanded = event
+                    .data
+                    .get("expanded")
+                    .and_then(|value| value.as_bool().or_else(|| value.as_str()?.parse().ok()));
+                activate(name, id, expanded);
             }
         })
         .flex_1();
-    view().flex_1().child(table).child(projects.view())
+    view()
+        .flex_1()
+        .child(table)
+        .child(projects.view())
+        .into_element()
+}
+
+/// The desktop sidebar's rows in the existing desktop client's layout. The project
+/// header's menu supplies folder addition and the hidden projects' restore rows.
+fn desktop_rows(
+    entries: Memo<Vec<Row>>,
+    sources: Memo<Vec<ListSource>>,
+    selected: Memo<Vec<String>>,
+    activate: impl Fn(&str, &str, Option<bool>) + Copy + 'static,
+) -> impl IntoElement {
+    let restores = computed(move || {
+        entries.with(|rows| {
+            rows.iter()
+                .filter(|row| matches!(row.action, Action::ProjectHeader))
+                .flat_map(|row| row.menu.as_array().cloned().unwrap_or_default())
+                .filter_map(|item| item.get("children").and_then(|c| c.as_array()).cloned())
+                .flatten()
+                .collect::<Vec<_>>()
+        })
+    });
+    scroll().flex_1().child(
+        view()
+            .px_3()
+            .py_3()
+            .child(each(
+                move || entries.get(),
+                |row: &Row| {
+                    format!(
+                        "{}|{}|{}|{}|{}|{:?}",
+                        row_id(row.scope.as_ref(), &row.action),
+                        row.title,
+                        row.expanded,
+                        row.loading,
+                        row.enabled,
+                        row.indicators.as_ref().map(|i| i.label()),
+                    )
+                },
+                move |row, _| {
+                    let row = row.get_untracked();
+                    desktop_row(row, sources, selected, activate)
+                },
+            ))
+            .child(each(
+                move || restores.get(),
+                |item: &serde_json::Value| item["id"].as_str().unwrap_or_default().to_owned(),
+                move |item, _| {
+                    let item = item.get_untracked();
+                    let id = item["id"].as_str().unwrap_or_default().to_owned();
+                    let title =
+                        format!("一覧に戻す: {}", item["title"].as_str().unwrap_or_default());
+                    menu_row(view().on_press(move || activate("menu", &id, None)))
+                        .child(row_label(title))
+                        .into_element()
+                },
+            )),
+    )
+}
+
+fn desktop_row(
+    row: Row,
+    sources: Memo<Vec<ListSource>>,
+    selected: Memo<Vec<String>>,
+    activate: impl Fn(&str, &str, Option<bool>) + Copy + 'static,
+) -> AnyElement {
+    use crate::ui::{self, Enabled, Icon, colors};
+    let id = row_id(row.scope.as_ref(), &row.action);
+    match &row.action {
+        Action::ProjectHeader => {
+            let add = row
+                .menu
+                .as_array()
+                .and_then(|items| items.iter().find(|item| item["id"] == "add"))
+                .map(|item| item["enabled"].as_bool().unwrap_or(false));
+            section(row.title.clone())
+                .child(add.map(|enabled| {
+                    ui::icon_button(Icon::FolderPlus, "プロジェクトを追加", move || {
+                        activate("menu", "add", None)
+                    })
+                    .enabled(move || enabled)
+                }))
+                .into_element()
+        }
+        Action::Heading(None) => section(row.title.clone()).into_element(),
+        Action::Heading(Some(_)) => text(row.title.clone())
+            .px_3()
+            .pt_3()
+            .pb_1()
+            .text_size(px(12.0))
+            .text_color(colors::MUTED)
+            .into_element(),
+        Action::Notice(_) => text(row.title.clone())
+            .px_3()
+            .py_2()
+            .text_size(px(14.0))
+            .into_element(),
+        Action::Expand(_) => {
+            let compose = row.compose.as_ref().map(|action| {
+                let compose_id = row_id(row.scope.as_ref(), action);
+                let connected = sources.with_untracked(|sources| {
+                    sources
+                        .iter()
+                        .any(|source| Some(&source.scope) == row.scope.as_ref() && source.connected)
+                });
+                ui::small_icon_button(
+                    Icon::NewChat,
+                    "このプロジェクトで新しいチャット",
+                    move || activate("compose", &compose_id, None),
+                )
+                .enabled(move || connected)
+            });
+            let menu = row.menu.clone();
+            let toggle = id.clone();
+            view()
+                .group()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(44.0))
+                        .px_2()
+                        .gap_2()
+                        .flex_row()
+                        .items_center()
+                        .rounded(px(ui::RADIUS))
+                        .text_color(colors::FOREGROUND)
+                        .role(AccessibilityRole::Button)
+                        .label(row.title.clone())
+                        .hover(|s| s.bg(colors::GHOST_HOVER))
+                        .active(|s| s.bg(colors::SELECTED))
+                        .on_press(move || activate("expand", &toggle, None))
+                        .child(project_icon(&row))
+                        .child(row_label(row.title.clone())),
+                )
+                .child(
+                    view()
+                        .flex_row()
+                        .gap_1()
+                        .opacity(0.0)
+                        .group_hover(|s| s.opacity(1.0))
+                        .child(ui::small_icon_button(
+                            Icon::Ellipsis,
+                            "プロジェクトのメニュー",
+                            move || {
+                                ui::popup(&menu, move |command| activate("menu", command, None))
+                            },
+                        ))
+                        .child(compose),
+                )
+                .into_element()
+        }
+        _ => {
+            let enabled = row.enabled;
+            let selected_id = id.clone();
+            let active = move || selected.with(|ids| ids.contains(&selected_id));
+            menu_row(view())
+                .style_when(active, |s| {
+                    s.bg(colors::SELECTED)
+                        .text_color(colors::FOREGROUND)
+                        .font_weight(FontWeight::MEDIUM)
+                })
+                .child((row.level > 0).then(|| view().w(px(16.0)).h(px(16.0))))
+                .child(row_label(row.title.clone()))
+                .child(row.loading.then(ui::spinner))
+                .child(row.indicators.clone().map(indicators))
+                .on_press(move || activate("select", &id, None))
+                .enabled(move || enabled)
+                .into_element()
+        }
+    }
+}
+
+/// A sidebar section's title row: "プロジェクト", "チャット".
+fn section(title: String) -> View {
+    view()
+        .flex_row()
+        .items_center()
+        .h(px(32.0))
+        .mt_2()
+        .pl_2()
+        .child(
+            text(title)
+                .flex_1()
+                .text_size(px(12.0))
+                .text_color(crate::ui::colors::MUTED),
+        )
+}
+
+/// A sidebar menu item: 28 pt, the muted text, a fill under the pointer.
+fn menu_row(row: View) -> View {
+    use crate::ui::{self, colors};
+    row.flex_row()
+        .items_center()
+        .gap_2()
+        .h(px(28.0))
+        .px_2()
+        .rounded(px(ui::RADIUS))
+        .text_color(colors::MUTED)
+        .role(AccessibilityRole::Button)
+        .hover(|s| s.bg(colors::ROW_HOVER).text_color(colors::FOREGROUND))
+}
+
+fn row_label(title: String) -> impl IntoElement {
+    text(title.clone())
+        .flex_1()
+        .min_w_0()
+        .text_size(px(14.0))
+        .number_of_lines(1)
+        .label(title)
+}
+
+fn project_icon(row: &Row) -> AnyElement {
+    use base64::Engine;
+    if let Some(png) = &row.png {
+        let source = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png)
+        );
+        return image(source)
+            .w(px(16.0))
+            .h(px(16.0))
+            .rounded(px(4.0))
+            .into_element();
+    }
+    let (monogram, color) = row.glyph.clone().unwrap_or_default();
+    let color = nsh_core::element::rgb(color);
+    view()
+        .w(px(16.0))
+        .h(px(16.0))
+        .flex_shrink_0()
+        .rounded(px(4.0))
+        .items_center()
+        .justify_center()
+        .bg(color.opacity(0.15))
+        .child(
+            text(monogram)
+                .text_size(px(8.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(color),
+        )
+        .into_element()
+}
+
+/// A chat's state after its title: running, unread, a worktree to merge or merged.
+fn indicators(indicators: native::RowIndicators) -> impl IntoElement {
+    use crate::ui::{self, Icon};
+    use agent_core::presentation::thread_status::ThreadActivity;
+    let label = indicators.label();
+    view()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .label(label)
+        .child(match indicators.activity {
+            Some(ThreadActivity::Running | ThreadActivity::Waiting) => {
+                Some(ui::spinner().into_element())
+            }
+            Some(ThreadActivity::Unread) => Some(
+                view()
+                    .w(px(8.0))
+                    .h(px(8.0))
+                    .rounded_full()
+                    .bg(nsh_core::element::rgb(0xffffff))
+                    .into_element(),
+            ),
+            None => None,
+        })
+        .child(indicators.worktree.map(|status| {
+            let (glyph, color) = match status {
+                agent_protocol::models::WorktreeStatus::Unmerged => (Icon::Diff, 0xfb923c),
+                agent_protocol::models::WorktreeStatus::Merged => (Icon::Merge, 0xa78bfa),
+            };
+            view()
+                .text_color(nsh_core::element::rgb(color))
+                .child(ui::icon(glyph, 16.0))
+        }))
 }
 
 fn native_rows(entries: &[Row], sources: &[ListSource]) -> serde_json::Value {

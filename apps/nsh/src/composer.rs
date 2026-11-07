@@ -337,12 +337,153 @@ pub(crate) fn composer(
                     .prop("enabled", move || json!(enabled())),
             )
     };
+    // The existing desktop client's composer: the field over one row of controls.
+    let desktop_box = move || {
+        use crate::ui::{self, Enabled, Icon, colors};
+        let attach_enabled = move || {
+            controls.with(|c| c.connected && !c.sending && !c.transcribing && !c.transferring)
+                && !recording.get()
+                && !requesting.get()
+                && !connection.uploading()
+                && answering.with(Option::is_none)
+        };
+        let inactive = move || {
+            !enabled() || (composer.with(|c| c.draft.text.trim().is_empty()) && !stopping())
+        };
+        view()
+            .w_full()
+            .p(px(7.0))
+            .gap_2()
+            .rounded(px(22.0))
+            .bg(colors::SURFACE)
+            .border_1()
+            .border_color(colors::BORDER)
+            .child(
+                view()
+                    .px_2()
+                    .pt(px(10.0))
+                    .pb_1()
+                    .child(field().w_full().h(px(40.0))),
+            )
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .child(when(
+                        move || answering.with(Option::is_none),
+                        move || {
+                            ui::icon_button_sized(
+                                Icon::Plus,
+                                "ファイルを添付",
+                                40.0,
+                                24.0,
+                                move || {
+                                    let host = connection.host.get_untracked();
+                                    let key =
+                                        controls.with_untracked(|c| c.navigation.draft_key.clone());
+                                    pick_files(
+                                        connection.application.get(),
+                                        host,
+                                        connection.pane,
+                                        key,
+                                    );
+                                },
+                            )
+                            .enabled(attach_enabled)
+                        },
+                    ))
+                    .child(view().flex_1())
+                    .child(crate::model_controls::controls())
+                    .child(when(
+                        move || answering.with(Option::is_none),
+                        dictation_button,
+                    ))
+                    .child(when(
+                        move || answering.with(Option::is_some),
+                        move || {
+                            ui::text_button(
+                                move || {
+                                    SharedString::from(answering.with(|q| {
+                                        q.as_ref().map(|q| q.action.clone()).unwrap_or_default()
+                                    }))
+                                },
+                                submit,
+                            )
+                            .enabled(enabled)
+                        },
+                    ))
+                    .child(when(
+                        move || answering.with(Option::is_none),
+                        move || {
+                            view()
+                                .w(px(40.0))
+                                .h(px(40.0))
+                                .rounded_full()
+                                .items_center()
+                                .justify_center()
+                                .role(AccessibilityRole::Button)
+                                .label(move || primary_label.get())
+                                .bg(move || {
+                                    if inactive() {
+                                        colors::BORDER
+                                    } else {
+                                        rgb(0xffffff)
+                                    }
+                                })
+                                .text_color(move || {
+                                    if inactive() {
+                                        colors::MUTED
+                                    } else {
+                                        colors::SIDEBAR
+                                    }
+                                })
+                                .on_press(submit)
+                                .child(when(move || !stopping(), || ui::icon(Icon::ArrowUp, 24.0)))
+                                .child(when(stopping, || ui::icon(Icon::Stop, 24.0)))
+                        },
+                    )),
+            )
+    };
+    let desktop_context = move || {
+        use crate::ui::{self, Enabled, Icon};
+        let hosts = computed(move || connection.state.with(|s| s.hosts.clone()));
+        let directory = computed(move || publication.with(|p| p.context.selected_directory()));
+        view()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .child(
+                ui::labeled_button(
+                    Icon::Folder,
+                    move || {
+                        let directory = directory.get();
+                        if directory.is_empty() {
+                            "チャット".to_owned()
+                        } else {
+                            agent_core::presentation::markdown::file_basename(&directory).to_owned()
+                        }
+                    },
+                    move || {
+                        workspace.open(
+                            agent_core::panels::PanelKind::Files,
+                            Some(directory.get_untracked()),
+                            None,
+                        );
+                    },
+                )
+                .enabled(move || !directory.get().is_empty()),
+            )
+            .child(crate::connections::destination(hosts, connection.host))
+    };
     view()
         .w_full()
-        .max_w(px(780.0))
+        .max_w(move || px(if is_desktop() { 828.0 } else { 780.0 }))
         .self_center()
-        .p_3()
-        .gap_2()
+        .px(move || if is_desktop() { px(24.0) } else { px(12.0) })
+        .pt(move || if is_desktop() { px(8.0) } else { px(12.0) })
+        .pb(move || if is_desktop() { px(16.0) } else { px(12.0) })
+        .gap(move || if is_desktop() { px(4.0) } else { px(8.0) })
         .child(crate::requests::panels(following))
         .child(when(
             move || {
@@ -470,57 +611,19 @@ pub(crate) fn composer(
                     )))
             },
         ))
-        .child(when(is_desktop, move || {
-            let hosts = computed(move || connection.state.with(|s| s.hosts.clone()));
-            let directory = computed(move || publication.with(|p| p.context.selected_directory()));
-            view()
-                .flex_row()
-                .items_center()
-                .gap_3()
-                .px_2()
-                .child(
-                    native::button("folder", "作業フォルダーを開く", move || {
-                        workspace.open(
-                            agent_core::panels::PanelKind::Files,
-                            Some(directory.get_untracked()),
-                            None,
-                        );
-                    })
-                    .prop("title", move || {
-                        json!(agent_core::presentation::markdown::file_basename(
-                            &directory.get()
-                        ))
-                    })
-                    .prop("appearance", json!("plain"))
-                    .prop("enabled", move || json!(!directory.get().is_empty()))
-                    .min_h(px(28.0)),
-                )
-                .child(
-                    crate::connections::selector(hosts, connection.host, false)
-                        .prop("appearance", json!("plain")),
-                )
-        }))
-        .child(
-            view()
-                .p_2()
-                .gap_1()
-                .rounded(px(if is_desktop() { 24.0 } else { 26.0 }))
-                .border(move || px(if is_desktop() { 1.0 } else { 0.0 }))
-                .border_color(move || rgb(if dark() { 0x303030 } else { 0xd8d8d8 }))
-                .bg(move || {
-                    if is_desktop() {
-                        rgb(if dark() { 0x0f0f0f } else { 0xffffff })
-                    } else {
-                        rgba(0)
-                    }
-                })
-                .glass_effect(if is_desktop() {
-                    GlassEffect::None
-                } else {
-                    GlassEffect::Regular
-                })
-                .child(actions()),
-        )
+        .child(when(is_desktop, desktop_context))
+        .child(when(is_desktop, desktop_box))
+        .child(when(
+            move || !is_desktop(),
+            move || {
+                view()
+                    .p_2()
+                    .gap_1()
+                    .rounded(px(26.0))
+                    .glass_effect(GlassEffect::Regular)
+                    .child(actions())
+            },
+        ))
         .child(
             text(move || controls.with(|c| if c.connected { "" } else { "Host 未接続" }))
                 .text_color(move || nsh_base::theme().muted_foreground)

@@ -1,3 +1,4 @@
+use crate::ui::Enabled;
 use crate::{Connection, native};
 use agent_core::{
     presentation::{permissions::PERMISSION_CHOICES, view::Presentation},
@@ -54,8 +55,8 @@ pub(crate) fn controls() -> impl Element {
         .flex_row()
         .items_center()
         .child(
-            native::text_button(
-                move || json!(label.get()),
+            crate::ui::text_button(
+                move || SharedString::from(label.get()),
                 move || {
                     let host = connection.host.get_untracked();
                     picker.set(Some(publication.with_untracked(|p| Picker {
@@ -70,19 +71,9 @@ pub(crate) fn controls() -> impl Element {
                     connection.dispatch(Intent::ListAccounts(op::ListAccounts {}));
                 },
             )
-            .prop("asset", move || {
-                json!(publication.with(|p| p.settings.provider().map(crate::accounts::icon)))
-            })
-            .prop("label", move || json!(label.get()))
-            .prop("identifier", json!("model.settings"))
-            .prop(
-                "appearance",
-                json!(if is_desktop() { "plain" } else { "automatic" }),
-            )
-            .prop("enabled", move || {
-                json!(publication.with(|p| p.settings.connected() && !p.composer.controls.sending))
-            })
-            .min_h(px(44.0)),
+            .enabled(move || {
+                publication.with(|p| p.settings.connected() && !p.composer.controls.sending)
+            }),
         )
         .child(
             native("bex.details")

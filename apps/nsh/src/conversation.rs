@@ -1,4 +1,5 @@
-use crate::{Connection, native, shared::Shared};
+use crate::ui::Enabled;
+use crate::{Connection, shared::Shared};
 use agent_core::{
     presentation::{
         conversation::{
@@ -12,7 +13,6 @@ use agent_core::{
 use nsh_base::theme;
 use nsh_core::geometry::{Point, Points};
 use nsh_core::prelude::*;
-use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
 const FOLLOW_END_THRESHOLD: f32 = 60.0;
@@ -203,9 +203,9 @@ pub(crate) fn list(
                     .gap_2()
                     .items_center()
                     .child(
-                        native::text_button(
+                        crate::ui::text_button(
                             move || {
-                                json!(history.with(|history| {
+                                SharedString::from(history.with(|history| {
                                     history
                                         .as_ref()
                                         .map(|history| history.load_label.clone())
@@ -221,10 +221,10 @@ pub(crate) fn list(
                                 }
                             },
                         )
-                        .prop("enabled", move || {
-                            json!(history.with(|history| {
+                        .enabled(move || {
+                            history.with(|history| {
                                 history.as_ref().is_some_and(|history| !history.loading)
-                            }))
+                            })
                         }),
                     )
                     .child(text(move || {
@@ -272,9 +272,9 @@ pub(crate) fn list(
                                         })
                                     },
                                     move || {
-                                        native::text_button(
+                                        crate::ui::text_button(
                                             move || {
-                                                json!(label().unwrap_or_default().to_string())
+                                                SharedString::from(label().unwrap_or_default().to_string())
                                             },
                                             move || {
                                                 if let Some(activity) = row.with_untracked(|row| {
@@ -354,8 +354,8 @@ pub(crate) fn list(
                                             .flex_row()
                                             .gap_4()
                                             .mt_2()
-                                            .child(native::button(
-                                                "doc.on.doc",
+                                            .child(crate::ui::icon_button(
+                                                crate::ui::Icon::Copy,
                                                 "コピー",
                                                 move || {
                                                     if let Some(row) = row.get_untracked() {
@@ -371,8 +371,8 @@ pub(crate) fn list(
                                                     })
                                                 },
                                                 move || {
-                                                    native::button(
-                                                        "arrow.triangle.branch",
+                                                    crate::ui::icon_button(
+                                                        crate::ui::Icon::Branch,
                                                         "会話を分岐",
                                                         move || {
                                                             if let Some(last_turn_id) = row
@@ -409,7 +409,7 @@ pub(crate) fn list(
                                 row.with(|row| row.as_ref().is_some_and(|row| row.retry.is_some()))
                             },
                             move || {
-                                native::text_button(json!("再試行"), move || {
+                                crate::ui::text_button("再試行", move || {
                                     following.set(true);
                                     if let Some(retry) = row.with_untracked(|row| {
                                         row.as_ref().and_then(|row| row.retry.clone())
@@ -437,9 +437,12 @@ pub(crate) fn list(
             .min_h_0(),
         )
         .child(when(move || !following.get(), move || {
-            native::button("arrow.down", "最新のメッセージへ", move || following.set(true))
-                .prop("appearance", json!("glass"))
-                .absolute().self_center().bottom(px(6.0)).w(px(44.0)).h(px(44.0))
+            crate::ui::icon_button_sized(crate::ui::Icon::ArrowDown, "最新のメッセージへ", 32.0, 16.0, move || following.set(true))
+                .bg(crate::ui::colors::RAISED)
+                .border_1()
+                .border_color(crate::ui::colors::BORDER)
+                .rounded_full()
+                .absolute().self_center().bottom(px(6.0))
         }))
 }
 
@@ -449,7 +452,7 @@ mod tests {
 
     #[test]
     fn expanding_running_work_reveals_output_without_a_second_progress_row() {
-        let source: agent_protocol::models::Thread = serde_json::from_value(json!({
+        let source: agent_protocol::models::Thread = serde_json::from_value(serde_json::json!({
             "id": {"provider":"codex", "id":"thread"},
             "turns": [{"id":"turn", "status":"running", "items":[
                 {"id":"command", "status":"completed", "clientInputId":null,
