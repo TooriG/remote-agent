@@ -186,7 +186,8 @@ struct ThreadMessageRow: View, Equatable {
             }
             if let fork {
                 Button(action: fork) {
-                    Image(systemName: "arrow.triangle.branch")
+                    // The branch turned to point forward: a new chat continues from here.
+                    Image(systemName: "arrow.triangle.branch").rotationEffect(.degrees(90))
                 }
                 .disabled(forking)
                 .accessibilityLabel("ここから会話を分岐")

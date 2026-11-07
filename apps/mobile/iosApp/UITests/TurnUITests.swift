@@ -228,7 +228,7 @@ extension LaunchUITests {
         XCTAssertTrue(answer.waitUntilExists(timeout: 30))
         let answerID = answer.identifier
         let completed = expectation(
-            for: NSPredicate(format: "label CONTAINS %@", "件の過去のメッセージ"),
+            for: NSPredicate(format: "label CONTAINS %@", "作業しました"),
             evaluatedWith: prefixedButton(app, prefix: "turn.activity.fixture-turn-")
         )
         wait(for: [completed], timeout: 10)

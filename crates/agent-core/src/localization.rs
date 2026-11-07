@@ -254,7 +254,11 @@ mod tests {
         );
         assert_eq!(
             localized_ui_text(UiLanguage::English, "1時間 2分 3秒 作業しました".into()),
-            "Worked for 1h 2m 3s · completed"
+            "Worked for 1h 2m 3s"
+        );
+        assert_eq!(
+            localized_ui_text(UiLanguage::English, "2分 作業した後に中断しました".into()),
+            "You stopped after 2m"
         );
         assert_eq!(
             localized_ui_text(

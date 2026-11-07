@@ -217,25 +217,20 @@ fn project_items<'a>(
         };
         segment.collapsible =
             (start..end).any(|index| segment.role(index, item(index)) == Role::Activity);
+        // As T3 Code: a turn that has ended folds its work under the whole turn's
+        // time, and the work after each steer under a row that continues it. A
+        // running turn names what its earlier segments did.
         segment.label = if segment.collapsible {
-            Some(if answer.is_some() {
-                let messages = (start..end)
-                    .filter(|&index| segment.role(index, item(index)) == Role::Activity)
-                    .count();
-                format!("{messages}件の過去のメッセージ")
-            } else {
-                let summary = activity_summary(
+            Some(if turn.status == TurnStatus::Running {
+                activity_summary(
                     (start..end)
                         .filter(|&index| segment.role(index, item(index)) == Role::Activity)
                         .map(&item),
-                );
-                if segment.last
-                    && matches!(turn.status, TurnStatus::Failed | TurnStatus::Interrupted)
-                {
-                    format!("{}・{summary}", work_summary(turn))
-                } else {
-                    summary
-                }
+                )
+            } else if start == 0 {
+                work_summary(turn)
+            } else {
+                "続けて作業しました".into()
             })
         } else if segment.last && !completed {
             Some(work_summary(turn))
@@ -556,7 +551,8 @@ mod presentation_tests {
         );
         assert!(p.collapsible);
         assert_work_starts_collapsed(&turn);
-        assert_eq!(p.label.as_deref(), Some("2件の過去のメッセージ"));
+        // As T3 Code, a finished turn folds its work under its working time.
+        assert_eq!(p.label.as_deref(), Some("40秒 作業しました"));
     }
     #[test]
     fn completed_empty_turn_does_not_restore_thinking() {
@@ -628,8 +624,37 @@ mod presentation_tests {
             rows(&parts[1], &turn, Role::Response).next().unwrap().id,
             "f2".into()
         );
-        assert_eq!(parts[0].label.as_deref(), Some("1件の過去のメッセージ"));
-        assert_eq!(parts[1].label.as_deref(), Some("1件の過去のメッセージ"));
+        // The work after a steer continues the turn's first fold, which keeps the
+        // whole turn's time.
+        assert_eq!(parts[0].label.as_deref(), Some("24分 19秒 作業しました"));
+        assert_eq!(parts[1].label.as_deref(), Some("続けて作業しました"));
+        let rendered = conversation::project_conversation(
+            &crate::state::Snapshot::default().pane.navigation.draft_key,
+            &crate::state::Snapshot::default()
+                .sessions
+                .pending_submissions,
+            std::sync::Arc::new(crate::models::Thread {
+                turns: Some(vec![std::sync::Arc::new(turn.clone())]),
+                ..Default::default()
+            }),
+            &None,
+        );
+        let steers: Vec<_> = rendered.turns[0]
+            .rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.content,
+                    conversation::ConversationRowContent::User { .. }
+                )
+            })
+            .map(|row| row.steer)
+            .collect();
+        assert_eq!(
+            steers,
+            [false, true],
+            "only the message sent while the turn worked steers it"
+        );
     }
     #[test]
     fn later_answer_does_not_hide_earlier_unanswered_commentary() {

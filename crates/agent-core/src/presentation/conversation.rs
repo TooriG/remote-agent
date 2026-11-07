@@ -62,6 +62,8 @@ pub struct ConversationRow {
     pub id: String,
     pub content: ConversationRowContent,
     pub timestamp_ms: Option<u64>,
+    /// A user message sent while its turn was working, which steered it.
+    pub steer: bool,
 }
 
 fn conversation_row_id(
@@ -531,6 +533,7 @@ pub fn project_conversation(
         .map(|source| ConversationRow {
             id: format!("request:{}", source.id),
             timestamp_ms: None,
+            steer: false,
             content: ConversationRowContent::PendingRequest {
                 request: Box::new(request(source)),
             },
@@ -548,6 +551,7 @@ pub fn project_conversation(
         session_rows.push(ConversationRow {
             id: "preparation".into(),
             timestamp_ms: None,
+            steer: false,
             content: ConversationRowContent::Preparation {
                 preparation: preparation_presentation(preparation),
             },
@@ -971,6 +975,7 @@ fn render_turn(
         }
     };
     use ConversationRowContent::*;
+    let steering = std::cell::Cell::new(false);
     let mut rows = Vec::new();
     let mut occurrences = HashMap::new();
     let mut push = |mut content: ConversationRowContent| {
@@ -1013,10 +1018,12 @@ fn render_turn(
             }),
             _ => None,
         };
+        let steer = matches!(content, User { .. }) && steering.get();
         rows.push(ConversationRow {
             id,
             content,
             timestamp_ms,
+            steer,
         });
     };
     if let Some(text) = handoff {
@@ -1024,6 +1031,8 @@ fn render_turn(
     }
     for segment in project_items(&source, order.len(), metadata) {
         let segment = &segment;
+        // A later segment of a turn starts with a message sent while it worked.
+        steering.set(segment.start > 0);
         let group = |role| {
             (segment.start..segment.end)
                 .filter(move |&index| segment.role(index, metadata(index)) == role)

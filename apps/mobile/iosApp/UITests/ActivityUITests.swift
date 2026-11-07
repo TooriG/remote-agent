@@ -126,7 +126,7 @@ extension LaunchUITests {
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 20))
         let completed = prefixedButton(app, prefix: "turn.activity.fixture-turn-")
         let completion = expectation(
-            for: NSPredicate(format: "label CONTAINS %@", "件の過去のメッセージ"), evaluatedWith: completed
+            for: NSPredicate(format: "label CONTAINS %@", "作業しました"), evaluatedWith: completed
         )
         wait(for: [completion], timeout: 10)
         XCTAssertFalse(prefixedElement(app, prefix: "item.fixture-command-").exists)

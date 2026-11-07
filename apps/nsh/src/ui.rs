@@ -32,11 +32,10 @@ pub(crate) const RADIUS: f32 = 6.0;
 pub(crate) enum Icon {
     ArrowDown,
     ArrowUp,
-    Branch,
+    Fork,
     #[cfg(target_os = "macos")]
     Check,
     ChevronDown,
-    #[cfg(target_os = "macos")]
     ChevronRight,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     Close,
@@ -74,6 +73,7 @@ pub(crate) enum Icon {
     Refresh,
     #[cfg(target_os = "macos")]
     Settings,
+    Steer,
     Stop,
 }
 
@@ -84,7 +84,7 @@ impl Icon {
         match self {
             Self::ArrowDown => "arrow.down",
             Self::ArrowUp => "arrow.up",
-            Self::Branch => "arrow.triangle.branch",
+            Self::Fork => "arrow.triangle.branch",
             Self::Check => "checkmark",
             Self::ChevronDown => "chevron.down",
             Self::ChevronRight => "chevron.right",
@@ -109,6 +109,7 @@ impl Icon {
             Self::Plus => "plus",
             Self::Refresh => "arrow.clockwise",
             Self::Settings => "gearshape",
+            Self::Steer => "arrow.uturn.forward",
             Self::Stop => "stop.fill",
         }
     }
@@ -117,11 +118,10 @@ impl Icon {
         match self {
             Self::ArrowDown => include_str!("../assets/icons/arrow-down.svg"),
             Self::ArrowUp => include_str!("../assets/icons/arrow-up.svg"),
-            Self::Branch => include_str!("../../desktop/assets/branch.svg"),
+            Self::Fork => include_str!("../../desktop/assets/branch.svg"),
             #[cfg(target_os = "macos")]
             Self::Check => include_str!("../assets/icons/check.svg"),
             Self::ChevronDown => include_str!("../assets/icons/chevron-down.svg"),
-            #[cfg(target_os = "macos")]
             Self::ChevronRight => include_str!("../assets/icons/chevron-right.svg"),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             Self::Close => include_str!("../assets/icons/x.svg"),
@@ -159,6 +159,7 @@ impl Icon {
             Self::Refresh => include_str!("../assets/icons/rotate-cw.svg"),
             #[cfg(target_os = "macos")]
             Self::Settings => include_str!("../assets/icons/settings.svg"),
+            Self::Steer => include_str!("../assets/icons/redo-2.svg"),
             Self::Stop => include_str!("../../desktop/assets/stop.svg"),
         }
     }

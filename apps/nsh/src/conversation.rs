@@ -41,6 +41,8 @@ struct Row {
     progress: Option<WorkProgress>,
     /// The local time it was sent or answered (`HH:MM`).
     time: Option<String>,
+    /// A message sent while its turn worked; only the first of a run says so.
+    steer: bool,
 }
 
 fn project(
@@ -75,6 +77,7 @@ fn project(
                 id: item.data.id.clone(),
                 content: ConversationRowContent::User { item: item.clone() },
                 timestamp_ms: item.data.timestamp_ms,
+                steer: false,
             }, None)
         }))
         .chain(conversation.session_rows.iter().cloned().map(|row| (row, None)))
@@ -85,6 +88,7 @@ fn project(
                 | ConversationRowContent::Response { item, .. } => item.data.image_sources.clone(),
                 _ => Vec::new(),
             };
+            let steer = row.steer;
             let time = row
                 .timestamp_ms
                 .and_then(|ms| i64::try_from(ms).ok())
@@ -133,7 +137,16 @@ fn project(
                 detail,
                 progress,
                 time,
+                steer,
             })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .scan(false, |previous_steer, mut row: Row| {
+            let steer = row.steer;
+            row.steer = steer && !*previous_steer;
+            *previous_steer = steer;
+            Some(row)
         })
         .collect()
 }
@@ -271,25 +284,26 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                 .items_start()
                                 .style_when(user, |s| s.items_end())
                                 .child(when(
+                                    move || row.with(|row| row.as_ref().is_some_and(|row| row.steer)),
+                                    steer_marker,
+                                ))
+                                .child(when(
                                     move || {
                                         row.with(|row| {
                                             row.as_ref().is_some_and(|row| row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse))
                                         })
                                     },
                                     move || {
-                                        crate::ui::text_button(
-                                            move || {
-                                                let open = row.with(|row| {
-                                                    row.as_ref().and_then(|row| row.activity.as_ref()).is_some_and(|activity| {
-                                                        expanded.with(|all| activity_is_expanded(&activity.status, all.get(&activity.id).cloned()))
-                                                    })
-                                                });
-                                                SharedString::from(format!(
-                                                    "{} {}",
-                                                    label().unwrap_or_default(),
-                                                    if open { "⌄" } else { "›" }
-                                                ))
-                                            },
+                                        let open = move || {
+                                            row.with(|row| {
+                                                row.as_ref().and_then(|row| row.activity.as_ref()).is_some_and(|activity| {
+                                                    expanded.with(|all| activity_is_expanded(&activity.status, all.get(&activity.id).cloned()))
+                                                })
+                                            })
+                                        };
+                                        fold_row(
+                                            move || label().unwrap_or_default().to_string(),
+                                            open,
                                             move || {
                                                 if let Some(activity) = row.with_untracked(|row| {
                                                     row.as_ref()
@@ -409,6 +423,51 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
         }))
 }
 
+/// A turn's folded work, as T3 Code's: its label and disclosure, ruled below.
+fn fold_row(
+    label: impl Fn() -> String + 'static,
+    open: impl Fn() -> bool + Copy + 'static,
+    toggle: impl Fn() + 'static,
+) -> View {
+    use crate::ui::{self, Icon, colors};
+    view()
+        .w_full()
+        .pt_1()
+        .pb_2()
+        .border_b_1()
+        .border_b_color(colors::BORDER)
+        .child(
+            nsh_base::button()
+                .self_start()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .px_1()
+                .rounded(px(ui::RADIUS))
+                .text_color(colors::MUTED)
+                .hover(|s| s.text_color(colors::FOREGROUND))
+                .on_press(toggle)
+                .child(text(label).text_size(px(14.0)))
+                .child(when(open, || ui::icon(Icon::ChevronDown, 14.0)))
+                .child(when(move || !open(), || ui::icon(Icon::ChevronRight, 14.0))),
+        )
+}
+
+/// Marks a message that steered the working turn (T3 Code's "Steer").
+fn steer_marker() -> View {
+    use crate::ui::{self, Icon, colors};
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .mr_1()
+        .mb_1()
+        .text_color(colors::MUTED)
+        .label("実行中の作業に追加で指示しました")
+        .child(ui::icon(Icon::Steer, 12.0))
+        .child(text("追加の指示").text_size(px(12.0)))
+}
+
 /// A response's actions, as the desktop client's: copy, fork from here, its time.
 fn response_actions(row: Memo<Option<Row>>) -> View {
     use crate::ui::{self, Enabled, Icon, colors};
@@ -443,7 +502,7 @@ fn response_actions(row: Memo<Option<Row>>) -> View {
         .child(when(
             move || fork().is_some(),
             move || {
-                ui::icon_button(Icon::Branch, "ここから会話を分岐", move || {
+                ui::icon_button(Icon::Fork, "ここから会話を分岐", move || {
                     if let (Some(thread_id), Some(last_turn_id)) =
                         (untracked(thread), untracked(fork))
                     {
@@ -453,6 +512,8 @@ fn response_actions(row: Memo<Option<Row>>) -> View {
                         }));
                     }
                 })
+                // The branch turned to point forward: a new chat continues from here.
+                .rotate(deg(90.0))
                 .enabled(move || !forking())
             },
         ))
