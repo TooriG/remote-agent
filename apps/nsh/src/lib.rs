@@ -185,7 +185,11 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
             }
             "compose" => {
                 connection.dispatch(Intent::NewChat {
-                    cwd: publication.with(|p| p.snapshot.pane.navigation.cwd.clone()),
+                    cwd: if is_desktop() {
+                        publication.with(|p| p.snapshot.pane.navigation.cwd.clone())
+                    } else {
+                        String::new()
+                    },
                 });
                 if !is_desktop() {
                     routes.set(vec![0, 1]);

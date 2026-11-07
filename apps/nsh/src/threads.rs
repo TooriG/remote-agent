@@ -26,6 +26,9 @@ enum Action {
     Projects,
     ProjectHeader,
     Heading(Option<String>),
+    Notice(String),
+    Loading(String),
+    Retry(String),
 }
 #[derive(Clone, PartialEq)]
 struct Row {
@@ -33,6 +36,7 @@ struct Row {
     title: String,
     symbol: &'static str,
     png: Option<Vec<u8>>,
+    glyph: Option<(String, u32)>,
     level: u32,
     disclosure: bool,
     expanded: bool,
@@ -40,59 +44,56 @@ struct Row {
     compose: Option<Action>,
     menu: serde_json::Value,
     indicators: Option<native::RowIndicators>,
+    loading: bool,
+    enabled: bool,
 }
 impl Row {
-    fn heading(
-        title: String,
-        action: Action,
-        menu: serde_json::Value,
-        scope: Option<ListScope>,
-    ) -> Self {
+    fn new(title: String, action: Action, scope: Option<ListScope>) -> Self {
+        let enabled = !matches!(action, Action::Notice(_) | Action::Loading(_));
+        let loading = matches!(action, Action::Loading(_));
         Self {
             scope,
             title,
             action,
             compose: None,
-            menu,
+            menu: serde_json::Value::Null,
             symbol: "",
             png: None,
+            glyph: None,
             level: 0,
             disclosure: false,
             expanded: false,
             indicators: None,
+            loading,
+            enabled,
         }
     }
 }
 fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>, scope: &ListScope) -> Row {
+    let activity = agent_core::presentation::thread_status::thread_activity(
+        thread.waiting,
+        thread.active,
+        thread.unread,
+    );
     Row {
-        scope: Some(scope.clone()),
-        title: thread.title.clone(),
-        symbol: "",
-        png: None,
         level,
-        disclosure: false,
-        expanded: false,
-        action: Action::Open {
-            thread: thread.id.clone(),
-            project: project.map(str::to_owned),
-        },
-        compose: None,
-        menu: serde_json::Value::Null,
-        indicators: {
-            let activity = agent_core::presentation::thread_status::thread_activity(
-                thread.waiting,
-                thread.active,
-                thread.unread,
-            );
-            (activity.is_some() || thread.worktree_status.is_some()).then_some(
-                native::RowIndicators {
-                    activity,
-                    worktree: thread.worktree_status,
-                },
-            )
-        },
+        indicators: (activity.is_some() || thread.worktree_status.is_some()).then_some(
+            native::RowIndicators {
+                activity,
+                worktree: thread.worktree_status,
+            },
+        ),
+        ..Row::new(
+            thread.title.clone(),
+            Action::Open {
+                thread: thread.id.clone(),
+                project: project.map(str::to_owned),
+            },
+            Some(scope.clone()),
+        )
     }
 }
+
 fn rows(
     list: Option<&ThreadList>,
     dark: bool,
@@ -102,17 +103,15 @@ fn rows(
 ) -> Vec<Row> {
     let mut rows = Vec::new();
     if desktop {
-        rows.push(Row::heading(
-            "プロジェクト".into(),
-            Action::ProjectHeader,
-            crate::projects::header_menu(
+        rows.push(Row {
+            menu: crate::projects::header_menu(
                 list.map_or(&[], |list| list.hidden_projects.as_slice()),
                 desktop,
                 selected_host,
                 sources,
             ),
-            None,
-        ));
+            ..Row::new("プロジェクト".into(), Action::ProjectHeader, None)
+        });
     }
     let Some(list) = list else {
         return rows;
@@ -120,8 +119,15 @@ fn rows(
     let more_title = if desktop {
         "もっと表示する"
     } else {
-        "さらに表示"
+        "もっと見る"
     };
+    if let Some(notice) = &list.notice {
+        rows.push(Row::new(
+            notice.clone(),
+            Action::Notice("list".into()),
+            None,
+        ));
+    }
     let sections = list
         .projects
         .iter()
@@ -142,16 +148,13 @@ fn rows(
             continue;
         };
         if let Some(heading) = heading.filter(|_| desktop) {
-            rows.push(Row::heading(
+            rows.push(Row::new(
                 heading.into(),
                 Action::Heading(Some(project.id.clone())),
-                serde_json::Value::Null,
                 Some(source.scope.clone()),
             ));
         }
         rows.push(Row {
-            scope: Some(source.scope.clone()),
-            title: project.name.clone(),
             symbol: "folder",
             png: project.icon.as_ref().map(|icon| {
                 if dark {
@@ -161,92 +164,56 @@ fn rows(
                 }
                 .clone()
             }),
-            level: 0,
+            glyph: Some((project.monogram.clone(), project.icon_color)),
             disclosure: true,
             expanded: project.expanded,
-            action: Action::Expand(project.id.clone()),
-            compose: project
-                .roots
-                .first()
-                .filter(|_| desktop)
-                .map(|root| Action::New {
-                    project: project.id.clone(),
-                    cwd: root.path.clone(),
-                }),
+            compose: (!desktop || !project.roots.is_empty()).then(|| Action::New {
+                project: project.id.clone(),
+                cwd: project
+                    .roots
+                    .first()
+                    .map(|root| root.path.clone())
+                    .unwrap_or_default(),
+            }),
             menu: crate::projects::menu(
                 project,
                 &sections,
                 &source.scope,
                 desktop && source.scope.host == "local",
             ),
-            indicators: None,
+            ..Row::new(
+                project.name.clone(),
+                Action::Expand(project.id.clone()),
+                Some(source.scope.clone()),
+            )
         });
         if project.expanded {
-            for thread in &project.threads {
-                rows.push(thread_row(thread, 1, Some(&project.id), &source.scope));
-            }
-            if project.has_more {
-                rows.push(Row {
-                    scope: Some(source.scope.clone()),
-                    title: more_title.into(),
-                    symbol: if desktop { "" } else { "ellipsis" },
-                    png: None,
-                    level: 1,
-                    disclosure: false,
-                    expanded: false,
-                    action: Action::More(Some(project.id.clone())),
-                    compose: None,
-                    menu: serde_json::Value::Null,
-                    indicators: None,
-                });
-            }
-            for root in project.roots.iter().filter(|_| !desktop) {
-                rows.push(Row {
-                    scope: Some(source.scope.clone()),
-                    title: "新しいチャット".into(),
-                    symbol: "plus",
-                    png: None,
-                    level: 1,
-                    disclosure: false,
-                    expanded: false,
-                    action: Action::New {
-                        project: project.id.clone(),
-                        cwd: root.path.clone(),
-                    },
-                    compose: None,
-                    menu: serde_json::Value::Null,
-                    indicators: None,
-                });
-            }
+            rows.extend(project_children(project, &source.scope, more_title));
         }
+    }
+    if list.projects.is_empty() {
+        let (title, action) = if list.loading_projects {
+            (
+                "プロジェクトを読み込み中…",
+                Action::Loading("projects".into()),
+            )
+        } else {
+            (
+                "登録されたプロジェクトはありません",
+                Action::Notice("projects".into()),
+            )
+        };
+        rows.push(Row::new(title.into(), action, None));
     }
     if list.has_more_projects {
         rows.push(Row {
-            scope: None,
-            title: if desktop {
-                "もっとプロジェクトを表示"
-            } else {
-                "プロジェクトをさらに表示"
-            }
-            .into(),
-            symbol: "folder.badge.plus",
-            png: None,
-            level: 0,
-            disclosure: false,
-            expanded: false,
-            action: Action::Projects,
-            compose: None,
-            menu: serde_json::Value::Null,
-            indicators: None,
+            loading: list.loading_projects,
+            enabled: !list.loading_projects && !list.loading_chats,
+            ..Row::new("もっとプロジェクトを表示".into(), Action::Projects, None)
         });
     }
-    if desktop && !list.threads.is_empty() {
-        rows.push(Row::heading(
-            "チャット".into(),
-            Action::Heading(None),
-            serde_json::Value::Null,
-            None,
-        ));
+    if !desktop || !list.threads.is_empty() {
+        rows.push(Row::new("チャット".into(), Action::Heading(None), None));
     }
     for thread in &list.threads {
         if let Some(source) = sources
@@ -256,20 +223,67 @@ fn rows(
             rows.push(thread_row(thread, 0, None, &source.scope));
         }
     }
+    if list.threads.is_empty() && !list.loading_chats && !desktop {
+        rows.push(Row::new(
+            "チャットがありません".into(),
+            Action::Notice("chats".into()),
+            None,
+        ));
+    }
     if list.has_more {
         rows.push(Row {
-            scope: None,
-            title: more_title.into(),
-            symbol: if desktop { "" } else { "ellipsis" },
-            png: None,
-            level: 0,
-            disclosure: false,
-            expanded: false,
-            action: Action::More(None),
-            compose: None,
-            menu: serde_json::Value::Null,
-            indicators: None,
+            loading: list.loading_chats,
+            enabled: !list.loading_chats && !list.loading_projects,
+            ..Row::new(more_title.into(), Action::More(None), None)
         });
+    }
+    rows
+}
+
+fn project_children(
+    project: &agent_core::presentation::list::ProjectSummary,
+    scope: &ListScope,
+    more_title: &str,
+) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if project.loading && !project.has_more {
+        rows.push(Row::new(
+            "読み込み中…".into(),
+            Action::Loading(project.id.clone()),
+            Some(scope.clone()),
+        ));
+    }
+    if let Some(error) = &project.error {
+        rows.push(Row::new(
+            error.to_string(),
+            Action::Notice(project.id.clone()),
+            Some(scope.clone()),
+        ));
+        rows.push(Row::new(
+            "再試行".into(),
+            Action::Retry(project.id.clone()),
+            Some(scope.clone()),
+        ));
+    }
+    rows.extend(
+        project
+            .threads
+            .iter()
+            .map(|thread| thread_row(thread, 0, Some(&project.id), scope)),
+    );
+    if project.has_more {
+        rows.push(Row {
+            loading: project.loading,
+            enabled: !project.loading,
+            ..Row::new(
+                more_title.into(),
+                Action::More(Some(project.id.clone())),
+                Some(scope.clone()),
+            )
+        });
+    }
+    for row in &mut rows {
+        row.level = 1;
     }
     rows
 }
@@ -305,11 +319,11 @@ pub(crate) fn list(
         let host = connection.host.get();
         list.with(|list| rows(list.as_deref(), dark(), &sources.get(), &host, is_desktop()))
     });
-    let table = native("bex.list").prop("items", move || {
-        entries.with(|entries| native_rows(entries, &sources.get()))
-    });
     let table = if is_desktop() {
-        table
+        native("bex.list")
+            .prop("items", move || {
+                entries.with(|entries| native_rows(entries, &sources.get()))
+            })
             .prop("sidebar", json!(true))
             .prop("selected", move || {
                 publication.with(|p| {
@@ -326,25 +340,38 @@ pub(crate) fn list(
                 })
             })
     } else {
-        table
+        native("bex.details").prop("data", move || {
+            let menu = list.with(|list| {
+                crate::projects::header_menu(
+                    list.as_ref()
+                        .map_or(&[], |list| list.hidden_projects.as_slice()),
+                    false,
+                    &connection.host.get(),
+                    &sources.get(),
+                )
+            });
+            entries.with(|entries| task_list_data(entries, &sources.get(), menu))
+        })
     };
     let table = table
         .on_native_event(move |event: &NativeEvent| {
-            if &*event.name == "menu" {
-                if let Some(command) = event.data.as_str() {
+            let name = if &*event.name == "action" {
+                event.data["action"].as_str().unwrap_or_default()
+            } else {
+                &*event.name
+            };
+            let id = event.data.as_str().or_else(|| event.data["id"].as_str());
+            if name == "menu" {
+                if let Some(command) = id {
                     projects.select(command);
                 }
                 return;
             }
-            if matches!(&*event.name, "select" | "expand" | "compose")
-                && let Some(id) = if &*event.name == "expand" {
-                    event.data["id"].as_str()
-                } else {
-                    event.data.as_str()
-                }
+            if matches!(name, "select" | "expand" | "compose")
+                && let Some(id) = id
                 && let Some(action) = entries.with_untracked(|rows| {
-                    rows.iter().find_map(|row| {
-                        let action = if &*event.name == "compose" {
+                    rows.iter().filter(|row| row.enabled).find_map(|row| {
+                        let action = if name == "compose" {
                             row.compose.as_ref()
                         } else {
                             Some(&row.action)
@@ -376,13 +403,19 @@ pub(crate) fn list(
                         expanded: event
                             .data
                             .get("expanded")
-                            .and_then(serde_json::Value::as_bool)
+                            .and_then(|value| {
+                                value.as_bool().or_else(|| value.as_str()?.parse().ok())
+                            })
                             .unwrap_or(!action.1),
                     },
                     Action::New { cwd, .. } => Intent::NewChat { cwd },
                     Action::More(project_id) => Intent::ExpandThreadList { project_id },
+                    Action::Retry(project_id) => Intent::RefreshProject { project_id },
                     Action::Projects => return,
-                    Action::Heading(_) | Action::ProjectHeader => return,
+                    Action::Heading(_)
+                    | Action::ProjectHeader
+                    | Action::Notice(_)
+                    | Action::Loading(_) => return,
                 };
                 let accepted = connection
                     .application
@@ -393,15 +426,19 @@ pub(crate) fn list(
             }
         })
         .flex_1();
-    view()
-        .flex_1()
-        .child(when(|| !is_desktop(), move || projects.mobile_header()))
-        .child(table)
-        .child(projects.view())
+    view().flex_1().child(table).child(projects.view())
 }
 
 fn native_rows(entries: &[Row], sources: &[ListSource]) -> serde_json::Value {
-    json!(entries.iter().map(|row| json!({"id": row_id(row.scope.as_ref(), &row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "level": row.level, "disclosure": row.disclosure, "group": matches!(&row.action, Action::Heading(_) | Action::ProjectHeader), "expanded": row.expanded, "menu": row.menu, "indicators": row.indicators, "compose": row.compose.as_ref().map(|action| json!({"id": row_id(row.scope.as_ref(), action), "enabled": sources.iter().any(|source| Some(&source.scope) == row.scope.as_ref() && source.connected)}))})).collect::<Vec<_>>())
+    json!(entries.iter().map(|row| json!({"id": row_id(row.scope.as_ref(), &row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "monogram":row.glyph.as_ref().map(|glyph| &glyph.0), "color":row.glyph.as_ref().map(|glyph| glyph.1), "level": row.level, "disclosure": row.disclosure, "group": matches!(&row.action, Action::Heading(_) | Action::ProjectHeader), "expanded": row.expanded, "menu": row.menu, "indicators": row.indicators, "loading":row.loading,"enabled":row.enabled,"passive":matches!(row.action,Action::Notice(_) | Action::Loading(_)), "statusLabel": row.indicators.as_ref().map(|data| data.label()), "compose": row.compose.as_ref().map(|action| json!({"id": row_id(row.scope.as_ref(), action), "enabled": sources.iter().any(|source| Some(&source.scope) == row.scope.as_ref() && source.connected)}))})).collect::<Vec<_>>())
+}
+
+fn task_list_data(
+    entries: &[Row],
+    sources: &[ListSource],
+    menu: serde_json::Value,
+) -> serde_json::Value {
+    json!({"taskList":{"data":{"rows":native_rows(entries, sources),"menu":menu}}})
 }
 
 fn selected_rows(
@@ -522,7 +559,9 @@ mod tests {
         let mut list = fixture_list();
         let thread = list.projects[0].threads[0].clone();
         let collapsed = fixture_rows(Some(&list), false, "host", "scope", false, true);
-        assert_eq!(collapsed.len(), 1);
+        assert_eq!(collapsed.len(), 3);
+        assert_eq!(collapsed[0].symbol, "folder");
+        assert_eq!(collapsed[0].glyph, Some(("PR".into(), 0)));
         assert_eq!(collapsed[0].png, Some(vec![1, 2]));
         let dark = fixture_rows(Some(&list), true, "host", "scope", false, true);
         assert_eq!(dark[0].png, Some(vec![3, 4]));
@@ -588,11 +627,7 @@ mod tests {
                 .len(),
             desktop.len()
         );
-        assert!(
-            !placed
-                .iter()
-                .any(|row| matches!(row.action, Action::Heading(_)))
-        );
+        assert!(placed.iter().any(|row| row.action == Action::Heading(None)));
         list.has_more_projects = true;
         let paged = fixture_rows(Some(&list), false, "host", "scope", true, true);
         assert!(
@@ -663,36 +698,30 @@ mod tests {
                 .find(|row| row.action == Action::More(Some("project".into())))
                 .unwrap();
             assert_eq!(more.level, 1);
-            if desktop {
-                let identities = rendered
+            let identities = rendered
+                .iter()
+                .filter_map(|row| {
+                    row.compose
+                        .as_ref()
+                        .map(|action| row_id(row.scope.as_ref(), action))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(identities.len(), 2);
+            assert_eq!(
+                identities
                     .iter()
-                    .filter_map(|row| {
-                        row.compose
-                            .as_ref()
-                            .map(|action| row_id(row.scope.as_ref(), action))
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(identities.len(), 2);
-                assert_eq!(
-                    identities
-                        .iter()
-                        .collect::<std::collections::HashSet<_>>()
-                        .len(),
-                    2
-                );
-                assert!(
-                    matches!(&project.compose, Some(Action::New {project, cwd}) if project == "project" && cwd == "/project")
-                );
-                assert!(
-                    !rendered
-                        .iter()
-                        .any(|row| matches!(&row.action, Action::New { .. }))
-                );
-            } else {
-                let compose = rendered.iter().find(|row| matches!(&row.action, Action::New { project, .. } if project == "project")).unwrap();
-                assert_eq!(compose.level, 1);
-                assert!(project.compose.is_none());
-            }
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                2
+            );
+            assert!(
+                matches!(&project.compose, Some(Action::New {project, cwd}) if project == "project" && cwd == "/project")
+            );
+            assert!(
+                !rendered
+                    .iter()
+                    .any(|row| matches!(&row.action, Action::New { .. }))
+            );
             assert!(selected_rows(&rendered, &scope(host, "scope"), None).is_empty());
             assert!(selected_rows(&rendered, &scope(host, "scope"), Some(&open_thread)).is_empty());
         }
@@ -738,6 +767,125 @@ mod tests {
                 .indicators
                 .is_none()
         );
+    }
+
+    #[test]
+    fn native_task_list_contract_keeps_hierarchy_scoped_actions_and_status_labels() {
+        let owner = scope("host", "scope");
+        let mut project = Row::new(
+            "日本語 👋".into(),
+            Action::Expand("project".into()),
+            Some(owner.clone()),
+        );
+        project.menu = json!([]);
+        project.symbol = "folder";
+        project.glyph = Some(("日".into(), 0x123456));
+        project.disclosure = true;
+        project.expanded = true;
+        project.compose = Some(Action::New {
+            project: "project".into(),
+            cwd: "/project".into(),
+        });
+        let thread = ThreadSummary {
+            host_id: "host".into(),
+            id: serde_json::from_value(json!({"provider":"codex","id":"chat"})).unwrap(),
+            title: "会話 👋".into(),
+            project_id: None,
+            active: true,
+            waiting: true,
+            unread: false,
+            worktree_status: Some(agent_protocol::models::WorktreeStatus::Unmerged),
+        };
+        let entries = [
+            project,
+            thread_row(&thread, 1, Some("project"), &owner),
+            Row::new("チャット".into(), Action::Heading(None), None),
+            thread_row(&thread, 0, None, &owner),
+        ];
+        let menu = json!([{"title":"非表示のプロジェクトを戻す","children":[{"id":"restore 👋","title":"日本語","enabled":true}]}]);
+        let actual = task_list_data(
+            &entries,
+            &[ListSource {
+                scope: owner,
+                connected: false,
+            }],
+            menu,
+        );
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../apple/Tests/BexNshNativeTests/Fixtures/task-list.json"
+        ))
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn project_loading_errors_and_paging_recover_without_losing_the_owner() {
+        let mut list = fixture_list();
+        list.projects[0].expanded = true;
+        list.projects[0].loading = true;
+        list.projects[0].error = Some(agent_core::presentation::error::ErrorText {
+            message: "一覧を取得できませんでした".into(),
+            details: Some("fixture failure".into()),
+        });
+        for desktop in [false, true] {
+            let rendered = fixture_rows(Some(&list), false, "host", "scope", desktop, true);
+            let loading = rendered
+                .iter()
+                .find(|row| matches!(row.action, Action::Loading(_)))
+                .unwrap();
+            assert!(loading.loading);
+            assert!(!loading.enabled);
+            assert_eq!(loading.level, 1);
+            let retry = rendered
+                .iter()
+                .find(|row| matches!(row.action, Action::Retry(_)))
+                .unwrap();
+            assert!(retry.enabled);
+            assert_eq!(retry.scope, Some(scope("host", "scope")));
+            assert_eq!(retry.level, 1);
+            let error = rendered
+                .iter()
+                .find(|row| row.action == Action::Notice("project".into()))
+                .unwrap();
+            assert_eq!(error.title, "一覧を取得できませんでした\nfixture failure");
+            assert!(!error.enabled);
+        }
+        list.projects[0].has_more = true;
+        let paged = fixture_rows(Some(&list), false, "host", "scope", false, true);
+        assert!(
+            !paged
+                .iter()
+                .any(|row| matches!(row.action, Action::Loading(_)))
+        );
+        let more = paged
+            .iter()
+            .find(|row| row.action == Action::More(Some("project".into())))
+            .unwrap();
+        assert_eq!(more.title, "もっと見る");
+        assert!(more.loading);
+        assert!(!more.enabled);
+        let identity = row_id(more.scope.as_ref(), &more.action);
+        list.projects[0].loading = false;
+        list.projects[0].error = None;
+        let recovered = fixture_rows(Some(&list), false, "host", "scope", false, true);
+        let more = recovered
+            .iter()
+            .find(|row| row_id(row.scope.as_ref(), &row.action) == identity)
+            .unwrap();
+        assert!(more.enabled);
+        assert!(!more.loading);
+        assert!(!recovered.iter().any(|row| matches!(row.action, Action::Retry(ref id) | Action::Notice(ref id) if id == "project")));
+
+        list.has_more = true;
+        list.has_more_projects = true;
+        list.loading_chats = true;
+        list.loading_projects = true;
+        let loading = fixture_rows(Some(&list), false, "host", "scope", true, true);
+        for action in [Action::Projects, Action::More(None)] {
+            let row = loading.iter().find(|row| row.action == action).unwrap();
+            assert!(row.loading);
+            assert!(!row.enabled);
+        }
     }
 
     #[test]

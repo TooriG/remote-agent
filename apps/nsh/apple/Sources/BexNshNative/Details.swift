@@ -43,6 +43,7 @@ enum DetailsContent: Decodable {
     case projectEditor(editor: ProjectEditorData?)
     case worktreeEditor(data: WorktreeEditorData?)
     case modelPicker(data: ModelPickerData?)
+    case taskList(data: TaskListData)
 }
 
 private struct DetailsView: View {
@@ -58,6 +59,8 @@ private struct DetailsView: View {
                 WorktreeEditorPresenter(data: data, send: send)
             case let .modelPicker(data):
                 ModelPickerPresenter(data: data, send: send)
+            case let .taskList(data):
+                TaskListView(data: data, send: send)
             case .separator: Divider()
             case let .workspace(summary):
                 WorkspaceCard(summary: summary, send: send)

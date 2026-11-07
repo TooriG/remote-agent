@@ -1,0 +1,43 @@
+{
+  "taskList": {
+    "data": {
+      "menu": [{"title":"非表示のプロジェクトを戻す","children":[{"id":"restore 👋","title":"日本語","enabled":true}]}],
+      "rows": [
+        {
+          "id":"[{\"host\":\"host\",\"storage\":\"scope\"},{\"Expand\":\"project\"}]",
+          "title":"日本語 👋", "symbol":"folder", "asset":null, "png":null,
+          "monogram":"日", "color":1193046, "level":0,
+          "disclosure":true, "group":false, "expanded":true, "menu":[],
+          "loading":false, "enabled":true, "passive":false, "indicators":null, "statusLabel":null,
+          "compose":{
+            "id":"[{\"host\":\"host\",\"storage\":\"scope\"},{\"New\":{\"project\":\"project\",\"cwd\":\"/project\"}}]",
+            "enabled":false
+          }
+        },
+        {
+          "id":"[{\"host\":\"host\",\"storage\":\"scope\"},{\"Open\":{\"thread\":{\"provider\":\"codex\",\"id\":\"chat\"},\"project\":\"project\"}}]",
+          "title":"会話 👋", "symbol":"", "asset":null, "png":null,
+          "monogram":null, "color":null, "level":1,
+          "disclosure":false, "group":false, "expanded":false, "menu":null,
+          "loading":false, "enabled":true, "passive":false, "indicators":{"activity":"waiting","worktree":"unmerged"},
+          "statusLabel":"確認待ち、main に未反映の変更あり", "compose":null
+        },
+        {
+          "id":"[null,{\"Heading\":null}]",
+          "title":"チャット", "symbol":"", "asset":null, "png":null,
+          "monogram":null, "color":null, "level":0,
+          "disclosure":false, "group":true, "expanded":false, "menu":null,
+          "loading":false, "enabled":true, "passive":false, "indicators":null, "statusLabel":null, "compose":null
+        },
+        {
+          "id":"[{\"host\":\"host\",\"storage\":\"scope\"},{\"Open\":{\"thread\":{\"provider\":\"codex\",\"id\":\"chat\"},\"project\":null}}]",
+          "title":"会話 👋", "symbol":"", "asset":null, "png":null,
+          "monogram":null, "color":null, "level":0,
+          "disclosure":false, "group":false, "expanded":false, "menu":null,
+          "loading":false, "enabled":true, "passive":false, "indicators":{"activity":"waiting","worktree":"unmerged"},
+          "statusLabel":"確認待ち、main に未反映の変更あり", "compose":null
+        }
+      ]
+    }
+  }
+}

@@ -9,9 +9,8 @@ pub(crate) struct RowIndicators {
     pub worktree: Option<agent_protocol::models::WorktreeStatus>,
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 impl RowIndicators {
-    fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         use agent_core::presentation::thread_status::{
             thread_activity_label, worktree_status_label,
         };
@@ -38,11 +37,18 @@ pub(super) struct ListRow {
     pub title: String,
     pub symbol: String,
     pub asset: Option<String>,
+    #[cfg(target_os = "macos")]
     pub png: Option<Vec<u8>>,
     pub level: u32,
     pub disclosure: bool,
+    #[cfg(target_os = "macos")]
     pub menu: Option<Value>,
+    #[cfg(target_os = "macos")]
     pub indicators: Option<RowIndicators>,
+    #[cfg(target_os = "macos")]
+    pub loading: Option<bool>,
+    #[cfg(target_os = "macos")]
+    pub enabled: Option<bool>,
     #[cfg(target_os = "macos")]
     pub group: bool,
     #[cfg(target_os = "macos")]

@@ -122,12 +122,12 @@ impl Application {
                     let next = updates.borrow_and_update().selection();
                     if next != previous {
                         previous = next.clone();
-                        if let Err(reason) = save_selection(path.clone(), next).await {
-                            if let Some(owner) = owner.upgrade() {
-                                owner.state.send_modify(|state| {
-                                    Arc::make_mut(state).failure = Some(reason.to_string())
-                                });
-                            }
+                        if let Err(reason) = save_selection(path.clone(), next).await
+                            && let Some(owner) = owner.upgrade()
+                        {
+                            owner.state.send_modify(|state| {
+                                Arc::make_mut(state).failure = Some(reason.to_string())
+                            });
                         }
                     }
                     if stop.is_cancelled() {

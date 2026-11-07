@@ -69,7 +69,7 @@ impl Client {
             jobs: Default::default(),
             closing: AtomicBool::new(false),
             sessions: ClientSessions::new(
-                true,
+                cfg!(not(target_os = "ios")),
                 ClientBuild {
                     number: 0,
                     revision: option_env!("AGENT_BUILD_REVISION")

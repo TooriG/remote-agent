@@ -7,10 +7,8 @@ use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
     runtime::ProtocolObject,
 };
-use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{
-    NSArray, NSData, NSIndexPath, NSInteger, NSObject, NSObjectProtocol, NSString,
-};
+use objc2_core_foundation::{CGRect, CGSize};
+use objc2_foundation::{NSArray, NSIndexPath, NSInteger, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::*;
 use std::{
     cell::{Cell, RefCell},
@@ -177,99 +175,6 @@ fn menu_items(
         .collect()
 }
 
-fn indicators(data: &super::RowIndicators, mtm: MainThreadMarker) -> Retained<UIView> {
-    use agent_core::presentation::thread_status::ThreadActivity;
-    let stack = UIStackView::initWithFrame(UIStackView::alloc(mtm), CGRect::ZERO);
-    stack.setAxis(UILayoutConstraintAxis::Horizontal);
-    stack.setAlignment(UIStackViewAlignment::Center);
-    stack.setSpacing(6.0);
-    let mut width = 0.0;
-    if let Some(activity) = data.activity {
-        let (view, size): (Retained<UIView>, f64) = match activity {
-            ThreadActivity::Running => {
-                let progress = UIActivityIndicatorView::initWithActivityIndicatorStyle(
-                    UIActivityIndicatorView::alloc(mtm),
-                    UIActivityIndicatorViewStyle::Medium,
-                );
-                progress.startAnimating();
-                (progress.into_super(), 20.0)
-            }
-            ThreadActivity::Waiting | ThreadActivity::Unread => {
-                let image = UIImageView::initWithFrame(UIImageView::alloc(mtm), CGRect::ZERO);
-                image.setImage(
-                    UIImage::systemImageNamed(&NSString::from_str(
-                        if activity == ThreadActivity::Waiting {
-                            "person.crop.circle.badge.questionmark"
-                        } else {
-                            "circle.fill"
-                        },
-                    ))
-                    .as_deref(),
-                );
-                let color = if activity == ThreadActivity::Waiting {
-                    UIColor::systemOrangeColor()
-                } else {
-                    UIColor::labelColor()
-                };
-                unsafe {
-                    image.setTintColor(Some(&color));
-                }
-                image.setContentMode(UIViewContentMode::ScaleAspectFit);
-                (
-                    image.into_super(),
-                    if activity == ThreadActivity::Unread {
-                        8.0
-                    } else {
-                        18.0
-                    },
-                )
-            }
-        };
-        add_indicator(&stack, &view, size);
-        width += size;
-    }
-    if let Some(status) = data.worktree {
-        let unmerged = status == agent_protocol::models::WorktreeStatus::Unmerged;
-        let image = UIImageView::initWithFrame(UIImageView::alloc(mtm), CGRect::ZERO);
-        image.setImage(
-            UIImage::imageNamed(&NSString::from_str(if unmerged {
-                "GitDiff"
-            } else {
-                "GitMerge"
-            }))
-            .as_deref(),
-        );
-        let color = if unmerged {
-            UIColor::systemOrangeColor()
-        } else {
-            UIColor::systemPurpleColor()
-        };
-        unsafe {
-            image.setTintColor(Some(&color));
-        }
-        image.setContentMode(UIViewContentMode::ScaleAspectFit);
-        add_indicator(&stack, &image, 18.0);
-        if width > 0.0 {
-            width += 6.0;
-        }
-        width += 18.0;
-    }
-    stack.setFrame(CGRect::new(CGPoint::ZERO, CGSize::new(width, 20.0)));
-    stack.into_super()
-}
-
-fn add_indicator(stack: &UIStackView, view: &UIView, size: f64) {
-    view.setIsAccessibilityElement(false, stack.mtm());
-    stack.addArrangedSubview(view);
-    NSLayoutConstraint::activateConstraints(
-        &NSArray::from_retained_slice(&[
-            view.widthAnchor().constraintEqualToConstant(size),
-            view.heightAnchor().constraintEqualToConstant(size),
-        ]),
-        stack.mtm(),
-    );
-}
-
 struct Button {
     view: Retained<UIButton>,
     context: ComponentContext,
@@ -418,23 +323,8 @@ define_class!(
             let config = UIListContentConfiguration::cellConfiguration(self.mtm());
             if let Some(row) = self.ivars().items.borrow().get(index.row() as usize) {
                 cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
-                cell.setAccessibilityValue(
-                    row.indicators
-                        .as_ref()
-                        .map(|data| NSString::from_str(&data.label()))
-                        .as_deref(),
-                    self.mtm(),
-                );
-                cell.setAccessoryView(
-                    row.indicators
-                        .as_ref()
-                        .map(|data| indicators(data, self.mtm()))
-                        .as_deref(),
-                );
                 config.setText(Some(&NSString::from_str(&row.title)));
-                let image = if let Some(png) = &row.png {
-                    UIImage::imageWithData(&NSData::with_bytes(png))
-                } else if let Some(asset) = &row.asset {
+                let image = if let Some(asset) = &row.asset {
                     UIImage::imageNamed(&NSString::from_str(asset))
                 } else {
                     None
@@ -461,30 +351,6 @@ define_class!(
     }
     unsafe impl UIScrollViewDelegate for ListDelegate {}
     unsafe impl UITableViewDelegate for ListDelegate {
-        #[unsafe(method_id(tableView:contextMenuConfigurationForRowAtIndexPath:point:))]
-        fn menu(
-            &self,
-            _: &UITableView,
-            index: &NSIndexPath,
-            _: CGPoint,
-        ) -> Option<Retained<UIContextMenuConfiguration>> {
-            self.ivars().items.borrow().get(index.row() as usize)
-                .and_then(|row| row.menu.as_ref())
-                .and_then(JsonValue::as_array)
-                .filter(|entries| !entries.is_empty())
-                .map(|entries| {
-                    let menu = UIMenu::menuWithTitle_children(
-                        &NSString::new(),
-                        &NSArray::from_retained_slice(&menu_items(&self.ivars().context, "menu", entries)),
-                        self.mtm(),
-                    );
-                    let provider = RcBlock::new(move |_: NonNull<NSArray<UIMenuElement>>| Retained::autorelease_ptr(menu.clone()));
-                    // UIKit copies the provider; it owns the native menu and its action contexts.
-                    unsafe { UIContextMenuConfiguration::configurationWithIdentifier_previewProvider_actionProvider(
-                        None, std::ptr::null_mut(), RcBlock::as_ptr(&provider), self.mtm(),
-                    ) }
-                })
-        }
         #[unsafe(method(tableView:didSelectRowAtIndexPath:))]
         fn selected(&self, table: &UITableView, index: &NSIndexPath) {
             table.deselectRowAtIndexPath_animated(index, true);

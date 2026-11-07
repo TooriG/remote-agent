@@ -195,7 +195,7 @@ impl Projects {
         let choice = pick_paths(nsh_core::file_dialog::OpenDialog::folders());
         spawn(async move {
             match choice.await {
-                Ok(Some(paths)) if self.same_scope(&scope) => {
+                Ok(Some(paths)) => {
                     if let Some(path) = paths.into_iter().next() {
                         self.application.with(|application| {
                             application.list_action(
@@ -212,49 +212,6 @@ impl Projects {
                 Err(reason) => native::message("プロジェクトを追加", reason),
             }
         });
-    }
-
-    pub fn mobile_header(self) -> impl IntoElement {
-        view()
-            .flex_row()
-            .items_center()
-            .px_2()
-            .child(
-                text("プロジェクト")
-                    .text_size(px(12.0))
-                    .text_color(move || nsh_base::theme().muted_foreground)
-                    .flex_1(),
-            )
-            .child(when(
-                move || {
-                    self.list.with(|list| {
-                        list.as_ref()
-                            .is_some_and(|list| !list.hidden_projects.is_empty())
-                    })
-                },
-                move || {
-                    native::menu(
-                        "plus",
-                        "プロジェクトを管理",
-                        move || {
-                            let host = self.host.get();
-                            self.list.with(|list| {
-                                header_menu(
-                                    list.as_ref()
-                                        .map_or(&[], |list| list.hidden_projects.as_slice()),
-                                    false,
-                                    &host,
-                                    &self.sources.get(),
-                                )
-                            })
-                        },
-                        move |command| self.select(command),
-                    )
-                    .prop("appearance", json!("plain"))
-                    .w(px(44.0))
-                    .h(px(44.0))
-                },
-            ))
     }
 
     pub fn view(self) -> impl IntoElement {

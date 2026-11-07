@@ -120,7 +120,7 @@ define_class!(
         }
         #[unsafe(method(outlineView:shouldSelectItem:))]
         fn can_select(&self, _: &NSOutlineView, item: &AnyObject) -> bool {
-            self.ivars().row(item).is_some_and(|row| !row.group)
+            self.ivars().row(item).is_some_and(|row| !row.group && row.enabled != Some(false))
         }
         // Only completed changes emit events. AppKit also queries shouldExpand /
         // shouldCollapse while inspecting accessibility; those queries stay pure.
@@ -171,7 +171,7 @@ define_class!(
                             button.setEnabled(compose.enabled);
                         }
                         if let Some(indicators) = view.downcast_ref::<NSStackView>() {
-                            set_indicators(indicators, row.indicators.as_ref());
+                            set_indicators(indicators, row.indicators.as_ref(), row.loading == Some(true));
                         }
                     }
                 }
@@ -181,6 +181,7 @@ define_class!(
                 // The stack owns both outlets, including detached hidden images.
                 unsafe {
                     if let Some(field) = cell.textField() {
+                        field.setEnabled(row.enabled != Some(false));
                         field.setStringValue(&NSString::from_str(&row.title));
                         if self.ivars().sidebar.get() {
                             let weight = if row.group || row.disclosure { NSFontWeightSemibold } else { NSFontWeightRegular };
@@ -366,7 +367,7 @@ fn cell_view(
     cell
 }
 
-fn set_indicators(stack: &NSStackView, data: Option<&super::RowIndicators>) {
+fn set_indicators(stack: &NSStackView, data: Option<&super::RowIndicators>, loading: bool) {
     for view in stack.arrangedSubviews().iter() {
         if let Some(progress) = view.downcast_ref::<NSProgressIndicator>() {
             unsafe {
@@ -376,10 +377,14 @@ fn set_indicators(stack: &NSStackView, data: Option<&super::RowIndicators>) {
         stack.removeArrangedSubview(&view);
         view.removeFromSuperview();
     }
-    stack.setHidden(data.is_none());
-    let Some(data) = data else { return };
+    stack.setHidden(data.is_none() && !loading);
     let mtm = stack.mtm();
-    if let Some(activity) = data.activity {
+    let activity = if loading {
+        Some(agent_core::presentation::thread_status::ThreadActivity::Running)
+    } else {
+        data.and_then(|data| data.activity)
+    };
+    if let Some(activity) = activity {
         use agent_core::presentation::thread_status::ThreadActivity;
         let view: Retained<NSView> = match activity {
             ThreadActivity::Running => {
@@ -420,7 +425,7 @@ fn set_indicators(stack: &NSStackView, data: Option<&super::RowIndicators>) {
             },
         );
     }
-    if let Some(status) = data.worktree {
+    if let Some(status) = data.and_then(|data| data.worktree) {
         let unmerged = status == agent_protocol::models::WorktreeStatus::Unmerged;
         let image = NSImageView::initWithFrame(NSImageView::alloc(mtm), CGRect::ZERO);
         image.setImage(

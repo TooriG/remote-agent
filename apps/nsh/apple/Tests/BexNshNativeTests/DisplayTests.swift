@@ -3,6 +3,28 @@ import NativeSettingsViews
 import XCTest
 
 final class DisplayTests: XCTestCase {
+    func testTaskListKeepsProjectChildrenNativeActionsAndAccountScope() throws {
+        guard case let .taskList(data) = try content("task-list")
+        else { return XCTFail("Expected task list") }
+        XCTAssertEqual(data.groups.count, 3)
+        let project = try XCTUnwrap(data.groups.first)
+        XCTAssertEqual(project.row.title, "日本語 👋")
+        XCTAssertEqual(project.row.monogram, "日")
+        XCTAssertEqual(project.row.color, 0x123456)
+        XCTAssertTrue(project.row.expanded)
+        XCTAssertEqual(project.row.compose?.enabled, false)
+        XCTAssertTrue(try XCTUnwrap(project.row.compose?.id).contains("scope"))
+        XCTAssertEqual(project.children.count, 1)
+        XCTAssertEqual(project.children[0].indicators?.activity, "waiting")
+        XCTAssertEqual(project.children[0].indicators?.worktree, "unmerged")
+        XCTAssertEqual(project.children[0].statusLabel, "確認待ち、main に未反映の変更あり")
+        XCTAssertEqual(data.groups[1].row.title, "チャット")
+        XCTAssertTrue(data.groups[1].row.group)
+        XCTAssertTrue(data.groups[2].children.isEmpty)
+        XCTAssertNotEqual(project.children[0].id, data.groups[2].id)
+        XCTAssertEqual(data.menu[0].children?[0].id, "restore 👋")
+    }
+
     func testModelPickerPreservesCoreSearchProviderSelectionAndAccountQuota() throws {
         guard case let .modelPicker(data) = try content("model-picker")
         else { return XCTFail("Expected model picker") }
