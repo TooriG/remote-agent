@@ -15,6 +15,20 @@ import pathlib
 import plistlib
 import shutil
 import sys
+import tempfile
+
+def copy_file(source, destination):
+    # A signed image may still be mapped by a previous launch. Give each
+    # replacement its own inode so macOS validates the new signature.
+    destination = pathlib.Path(destination)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as pending:
+        path = pathlib.Path(pending.name)
+    try:
+        shutil.copy2(source, path)
+        path.replace(destination)
+    finally:
+        path.unlink(missing_ok=True)
+    return str(destination)
 
 platform, destination, executable, native = sys.argv[1:]
 bundle = pathlib.Path(destination)
@@ -34,7 +48,7 @@ if platform == "macos":
     info.update(LSMinimumSystemVersion="26.0", NSHighResolutionCapable=True)
     resources = contents / "Resources"
     resources.mkdir(parents=True, exist_ok=True)
-    shutil.copy2("apps/desktop/assets/icon.icns", resources / "Bex.icns")
+    copy_file("apps/desktop/assets/icon.icns", resources / "Bex.icns")
     info["CFBundleIconFile"] = "Bex.icns"
 else:
     contents = bundle
@@ -50,9 +64,9 @@ else:
 binary.parent.mkdir(parents=True, exist_ok=True)
 frameworks = contents / "Frameworks"
 frameworks.mkdir(parents=True, exist_ok=True)
-shutil.copytree(native, frameworks / "BexNshNative.framework", dirs_exist_ok=True)
-shutil.copytree("apps/mobile/file-icons", (resources if platform == "macos" else contents) / "file-icons", dirs_exist_ok=True)
-shutil.copy2(executable, binary)
+shutil.copytree(native, frameworks / "BexNshNative.framework", dirs_exist_ok=True, copy_function=copy_file)
+shutil.copytree("apps/mobile/file-icons", (resources if platform == "macos" else contents) / "file-icons", dirs_exist_ok=True, copy_function=copy_file)
+copy_file(executable, binary)
 with (contents / "Info.plist").open("wb") as output:
     plistlib.dump(info, output)
 PY
@@ -76,4 +90,5 @@ with open(sys.argv[1], "wb") as output:
 PY
 fi
 codesign --force --sign - "$bundle"
+codesign --verify --deep --strict "$bundle"
 printf '%s\n' "$bundle"
