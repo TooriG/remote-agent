@@ -29,6 +29,9 @@ final class ConversationTextView: UITextView {
         container.lineFragmentPadding = 0
         layoutManager.addTextContainer(container)
         super.init(frame: .zero, textContainer: container)
+        #if AGENT_DEV_DIAGNOSTICS
+            layoutManager.didDraw = { [weak self] in self?.scheduleDiagnostic() }
+        #endif
         isScrollEnabled = false
         scrollsToTop = false
         isEditable = false
@@ -75,6 +78,10 @@ final class ConversationTextView: UITextView {
     #if AGENT_DEV_DIAGNOSTICS
         override func layoutSubviews() {
             super.layoutSubviews()
+            scheduleDiagnostic()
+        }
+
+        private func scheduleDiagnostic() {
             guard window != nil, diagnosticProbe == nil else { return }
             // Coalesce streamed updates without generating glyphs or changing the live layout.
             diagnosticProbe = Task { @MainActor [weak self] in
@@ -87,15 +94,31 @@ final class ConversationTextView: UITextView {
                 guard convert(tail, to: window).intersects(window.bounds) else { return }
                 let input = ConversationTextDiagnosticInput(
                     content: ObjectIdentifier(content), size: bounds.size,
-                    container: textContainer.size, offset: contentOffset, proposedWidth: diagnosticWidth
+                    container: textContainer.size, offset: contentOffset, proposedWidth: diagnosticWidth,
+                    clippingBounds: diagnosticClippingBounds, firstUnlaid: layoutManager.firstUnlaidCharacterIndex()
                 )
                 guard input != diagnosticInput else { return }
                 diagnosticInput = input
                 let metrics = textLayoutDiagnostic()
                 let recovered = diagnosticHadIssue && !metrics.incomplete
                 diagnosticHadIssue = metrics.incomplete
-                await ConversationTextDiagnosticLog.shared.record(metrics, recovered: recovered)
+                await ConversationTextDiagnosticLog.shared.record(
+                    metrics, recovered: recovered, snapshot: ConversationTextDiagnosticLog.includesNormalLayouts
+                )
             }
+        }
+
+        private var diagnosticClippingBounds: CGRect {
+            var available = bounds
+            var parent = superview
+            // Scrolling intentionally hides text. Only inspect the message's own clipping ancestors.
+            while let ancestor = parent, !(ancestor is UIScrollView) {
+                if ancestor.clipsToBounds {
+                    available = available.intersection(convert(ancestor.bounds, from: ancestor))
+                }
+                parent = ancestor.superview
+            }
+            return available.isNull ? .zero : available
         }
 
         /// Reads the existing layout; the independent reference layout never touches the displayed text.
@@ -113,15 +136,25 @@ final class ConversationTextView: UITextView {
             let measured = content.flatMap { content in
                 diagnosticWidth.flatMap { ConversationTextSizes.cached(content, width: $0) }
             }
-            return ConversationTextDiagnostic(
+            let tail = min(placedEnd, requiredEnd)
+            let lastGlyph = tail > 0 ? layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: tail - 1, length: 1), actualCharacterRange: nil
+            ).location : nil
+            let lastLine = lastGlyph.map {
+                layoutManager.lineFragmentUsedRect(forGlyphAt: $0, effectiveRange: nil, withoutAdditionalLayout: true)
+            }
+            var metrics = ConversationTextDiagnostic(
                 view: diagnosticID, characters: textStorage.length, requiredEnd: requiredEnd,
                 placedEnd: placedEnd, firstUnlaid: layoutManager.firstUnlaidCharacterIndex(),
                 frame: bounds.size, container: textContainer.size, contentSize: contentSize,
                 offset: contentOffset, measured: measured, scale: traitCollection.displayScale,
                 category: traitCollection.preferredContentSizeCategory.rawValue,
-                referenceHeight: placedEnd < requiredEnd
-                    ? ConversationTextDiagnostic.referenceHeight(textStorage, width: bounds.width) : nil
+                lastLine: lastLine, clippingBounds: diagnosticClippingBounds, referenceHeight: nil
             )
+            if metrics.incomplete || ConversationTextDiagnosticLog.includesNormalLayouts {
+                metrics.referenceHeight = ConversationTextDiagnostic.referenceHeight(textStorage, width: bounds.width)
+            }
+            return metrics
         }
     #endif
 
@@ -255,6 +288,15 @@ private enum ConversationTextSizes {
 
 /// Draws quote bars and rules beneath the glyphs of each drawn tile.
 private final class DecoratingLayoutManager: NSLayoutManager {
+    #if AGENT_DEV_DIAGNOSTICS
+        var didDraw: (() -> Void)?
+
+        override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+            super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+            didDraw?()
+        }
+    #endif
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let textStorage, let container = textContainers.first else { return }

@@ -8,6 +8,8 @@
         let container: CGSize
         let offset: CGPoint
         let proposedWidth: CGFloat?
+        let clippingBounds: CGRect
+        let firstUnlaid: Int
     }
 
     /// Numeric layout data only: no text, paths, conversation IDs, or content fingerprints.
@@ -24,10 +26,15 @@
         let measured: CGSize?
         let scale: CGFloat
         let category: String
-        let referenceHeight: CGFloat?
+        let lastLine: CGRect?
+        let clippingBounds: CGRect
+        var referenceHeight: CGFloat?
 
         var incomplete: Bool {
-            placedEnd < requiredEnd
+            // Ignore floating-point noise while retaining deficits smaller than one physical pixel.
+            placedEnd < requiredEnd || lastLine.map {
+                $0.maxY > clippingBounds.maxY + 1 / (max(scale, 1) * 64)
+            } == true
         }
 
         @MainActor static func referenceHeight(_ text: NSAttributedString, width: CGFloat) -> CGFloat {
@@ -45,6 +52,8 @@
     /// A single baseline per launch, then anomalies and recoveries, bounded to two 256 KiB files.
     /// File I/O stays off the UI actor. The Dev xcconfig is the only app configuration enabling this code.
     actor ConversationTextDiagnosticLog {
+        // An explicit debugging launch can capture normal layouts without increasing routine Dev logging.
+        static let includesNormalLayouts = ProcessInfo.processInfo.environment["BEX_TEXT_LAYOUT_SNAPSHOT"] == "1"
         static let shared = ConversationTextDiagnosticLog(
             directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("diagnostics", isDirectory: true)
@@ -67,13 +76,14 @@
             self.byteLimit = byteLimit
         }
 
-        func record(_ metrics: ConversationTextDiagnostic, recovered: Bool = false) {
-            guard !baselineRecorded || metrics.incomplete || recovered else { return }
+        func record(_ metrics: ConversationTextDiagnostic, recovered: Bool = false, snapshot: Bool = false) {
+            guard !baselineRecorded || metrics.incomplete || recovered || snapshot else { return }
             let entry = Entry(
                 time: Date(),
                 revision: Bundle.main.object(forInfoDictionaryKey: "BEXBuildRevision") as? String ?? "test",
                 system: ProcessInfo.processInfo.operatingSystemVersionString,
-                event: metrics.incomplete ? "incomplete" : recovered ? "recovered" : "baseline", layout: metrics
+                event: metrics.incomplete ? "incomplete" : recovered ? "recovered" : snapshot ? "snapshot" : "baseline",
+                layout: metrics
             )
             do {
                 var data = try JSONEncoder().encode(entry)

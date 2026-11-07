@@ -158,6 +158,20 @@ struct ConversationTextViewTests {
             _ = drawnRows(view, in: view.bounds)
             let complete = view.textLayoutDiagnostic()
             check(!complete.incomplete, "Fully drawn text must not report missing characters")
+            checkClippedWhitespace(body: body, size: size)
+
+            let parent = UIView(frame: CGRect(x: 0, y: 0, width: size.width, height: size.height - 1))
+            parent.clipsToBounds = true
+            parent.addSubview(view)
+            let clipped = view.textLayoutDiagnostic()
+            check(clipped.placedEnd == clipped.requiredEnd && clipped.incomplete,
+                  "A parent hiding the last line must be detected even when every character is laid out")
+            view.removeFromSuperview()
+            let scrolling = UIScrollView(frame: parent.frame)
+            scrolling.addSubview(view)
+            check(!view.textLayoutDiagnostic().incomplete,
+                  "Scrolling intentionally hides text and must not report a clipped message")
+            view.removeFromSuperview()
 
             view.frame.size.height -= 1
             view.layoutIfNeeded()
@@ -170,7 +184,23 @@ struct ConversationTextViewTests {
                   "An independent layout must show the height the text needs")
             check(view.textContainer.size == container && view.contentOffset == offset && view.text == body,
                   "Diagnostics must not fix or otherwise change the layout being investigated")
+            try await checkDiagnosticLog(complete: complete, incomplete: incomplete)
+        }
 
+        @MainActor private static func checkClippedWhitespace(body: String, size: CGSize) {
+            let view = ConversationTextView()
+            view.update(blocks: [body + "\n\n"], dark: false, sizeCategory: .large)
+            view.frame.size = size
+            view.layoutIfNeeded()
+            _ = drawnRows(view, in: view.bounds)
+            check(!view.textLayoutDiagnostic().incomplete,
+                  "Clipped trailing whitespace must not be treated as missing visible text")
+        }
+
+        private static func checkDiagnosticLog(
+            complete: ConversationTextDiagnostic,
+            incomplete: ConversationTextDiagnostic
+        ) async throws {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
             let log = ConversationTextDiagnosticLog(directory: directory, byteLimit: 4096)
@@ -184,6 +214,10 @@ struct ConversationTextViewTests {
             check(text?.split(separator: "\n").count == 3, "Log one normal baseline, an anomaly, and its recovery")
             check(text?.contains("本文をログに記録しない検査") == false,
                   "Layout diagnostics must never contain message text")
+            await log.record(complete, snapshot: true)
+            let snapshot = try Data(contentsOf: current)
+            check(String(data: snapshot, encoding: .utf8)?.split(separator: "\n").count == 4,
+                  "An explicit diagnostic snapshot can record normal geometry without enabling routine logging")
             for _ in 0 ..< 30 {
                 await log.record(incomplete)
             }
