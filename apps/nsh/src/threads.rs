@@ -458,9 +458,33 @@ fn desktop_rows(
                         row.indicators.as_ref().map(|i| i.label()),
                     )
                 },
-                move |row, _| {
+                move |row, position| {
                     let row = row.get_untracked();
-                    desktop_row(row, sources, selected, activate)
+                    // Items are 4 pt apart, as the desktop client's; a section's
+                    // title sits flush against what it heads.
+                    let after_section = move || {
+                        let at = position.get();
+                        at > 0
+                            && entries.with(|rows| {
+                                rows.get(at - 1).is_some_and(|row| {
+                                    matches!(
+                                        row.action,
+                                        Action::ProjectHeader | Action::Heading(None)
+                                    )
+                                })
+                            })
+                    };
+                    let spaced =
+                        !matches!(row.action, Action::ProjectHeader | Action::Heading(None));
+                    view()
+                        .mt(move || {
+                            px(if spaced && position.get() > 0 && !after_section() {
+                                4.0
+                            } else {
+                                0.0
+                            })
+                        })
+                        .child(desktop_row(row, sources, selected, activate))
                 },
             ))
             .child(each(
@@ -472,6 +496,7 @@ fn desktop_rows(
                     let title =
                         format!("一覧に戻す: {}", item["title"].as_str().unwrap_or_default());
                     menu_row(view().on_press(move || activate("menu", &id, None)))
+                        .mt_1()
                         .child(row_label(title))
                         .into_element()
                 },
@@ -597,21 +622,15 @@ fn desktop_row(
 
 /// A sidebar section's title row: "プロジェクト", "チャット".
 fn section(title: String) -> View {
-    view()
-        .flex_row()
-        .items_center()
-        .h(px(32.0))
-        .mt_2()
-        .pl_2()
-        .child(
-            text(title)
-                .flex_1()
-                .text_size(px(12.0))
-                .text_color(crate::ui::colors::MUTED),
-        )
+    view().flex_row().items_center().h(px(32.0)).pl_2().child(
+        text(title)
+            .flex_1()
+            .text_size(px(12.0))
+            .text_color(crate::ui::colors::MUTED),
+    )
 }
 
-/// A sidebar menu item: 28 pt, the muted text, a fill under the pointer.
+/// A sidebar menu item: 28 pt, a fill under the pointer.
 fn menu_row(row: View) -> View {
     use crate::ui::{self, colors};
     row.flex_row()
@@ -620,9 +639,9 @@ fn menu_row(row: View) -> View {
         .h(px(28.0))
         .px_2()
         .rounded(px(ui::RADIUS))
-        .text_color(colors::MUTED)
+        .text_color(colors::FOREGROUND)
         .role(AccessibilityRole::Button)
-        .hover(|s| s.bg(colors::ROW_HOVER).text_color(colors::FOREGROUND))
+        .hover(|s| s.bg(colors::ROW_HOVER))
 }
 
 fn row_label(title: String) -> impl IntoElement {

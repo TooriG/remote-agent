@@ -31,7 +31,14 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                 .pt_3()
                 .px_3()
                 .gap_3()
-                .child(connection_menu(hosts))
+                // The desktop client keeps the menu's place while one Host is listed.
+                .child(view().child(when(
+                    move || {
+                        hosts.with(|hosts| hosts.len() > 1)
+                            || connection.state.with(|state| state.all_hosts)
+                    },
+                    move || connection_menu(hosts),
+                )))
                 .child(
                     view()
                         .flex_row()
@@ -51,8 +58,8 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                 .items_center()
                 .justify_between()
                 .px_3()
-                .pb_3()
-                .py_2()
+                .pt_2()
+                .pb(px(20.0))
                 .child(ui::icon_button(
                     Icon::Settings,
                     "設定を開く",

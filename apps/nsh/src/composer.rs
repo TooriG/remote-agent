@@ -430,6 +430,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                         colors::SIDEBAR
                                     }
                                 })
+                                .style_when(inactive, |s| s.opacity(0.5))
                                 .on_press(submit)
                                 .child(when(move || !stopping(), || ui::icon(Icon::ArrowUp, 24.0)))
                                 .child(when(stopping, || ui::icon(Icon::Stop, 24.0)))
@@ -617,11 +618,14 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     .child(actions())
             },
         ))
-        .child(
-            text(move || controls.with(|c| if c.connected { "" } else { "Host 未接続" }))
-                .text_color(move || nsh_base::theme().muted_foreground)
-                .text_size(px(11.0)),
-        )
+        .child(when(
+            move || controls.with(|c| !c.connected),
+            move || {
+                text("Host 未接続")
+                    .text_color(move || nsh_base::theme().muted_foreground)
+                    .text_size(px(11.0))
+            },
+        ))
 }
 
 /// Both the composer and desktop workspace use the OS picker and Core's upload owner.

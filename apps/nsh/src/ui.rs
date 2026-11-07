@@ -33,7 +33,6 @@ pub(crate) enum Icon {
     ArrowDown,
     ArrowUp,
     Branch,
-    #[cfg(target_os = "macos")]
     ChevronDown,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     Close,
@@ -70,7 +69,6 @@ impl Icon {
             Self::ArrowDown => include_str!("../assets/icons/arrow-down.svg"),
             Self::ArrowUp => include_str!("../assets/icons/arrow-up.svg"),
             Self::Branch => include_str!("../../desktop/assets/branch.svg"),
-            #[cfg(target_os = "macos")]
             Self::ChevronDown => include_str!("../assets/icons/chevron-down.svg"),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             Self::Close => include_str!("../assets/icons/x.svg"),

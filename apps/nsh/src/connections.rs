@@ -78,6 +78,7 @@ pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> imp
                 .with(|application| application.select_host(id.to_owned(), true))
         })
     })
+    .child(ui::icon(Icon::ChevronDown, 14.0))
 }
 
 pub(crate) fn screen(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl IntoElement {
