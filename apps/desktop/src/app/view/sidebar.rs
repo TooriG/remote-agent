@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::component::menu::ContextMenuExt;
 
 fn source_scope(host: &str, current: &str) -> String {
     if host.is_empty() {
@@ -61,6 +62,7 @@ pub(super) enum SidebarRow {
     Chat {
         item: Box<SidebarMenuItem>,
         drag: SidebarDrag,
+        copy_items: Vec<agent_core::presentation::list::ThreadCopyItem>,
     },
     Heading(String),
     Error(agent_core::presentation::error::ErrorText),
@@ -133,7 +135,11 @@ impl SidebarRow {
                 .collapsed(collapsed)
                 .render(id, window, cx)
                 .into_any_element(),
-            Self::Chat { item, drag } => {
+            Self::Chat {
+                item,
+                drag,
+                copy_items,
+            } => {
                 let selector = format!(
                     "drag-chat-{}",
                     match &drag.kind {
@@ -151,6 +157,32 @@ impl SidebarRow {
                         cx.new(|_| drag.clone())
                     })
                     .child(item.collapsed(collapsed).render(id, window, cx))
+                    .context_menu(move |menu, window, cx| {
+                        let copy_items = copy_items.clone();
+                        menu.submenu(
+                            language.text("コピー"),
+                            window,
+                            cx,
+                            move |mut menu, _, _| {
+                                for item in &copy_items {
+                                    let entry =
+                                        PopupMenuItem::new(language.text(&item.label).to_owned());
+                                    let entry = if let Some(value) = &item.value {
+                                        let value = value.clone();
+                                        entry.on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                value.clone(),
+                                            ));
+                                        })
+                                    } else {
+                                        entry.disabled(true)
+                                    };
+                                    menu = menu.item(entry);
+                                }
+                                menu
+                            },
+                        )
+                    })
                     .into_any_element()
             }
             Self::Project {
@@ -892,6 +924,7 @@ impl SidebarView {
     ) -> SidebarRow {
         SidebarRow::Chat {
             item: Box::new(item),
+            copy_items: thread.copy_items.clone(),
             drag: SidebarDrag {
                 scope: source_scope(&thread.host_id, scope),
                 label: thread.title.clone(),
@@ -959,9 +992,92 @@ mod tests {
     use agent_core::store::Store;
     use gpui_kit as gpui;
     use gpui_kit::{
-        AppContext, Context, Entity, IntoElement, Modifiers, Render, TestAppContext, Window, px,
-        size,
+        AppContext, Context, Entity, IntoElement, Modifiers, ParentElement, Render, Styled,
+        TestAppContext, Window, px, size,
     };
+
+    struct CopyRows(Vec<agent_core::presentation::list::ThreadSummary>);
+    impl Render for CopyRows {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            super::v_flex()
+                .w(px(240.))
+                .children(self.0.iter().enumerate().map(|(index, thread)| {
+                    super::SidebarView::draggable_chat(
+                        "host",
+                        thread,
+                        super::SidebarMenuItem::new(thread.title.clone())
+                            .on_click(|_, _, _| panic!("copying must not open the thread")),
+                    )
+                    .render(index.to_string(), false, window, cx)
+                }))
+        }
+    }
+
+    #[gpui::test]
+    fn right_click_copies_the_target_thread_and_skips_unavailable_metadata(
+        cx: &mut TestAppContext,
+    ) {
+        let snapshot = Snapshot {
+            lists: agent_core::state::Lists {
+                threads: Some(Arc::new(serde_json::from_value(serde_json::json!({
+                    "data":[
+                        {"id":{"provider":"codex","id":"first"},"name":"タイトル全文 · 日本語 / copy","cwd":"C:\\work repo\\日本語","gitBranch":"feature/copy-menu"},
+                        {"id":{"provider":"claude","id":"second"},"name":"Second thread","cwd":"","gitBranch":""},
+                        {"id":{"provider":"codex","id":"third"},"name":"Third thread","listStale":true}
+                    ],
+                    "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
+                })).unwrap())),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        cx.update(crate::appearance::init);
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let rows = cx.new(|_| CopyRows(snapshot.thread_list().unwrap().threads));
+            gpui::component::Root::new(rows, window, cx)
+        });
+        window.simulate_resize(size(px(800.), px(600.)));
+        window.run_until_parked();
+        for (id, keys, expected) in [
+            (
+                "drag-chat-first",
+                "down right enter",
+                "C:\\work repo\\日本語",
+            ),
+            (
+                "drag-chat-first",
+                "down right down enter",
+                "feature/copy-menu",
+            ),
+            (
+                "drag-chat-first",
+                "down right down down enter",
+                "タイトル全文 · 日本語 / copy",
+            ),
+            (
+                "drag-chat-first",
+                "down right down down down enter",
+                "first",
+            ),
+            ("drag-chat-second", "down right enter", "Second thread"),
+            ("drag-chat-second", "down right down enter", "second"),
+            ("drag-chat-third", "down right enter", "Third thread"),
+            ("drag-chat-third", "down right down enter", "third"),
+        ] {
+            window.update(|_, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string("previous".into()))
+            });
+            let at = window.debug_bounds(id).unwrap().center();
+            window.simulate_mouse_move(at, None, Modifiers::default());
+            window.simulate_mouse_down(at, gpui::MouseButton::Right, Modifiers::default());
+            window.simulate_mouse_up(at, gpui::MouseButton::Right, Modifiers::default());
+            window.run_until_parked();
+            window.simulate_keystrokes(keys);
+            window.update(|_, cx| {
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected)
+            });
+        }
+    }
 
     struct TaskNavigation(Entity<Desktop>);
     impl Render for TaskNavigation {

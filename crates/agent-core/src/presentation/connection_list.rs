@@ -73,6 +73,7 @@ mod tests {
                 id: "same-session".into(),
             },
             title: "Task".into(),
+            copy_items: vec![],
             project_id: Some("same-project".into()),
             active: false,
             waiting: false,
