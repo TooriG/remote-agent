@@ -9,6 +9,8 @@ mod connections;
 mod conversation;
 #[cfg(target_os = "macos")]
 mod desktop;
+#[cfg(target_os = "macos")]
+mod desktop_workspace;
 mod details;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod dictation;
@@ -206,11 +208,19 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
     };
     let content = move || {
         let following = signal(true);
+        let welcome =
+            computed(move || is_desktop() && publication.with(|p| p.conversation.is_none()));
         view()
             .flex_1()
             .min_w_0()
             .pb_keyboard()
-            .child(conversation::list(publication, following))
+            .child(when(move || !welcome.get(), move || conversation::list(publication, following)))
+            .child(when(move || welcome.get(), move || {
+                native("bex.details").prop("data", move || {
+                    let directory = publication.with(|p| p.context.selected_directory());
+                    json!({"welcome": {"directory": agent_core::presentation::markdown::file_basename(&directory)}})
+                }).flex_1()
+            }))
             .child(composer::composer(publication, following))
     };
     let notices = move || {
@@ -261,33 +271,26 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         Area::Sidebar => {
             return view()
                 .flex_1()
-                .p_2()
-                .gap_2()
+                .p_3()
+                .gap_3()
                 .child(
-                    connections::selector(hosts, host)
-                        .prop("enabled", move || json!(!account_locked.get())),
+                    view().flex_row().items_center().gap_1()
+                        .child(native::search(query).prop("appearance", json!("plain")).flex_1())
+                        .child(native::button("square.and.pencil", "新しいチャット", move || toolbar_action("compose"))
+                            .prop("appearance", json!("plain")).w(px(32.0)).h(px(32.0)))
                 )
-                .child(native::search(query).w_full())
+                .child(text("プロジェクト").text_size(px(12.0)).text_color(move || nsh_base::theme().muted_foreground).px_2())
                 .child(list())
-                .child(each(
-                    workbench::tools,
-                    |tool: &agent_core::panels::PanelTool| tool.key.clone(),
-                    move |tool, _| {
-                        native::text_button(
-                            move || json!(tool.with(|t| t.label.clone())),
-                            move || toolbar_action(&tool.with_untracked(|t| t.key.clone())),
-                        )
-                        .prop("symbol", move || {
-                            json!(tool.with(|t| workbench::symbol(t.kind)))
-                        })
-                        .prop("enabled", move || {
-                            json!(!account_locked.get() && tool.with(|t| t.enabled))
-                        })
-                    },
-                ))
-                .child(native::text_button(json!("環境"), move || {
-                    navigate(Navigation::Settings(true))
-                }))
+                .child(view().flex_row().items_center()
+                    .child(native::button("gearshape", "設定を開く", move || navigate(Navigation::Settings(true)))
+                        .prop("appearance", json!("plain")).w(px(32.0)).h(px(32.0)))
+                    .child(view().flex_1())
+                    .child(native::menu("square.split.2x2", "ツール", move || json!(workbench::tools().into_iter().map(|tool| json!({
+                        "id": tool.key, "title": tool.label, "symbol": workbench::symbol(tool.kind), "enabled": tool.enabled
+                    })).collect::<Vec<_>>()), toolbar_action).prop("appearance", json!("plain"))
+                        .prop("enabled", move || json!(!account_locked.get())).w(px(32.0)).h(px(32.0)))
+                    .child(native::button("arrow.clockwise", "会話を更新", move || connection.dispatch(Intent::ShowThreadList))
+                        .prop("appearance", json!("plain")).w(px(32.0)).h(px(32.0))))
                 .into_element();
         }
         #[cfg(target_os = "macos")]
@@ -302,7 +305,19 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                 ))
                 .child(when(
                     move || !settings.get() && !hosts.with(Vec::is_empty),
-                    content,
+                    move || {
+                        view()
+                            .flex_row()
+                            .flex_1()
+                            .min_w_0()
+                            .child(content())
+                            .child(when(
+                                move || {
+                                    window().width.0 >= 1000.0 && !workspace.state.with(|s| s.open)
+                                },
+                                desktop_workspace::card,
+                            ))
+                    },
                 ))
                 .into_element();
         }

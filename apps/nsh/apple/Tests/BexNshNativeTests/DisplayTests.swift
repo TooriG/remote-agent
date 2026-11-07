@@ -2,6 +2,19 @@
 import XCTest
 
 final class DisplayTests: XCTestCase {
+    func testWorkspacePreservesHostEditorSelectionBranchAndSources() throws {
+        guard case let .workspace(summary) = try content("workspace") else { return XCTFail("Expected workspace") }
+        XCTAssertEqual(summary.directory, "日本語 👋")
+        XCTAssertTrue(summary.enabled)
+        XCTAssertTrue(summary.hasDirectory)
+        XCTAssertEqual(summary.branch, "feature/native")
+        XCTAssertEqual(summary.additions, 7)
+        XCTAssertEqual(summary.deletions, 2)
+        XCTAssertEqual(summary.editor, "cursor")
+        XCTAssertEqual(summary.editors[1].title, "Finder")
+        XCTAssertEqual(summary.sources[0].path, "/fixture/日本語.txt")
+    }
+
     func testBrowserPreservesNativePromptAndHostCredentialMetadata() throws {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "browser", withExtension: "json"))
         let content = try BrowserData(data: Data(contentsOf: url))

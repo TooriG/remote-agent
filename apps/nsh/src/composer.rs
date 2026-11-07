@@ -13,6 +13,7 @@ pub(crate) fn composer(
 ) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let files = use_context::<crate::files::Browser>().unwrap();
+    let workspace = use_context::<crate::workbench::Workbench>().unwrap();
     let composing = signal(false);
     let focused = signal(false);
     let field_ref = element_ref();
@@ -137,7 +138,14 @@ pub(crate) fn composer(
                     question
                         .as_ref()
                         .map(|question| question.placeholder.clone())
-                        .unwrap_or_else(|| "メッセージを入力".into())
+                        .unwrap_or_else(|| {
+                            if is_desktop() {
+                                "AI に依頼する"
+                            } else {
+                                "メッセージを入力"
+                            }
+                            .into()
+                        })
                 })
             })
             .masked(move || answering.with(|q| q.as_ref().is_some_and(|q| q.question.secret)))
@@ -245,36 +253,13 @@ pub(crate) fn composer(
                             file_target.replace(Some((host, key)));
                             file_pick.update(|value| *value += 1);
                         } else {
-                            let picked = pick_paths(
-                                nsh_core::file_dialog::OpenDialog::files().multiple(true),
-                            );
-                            spawn(async move {
-                                match picked.await {
-                                    Ok(Some(paths)) => {
-                                        connection.application.with(|app| {
-                                            app.attach(
-                                                host,
-                                                connection.pane,
-                                                key,
-                                                paths
-                                                    .into_iter()
-                                                    .map(|path| {
-                                                        let is_image = native::image_file(&path);
-                                                        crate::client::AttachmentSource::File {
-                                                            path,
-                                                            is_image,
-                                                        }
-                                                    })
-                                                    .collect(),
-                                            )
-                                        });
-                                    }
-                                    Ok(None) => {}
-                                    Err(reason) => native::message("添付", reason),
-                                }
-                            });
+                            pick_files(connection.application.get(), host, connection.pane, key);
                         }
                     },
+                )
+                .prop(
+                    "appearance",
+                    json!(if is_desktop() { "plain" } else { "automatic" }),
                 )
                 .prop("enabled", move || {
                     json!(
@@ -341,7 +326,13 @@ pub(crate) fn composer(
                         )
                     })
                     .prop("label", move || json!(primary_label.get()))
-                    .prop("appearance", json!("prominent"))
+                    .prop("appearance", move || {
+                        json!(if is_desktop() && answering.with(Option::is_none) {
+                            "circular"
+                        } else {
+                            "prominent"
+                        })
+                    })
                     .prop("enabled", move || json!(enabled())),
             )
     };
@@ -478,12 +469,55 @@ pub(crate) fn composer(
                     )))
             },
         ))
+        .child(when(is_desktop, move || {
+            let hosts = computed(move || connection.state.with(|s| s.hosts.clone()));
+            let directory = computed(move || publication.with(|p| p.context.selected_directory()));
+            view()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .px_2()
+                .child(
+                    native::button("folder", "作業フォルダーを開く", move || {
+                        workspace.open(
+                            agent_core::panels::PanelKind::Files,
+                            Some(directory.get_untracked()),
+                            None,
+                        );
+                    })
+                    .prop("title", move || {
+                        json!(agent_core::presentation::markdown::file_basename(
+                            &directory.get()
+                        ))
+                    })
+                    .prop("appearance", json!("plain"))
+                    .prop("enabled", move || json!(!directory.get().is_empty()))
+                    .min_h(px(28.0)),
+                )
+                .child(
+                    crate::connections::selector(hosts, connection.host)
+                        .prop("appearance", json!("plain")),
+                )
+        }))
         .child(
             view()
                 .p_2()
                 .gap_1()
-                .rounded(px(26.0))
-                .glass_effect(GlassEffect::Regular)
+                .rounded(px(if is_desktop() { 24.0 } else { 26.0 }))
+                .border(move || px(if is_desktop() { 1.0 } else { 0.0 }))
+                .border_color(move || rgb(if dark() { 0x303030 } else { 0xd8d8d8 }))
+                .bg(move || {
+                    if is_desktop() {
+                        rgb(if dark() { 0x0f0f0f } else { 0xffffff })
+                    } else {
+                        rgba(0)
+                    }
+                })
+                .glass_effect(if is_desktop() {
+                    GlassEffect::None
+                } else {
+                    GlassEffect::Regular
+                })
                 .child(actions()),
         )
         .child(
@@ -491,4 +525,32 @@ pub(crate) fn composer(
                 .text_color(move || nsh_base::theme().muted_foreground)
                 .text_size(px(11.0)),
         )
+}
+
+/// Both the composer and desktop workspace use the OS picker and Core's upload owner.
+pub(crate) fn pick_files(
+    application: std::sync::Arc<crate::application::Application>,
+    host: String,
+    pane: Option<u64>,
+    key: agent_core::state::DraftKey,
+) {
+    let picked = pick_paths(nsh_core::file_dialog::OpenDialog::files().multiple(true));
+    spawn(async move {
+        match picked.await {
+            Ok(Some(paths)) => application.attach(
+                host,
+                pane,
+                key,
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        let is_image = native::image_file(&path);
+                        crate::client::AttachmentSource::File { path, is_image }
+                    })
+                    .collect(),
+            ),
+            Ok(None) => {}
+            Err(reason) => native::message("添付", reason),
+        }
+    });
 }

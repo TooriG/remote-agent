@@ -50,6 +50,7 @@ struct State {
     updating: Cell<bool>,
     selected: RefCell<Option<String>>,
     expansion_enabled: Cell<bool>,
+    sidebar: Cell<bool>,
 }
 
 impl State {
@@ -111,7 +112,7 @@ define_class!(
     unsafe impl NSOutlineViewDelegate for Delegate {
         #[unsafe(method(outlineView:isGroupItem:))]
         fn group(&self, _: &NSOutlineView, item: &AnyObject) -> bool {
-            self.ivars().row(item).is_some_and(|row| row.group)
+            !self.ivars().sidebar.get() && self.ivars().row(item).is_some_and(|row| row.group)
         }
         // Only completed changes emit events. AppKit also queries shouldExpand /
         // shouldCollapse while inspecting accessibility; those queries stay pure.
@@ -145,6 +146,11 @@ define_class!(
                 unsafe {
                     if let Some(field) = cell.textField() {
                         field.setStringValue(&NSString::from_str(&row.title));
+                        if self.ivars().sidebar.get() {
+                            let weight = if row.group { NSFontWeightSemibold } else { NSFontWeightRegular };
+                            field.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, weight)));
+                            field.setTextColor(Some(&NSColor::labelColor()));
+                        }
                     }
                     if let Some(view) = cell.imageView() {
                         let image = if let Some(png) = &row.png {
@@ -249,6 +255,7 @@ impl List {
             updating: Cell::new(false),
             selected: RefCell::new(None),
             expansion_enabled: Cell::new(true),
+            sidebar: Cell::new(false),
         });
         let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
         let outline = NSOutlineView::initWithFrame(NSOutlineView::alloc(mtm), CGRect::ZERO);
@@ -270,6 +277,7 @@ impl List {
         outline.setStyle(NSTableViewStyle::SourceList);
         let view = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), CGRect::ZERO);
         view.setDocumentView(Some(&outline));
+        view.setBorderType(NSBorderType::NoBorder);
         view.setHasVerticalScroller(true);
         Self {
             view,
@@ -354,6 +362,13 @@ impl NativeComponent for List {
     }
 
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        if name == "sidebar" {
+            let sidebar = value.and_then(JsonValue::as_bool).unwrap_or(false);
+            self.delegate.ivars().sidebar.set(sidebar);
+            self.outline.setRowHeight(if sidebar { 32.0 } else { 24.0 });
+            self.outline.reloadData();
+            return;
+        }
         if name == "expansion_enabled" {
             self.delegate
                 .ivars()

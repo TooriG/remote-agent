@@ -200,12 +200,15 @@ impl NativeComponent for Button {
             "enabled" => self
                 .view
                 .setEnabled(value.and_then(JsonValue::as_bool).unwrap_or(true)),
-            "appearance" => self
-                .view
-                .setBezelStyle(match value.and_then(JsonValue::as_str) {
+            "appearance" => {
+                let appearance = value.and_then(JsonValue::as_str);
+                self.view.setBordered(appearance != Some("plain"));
+                self.view.setBezelStyle(match appearance {
+                    Some("circular") => NSBezelStyle::Circular,
                     Some("glass" | "prominent") => NSBezelStyle::Glass,
                     _ => NSBezelStyle::Automatic,
-                }),
+                });
+            }
             "selected" => {
                 self.view.setButtonType(NSButtonType::PushOnPushOff);
                 self.view
@@ -295,13 +298,21 @@ impl NativeComponent for Menu {
     }
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
         match name {
-            "label" | "title" => {
+            "appearance" => self
+                .view
+                .setBordered(value.and_then(JsonValue::as_str) != Some("plain")),
+            "label" => self.view.setAccessibilityLabel(
+                value
+                    .and_then(JsonValue::as_str)
+                    .map(NSString::from_str)
+                    .as_deref(),
+            ),
+            "title" => {
                 let title = NSString::from_str(value.and_then(JsonValue::as_str).unwrap_or(""));
                 // A pull-down button displays its first item's title.
                 if let Some(item) = self.view.itemAtIndex(0) {
                     item.setTitle(&title);
                 }
-                self.view.setAccessibilityLabel(Some(&title));
             }
             "symbol" => {
                 if let Some(item) = self.view.itemAtIndex(0) {
@@ -361,6 +372,11 @@ impl NativeComponent for Search {
         self.view.clone().into_super().into_super().into_super()
     }
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        if name == "appearance" {
+            let plain = value.and_then(JsonValue::as_str) == Some("plain");
+            self.view.setBezeled(!plain);
+            self.view.setDrawsBackground(!plain);
+        }
         if name == "placeholder" {
             self.view.setPlaceholderString(
                 value
@@ -382,6 +398,7 @@ impl NativeComponent for Search {
 fn toolbar_identifiers() -> Retained<NSArray<NSString>> {
     NSArray::from_retained_slice(&[
         NSString::from_str("sidebar"),
+        unsafe { NSToolbarFlexibleSpaceItemIdentifier }.to_owned(),
         NSString::from_str("compose"),
         NSString::from_str("more"),
     ])
@@ -443,6 +460,7 @@ define_class!(
             // Keep NSView's lifecycle, then attach the standard AppKit toolbar.
             let _: () = unsafe { msg_send![super(self), viewDidMoveToWindow] };
             if let Some(window) = self.window() {
+                window.setToolbarStyle(NSWindowToolbarStyle::UnifiedCompact);
                 window.setToolbar(Some(&self.ivars().toolbar));
                 window.setTitle(&NSString::from_str(&self.ivars().title.borrow()));
             }
@@ -467,6 +485,7 @@ impl Toolbar {
             &NSString::from_str("BexNativeToolbar"),
         );
         toolbar.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        toolbar.setDisplayMode(NSToolbarDisplayMode::IconOnly);
         let view = ToolbarHost::new(
             mtm,
             ToolbarState {

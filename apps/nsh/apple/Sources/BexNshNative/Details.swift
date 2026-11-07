@@ -37,14 +37,25 @@ enum DetailsContent: Decodable {
     case diff(files: [DiffFile])
     case agents(rows: [Agent])
     case error(message: String)
+    case welcome(directory: String)
+    case workspace(summary: WorkspaceSummary)
 }
 
 private struct DetailsView: View {
     let content: DetailsContent
+    var send: ([String: String]) -> Void = { _ in }
 
     var body: some View {
         Group {
             switch content {
+            case let .workspace(summary):
+                WorkspaceCard(summary: summary, send: send)
+            case let .welcome(directory):
+                VStack(spacing: 16) {
+                    Text("何から始めましょうか？").font(.system(size: 24, weight: .semibold))
+                    Text(directory.isEmpty ? "メッセージを入力して、作業を始めましょう。" : directory)
+                        .font(.system(size: 14))
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loading:
                 ProgressView().accessibilityIdentifier("files.diff.loading")
             case .sideChatLoading:
@@ -154,6 +165,17 @@ private struct DiffCard: View {
 }
 
 @MainActor private final class DetailsOwner {
+    let context: UnsafeMutableRawPointer?
+    var callback: (@convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void)?
+
+    init(
+        context: UnsafeMutableRawPointer?,
+        callback: @escaping @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
+    ) {
+        self.context = context
+        self.callback = callback
+    }
+
     #if os(macOS)
         let view = NSHostingView(rootView: DetailsView(content: .diff(files: [])))
     #else
@@ -164,20 +186,24 @@ private struct DiffCard: View {
         let content: DetailsContent
         do { content = try JSONDecoder().decode(DetailsContent.self, from: data) }
         catch { content = .error(message: error.localizedDescription) }
+        let root = DetailsView(content: content) { [weak self] action in
+            guard let self, let data = try? JSONSerialization.data(withJSONObject: action) else { return }
+            data.withUnsafeBytes { self.callback?(self.context, $0.bindMemory(to: UInt8.self).baseAddress, data.count) }
+        }
         #if os(macOS)
-            view.rootView = DetailsView(content: content)
+            view.rootView = root
         #else
-            view.controller.rootView = DetailsView(content: content)
+            view.controller.rootView = root
         #endif
     }
 }
 
 @_cdecl("bex_nsh_details_create")
 @MainActor public func detailsCreate(
-    _: UnsafeMutableRawPointer?,
-    _: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
+    _ context: UnsafeMutableRawPointer?,
+    _ callback: @escaping @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
 ) -> UnsafeMutableRawPointer {
-    Unmanaged.passRetained(DetailsOwner()).toOpaque()
+    Unmanaged.passRetained(DetailsOwner(context: context, callback: callback)).toOpaque()
 }
 
 @_cdecl("bex_nsh_details_view")
@@ -193,6 +219,7 @@ private struct DiffCard: View {
 @_cdecl("bex_nsh_details_release")
 @MainActor public func detailsRelease(_ handle: UnsafeMutableRawPointer) {
     let owner = Unmanaged<DetailsOwner>.fromOpaque(handle).takeRetainedValue()
+    owner.callback = nil
     #if os(iOS)
         owner.view.detach()
     #else

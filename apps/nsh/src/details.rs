@@ -18,6 +18,43 @@ fn agent_data(rows: &[AgentSummary]) -> Value {
     json!({"agents": {"rows": rows}})
 }
 
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn workspace_data(
+    p: &agent_core::presentation::view::Presentation,
+    local: bool,
+) -> Value {
+    use agent_core::presentation::editors;
+    use agent_protocol::editors::FileManagerRevealKind;
+    let cwd = &p.composer.controls.navigation.cwd;
+    let review = p.snapshot.pane.workspace.review.as_ref();
+    let capabilities = p.snapshot.files.file_open_capabilities.as_ref();
+    let available = capabilities
+        .map(|c| c.editors.as_slice())
+        .unwrap_or_default();
+    let selected = editors::preferred_editor(p.snapshot.files.preferred_editor, available);
+    let manager = capabilities
+        .and_then(|c| c.reveal)
+        .unwrap_or(FileManagerRevealKind::Finder);
+    let sources = p
+        .conversation
+        .as_ref()
+        .into_iter()
+        .flat_map(|c| c.source_paths.iter())
+        .chain(p.composer.draft.attachments.iter().map(|a| &a.path))
+        .collect::<std::collections::BTreeSet<_>>();
+    json!({"workspace": {"summary": {
+        "directory": if cwd.is_empty() { "フォルダを選択" } else { agent_core::presentation::markdown::file_basename(cwd) },
+        "enabled": p.composer.controls.connected,
+        "hasDirectory": !cwd.is_empty() && !p.context.selected_directory().is_empty(),
+        "branch": review.map(|r| r.branch.as_str()).unwrap_or_default(),
+        "additions": review.map_or(0, |r| r.additions), "deletions": review.map_or(0, |r| r.deletions),
+        "editors": if local { available.iter().map(|id| json!({"id":id, "title":editors::editor_label(*id,manager), "selected":Some(*id)==selected})).collect::<Vec<_>>() } else { Vec::new() },
+        "editor": selected,
+        "editorLabel": selected.map(|id| format!("{}で開く", editors::editor_label(id,manager))).unwrap_or_else(|| "エディターで開く".into()),
+        "sources": sources.into_iter().map(|path| json!({"path":path,"title":agent_core::presentation::markdown::file_basename(path)})).collect::<Vec<_>>()
+    }}})
+}
+
 pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let cwd = stored(cwd);
@@ -141,6 +178,56 @@ pub(crate) fn agents(host: String) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_contract_uses_host_editor_labels_and_preserves_sources() {
+        use agent_core::{
+            presentation::view::Presentation,
+            state::{Attachment, Draft, Snapshot},
+        };
+        use agent_protocol::{
+            editors::{EditorId, FileManagerRevealKind, FileOpenCapabilities},
+            models::WorkspaceReview,
+        };
+        use std::sync::Arc;
+        let mut snapshot = Snapshot::default();
+        snapshot.connection.connected = true;
+        let pane = Arc::make_mut(&mut snapshot.pane);
+        Arc::make_mut(&mut pane.navigation).cwd = "/fixture/日本語 👋".into();
+        Arc::make_mut(&mut pane.workspace).review = Some(Arc::new(WorkspaceReview {
+            branch: "feature/native".into(),
+            additions: 7,
+            deletions: 2,
+            files: Vec::new(),
+            diff: String::new(),
+        }));
+        snapshot.files.file_open_capabilities = Some(Arc::new(FileOpenCapabilities {
+            editors: vec![EditorId::Cursor, EditorId::FileManager],
+            reveal: Some(FileManagerRevealKind::Finder),
+        }));
+        snapshot.files.preferred_editor = Some(EditorId::Cursor);
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
+            pane.navigation.draft_key.clone(),
+            Arc::new(Draft {
+                attachments: vec![Attachment {
+                    path: "/fixture/日本語.txt".into(),
+                    name: "日本語.txt".into(),
+                    is_image: false,
+                }],
+                ..Default::default()
+            }),
+        );
+        let p = Presentation::project(Arc::new(snapshot), None);
+        let expected: Value = serde_json::from_str(include_str!(
+            "../apple/Tests/BexNshNativeTests/Fixtures/workspace.json"
+        ))
+        .unwrap();
+        assert_eq!(workspace_data(&p, true), expected);
+        assert_eq!(
+            workspace_data(&p, false)["workspace"]["summary"]["editors"],
+            json!([])
+        );
+    }
 
     #[test]
     fn agents_match_the_native_display_contract() {

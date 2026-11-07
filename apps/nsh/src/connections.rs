@@ -30,11 +30,17 @@ pub(crate) fn selector(
             hosts
                 .iter()
                 .find(|host| host.id == selected.get())
-                .map(|host| host.name.clone())
+                .map(|host| {
+                    if is_desktop() && host.id == "local" {
+                        "Local".into()
+                    } else {
+                        host.name.clone()
+                    }
+                })
                 .unwrap_or_else(|| "接続先".into())
         }))
     })
-    .min_h(px(44.0))
+    .min_h(px(if is_desktop() { 28.0 } else { 44.0 }))
 }
 
 pub(crate) fn screen(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl IntoElement {

@@ -289,6 +289,10 @@ impl Dictation {
                         });
                     }
                 })
+                .prop(
+                    "appearance",
+                    json!(if is_desktop() { "plain" } else { "automatic" }),
+                )
                 .prop("symbol", move || {
                     json!(if self.active.get() {
                         "stop.fill"

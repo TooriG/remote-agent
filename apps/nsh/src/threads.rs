@@ -150,24 +150,26 @@ pub(crate) fn list(
     let entries = computed(move || publication.with(|p| rows(p.list.as_deref(), dark())));
     let table = native("bex.list").prop("items", move || entries.with(|entries| json!(entries.iter().map(|row| json!({"id": row_id(&row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "level": row.level, "disclosure": row.disclosure, "group": row.level == 0 && row.disclosure, "expanded": row.expanded})).collect::<Vec<_>>())));
     let table = if is_desktop() {
-        table.prop("selected", move || {
-            publication.with(|p| {
-                let navigation = &p.composer.controls.navigation;
-                let action = navigation.thread_id.clone().map(Action::Open).or_else(|| {
-                    entries.with(|rows| {
-                        rows.iter().find_map(|row| match &row.action {
-                            Action::New { cwd, .. }
-                                if !cwd.is_empty() && *cwd == navigation.cwd =>
-                            {
-                                Some(row.action.clone())
-                            }
-                            _ => None,
+        table
+            .prop("sidebar", json!(true))
+            .prop("selected", move || {
+                publication.with(|p| {
+                    let navigation = &p.composer.controls.navigation;
+                    let action = navigation.thread_id.clone().map(Action::Open).or_else(|| {
+                        entries.with(|rows| {
+                            rows.iter().find_map(|row| match &row.action {
+                                Action::New { cwd, .. }
+                                    if !cwd.is_empty() && *cwd == navigation.cwd =>
+                                {
+                                    Some(row.action.clone())
+                                }
+                                _ => None,
+                            })
                         })
-                    })
-                });
-                json!(action.as_ref().map(row_id))
+                    });
+                    json!(action.as_ref().map(row_id))
+                })
             })
-        })
     } else {
         table
     };
