@@ -90,11 +90,18 @@ async fn send(store: &Store, text: &str, client_id: &str) -> agent_protocol::ses
         })
         .await
         .unwrap();
-    assert!(if thread_id.is_some() {
-        matches!(outcome, Outcome::Submitted { .. })
-    } else {
-        matches!(outcome, Outcome::StartedThread { .. })
-    });
+    assert!(
+        if thread_id.is_some() {
+            matches!(outcome, Outcome::Submitted { .. })
+        } else {
+            matches!(outcome, Outcome::StartedThread { .. })
+        },
+        "unexpected submission outcome for {client_id}: {outcome:?}; error: {:?}; unavailable: {:?}",
+        store.snapshot().pane.error,
+        agent_core::presentation::composer::ComposerPresentation::from_snapshot(store.snapshot())
+            .controls()
+            .unavailable
+    );
     store.snapshot().pane.navigation.thread_id.clone().unwrap()
 }
 
@@ -854,6 +861,14 @@ async fn provider_switch_preserves_conversation_identity_history_and_workspace()
                     })
                     .await
                     .unwrap();
+                // History may complete before the Host acknowledges the previous input.
+                // Follow the same readiness contract as the native send control.
+                until(&store, |snapshot| {
+                    snapshot
+                        .input_unavailable_reason(id.clone(), Some(model.provider))
+                        .is_none()
+                })
+                .await;
                 assert_eq!(
                     send(&store, text, &format!("{}-{step}", original.id)).await,
                     id
