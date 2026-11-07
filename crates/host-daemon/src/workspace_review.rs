@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creation_history_excludes_inherited_work_without_a_saved_source_ref() {
+    async fn missing_or_deleted_source_falls_back_to_main_and_clears_integrated_changes() {
         let directory = tempfile::tempdir().unwrap();
         let cwd = directory.path();
         git(cwd, &["init", "--initial-branch=main"]);
@@ -275,15 +275,133 @@ mod tests {
         git(cwd, &["add", "."]);
         git(cwd, &["commit", "-m", "source work"]);
         git(cwd, &["switch", "-c", "task", "HEAD"]);
-        assert_changes(cwd, &[], (0, 0)).await;
+        assert_changes(cwd, &["inherited.txt"], (1, 0)).await;
         git(cwd, &["commit", "--allow-empty", "-m", "no file changes"]);
-        assert_changes(cwd, &[], (0, 0)).await;
+        assert_changes(cwd, &["inherited.txt"], (1, 0)).await;
         std::fs::write(cwd.join("own.txt"), "own work\n").unwrap();
         git(cwd, &["add", "own.txt"]);
         git(cwd, &["commit", "-m", "own work"]);
-        assert_changes(cwd, &["own.txt"], (1, 0)).await;
+        assert_changes(cwd, &["inherited.txt", "own.txt"], (2, 0)).await;
         git(cwd, &["revert", "--no-edit", "HEAD"]);
+        assert_changes(cwd, &["inherited.txt"], (1, 0)).await;
+        git(
+            cwd,
+            &[
+                "config",
+                &comparison::base_key("task"),
+                "refs/heads/deleted",
+            ],
+        );
+        assert_changes(cwd, &["inherited.txt"], (1, 0)).await;
+        git(cwd, &["switch", "main"]);
+        git(cwd, &["merge", "--no-edit", "task"]);
+        git(cwd, &["switch", "task"]);
         assert_changes(cwd, &[], (0, 0)).await;
+        std::fs::write(cwd.join("pending.txt"), "not integrated\n").unwrap();
+        assert_changes(cwd, &["pending.txt"], (1, 0)).await;
+    }
+
+    #[tokio::test]
+    async fn fallback_follows_the_primary_remotes_default_branch_without_network_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        git(cwd, &["init", "--initial-branch=main"]);
+        git(cwd, &["commit", "--allow-empty", "-m", "base"]);
+        git(cwd, &["switch", "-c", "trunk"]);
+        std::fs::write(cwd.join("inherited.txt"), "default branch work\n").unwrap();
+        git(cwd, &["add", "."]);
+        git(cwd, &["commit", "-m", "trunk work"]);
+        git(cwd, &["remote", "add", "mirror", "./unreachable"]);
+        git(cwd, &["update-ref", "refs/remotes/mirror/trunk", "HEAD"]);
+        git(
+            cwd,
+            &[
+                "symbolic-ref",
+                "refs/remotes/mirror/HEAD",
+                "refs/remotes/mirror/trunk",
+            ],
+        );
+        git(cwd, &["switch", "-c", "task", "HEAD"]);
+        std::fs::write(cwd.join("own.txt"), "task work\n").unwrap();
+        git(cwd, &["add", "."]);
+        git(cwd, &["commit", "-m", "task work"]);
+        assert_changes(cwd, &["own.txt"], (1, 0)).await;
+
+        git(cwd, &["remote", "add", "origin", "./also-unreachable"]);
+        git(cwd, &["update-ref", "refs/remotes/origin/release", "main"]);
+        git(
+            cwd,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/release",
+            ],
+        );
+        assert_changes(cwd, &["inherited.txt", "own.txt"], (2, 0)).await;
+        git(cwd, &["update-ref", "refs/remotes/origin/release", "HEAD"]);
+        assert_changes(cwd, &[], (0, 0)).await;
+    }
+
+    #[tokio::test]
+    async fn default_branch_uses_its_tracked_remote_and_detached_heads_only_show_pending_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        git(cwd, &["init", "--initial-branch=main"]);
+        git(cwd, &["commit", "--allow-empty", "-m", "base"]);
+        git(cwd, &["remote", "add", "origin", "./unreachable"]);
+        git(cwd, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        std::fs::write(cwd.join("own.txt"), "local commit\n").unwrap();
+        git(cwd, &["add", "."]);
+        git(cwd, &["commit", "-m", "local work"]);
+        assert_changes(cwd, &["own.txt"], (1, 0)).await;
+
+        git(cwd, &["remote", "add", "other", "./also-unreachable"]);
+        git(cwd, &["update-ref", "refs/remotes/other/stable", "HEAD"]);
+        git(cwd, &["branch", "--set-upstream-to=other/stable"]);
+        assert_changes(cwd, &[], (0, 0)).await;
+        git(cwd, &["checkout", "--detach"]);
+        assert_changes(cwd, &[], (0, 0)).await;
+        std::fs::write(cwd.join("own.txt"), "pending edit\n").unwrap();
+        assert_changes(cwd, &["own.txt"], (1, 1)).await;
+    }
+
+    #[tokio::test]
+    async fn repositories_without_a_comparison_branch_only_show_pending_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        git(cwd, &["init", "--initial-branch=develop"]);
+        git(cwd, &["commit", "--allow-empty", "-m", "base"]);
+        git(cwd, &["switch", "-c", "task"]);
+        std::fs::write(cwd.join("own.txt"), "committed\n").unwrap();
+        git(cwd, &["add", "."]);
+        git(cwd, &["commit", "-m", "task work"]);
+        assert_changes(cwd, &[], (0, 0)).await;
+        std::fs::write(cwd.join("own.txt"), "pending\n").unwrap();
+        assert_changes(cwd, &["own.txt"], (1, 1)).await;
+        std::fs::write(cwd.join("own.txt"), "committed\n").unwrap();
+        git(cwd, &["branch", "master", "HEAD^"]);
+        assert_changes(cwd, &["own.txt"], (1, 0)).await;
+        git(cwd, &["branch", "main"]);
+        assert_changes(cwd, &[], (0, 0)).await;
+    }
+
+    #[tokio::test]
+    async fn unrelated_history_remains_an_error_instead_of_hiding_committed_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        git(cwd, &["init", "--initial-branch=main"]);
+        git(cwd, &["commit", "--allow-empty", "-m", "base"]);
+        git(cwd, &["switch", "--orphan", "unrelated"]);
+        std::fs::write(cwd.join("own.txt"), "unrelated work\n").unwrap();
+        git(cwd, &["add", "."]);
+        git(cwd, &["commit", "-m", "separate history"]);
+        std::fs::write(cwd.join("pending.txt"), "pending\n").unwrap();
+        // T3's resolveReviewMergeBase errors when an existing comparison ref
+        // shares no ancestor; falling back to HEAD would conceal committed work.
+        let cwd_text = cwd.to_str().unwrap().to_owned();
+        assert!(inspect_workspace(cwd_text.clone()).await.is_err());
+        let marks = directory_changes([cwd_text.clone()].into()).await.unwrap();
+        assert_eq!(marks.get(&cwd_text), None, "unknown is not a clean result");
     }
 
     #[tokio::test]
