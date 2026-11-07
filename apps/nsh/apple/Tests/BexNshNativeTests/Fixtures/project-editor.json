@@ -1,0 +1,10 @@
+{
+  "projectEditor": {
+    "editor": {
+      "id": "fixture-editor",
+      "name": "日本語のプロジェクト 👋",
+      "section": "個人",
+      "error": "表示名は1〜100文字、セクションは60文字以内で入力してください"
+    }
+  }
+}

@@ -280,7 +280,7 @@ pub(crate) fn screen(id: u64) -> impl Element {
             "symbol": if row.kind == agent_protocol::file_tree::EntryKind::Directory { "folder" } else { "" },
             "asset": (row.kind != agent_protocol::file_tree::EntryKind::Directory).then(|| format!("file-icons/pierre_{}.png", mobile_file_icon(row.path.clone()))),
             "level": row.depth, "disclosure": row.kind == agent_protocol::file_tree::EntryKind::Directory, "group": false, "expanded": row.expanded,
-        })).collect::<Vec<_>>()))).prop("selected", move || json!(tree.with(|tree| tree.selected_paths.first().cloned())))
+        })).collect::<Vec<_>>()))).prop("selected", move || json!(tree.with(|tree| tree.selected_paths.first().cloned().into_iter().collect::<Vec<_>>())))
         .prop("expansion_enabled", move || json!(tree.with(|tree| tree.can_change_expansion)))
         .on_native_event(move |event: &NativeEvent| {
             if &*event.name == "activate" && let Some(path) = event.data.as_str()

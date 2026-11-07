@@ -7,7 +7,7 @@ use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
     runtime::ProtocolObject,
 };
-use objc2_core_foundation::{CGRect, CGSize};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{
     NSArray, NSData, NSIndexPath, NSInteger, NSObject, NSObjectProtocol, NSString,
 };
@@ -111,15 +111,39 @@ impl NativeComponent for Progress {
     }
 }
 
-fn menu_items(context: &ComponentContext, entries: &JsonValue) -> Vec<Retained<UIMenuElement>> {
+fn menu_items(
+    context: &ComponentContext,
+    event: &'static str,
+    entries: &[JsonValue],
+) -> Vec<Retained<UIMenuElement>> {
+    // UIKit renders separators as inline menu groups.
+    if entries.iter().any(|entry| entry["separator"] == true) {
+        return entries
+            .split(|entry| entry["separator"] == true)
+            .filter(|group| !group.is_empty())
+            .map(|group| {
+                UIMenu::menuWithTitle_image_identifier_options_children(
+                    &NSString::new(),
+                    None,
+                    None,
+                    UIMenuOptions::DisplayInline,
+                    &NSArray::from_retained_slice(&menu_items(context, event, group)),
+                    MainThreadMarker::new().unwrap(),
+                )
+                .into_super()
+            })
+            .collect();
+    }
     entries
-        .as_array()
-        .into_iter()
-        .flatten()
+        .iter()
         .filter_map(|entry| {
             let title = NSString::from_str(entry["title"].as_str()?);
             if let Some(children) = entry.get("children") {
-                let children = menu_items(context, children);
+                let children = menu_items(
+                    context,
+                    event,
+                    children.as_array().map(Vec::as_slice).unwrap_or_default(),
+                );
                 Some(
                     UIMenu::menuWithTitle_children(
                         &title,
@@ -129,7 +153,7 @@ fn menu_items(context: &ComponentContext, entries: &JsonValue) -> Vec<Retained<U
                     .into_super(),
                 )
             } else {
-                let action = action(context, "select", entry["id"].as_str()?);
+                let action = action(context, event, entry["id"].as_str()?);
                 action.setTitle(&title);
                 action.setImage(
                     entry["symbol"]
@@ -175,7 +199,11 @@ impl Button {
     }
 
     fn menu(&self, items: &JsonValue) {
-        let actions = menu_items(&self.context, items);
+        let actions = menu_items(
+            &self.context,
+            "select",
+            items.as_array().map(Vec::as_slice).unwrap_or_default(),
+        );
         let menu = UIMenu::menuWithTitle_children(
             &NSString::new(),
             &NSArray::from_retained_slice(&actions),
@@ -323,6 +351,30 @@ define_class!(
     }
     unsafe impl UIScrollViewDelegate for ListDelegate {}
     unsafe impl UITableViewDelegate for ListDelegate {
+        #[unsafe(method_id(tableView:contextMenuConfigurationForRowAtIndexPath:point:))]
+        fn menu(
+            &self,
+            _: &UITableView,
+            index: &NSIndexPath,
+            _: CGPoint,
+        ) -> Option<Retained<UIContextMenuConfiguration>> {
+            self.ivars().items.borrow().get(index.row() as usize)
+                .and_then(|row| row.menu.as_ref())
+                .and_then(JsonValue::as_array)
+                .filter(|entries| !entries.is_empty())
+                .map(|entries| {
+                    let menu = UIMenu::menuWithTitle_children(
+                        &NSString::new(),
+                        &NSArray::from_retained_slice(&menu_items(&self.ivars().context, "menu", entries)),
+                        self.mtm(),
+                    );
+                    let provider = RcBlock::new(move |_: NonNull<NSArray<UIMenuElement>>| Retained::autorelease_ptr(menu.clone()));
+                    // UIKit copies the provider; it owns the native menu and its action contexts.
+                    unsafe { UIContextMenuConfiguration::configurationWithIdentifier_previewProvider_actionProvider(
+                        None, std::ptr::null_mut(), RcBlock::as_ptr(&provider), self.mtm(),
+                    ) }
+                })
+        }
         #[unsafe(method(tableView:didSelectRowAtIndexPath:))]
         fn selected(&self, table: &UITableView, index: &NSIndexPath) {
             table.deselectRowAtIndexPath_animated(index, true);

@@ -541,28 +541,22 @@ impl SidebarView {
         let list = &model.list;
         let loading_session_list = model.loading_session_list;
         let mut projects = Vec::new();
-        let mut last_section = Some(language.text("プロジェクト").to_string());
-        let mut pinned_heading = false;
-        for project in list
+        let visible = list
             .as_ref()
             .map(|page| page.projects.as_slice())
-            .unwrap_or_default()
-        {
-            if project.pinned {
-                last_section = None;
-                if !pinned_heading {
-                    projects.push(SidebarRow::Heading(language.text("ピン留め").into()));
-                    pinned_heading = true;
-                }
-            } else {
-                let section = project
-                    .section
-                    .clone()
-                    .unwrap_or_else(|| language.text("プロジェクト").into());
-                if last_section.as_ref() != Some(&section) {
-                    projects.push(SidebarRow::Heading(section.clone()));
-                    last_section = Some(section);
-                }
+            .unwrap_or_default();
+        let default_title = language.text("プロジェクト").to_string();
+        let pinned_title = language.text("ピン留め").to_string();
+        let headings = agent_core::presentation::list::project_headings(
+            visible
+                .iter()
+                .map(|project| (project.pinned, project.section.as_deref())),
+            &default_title,
+            &pinned_title,
+        );
+        for (project, heading) in visible.iter().zip(headings) {
+            if let Some(heading) = heading {
+                projects.push(SidebarRow::Heading(heading.into()));
             }
             let id = project.id.clone();
             let expanded = project.expanded;

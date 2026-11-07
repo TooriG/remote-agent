@@ -2,6 +2,16 @@
 import XCTest
 
 final class DisplayTests: XCTestCase {
+    func testProjectEditorPreservesNativeInputAndCoreValidation() throws {
+        guard case let .projectEditor(editor) = try content("project-editor")
+        else { return XCTFail("Expected project editor") }
+        let value = try XCTUnwrap(editor)
+        XCTAssertEqual(value.id, "fixture-editor")
+        XCTAssertEqual(value.name, "日本語のプロジェクト 👋")
+        XCTAssertEqual(value.section, "個人")
+        XCTAssertEqual(value.error, "表示名は1〜100文字、セクションは60文字以内で入力してください")
+    }
+
     func testWorkspacePreservesHostEditorSelectionBranchAndSources() throws {
         guard case let .workspace(summary) = try content("workspace") else { return XCTFail("Expected workspace") }
         XCTAssertEqual(summary.directory, "日本語 👋")

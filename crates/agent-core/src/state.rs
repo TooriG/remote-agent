@@ -882,20 +882,16 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
         },
         Intent::EditProject { project_id, name, section } => {
-            let name = name.trim();
-            let section = section.trim();
-            if name.is_empty() || name.chars().count() > 100 || section.chars().count() > 60 {
-                Arc::make_mut(&mut next.pane).error = Some("表示名は1〜100文字、セクションは60文字以内で入力してください".into());
-            } else {
-                projects::update(&mut next, &project_id, |p| {
+            match projects::validate_project_labels(&name, &section) {
+                Ok((name, section)) => projects::update(&mut next, &project_id, |p| {
                     p.name = Some(name.into());
                     p.section = (!section.is_empty()).then(|| section.into());
-                });
+                }),
+                Err(reason) => Arc::make_mut(&mut next.pane).error = Some(reason.into()),
             }
         }
         Intent::SetProjectSection { project_id, section } => {
-            let section = section.trim();
-            if section.chars().count() <= 60 {
+            if let Some(section) = projects::project_section(&section) {
                 projects::update(&mut next, &project_id, |p| p.section = (!section.is_empty()).then(|| section.into()));
             }
         }

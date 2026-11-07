@@ -4,7 +4,7 @@ use nsh_core::JsonValue;
 use nsh_platform_macos::{ComponentContext, NativeComponent};
 use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
-    rc::Retained,
+    rc::{Retained, Weak},
     runtime::{AnyObject, ProtocolObject},
     sel,
 };
@@ -112,7 +112,11 @@ define_class!(
     unsafe impl NSOutlineViewDelegate for Delegate {
         #[unsafe(method(outlineView:isGroupItem:))]
         fn group(&self, _: &NSOutlineView, item: &AnyObject) -> bool {
-            !self.ivars().sidebar.get() && self.ivars().row(item).is_some_and(|row| row.group)
+            self.ivars().row(item).is_some_and(|row| row.group)
+        }
+        #[unsafe(method(outlineView:shouldSelectItem:))]
+        fn can_select(&self, _: &NSOutlineView, item: &AnyObject) -> bool {
+            self.ivars().row(item).is_some_and(|row| !row.group)
         }
         // Only completed changes emit events. AppKit also queries shouldExpand /
         // shouldCollapse while inspecting accessibility; those queries stay pure.
@@ -136,23 +140,34 @@ define_class!(
             item: &AnyObject,
         ) -> Option<Retained<NSView>> {
             self.ivars().row(item).map(|row| {
-                let identifier = NSString::from_str("item");
+                let identifier = NSString::from_str(if row.group { "heading" } else { "item" });
                 let reused = unsafe { outline.makeViewWithIdentifier_owner(&identifier, None) };
                 let cell = reused
                     .and_then(|view| view.downcast::<NSTableCellView>().ok())
-                    .unwrap_or_else(|| cell_view(self.mtm()));
+                    .unwrap_or_else(|| cell_view(self.mtm(), row.group));
                 cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
+                let menu = row.menu.as_ref().map(|entries| {
+                    let menu = NSMenu::new(self.mtm());
+                    super::macos::menu_items(&menu, entries, self);
+                    menu
+                });
                 // The cell's subviews retain both outlets for the cell's entire lifetime.
                 unsafe {
+                    // Read-only labels and images receive their own context-menu events.
+                    // AppKit retains the menu; List keeps its action target alive.
+                    cell.setMenu(menu.as_deref());
                     if let Some(field) = cell.textField() {
+                        field.setMenu(menu.as_deref());
                         field.setStringValue(&NSString::from_str(&row.title));
                         if self.ivars().sidebar.get() {
-                            let weight = if row.group { NSFontWeightSemibold } else { NSFontWeightRegular };
-                            field.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, weight)));
-                            field.setTextColor(Some(&NSColor::labelColor()));
+                            let weight = if row.group || row.disclosure { NSFontWeightSemibold } else { NSFontWeightRegular };
+                            field.setFont(Some(&NSFont::systemFontOfSize_weight(if row.group { 12.0 } else { 13.0 }, weight)));
+                            let color = if row.group { NSColor::secondaryLabelColor() } else { NSColor::labelColor() };
+                            field.setTextColor(Some(&color));
                         }
                     }
                     if let Some(view) = cell.imageView() {
+                        view.setMenu(menu.as_deref());
                         let image = if let Some(png) = &row.png {
                             NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(png))
                                 .inspect(|image| image.setSize(CGSize::new(17.0, 17.0)))
@@ -194,6 +209,12 @@ define_class!(
         }
     }
     impl Delegate {
+        #[unsafe(method(chose:))]
+        fn chose(&self, sender: &NSMenuItem) {
+            if let Some(id) = sender.representedObject().and_then(|value| value.downcast::<NSString>().ok()) {
+                self.ivars().context.emit("menu", id.to_string().into());
+            }
+        }
         #[unsafe(method(activate:))]
         fn activate(&self, view: &NSOutlineView) {
             let id = view.itemAtRow(view.selectedRow()).and_then(|item| self.ivars().row(&item).map(|row| row.id.clone()));
@@ -202,34 +223,72 @@ define_class!(
     }
 );
 
-fn cell_view(mtm: MainThreadMarker) -> Retained<NSTableCellView> {
+// Ask AppKit which row the context-menu event belongs to. No selection change
+// or delayed menu population is needed, including when the menu starts empty.
+define_class!(
+    #[unsafe(super(NSOutlineView))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = Weak<Delegate>]
+    struct Outline;
+    unsafe impl NSObjectProtocol for Outline {}
+    impl Outline {
+        #[unsafe(method_id(menuForEvent:))]
+        fn menu(&self, event: &NSEvent) -> Option<Retained<NSMenu>> {
+            self.ivars().load().and_then(|delegate| {
+                let point = self.convertPoint_fromView(event.locationInWindow(), None);
+                let entries = self.itemAtRow(self.rowAtPoint(point))
+                    .and_then(|item| delegate.ivars().row(&item).and_then(|row| row.menu.clone()))?;
+                let menu = NSMenu::new(self.mtm());
+                super::macos::menu_items(&menu, &entries, &delegate);
+                Some(menu)
+            })
+        }
+    }
+);
+
+fn cell_view(mtm: MainThreadMarker, heading: bool) -> Retained<NSTableCellView> {
     let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), CGRect::ZERO);
-    cell.setIdentifier(Some(&NSString::from_str("item")));
-    let image = NSImageView::initWithFrame(NSImageView::alloc(mtm), CGRect::ZERO);
-    image.setAccessibilityElement(false);
+    cell.setIdentifier(Some(&NSString::from_str(if heading {
+        "heading"
+    } else {
+        "item"
+    })));
     let field = NSTextField::labelWithString(&NSString::new(), mtm);
     field.setMaximumNumberOfLines(1);
-    image.setTranslatesAutoresizingMaskIntoConstraints(false);
     field.setTranslatesAutoresizingMaskIntoConstraints(false);
-    cell.addSubview(&image);
     cell.addSubview(&field);
-    // These unretained outlets point at subviews owned by the standard cell.
+    // This unretained outlet points at a subview owned by the standard cell.
     unsafe {
-        cell.setImageView(Some(&image));
         cell.setTextField(Some(&field));
     }
-    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
-        image
-            .leadingAnchor()
-            .constraintEqualToAnchor(&cell.leadingAnchor()),
-        image
-            .centerYAnchor()
-            .constraintEqualToAnchor(&cell.centerYAnchor()),
-        image.widthAnchor().constraintEqualToConstant(18.0),
-        image.heightAnchor().constraintEqualToConstant(18.0),
+    let leading = if heading {
         field
             .leadingAnchor()
-            .constraintEqualToAnchor_constant(&image.trailingAnchor(), 6.0),
+            .constraintEqualToAnchor(&cell.leadingAnchor())
+    } else {
+        let image = NSImageView::initWithFrame(NSImageView::alloc(mtm), CGRect::ZERO);
+        image.setAccessibilityElement(false);
+        image.setTranslatesAutoresizingMaskIntoConstraints(false);
+        cell.addSubview(&image);
+        unsafe {
+            cell.setImageView(Some(&image));
+        }
+        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+            image
+                .leadingAnchor()
+                .constraintEqualToAnchor(&cell.leadingAnchor()),
+            image
+                .centerYAnchor()
+                .constraintEqualToAnchor(&cell.centerYAnchor()),
+            image.widthAnchor().constraintEqualToConstant(18.0),
+            image.heightAnchor().constraintEqualToConstant(18.0),
+        ]));
+        field
+            .leadingAnchor()
+            .constraintEqualToAnchor_constant(&image.trailingAnchor(), 6.0)
+    };
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+        leading,
         field
             .trailingAnchor()
             .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
@@ -258,7 +317,10 @@ impl List {
             sidebar: Cell::new(false),
         });
         let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
-        let outline = NSOutlineView::initWithFrame(NSOutlineView::alloc(mtm), CGRect::ZERO);
+        let outline = Outline::alloc(mtm).set_ivars(Weak::from_retained(&delegate));
+        let outline: Retained<Outline> =
+            unsafe { msg_send![super(outline), initWithFrame: CGRect::ZERO] };
+        let outline = outline.into_super();
         let column = NSTableColumn::initWithIdentifier(
             NSTableColumn::alloc(mtm),
             &NSString::from_str("items"),
@@ -387,8 +449,18 @@ impl NativeComponent for List {
                     .unwrap_or_default(),
             );
         } else {
-            *self.delegate.ivars().selected.borrow_mut() =
-                value.and_then(JsonValue::as_str).map(str::to_owned);
+            let candidates = value
+                .and_then(JsonValue::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(JsonValue::as_str)
+                .collect::<Vec<_>>();
+            let mut selected = self.delegate.ivars().selected.borrow_mut();
+            // A logical selection can appear in a project and in recent chats.
+            // Keep the native position the user chose while it remains valid.
+            if !candidates.iter().any(|id| selected.as_deref() == Some(*id)) {
+                *selected = candidates.first().map(|id| (*id).to_owned());
+            }
         }
         let object = self
             .delegate

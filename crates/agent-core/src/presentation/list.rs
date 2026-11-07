@@ -40,6 +40,75 @@ pub struct ProjectSummary {
     pub has_more: bool,
 }
 
+/// Native lists share the existing sidebar's section boundaries and pinned group.
+pub fn project_headings<'a>(
+    projects: impl IntoIterator<Item = (bool, Option<&'a str>)>,
+    default_title: &'a str,
+    pinned_title: &'a str,
+) -> Vec<Option<&'a str>> {
+    let mut last_section = Some(default_title);
+    let mut pinned_heading = false;
+    projects
+        .into_iter()
+        .map(|(pinned, section)| {
+            if pinned {
+                last_section = None;
+                if pinned_heading {
+                    None
+                } else {
+                    pinned_heading = true;
+                    Some(pinned_title)
+                }
+            } else {
+                let title = section.unwrap_or(default_title);
+                if last_section == Some(title) {
+                    None
+                } else {
+                    last_section = Some(title);
+                    Some(title)
+                }
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod heading_tests {
+    #[test]
+    fn project_headings_preserve_pinned_precedence_and_section_boundaries() {
+        let projects = [
+            (false, None),
+            (true, Some("ignored")),
+            (true, None),
+            (false, None),
+            (false, Some("仕事")),
+            (false, Some("仕事")),
+            (false, None),
+        ];
+        assert_eq!(
+            super::project_headings(projects, "プロジェクト", "ピン留め"),
+            [
+                None,
+                Some("ピン留め"),
+                None,
+                Some("プロジェクト"),
+                Some("仕事"),
+                None,
+                Some("プロジェクト")
+            ]
+        );
+        assert_eq!(
+            super::project_headings(
+                [(false, Some("Projects")), (false, None)],
+                "Projects",
+                "Pinned"
+            ),
+            [None, None]
+        );
+        assert!(super::project_headings([], "Projects", "Pinned").is_empty());
+    }
+}
+
 fn project_summary(project: &Project, display_name: &str) -> ProjectSummary {
     let name = project.name.trim();
     let mut words = name

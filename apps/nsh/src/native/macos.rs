@@ -13,6 +13,18 @@ use std::{
     rc::Rc,
 };
 
+pub(crate) fn open_directory(path: &str) {
+    let directory = std::path::Path::new(path);
+    if !directory.is_absolute() || !directory.is_dir() {
+        super::message("フォルダを開く", "プロジェクトのフォルダが見つかりません");
+        return;
+    }
+    let url = objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(path));
+    if !NSWorkspace::sharedWorkspace().openURL(&url) {
+        super::message("フォルダを開く", "フォルダを開けませんでした。");
+    }
+}
+
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
@@ -255,16 +267,20 @@ impl Menu {
     }
 }
 
-fn menu_items(menu: &NSMenu, entries: &JsonValue, target: &ActionTarget) {
+pub(super) fn menu_items(menu: &NSMenu, entries: &JsonValue, target: &objc2::runtime::AnyObject) {
     menu.setAutoenablesItems(false);
     for entry in entries.as_array().into_iter().flatten() {
+        if entry["separator"].as_bool().unwrap_or(false) {
+            menu.addItem(&NSMenuItem::separatorItem(menu.mtm()));
+            continue;
+        }
         let Some(title) = entry["title"].as_str() else {
             continue;
         };
         // Every actionable item targets the retained delegate's chose: selector.
         let item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(target.mtm()),
+                NSMenuItem::alloc(menu.mtm()),
                 &NSString::from_str(title),
                 Some(sel!(chose:)),
                 &NSString::new(),
@@ -273,7 +289,7 @@ fn menu_items(menu: &NSMenu, entries: &JsonValue, target: &ActionTarget) {
         if let Some(children) = entry.get("children") {
             unsafe { item.setAction(None) };
             let submenu =
-                NSMenu::initWithTitle(NSMenu::alloc(target.mtm()), &NSString::from_str(title));
+                NSMenu::initWithTitle(NSMenu::alloc(menu.mtm()), &NSString::from_str(title));
             menu_items(&submenu, children, target);
             item.setSubmenu(Some(&submenu));
         } else if let Some(id) = entry["id"].as_str() {

@@ -1,6 +1,22 @@
 //! Reversible, device-local project organization. Provider files remain unchanged.
 use super::*;
 use std::collections::HashMap;
+
+pub(crate) fn project_section(section: &str) -> Option<&str> {
+    let section = section.trim();
+    (section.chars().count() <= 60).then_some(section)
+}
+
+pub fn validate_project_labels<'a>(
+    name: &'a str,
+    section: &'a str,
+) -> Result<(&'a str, &'a str), &'static str> {
+    let name = name.trim();
+    match project_section(section) {
+        Some(section) if !name.is_empty() && name.chars().count() <= 100 => Ok((name, section)),
+        _ => Err("表示名は1〜100文字、セクションは60文字以内で入力してください"),
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacedChat {
     pub id: crate::session::SessionRef,
@@ -243,6 +259,25 @@ pub(super) fn archive(snapshot: &mut Snapshot, project: &str, before: i64) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn project_labels_accept_unicode_boundaries_and_reject_empty_or_overlong_values() {
+        assert_eq!(
+            super::validate_project_labels("  日本語 👋  ", "  個人  "),
+            Ok(("日本語 👋", "個人"))
+        );
+        assert!(super::validate_project_labels(&"名".repeat(100), &"節".repeat(60)).is_ok());
+        for (name, section) in [
+            ("  ".to_string(), String::new()),
+            ("名".repeat(101), String::new()),
+            ("有効".into(), "節".repeat(61)),
+        ] {
+            assert_eq!(
+                super::validate_project_labels(&name, &section),
+                Err("表示名は1〜100文字、セクションは60文字以内で入力してください")
+            );
+        }
+    }
+
     use super::*;
     use serde_json::json;
     fn fixture() -> Snapshot {

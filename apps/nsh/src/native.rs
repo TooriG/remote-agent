@@ -13,6 +13,7 @@ pub(super) struct ListRow {
     pub png: Option<Vec<u8>>,
     pub level: u32,
     pub disclosure: bool,
+    pub menu: Option<Value>,
     #[cfg(target_os = "macos")]
     pub group: bool,
     #[cfg(target_os = "macos")]

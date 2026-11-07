@@ -22,6 +22,7 @@ mod media;
 mod model_controls;
 mod native;
 mod notices;
+mod projects;
 mod requests;
 mod rich_text;
 mod shared;
@@ -281,7 +282,6 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                         .child(native::button("square.and.pencil", "新しいチャット", move || toolbar_action("compose"))
                             .prop("appearance", json!("plain")).w(px(32.0)).h(px(32.0)))
                 )
-                .child(text("プロジェクト").text_size(px(12.0)).text_color(move || nsh_base::theme().muted_foreground).px_2())
                 .child(list())
                 .child(view().flex_row().items_center()
                     .child(native::button("gearshape", "設定を開く", move || navigate(Navigation::Settings(true)))
