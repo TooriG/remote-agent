@@ -79,6 +79,7 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                         connection.client.with(|client| {
                             client.dispatch(
                                 &host.get(),
+                                None,
                                 Intent::SaveFile(op::SaveFile { path: path.get() }),
                             )
                         })
@@ -115,6 +116,7 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                     connection.client.with(|client| {
                         client.dispatch(
                             &host.get(),
+                            None,
                             Intent::SetFileDraft {
                                 path: path.get(),
                                 text: text.into(),
@@ -157,6 +159,7 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                             connection.client.with(|client| {
                                 client.dispatch(
                                     &host.get(),
+                                    None,
                                     Intent::ReadFile(op::ReadFile {
                                         path: path.get(),
                                         discard_draft: true,
@@ -186,6 +189,7 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                     connection.client.with(|client| {
                         client.dispatch(
                             &host.get(),
+                            None,
                             Intent::SetDraftText {
                                 thread_id: draft.get(),
                                 text: file_edit_prompt(path.get()),

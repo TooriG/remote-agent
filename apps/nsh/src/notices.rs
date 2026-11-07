@@ -15,8 +15,12 @@ pub(crate) fn notices(
         move || {
             connection.publication.with(|p| {
                 let mut notices = p.context.notices();
-                for scope in [ErrorScope::Application, ErrorScope::Projects] {
-                    notices.extend(p.snapshot.error_notices(scope));
+                if connection.pane.is_none() {
+                    for scope in [ErrorScope::Application, ErrorScope::Projects] {
+                        notices.extend(p.snapshot.error_notices(scope));
+                    }
+                } else {
+                    notices.extend(p.snapshot.pane_error_notice());
                 }
                 if workspace() {
                     notices.extend(p.snapshot.error_notices(ErrorScope::Workspace));

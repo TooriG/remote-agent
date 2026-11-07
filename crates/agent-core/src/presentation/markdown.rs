@@ -18,6 +18,15 @@ pub use links::{
     pick_stripped_workspace_match, pick_workspace_basename_match, strip_repeated_workspace_prefix,
 };
 
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn selection_quote(text: String) -> String {
+    text.split('\n')
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n\n"
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum MarkdownBlock {

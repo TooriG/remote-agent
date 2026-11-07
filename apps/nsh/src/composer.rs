@@ -229,6 +229,7 @@ pub(crate) fn composer(
                                 connection.application.with(|app| {
                                     app.attach(
                                         host,
+                                        connection.pane,
                                         key,
                                         images
                                             .into_iter()
@@ -253,6 +254,7 @@ pub(crate) fn composer(
                                         connection.application.with(|app| {
                                             app.attach(
                                                 host,
+                                                connection.pane,
                                                 key,
                                                 paths
                                                     .into_iter()
@@ -387,7 +389,7 @@ pub(crate) fn composer(
                                 .collect();
                             connection
                                 .application
-                                .with(|app| app.attach(host, key, sources));
+                                .with(|app| app.attach(host, connection.pane, key, sources));
                         }
                     })
             },

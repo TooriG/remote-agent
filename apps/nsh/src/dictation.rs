@@ -171,6 +171,7 @@ struct Recording {
     capture: Capture,
     preparation: Arc<DictationPreparation>,
     host: String,
+    pane: Option<u64>,
     draft: DraftKey,
 }
 
@@ -229,6 +230,7 @@ impl Dictation {
             match recording.capture.finish() {
                 Ok(audio) => client.dictate(
                     recording.host,
+                    recording.pane,
                     recording.draft,
                     recording.preparation,
                     audio,
@@ -252,7 +254,7 @@ impl Dictation {
                         let (host, draft) = self.target.get_untracked();
                         let preparation = match connection
                             .client
-                            .with(|client| client.prepare_dictation(&host))
+                            .with(|client| client.prepare_dictation(&host, connection.pane))
                         {
                             Ok(preparation) => preparation,
                             Err(reason) => {
@@ -277,6 +279,7 @@ impl Dictation {
                                         capture,
                                         preparation,
                                         host,
+                                        pane: connection.pane,
                                         draft,
                                     }));
                                     self.active.set(true);

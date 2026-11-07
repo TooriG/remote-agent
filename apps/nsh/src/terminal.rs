@@ -39,7 +39,7 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
     let send = move |intent| {
         connection
             .client
-            .with(|client| client.dispatch(&host.get(), intent))
+            .with(|client| client.dispatch(&host.get(), None, intent))
     };
     let start = move |size| {
         started.replace(true);

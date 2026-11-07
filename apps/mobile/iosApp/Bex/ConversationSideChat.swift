@@ -15,7 +15,6 @@ final class SideChatRequest {
     private(set) var chat: ConversationModel?
     private(set) var preparing = false
     private(set) var error: ErrorText?
-    private var draftInitialized = false
 
     init(text: String, host: String, originalThreadId: SessionRef, cwd: String,
          session: ClientSession, provider: ProviderKind?) {
@@ -42,22 +41,7 @@ final class SideChatRequest {
                 model = ConversationModel(host: host, session: session, pane: pane)
                 chat = model
             }
-            if model.selectedThreadId == nil {
-                guard let provider = provider ?? model.settings.provider()
-                else {
-                    throw NSError(domain: "Bex", code: 1,
-                                  userInfo: [NSLocalizedDescriptionKey: "利用可能なエージェントを選択してください。"])
-                }
-                _ = try await model.outcome(for: .createSession(CreateSession(
-                    provider: provider, cwd: cwd, model: nil, initialInput: nil
-                )))
-            }
-            if !draftInitialized {
-                if !text.isEmpty {
-                    model.draft = ConversationModel.selectionQuote(text)
-                }
-                draftInitialized = true
-            }
+            try await model.prepareSideChat(provider: provider, selection: text)
             model.composerFocusRequest = UUID()
         } catch {
             if !Task.isCancelled {
@@ -69,13 +53,9 @@ final class SideChatRequest {
 
 extension ConversationModel {
     func addSelectionToChat(_ text: String) {
-        let quote = Self.selectionQuote(text)
+        let quote = AgentCore.selectionQuote(text: text)
         draft = draft.isEmpty ? quote : draft + "\n\n" + quote
         composerFocusRequest = UUID()
-    }
-
-    static func selectionQuote(_ text: String) -> String {
-        text.components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n\n"
     }
 
     func askSelectionInSideChat(_ text: String) {

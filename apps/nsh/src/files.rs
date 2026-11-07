@@ -115,7 +115,7 @@ impl Browser {
         };
         let token = self.preview.begin();
         let target = self.target.get_untracked();
-        let resolve = client.request(&host, Intent::ResolveFileReference(request));
+        let resolve = client.request(&host, None, Intent::ResolveFileReference(request));
         self.owner.run(move || {
             spawn(async move {
                 let result = resolve
@@ -158,6 +158,7 @@ impl Browser {
                 .open(PanelKind::File, Some(path.clone()), line);
             client.dispatch(
                 &host,
+                None,
                 Intent::ReadFile(agent_core::state::operations::ReadFile {
                     path,
                     discard_draft: false,
@@ -183,6 +184,7 @@ pub(crate) fn screen(id: u64) -> impl Element {
             connection.client.with(|client| {
                 client.dispatch(
                     &host,
+                    None,
                     Intent::FileTree {
                         key,
                         action: FileTreeAction::Close,
@@ -199,6 +201,7 @@ pub(crate) fn screen(id: u64) -> impl Element {
         connection.client.with(|client| {
             client.dispatch(
                 &host,
+                None,
                 Intent::FileTree {
                     key,
                     action: FileTreeAction::Open {
@@ -219,6 +222,7 @@ pub(crate) fn screen(id: u64) -> impl Element {
             connection.client.with(|client| {
                 client.dispatch(
                     &host,
+                    None,
                     Intent::FileTree {
                         key,
                         action: FileTreeAction::Close,

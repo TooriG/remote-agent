@@ -38,6 +38,16 @@ impl AgentPane {
     pub fn prepare_dictation(&self) -> Arc<crate::client::DictationPreparation> {
         Arc::new(self.pane.prepare_dictation())
     }
+    pub async fn prepare_side_chat(
+        &self,
+        provider: Option<agent_protocol::session::ProviderKind>,
+        selection: String,
+    ) -> Result<Arc<Presentation>, AgentError> {
+        self.pane
+            .prepare_side_chat(provider, selection)
+            .await
+            .map_err(error)
+    }
     pub fn retire(&self) {
         self.pane.close();
     }

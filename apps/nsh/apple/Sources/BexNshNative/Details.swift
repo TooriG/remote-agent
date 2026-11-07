@@ -33,6 +33,7 @@ struct Agent: Decodable {
 
 enum DetailsContent: Decodable {
     case loading
+    case sideChatLoading
     case diff(files: [DiffFile])
     case agents(rows: [Agent])
     case error(message: String)
@@ -46,6 +47,8 @@ private struct DetailsView: View {
             switch content {
             case .loading:
                 ProgressView().accessibilityIdentifier("files.diff.loading")
+            case .sideChatLoading:
+                ProgressView("サイドチャットを準備中…").accessibilityIdentifier("sideChat.loading")
             case let .diff(files):
                 if files.isEmpty {
                     ContentUnavailableView("変更はありません", systemImage: "checkmark.circle")

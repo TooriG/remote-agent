@@ -16,6 +16,7 @@ use std::{
     },
 };
 
+mod panes;
 mod transfers;
 pub(crate) use transfers::{AttachmentSource, LocalFile};
 
@@ -28,6 +29,14 @@ pub(crate) enum Update {
     },
     Error(String),
     Paired(Result<String, String>),
+    PanePresentation {
+        id: u64,
+        value: Arc<Presentation>,
+    },
+    SideChatReady {
+        id: u64,
+        result: Result<Arc<Presentation>, String>,
+    },
 }
 
 pub(crate) struct Client {
@@ -38,6 +47,7 @@ pub(crate) struct Client {
     root: PathBuf,
     hosts: tokio::sync::Mutex<Vec<Host>>,
     updates: async_channel::Sender<Update>,
+    panes: std::sync::Mutex<std::collections::BTreeMap<u64, Arc<panes::Pane>>>,
 }
 
 impl Client {
@@ -70,6 +80,7 @@ impl Client {
             root,
             hosts: Default::default(),
             updates,
+            panes: Default::default(),
         });
         let owner = client.clone();
         client.spawn(async move {
@@ -178,10 +189,10 @@ impl Client {
         });
     }
 
-    pub fn dispatch(&self, host: &str, intent: Intent) {
+    pub fn dispatch(&self, host: &str, pane: Option<u64>, intent: Intent) {
         // Core enqueues effects synchronously and publishes their errors.
         // A receipt is needed only when its result or resource lifetime is needed.
-        if let Err(reason) = self.execute(host, intent) {
+        if let Err(reason) = self.execute(host, pane, intent) {
             self.report(reason);
         }
     }
@@ -189,8 +200,12 @@ impl Client {
     fn execute(
         &self,
         host: &str,
+        pane: Option<u64>,
         intent: Intent,
     ) -> Result<Arc<agent_core::client::native::Receipt>, AgentError> {
+        if let Some(id) = pane {
+            return self.pane(host, id)?.dispatch(intent);
+        }
         self.sessions
             .session(host.into())
             .ok_or_else(|| error("接続先が選択されていません"))?
@@ -200,9 +215,10 @@ impl Client {
     pub fn request(
         &self,
         host: &str,
+        pane: Option<u64>,
         intent: Intent,
     ) -> async_channel::Receiver<Result<agent_core::store::Outcome, AgentError>> {
-        let receipt = self.execute(host, intent);
+        let receipt = self.execute(host, pane, intent);
         if let Err(reason) = &receipt {
             self.report(reason);
         }
@@ -320,7 +336,11 @@ impl Client {
     pub fn prepare_dictation(
         &self,
         host: &str,
+        pane: Option<u64>,
     ) -> Result<Arc<agent_core::client::DictationPreparation>, AgentError> {
+        if let Some(id) = pane {
+            return Ok(self.pane(host, id)?.prepare_dictation());
+        }
         self.sessions
             .session(host.into())
             .and_then(|session| session.store())
@@ -332,15 +352,12 @@ impl Client {
     pub fn dictate(
         self: &Arc<Self>,
         host: String,
+        pane: Option<u64>,
         draft_key: agent_core::state::DraftKey,
         preparation: Arc<agent_core::client::DictationPreparation>,
         audio: Vec<u8>,
         send: bool,
     ) {
-        let Some(session) = self.sessions.session(host) else {
-            self.report("Host 未接続");
-            return;
-        };
         let intent = Intent::Transcribe(agent_core::state::operations::Dictate {
             draft_key,
             preparation: Some(preparation.id()),
@@ -348,7 +365,7 @@ impl Client {
             send,
             client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
         });
-        match session.dispatch(intent) {
+        match self.execute(&host, pane, intent) {
             Ok(receipt) => {
                 self.spawn(async move {
                     let _ = receipt.wait().await;
@@ -361,6 +378,7 @@ impl Client {
 
     pub async fn shutdown(&self) -> Result<(), AgentError> {
         self.closing.store(true, Ordering::SeqCst);
+        self.close_panes();
         let hosts = self.hosts.lock().await;
         self.sessions.retire();
         drop(hosts);
@@ -379,7 +397,7 @@ mod tests {
     };
     use std::time::Duration;
 
-    fn saved_host(root: &std::path::Path) -> Host {
+    pub(super) fn saved_host(root: &std::path::Path) -> Host {
         let host = Host {
             id: "test-host".into(),
             name: "Saved PC".into(),
@@ -402,7 +420,7 @@ mod tests {
         host
     }
 
-    async fn publication(
+    pub(super) async fn publication(
         incoming: &async_channel::Receiver<Update>,
         text: &str,
     ) -> Arc<Presentation> {
@@ -430,11 +448,11 @@ mod tests {
             thread_id: draft.clone(),
             text: text.into(),
         };
-        let failed = client.request("missing-host", edit("must not be applied"));
+        let failed = client.request("missing-host", None, edit("must not be applied"));
         runtime.block_on(async {
             let reason = failed.recv().await.unwrap().unwrap_err().to_string();
             client
-                .request(&host.id, edit("recovered 日本語 👋"))
+                .request(&host.id, None, edit("recovered 日本語 👋"))
                 .recv()
                 .await
                 .unwrap()
@@ -472,6 +490,7 @@ mod tests {
         client.attach_batch(
             id,
             "missing-host".into(),
+            None,
             initial.composer.controls.navigation.draft_key.clone(),
             vec![
                 AttachmentSource::Image {
@@ -524,6 +543,7 @@ mod tests {
             client.attach_batch(
                 retry,
                 "missing-host".into(),
+                None,
                 initial.composer.controls.navigation.draft_key.clone(),
                 vec![AttachmentSource::File {
                     path: selected.clone(),
@@ -570,6 +590,7 @@ mod tests {
         client.attach_batch(
             id,
             host.id.clone(),
+            None,
             draft_key.clone(),
             vec![
                 AttachmentSource::File {
@@ -623,6 +644,7 @@ mod tests {
         let key = initial.snapshot.pane.navigation.draft_key.clone();
         client.dispatch(
             &host.id,
+            None,
             Intent::SetDraftText {
                 thread_id: key.clone(),
                 text: "終了直前の日本語 👋".into(),
@@ -651,6 +673,7 @@ mod tests {
         let initial = runtime.block_on(publication(&incoming, ""));
         client.dispatch(
             &host.id,
+            None,
             Intent::SetDraftText {
                 thread_id: initial.snapshot.pane.navigation.draft_key.clone(),
                 text: "保持する入力".into(),
@@ -717,6 +740,7 @@ mod tests {
         runtime.block_on(publication(&incoming, ""));
         client.dispatch(
             &host.id,
+            None,
             Intent::ReadFile(op::ReadFile {
                 path: "/missing.txt".into(),
                 discard_draft: false,
@@ -737,6 +761,7 @@ mod tests {
                             assert_eq!(notices.len(), 1);
                             client.dispatch(
                                 &host.id,
+                                None,
                                 Intent::DismissError {
                                     id: notices[0].id.clone(),
                                 },

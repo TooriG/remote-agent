@@ -26,6 +26,15 @@ pub(crate) enum Navigation {
 }
 
 #[derive(Clone)]
+pub(crate) struct SideChat {
+    pub publication: Option<Shared<Presentation>>,
+    pub pending: bool,
+    pub failure: Option<agent_core::presentation::error::ErrorText>,
+    provider: Option<agent_protocol::session::ProviderKind>,
+    selection: Arc<str>,
+}
+
+#[derive(Clone)]
 pub(crate) struct State {
     pub hosts: Vec<Host>,
     pub host: String,
@@ -38,6 +47,7 @@ pub(crate) struct State {
     pub account_pending: bool,
     pub sidebar: bool,
     pub file_line: Option<(u64, Option<u32>)>,
+    pub side_chats: BTreeMap<u64, SideChat>,
     uploads: BTreeMap<uuid::Uuid, (String, DraftKey)>,
 }
 
@@ -55,6 +65,7 @@ impl Default for State {
             account_pending: false,
             sidebar: true,
             file_line: None,
+            side_chats: BTreeMap::new(),
             uploads: BTreeMap::new(),
         }
     }
@@ -113,6 +124,26 @@ impl State {
                 self.publications.insert(host, Shared(value));
             }
             Update::Error(reason) => self.failure = Some(reason),
+            Update::PanePresentation { id, value } => {
+                if let Some(pane) = self.side_chats.get_mut(&id) {
+                    pane.publication = Some(Shared(value));
+                }
+            }
+            Update::SideChatReady { id, result } => {
+                if let Some(pane) = self.side_chats.get_mut(&id) {
+                    pane.pending = false;
+                    match result {
+                        Ok(value) => {
+                            pane.publication = Some(Shared(value));
+                            pane.failure = None;
+                        }
+                        Err(reason) => {
+                            pane.failure =
+                                Some(agent_core::presentation::error::error_text(&reason))
+                        }
+                    }
+                }
+            }
             Update::Paired(result) => match result {
                 Ok(host) => {
                     self.host = host;
@@ -237,7 +268,7 @@ impl Application {
         if !accepted {
             return;
         }
-        let response = self.client.request(&host, intent);
+        let response = self.client.request(&host, None, intent);
         let owner = Arc::downgrade(self);
         let stop = self.stop.clone();
         self.jobs.spawn_on(
@@ -263,10 +294,13 @@ impl Application {
     pub fn attach(
         &self,
         host: String,
+        pane: Option<u64>,
         draft: DraftKey,
         sources: Vec<crate::client::AttachmentSource>,
     ) {
-        if sources.is_empty() {
+        if sources.is_empty()
+            || pane.is_some_and(|id| !self.snapshot().side_chats.contains_key(&id))
+        {
             return;
         }
         let id = uuid::Uuid::new_v4();
@@ -275,7 +309,69 @@ impl Application {
                 .uploads
                 .insert(id, (host.clone(), draft.clone()));
         });
-        self.client.attach_batch(id, host, draft, sources);
+        self.client.attach_batch(id, host, pane, draft, sources);
+    }
+
+    pub fn open_side_chat(
+        &self,
+        scope: PanelScope,
+        cwd: String,
+        provider: Option<agent_protocol::session::ProviderKind>,
+        selection: String,
+    ) {
+        let mut id = 0;
+        self.state.send_modify(|state| {
+            let opened = state
+                .panels
+                .clone()
+                .open(scope, PanelKind::SideChat, Some(cwd));
+            id = opened.id;
+            let state = Arc::make_mut(state);
+            state.panels = opened.panels;
+            state.side_chats.insert(
+                id,
+                SideChat {
+                    publication: None,
+                    pending: false,
+                    failure: None,
+                    provider,
+                    selection: selection.into(),
+                },
+            );
+        });
+        self.prepare_side_chat(id);
+    }
+
+    pub fn prepare_side_chat(&self, id: u64) {
+        let mut request = None;
+        self.state.send_if_modified(|state| {
+            let Some(scope) = state.panels.scope(id) else {
+                return false;
+            };
+            let cwd = state
+                .panels
+                .get(scope.clone())
+                .surfaces
+                .into_iter()
+                .find(|s| s.id == id)
+                .and_then(|s| s.path)
+                .unwrap_or_default();
+            let Some(pane) = Arc::make_mut(state)
+                .side_chats
+                .get_mut(&id)
+                .filter(|pane| !pane.pending)
+            else {
+                return false;
+            };
+            pane.pending = true;
+            pane.failure = None;
+            request = Some((scope.host, cwd, pane.provider, pane.selection.to_string()));
+            true
+        });
+        if let Some((host, cwd, provider, selection)) = request {
+            self.client
+                .prepare_side_chat(id, host, cwd, provider, selection);
+        }
     }
 
     pub fn open_panel(
@@ -284,18 +380,15 @@ impl Application {
         kind: PanelKind,
         path: Option<String>,
         line: Option<u32>,
-    ) -> u64 {
-        let mut id = 0;
+    ) {
         self.state.send_modify(|state| {
             let next = state.panels.clone().open(scope, kind, path);
-            id = next.id;
             let state = Arc::make_mut(state);
             state.panels = next.panels;
             if kind == PanelKind::File {
-                state.file_line = Some((id, line));
+                state.file_line = Some((next.id, line));
             }
         });
-        id
     }
 
     pub fn set_panel_open(&self, scope: PanelScope, open: bool) {
@@ -314,7 +407,10 @@ impl Application {
 
     pub fn close_panel(&self, scope: PanelScope, id: u64) {
         let mut terminal = false;
-        self.state.send_modify(|state| {
+        let closed = self.state.send_if_modified(|state| {
+            if state.panels.scope(id).as_ref() != Some(&scope) {
+                return false;
+            }
             terminal = state
                 .panels
                 .get(scope.clone())
@@ -324,13 +420,20 @@ impl Application {
             let panels = state.panels.clone().close(scope.clone(), id);
             let state = Arc::make_mut(state);
             state.panels = panels;
+            state.side_chats.remove(&id);
             if state.file_line.is_some_and(|(file, _)| file == id) {
                 state.file_line = None;
             }
+            true
         });
+        if !closed {
+            return;
+        }
+        self.client.close_pane(id);
         if terminal {
             self.client.dispatch(
                 &scope.host,
+                None,
                 Intent::CloseTerminal {
                     handle: self.terminal_handle(id),
                 },
@@ -355,6 +458,47 @@ mod tests {
     use super::*;
     use agent_core::state::Snapshot;
     use agent_protocol::session::{ProviderKind, SessionRef};
+
+    #[test]
+    fn hiding_a_side_chat_keeps_its_resource_and_late_updates_cannot_reopen_a_closed_tab() {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, application) = Application::new(directory.path().into()).unwrap();
+        let scope =
+            Snapshot::default().panel_scope("missing-host".into(), DraftKey::from("parent"));
+        application.open_side_chat(
+            scope.clone(),
+            "/side".into(),
+            Some(ProviderKind::Codex),
+            "quote".into(),
+        );
+        let id = application
+            .snapshot()
+            .panels
+            .get(scope.clone())
+            .active
+            .unwrap();
+        application.set_panel_open(scope.clone(), false);
+        assert!(application.snapshot().side_chats.contains_key(&id));
+        let mut wrong_scope = scope.clone();
+        wrong_scope.host = "another-host".into();
+        application.close_panel(wrong_scope, id);
+        assert!(application.snapshot().side_chats.contains_key(&id));
+        application.close_panel(scope.clone(), id);
+        application.state.send_modify(|state| {
+            let state = Arc::make_mut(state);
+            state.receive(Update::PanePresentation {
+                id,
+                value: Presentation::empty(),
+            });
+            state.receive(Update::SideChatReady {
+                id,
+                result: Ok(Presentation::empty()),
+            });
+        });
+        assert!(!application.snapshot().side_chats.contains_key(&id));
+        assert!(application.snapshot().panels.get(scope).surfaces.is_empty());
+        runtime.block_on(application.shutdown()).unwrap();
+    }
 
     #[test]
     fn submitting_a_draft_publishes_its_conversation_and_rekeyed_tabs_together() {
@@ -430,12 +574,18 @@ mod tests {
         let mut sidebar = application.subscribe();
         let mut tools = application.subscribe();
         let scope = Snapshot::default().panel_scope("host".into(), DraftKey::from("draft"));
-        let id = application.open_panel(
+        application.open_panel(
             scope.clone(),
             PanelKind::File,
             Some("/a.rs".into()),
             Some(7),
         );
+        let id = application
+            .snapshot()
+            .panels
+            .get(scope.clone())
+            .active
+            .unwrap();
         application.set_panel_layout(scope.clone(), PanelLayout::Bottom);
         application.navigate(Navigation::Settings(true));
         application.navigate(Navigation::Provider(Some(ProviderKind::Codex)));

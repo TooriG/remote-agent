@@ -7,6 +7,7 @@ pub struct Pane {
     id: String,
     presentations: watch::Receiver<Arc<Presentation>>,
     stop: CancellationToken,
+    selection_quoted: tokio::sync::Mutex<bool>,
 }
 
 impl Store {
@@ -16,6 +17,7 @@ impl Store {
             id: String::new(),
             presentations: self.subscribe_presentation(),
             stop: self.stop.child_token(),
+            selection_quoted: Default::default(),
         })
     }
 
@@ -28,6 +30,7 @@ impl Store {
             id,
             presentations,
             stop,
+            selection_quoted: Default::default(),
         }))
     }
 }
@@ -74,6 +77,62 @@ impl Pane {
 
     pub fn prepare_dictation(&self) -> crate::client::DictationPreparation {
         self.store.prepare_dictation()
+    }
+
+    /// Preparation belongs to the pane, including when its native view unmounts.
+    /// Serializing retries prevents duplicate sessions and preserves an edited quote.
+    pub fn prepare_side_chat(
+        self: &Arc<Self>,
+        provider: Option<agent_protocol::session::ProviderKind>,
+        selection: String,
+    ) -> impl Future<Output = Result<Arc<Presentation>, PeerError>> + Send + use<> {
+        let pane = self.clone();
+        let task = tokio::spawn(async move {
+            tokio::select! {
+                _ = pane.stop.cancelled() => Err(PeerError::ConnectionClosed("pane is closed".into())),
+                result = pane.initialize_side_chat(provider, selection) => result,
+            }
+        });
+        async move {
+            task.await
+                .map_err(|reason| PeerError::ConnectionClosed(reason.to_string()))?
+        }
+    }
+
+    async fn initialize_side_chat(
+        &self,
+        provider: Option<agent_protocol::session::ProviderKind>,
+        selection: String,
+    ) -> Result<Arc<Presentation>, PeerError> {
+        let mut quoted = self.selection_quoted.lock().await;
+        let snapshot = self.snapshot()?;
+        if snapshot.pane.navigation.thread_id.is_none() {
+            let provider = provider
+                .or_else(|| {
+                    snapshot.model_provider_for_draft(snapshot.pane.navigation.draft_key.clone())
+                })
+                .ok_or_else(|| {
+                    PeerError::InvalidMessage("利用可能なエージェントを選択してください。".into())
+                })?;
+            self.dispatch(Intent::CreateSession(op::CreateSession {
+                provider,
+                cwd: Some(snapshot.pane.navigation.cwd.clone()),
+                model: None,
+                initial_input: None,
+            }))
+            .await?;
+        }
+        if !*quoted {
+            if !selection.is_empty() {
+                self.dispatch(Intent::SetDraftText {
+                    thread_id: self.snapshot()?.pane.navigation.draft_key.clone(),
+                    text: crate::presentation::markdown::selection_quote(selection),
+                })
+                .await?;
+            }
+            *quoted = true;
+        }
+        self.presentation()
     }
 
     pub fn close(&self) {

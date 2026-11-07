@@ -29,10 +29,10 @@ impl Workbench {
         }
     }
 
-    pub fn open(self, kind: PanelKind, path: Option<String>, line: Option<u32>) -> u64 {
+    pub fn open(self, kind: PanelKind, path: Option<String>, line: Option<u32>) {
         self.application.with(|application| {
             application.open_panel(self.scope.get_untracked(), kind, path, line)
-        })
+        });
     }
 
     pub fn hide(self) {
@@ -105,7 +105,11 @@ pub(crate) fn tools() -> Vec<agent_core::panels::PanelTool> {
         .filter(|tool| {
             matches!(
                 tool.kind,
-                PanelKind::Files | PanelKind::Terminal | PanelKind::Diff | PanelKind::Agents
+                PanelKind::Files
+                    | PanelKind::Terminal
+                    | PanelKind::Diff
+                    | PanelKind::Agents
+                    | PanelKind::SideChat
             )
         })
         .collect()
@@ -124,7 +128,21 @@ pub(crate) fn open_tool(key: &str) {
                 p.context.home(),
             )
         });
-        workspace.open(tool.kind, Some(directory), None);
+        if tool.kind == PanelKind::SideChat {
+            let provider = connection
+                .publication
+                .with_untracked(|p| p.composer.controls.provider);
+            workspace.application.with(|app| {
+                app.open_side_chat(
+                    workspace.scope.get_untracked(),
+                    directory,
+                    provider,
+                    String::new(),
+                )
+            });
+        } else {
+            workspace.open(tool.kind, Some(directory), None);
+        }
     }
 }
 
@@ -157,6 +175,7 @@ pub(crate) fn screen() -> impl IntoElement {
                     PanelKind::Terminal => crate::terminal::screen(surface.get_untracked(), workspace.scope.get_untracked().host).into_element(),
                     PanelKind::Diff => crate::details::diff(surface.with_untracked(|s| s.path.clone().unwrap_or_default()), workspace.scope.get_untracked().host).into_element(),
                     PanelKind::Agents => crate::details::agents(workspace.scope.get_untracked().host).into_element(),
+                    PanelKind::SideChat => crate::side_chat::screen(surface.with_untracked(|s| s.id), workspace.scope.get_untracked().host).into_element(),
                     _ => view().into_element(),
                 }
             }))

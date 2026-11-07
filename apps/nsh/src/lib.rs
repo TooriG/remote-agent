@@ -22,6 +22,7 @@ mod notices;
 mod requests;
 mod rich_text;
 mod shared;
+mod side_chat;
 mod storage;
 mod terminal;
 mod threads;
@@ -49,6 +50,7 @@ pub(crate) struct Connection {
     host: Memo<String>,
     publication: Memo<Shared<Presentation>>,
     pairing: Memo<bool>,
+    pane: Option<u64>,
 }
 
 impl Connection {
@@ -66,7 +68,7 @@ impl Connection {
 
     fn dispatch(self, intent: Intent) {
         self.client
-            .with(|client| client.dispatch(&self.host.get_untracked(), intent));
+            .with(|client| client.dispatch(&self.host.get_untracked(), self.pane, intent));
     }
 }
 
@@ -116,6 +118,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         client,
         host,
         publication,
+        pane: None,
         pairing: computed(move || state.with(|state| state.pairing)),
     };
     provide_context(connection);
@@ -168,7 +171,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         match action {
             "sidebar" => navigate(Navigation::ToggleSidebar),
             "search" => searching.update(|open| *open = !*open),
-            "files" | "terminal" | "diff" | "agents" => workbench::open_tool(action),
+            "files" | "terminal" | "diff" | "agents" | "sideChat" => workbench::open_tool(action),
             "compose" => {
                 connection.dispatch(Intent::NewChat {
                     cwd: publication.with(|p| p.snapshot.pane.navigation.cwd.clone()),

@@ -60,6 +60,7 @@ impl Client {
             .map_err(error)??;
         self.execute(
             host,
+            None,
             Intent::DownloadFile(agent_core::state::operations::DownloadFile {
                 source,
                 destination: file.path.to_string_lossy().into_owned(),
@@ -96,13 +97,17 @@ impl Client {
         self: &Arc<Self>,
         id: uuid::Uuid,
         host: String,
+        pane: Option<u64>,
         draft_key: DraftKey,
         sources: Vec<AttachmentSource>,
     ) {
         let owner = self.clone();
         self.spawn(async move {
             for source in sources {
-                match owner.upload_source(&host, draft_key.clone(), source).await {
+                match owner
+                    .upload_source(&host, pane, draft_key.clone(), source)
+                    .await
+                {
                     Ok(true) => {}
                     // Retain core's failure notice; a later upload would replace it.
                     Ok(false) => break,
@@ -122,6 +127,7 @@ impl Client {
     async fn upload_source(
         &self,
         host: &str,
+        pane: Option<u64>,
         draft_key: DraftKey,
         source: AttachmentSource,
     ) -> Result<bool, AgentError> {
@@ -159,6 +165,7 @@ impl Client {
         };
         let receipt = self.execute(
             host,
+            pane,
             Intent::UploadAttachment(UploadAttachment {
                 draft_key,
                 attachment,

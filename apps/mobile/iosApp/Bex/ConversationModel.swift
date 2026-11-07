@@ -318,6 +318,11 @@ extension ConversationModel {
         }
     }
 
+    func prepareSideChat(provider: ProviderKind?, selection: String) async throws {
+        guard let pane else { preconditionFailure("Side chat requires its own pane") }
+        try await publish(pane.prepareSideChat(provider: provider, selection: selection))
+    }
+
     func forkAndOpen(through turnId: String, completion: @escaping (String?) -> Void) {
         guard let threadId = selectedThreadId else { completion(nil); return }
         perform(.forkSession(ForkSession(threadId: threadId, lastTurnId: turnId))) { [self] result in

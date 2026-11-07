@@ -1,6 +1,123 @@
 use super::*;
 
 #[tokio::test]
+async fn an_empty_side_chat_uses_the_available_provider_and_initializes_its_draft_once() {
+    let (store, mut reader, writer) = setup(authenticated_snapshot()).await;
+    let pane = store.open_pane("/side".into()).unwrap();
+    let preparing = pane.prepare_side_chat(None, String::new());
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/session/create");
+    assert_eq!(request["params"]["provider"], "codex");
+    writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"empty-side"},"cwd":"/side","status":"idle","turns":[]}}})).await.unwrap();
+    assert!(preparing.await.unwrap().composer.draft.text.is_empty());
+    let repeated = pane
+        .prepare_side_chat(
+            None,
+            "later text must not replace the initialized draft".into(),
+        )
+        .await
+        .unwrap();
+    assert!(repeated.composer.draft.text.is_empty());
+    pane.close();
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn side_chat_without_an_available_provider_preserves_both_navigation_targets() {
+    let store = Arc::new(Store::offline(Snapshot::default()));
+    let pane = store.open_pane("/side".into()).unwrap();
+    let result = pane.prepare_side_chat(None, "selection".into()).await;
+    assert!(
+        result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("利用可能なエージェント")
+    );
+    assert!(pane.snapshot().unwrap().pane.navigation.thread_id.is_none());
+    assert!(store.snapshot().pane.navigation.thread_id.is_none());
+    pane.close();
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn side_chat_initialization_survives_its_caller_and_preserves_later_edits() {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let pane = store.open_pane("/side".into()).unwrap();
+    let primary = store.snapshot().pane.navigation.clone();
+    let preparing = pane.prepare_side_chat(
+        Some(agent_protocol::session::ProviderKind::Codex),
+        "日本語 👋\n\nlast\n".into(),
+    );
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/session/create");
+    assert_eq!(request["params"]["cwd"], "/side");
+    drop(preparing);
+    let retry = pane.prepare_side_chat(
+        Some(agent_protocol::session::ProviderKind::Codex),
+        "日本語 👋\n\nlast\n".into(),
+    );
+    writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"side-created"},"cwd":"/side","status":"idle","turns":[]}}})).await.unwrap();
+    let ready = retry.await.unwrap();
+    assert_eq!(ready.composer.draft.text, "> 日本語 👋\n> \n> last\n> \n\n");
+    assert_eq!(store.snapshot().pane.navigation, primary);
+    let key = ready.composer.controls.navigation.draft_key.clone();
+    pane.dispatch(Intent::SetDraftText {
+        thread_id: key,
+        text: "edited quote".into(),
+    })
+    .await
+    .unwrap();
+    let repeated = pane
+        .prepare_side_chat(None, "ignored second selection".into())
+        .await
+        .unwrap();
+    assert_eq!(repeated.composer.draft.text, "edited quote");
+    if let Ok(Ok(Some(request))) =
+        tokio::time::timeout(Duration::from_millis(30), reader.read_request()).await
+    {
+        assert_ne!(
+            request["method"], "host/session/create",
+            "retrying preparation must not create another session"
+        );
+    }
+    pane.close();
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_side_chat_creation_retries_in_its_own_pane_and_close_cancels_preparation() {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let pane = store.open_pane("/side".into()).unwrap();
+    let preparing = pane.prepare_side_chat(
+        Some(agent_protocol::session::ProviderKind::Codex),
+        "selection".into(),
+    );
+    let request = read(&mut reader).await;
+    writer.reply(&request, json!({"error":{"code":"unavailable","message":"fixture unavailable","delivery":"notSent"}})).await.unwrap();
+    assert!(preparing.await.is_err());
+    assert!(store.snapshot().pane.error.is_none());
+    assert!(pane.snapshot().unwrap().pane.navigation.thread_id.is_none());
+    let retry = pane.prepare_side_chat(
+        Some(agent_protocol::session::ProviderKind::Codex),
+        "selection".into(),
+    );
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/session/create");
+    pane.close();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), retry)
+            .await
+            .unwrap()
+            .is_err()
+    );
+    writer.reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"late-side"},"cwd":"/side","status":"idle","turns":[]}}})).await.unwrap();
+    assert!(pane.presentation().is_err());
+    assert!(store.snapshot().pane.navigation.thread_id.is_none());
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn closing_the_primary_view_does_not_close_the_host_or_accept_more_view_actions() {
     let store = Arc::new(Store::offline(Snapshot::default()));
     let primary = store.primary_pane();

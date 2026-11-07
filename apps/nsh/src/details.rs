@@ -50,6 +50,7 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
         connection.client.with(|client| {
             client.dispatch(
                 &host.get(),
+                None,
                 Intent::ReviewWorkspace(op::ReviewWorkspace { cwd: cwd.get() }),
             )
         })
@@ -124,11 +125,11 @@ pub(crate) fn agents(host: String) -> impl IntoElement {
         .with_untracked(|p| p.context.navigation().thread_id);
     connection
         .client
-        .with(|client| client.dispatch(&host.get(), Intent::WatchAgents { thread_id }));
+        .with(|client| client.dispatch(&host.get(), None, Intent::WatchAgents { thread_id }));
     cleanup(move || {
-        connection
-            .client
-            .with(|client| client.dispatch(&host.get(), Intent::WatchAgents { thread_id: None }))
+        connection.client.with(|client| {
+            client.dispatch(&host.get(), None, Intent::WatchAgents { thread_id: None })
+        })
     });
     let agents = computed(move || connection.publication.with(|p| Shared(p.agents.clone())));
     native("bex.details")

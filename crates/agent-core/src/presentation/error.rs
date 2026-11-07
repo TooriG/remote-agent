@@ -51,6 +51,18 @@ pub(crate) struct ErrorRecovery {
     pub intent: crate::state::Intent,
 }
 
+fn application_notice(message: &str, context: &str, title: &str) -> ErrorNotice {
+    ErrorNotice {
+        id: ErrorId::Application {
+            message: message.into(),
+        },
+        context: context.into(),
+        title: title.into(),
+        text: error_text(message),
+        recovery_label: None,
+    }
+}
+
 impl ErrorScope {
     pub fn label(&self) -> &'static str {
         match self {
@@ -197,30 +209,24 @@ impl Snapshot {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
+    pub fn pane_error_notice(&self) -> Option<ErrorNotice> {
+        self.pane
+            .error
+            .as_ref()
+            .map(|message| application_notice(message, "操作", "操作に失敗しました"))
+    }
+
     pub fn error_notices(&self, scope: ErrorScope) -> Vec<ErrorNotice> {
         let mut notices = Vec::new();
         if scope == ErrorScope::Application {
-            let application = [
-                (
-                    &self.connection.connection_failure,
+            if let Some(message) = &self.connection.connection_failure {
+                notices.push(application_notice(
+                    message,
                     "接続",
                     "ホストに接続できません",
-                ),
-                (&self.pane.error, "操作", "操作に失敗しました"),
-            ];
-            for (error, context, title) in application {
-                if let Some(error) = error {
-                    notices.push(ErrorNotice {
-                        id: ErrorId::Application {
-                            message: error.clone(),
-                        },
-                        context: context.into(),
-                        title: title.into(),
-                        text: error_text(error),
-                        recovery_label: None,
-                    });
-                }
+                ));
             }
+            notices.extend(self.pane_error_notice());
         }
         for (key, state) in self.operations.iter() {
             let OperationPhase::Failed { message } = &state.phase else {
@@ -616,6 +622,31 @@ mod notice_tests {
         ErrorScope::Conversation {
             draft_key: key.clone(),
         }
+    }
+
+    #[test]
+    fn a_secondary_panes_notice_can_be_dismissed_without_hiding_host_failure() {
+        let mut snapshot = Snapshot::default();
+        snapshot.connection.connection_failure = Some("connection lost".into());
+        std::sync::Arc::make_mut(&mut snapshot.pane).error = Some("local validation".into());
+        let notice = snapshot.pane_error_notice().unwrap();
+        assert_eq!(notice.context, "操作");
+        assert_eq!(
+            notice.id,
+            ErrorId::Application {
+                message: "local validation".into()
+            }
+        );
+        let (next, _) = reduce(
+            &snapshot,
+            Event::Intent(Intent::DismissError { id: notice.id }),
+        );
+        assert!(next.pane_error_notice().is_none());
+        assert_eq!(
+            next.connection.connection_failure,
+            Some("connection lost".into())
+        );
+        assert_eq!(next.error_notices(ErrorScope::Application).len(), 1);
     }
 
     #[test]
