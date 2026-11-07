@@ -48,8 +48,15 @@ unsafe extern "C" fn event(context: *mut c_void, bytes: *const u8, count: isize)
     }
     let context = unsafe { &*context.cast::<ComponentContext>() };
     let bytes = unsafe { std::slice::from_raw_parts(bytes, count as usize) };
-    if let Ok(value) = serde_json::from_slice(bytes) {
-        context.emit("action", value);
+    if let Ok(value) = serde_json::from_slice::<JsonValue>(bytes) {
+        if let Some(height) = value["measuredHeight"].as_f64() {
+            let width = value["measuredWidth"].as_f64().unwrap_or(0.0);
+            if height.is_finite() && height >= 0.0 && width.is_finite() && width >= 0.0 {
+                context.set_size(width as f32, height as f32);
+            }
+        } else {
+            context.emit("action", value);
+        }
     }
 }
 struct Hosted {

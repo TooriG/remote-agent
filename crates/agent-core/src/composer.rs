@@ -135,6 +135,76 @@ mod tests {
         }
     }
 
+    #[test]
+    fn quoting_a_selection_preserves_the_target_draft_after_navigation_changes() {
+        let draft = Draft {
+            text: "$review 下書き".into(),
+            attachments: vec![crate::state::Attachment {
+                path: "/fixture/添付.txt".into(),
+                name: "添付.txt".into(),
+                is_image: false,
+            }],
+            invocations: vec![skill()],
+            ..Default::default()
+        };
+        let (snapshot, _) = reduce(
+            &Snapshot::default(),
+            Event::Intent(Intent::SetDraft {
+                thread_id: "origin".into(),
+                draft: draft.clone(),
+            }),
+        );
+        let (snapshot, _) = reduce(
+            &snapshot,
+            Event::Intent(Intent::SetDraftText {
+                thread_id: "other".into(),
+                text: "別の下書き".into(),
+            }),
+        );
+        let (snapshot, _) = reduce(
+            &snapshot,
+            Event::Intent(Intent::NewChat {
+                cwd: "/other".into(),
+            }),
+        );
+        let (next, effects) = reduce(
+            &snapshot,
+            Event::Intent(Intent::QuoteSelection {
+                storage_scope: String::new(),
+                thread_id: "origin".into(),
+                text: "日本語 👋\n引用".into(),
+            }),
+        );
+        assert_eq!(
+            next.input.drafts[&"origin".into()].text,
+            "$review 下書き\n\n> 日本語 👋\n> 引用\n\n"
+        );
+        assert_eq!(
+            next.input.drafts[&"origin".into()].invocations,
+            draft.invocations
+        );
+        assert_eq!(
+            next.input.drafts[&"origin".into()].attachments,
+            draft.attachments
+        );
+        assert_eq!(
+            next.input.drafts[&"other".into()],
+            snapshot.input.drafts[&"other".into()]
+        );
+        assert_eq!(next.pane.navigation, snapshot.pane.navigation);
+        assert!(effects.is_empty());
+        let (stale, effects) = reduce(
+            &snapshot,
+            Event::Intent(Intent::QuoteSelection {
+                storage_scope: "previous-account".into(),
+                thread_id: "origin".into(),
+                text: "古い選択".into(),
+            }),
+        );
+        assert_eq!(stale.input.drafts, snapshot.input.drafts);
+        assert!(effects.is_empty());
+    }
+
     #[rstest::rstest]
     #[case("Review code", "Review code")]
     #[case("  First line\nSecond line\r\n", "First line Second line")]

@@ -223,6 +223,11 @@ pub enum Intent {
         thread_id: DraftKey,
         text: String,
     },
+    QuoteSelection {
+        storage_scope: String,
+        thread_id: DraftKey,
+        text: String,
+    },
     SelectModel {
         thread_id: DraftKey,
         model: crate::models::ModelRef,

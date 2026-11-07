@@ -47,8 +47,9 @@ struct WorkspaceBrowserScreen: View {
                 if let image, let currentTab = frame?.currentTab, currentTab.url != "about:blank" {
                     RemoteBrowserCanvas(image: image, acceptsInput: acceptsInput) { action in
                         switch action {
-                        case let .click(x, y): send(.click(x: x, y: y))
-                        case let .scroll(x, y, dx, dy): send(.scroll(x: x, y: y, deltaX: dx, deltaY: dy))
+                        case let .click(pointX, pointY): send(.click(x: pointX, y: pointY))
+                        case let .scroll(pointX, pointY, deltaX, deltaY):
+                            send(.scroll(x: pointX, y: pointY, deltaX: deltaX, deltaY: deltaY))
                         }
                     }
                     .accessibilityIdentifier("browser.content")

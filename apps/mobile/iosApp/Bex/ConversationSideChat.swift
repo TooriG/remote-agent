@@ -53,8 +53,7 @@ final class SideChatRequest {
 
 extension ConversationModel {
     func addSelectionToChat(_ text: String) {
-        let quote = AgentCore.selectionQuote(text: text)
-        draft = draft.isEmpty ? quote : draft + "\n\n" + quote
+        draft = AgentCore.appendSelectionQuote(draft: draft, text: text)
         composerFocusRequest = UUID()
     }
 

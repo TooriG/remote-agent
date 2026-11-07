@@ -130,12 +130,16 @@ pub(crate) fn details(
                             )
                     },
                 ))
-                .child(crate::rich_text::view().document(move || {
-                    item.with(|item| {
-                        item.as_ref()
-                            .filter(|item| !item.source.data.deferred)
-                            .map(|item| crate::rich_text::document(item.source.detail_blocks()))
-                    })
-                }))
+                .child(crate::rich_text::content(
+                    move || {
+                        item.with(|item| {
+                            item.as_ref()
+                                .filter(|item| !item.source.data.deferred)
+                                .map(|item| item.source.detail_blocks())
+                                .unwrap_or_default()
+                        })
+                    },
+                    || false,
+                ))
         }))
 }

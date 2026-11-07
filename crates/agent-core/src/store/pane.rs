@@ -126,7 +126,10 @@ impl Pane {
             if !selection.is_empty() {
                 self.dispatch(Intent::SetDraftText {
                     thread_id: self.snapshot()?.pane.navigation.draft_key.clone(),
-                    text: crate::presentation::markdown::selection_quote(selection),
+                    text: crate::presentation::markdown::append_selection_quote(
+                        String::new(),
+                        selection,
+                    ),
                 })
                 .await?;
             }

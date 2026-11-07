@@ -16,7 +16,7 @@ pub(crate) fn composer(
     let workspace = use_context::<crate::workbench::Workbench>().unwrap();
     let composing = signal(false);
     let focused = signal(false);
-    let field_ref = element_ref();
+    let field_ref = connection.composer_ref;
     let file_pick = signal(0_u64);
     let file_target = stored(None::<(String, agent_core::state::DraftKey)>);
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -127,6 +127,7 @@ pub(crate) fn composer(
     let field = move || {
         input()
             .element_ref(&field_ref)
+            .auto_focus(connection.pane.is_some())
             .multiline(true)
             .value(move || {
                 answering

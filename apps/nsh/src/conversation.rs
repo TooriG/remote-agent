@@ -324,29 +324,15 @@ pub(crate) fn list(
                                                 .bg(move || theme().muted)
                                         })
                                         .style_when(move || !user(), |s| s.w_full())
-                                        .child(
-                                            crate::rich_text::view()
-                                                .document(move || label().map(|text| crate::rich_text::document(
-                                                    agent_core::presentation::markdown::markdown_blocks(text.to_string())
-                                                )))
-                                                .font_weight(FontWeight::NORMAL)
-                                                .text_size(move || {
-                                                    if is_desktop() { px(14.0) } else { px(16.0) }
-                                                })
-                                                .style_when(activity, |s| {
-                                                    s.text_color(move || theme().muted_foreground)
-                                                })
-                                                .style_when(
-                                                    move || {
-                                                        row.with(|row| {
-                                                            row.as_ref().is_some_and(|row| {
-                                                                row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse) || row.detail.is_some()
-                                                            })
-                                                        })
-                                                    },
-                                                    |s| s.hidden(),
-                                                ),
-                                        ),
+                                        .child(when(
+                                            move || row.with(|row| row.as_ref().is_some_and(|row| {
+                                                !row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse) && row.detail.is_none()
+                                            })),
+                                            move || crate::rich_text::content(
+                                                move || label().map(|text| agent_core::presentation::markdown::markdown_blocks(text.to_string())).unwrap_or_default(),
+                                                activity,
+                                            ),
+                                        )),
                                 )
                                 .child(each(
                                     move || {

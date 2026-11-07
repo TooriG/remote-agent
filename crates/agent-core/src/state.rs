@@ -1072,6 +1072,14 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             draft.text = text;
         }
         Intent::SetDraftText { thread_id, text } => set_draft_text(&mut next, thread_id, text),
+        Intent::QuoteSelection { storage_scope, thread_id, text } => {
+            if previous.connection.storage_scope == storage_scope {
+                let draft = previous.input.drafts.get(&thread_id)
+                    .map(|draft| draft.text.clone()).unwrap_or_default();
+                set_draft_text(&mut next, thread_id,
+                    crate::presentation::markdown::append_selection_quote(draft, text));
+            }
+        },
         Intent::AnswerQuestion { request_id, action } => {
             if let Some(answer) = crate::questions::act(&mut next, request_id.clone(), action) {
                 return prepare(next, op::Respond { request_id, answer });

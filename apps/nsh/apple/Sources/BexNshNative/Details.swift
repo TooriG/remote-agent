@@ -32,6 +32,7 @@ struct Agent: Decodable {
 }
 
 enum DetailsContent: Decodable {
+    case separator
     case loading
     case sideChatLoading
     case diff(files: [DiffFile])
@@ -48,6 +49,7 @@ private struct DetailsView: View {
     var body: some View {
         Group {
             switch content {
+            case .separator: Divider()
             case let .workspace(summary):
                 WorkspaceCard(summary: summary, send: send)
             case let .welcome(directory):

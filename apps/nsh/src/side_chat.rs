@@ -33,6 +33,7 @@ pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
     });
     provide_context(Connection {
         pane: Some(id),
+        composer_ref: element_ref(),
         host: computed(move || host.get()),
         publication,
         ..parent

@@ -54,6 +54,7 @@ pub(crate) struct Connection {
     publication: Memo<Shared<Presentation>>,
     pairing: Memo<bool>,
     pane: Option<u64>,
+    composer_ref: ElementRef,
 }
 
 impl Connection {
@@ -122,6 +123,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         host,
         publication,
         pane: None,
+        composer_ref: element_ref(),
         pairing: computed(move || state.with(|state| state.pairing)),
     };
     provide_context(connection);
