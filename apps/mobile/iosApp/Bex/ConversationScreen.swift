@@ -75,13 +75,17 @@ struct ThreadScreen: View {
                 AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
             if let thread = conversation {
-                let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
+                let projection = model.conversationRows(thread, expansion: activityExpansionOverrides)
+                let rows = projection.rows
                 let hasHistory = thread.id != nil && history != nil
                 let ids: [ConversationList.RowID] = (hasHistory ? [.history] : []) + rows.map { .message($0.id) }
                 let showLatest = !scroll.latestVisible && !rows.isEmpty
                 GeometryReader { geometry in
                     ConversationList(ids: ids, scroll: scroll, following: scroll.following,
-                                     accessibilityValue: threadAccessibilityValue(thread),
+                                     accessibilityValue: threadAccessibilityValue(
+                                         thread,
+                                         itemCount: projection.sourceItemCount
+                                     ),
                                      viewportHeight: geometry.size.height) { index in
                         let row = index - (hasHistory ? 1 : 0)
                         return AnyView(Group {

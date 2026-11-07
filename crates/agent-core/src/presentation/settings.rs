@@ -315,10 +315,13 @@ mod tests {
 
     #[test]
     fn workspace_and_connection_inputs_invalidate_settings_independently() {
-        let changes: [(&str, fn(&mut Snapshot)); 5] = [
-            ("settings", |state| {
-                Arc::make_mut(&mut state.files.workspace).settings = Some(Arc::default());
-            }),
+        let changes = [
+            (
+                "settings",
+                (|state: &mut Snapshot| {
+                    Arc::make_mut(&mut state.files.workspace).settings = Some(Arc::default());
+                }) as fn(&mut Snapshot),
+            ),
             ("worktrees", |state| {
                 Arc::make_mut(&mut state.files.workspace).worktrees = Some(Arc::new(Vec::new()));
             }),

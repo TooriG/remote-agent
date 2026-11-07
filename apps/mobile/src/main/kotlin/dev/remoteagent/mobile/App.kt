@@ -26,12 +26,17 @@ import dev.remoteagent.core.AgentStore
 import dev.remoteagent.core.ClientBuild
 import dev.remoteagent.core.ClientSession
 import dev.remoteagent.core.ClientSessions
+import dev.remoteagent.core.ConversationRowPolicy
+import dev.remoteagent.core.ConversationRows
 import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListSessions
 import dev.remoteagent.core.OperationKey
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.PanelScope
 import dev.remoteagent.core.Presentation
+import dev.remoteagent.core.ProgressRows
+import dev.remoteagent.core.RenderedConversation
 import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.UploadAttachment
@@ -120,7 +125,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var projectNotices by mutableStateOf(emptyList<dev.remoteagent.core.ErrorNotice>())
         private set
 
-    var conversation by mutableStateOf<ConversationProjection?>(null)
+    var conversation by mutableStateOf<ConversationRows?>(null)
         private set
 
     var profiles by mutableStateOf(emptyList<HostProfile>())
@@ -139,8 +144,6 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             else connectionSelection.hostId?.let(connections::containsKey) == true
 
     var notice by mutableStateOf<String?>(null)
-    val loadingHistory: Boolean
-        get() = conversationContext.history()?.loading == true
 
     val shouldReconnect: Boolean
         get() =
@@ -158,6 +161,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
 
     private val connections = mutableStateMapOf<String, Job>()
     private var pairingConnection by mutableStateOf<Job?>(null)
+    private var activityExpansion = emptyMap<String, String>()
     private var attachmentTransfers = 0
     private val observations = mutableMapOf<String, Job>()
     val draftKey
@@ -458,9 +462,12 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         if (!changes.changed) return
         if (changes.reconnected) notice = null
         if (changes.list) updateTaskList()
-        if (changes.context) conversationContext = value.conversationContext()
+        val context = if (changes.context) value.conversationContext() else conversationContext
+        val navigated = context.navigation().draftKey != draftKey
+        if (navigated) activityExpansion = emptyMap()
+        if (changes.context) conversationContext = context
         if (changes.composer) composer = value.composer()
-        if (changes.conversation) conversation = projectConversationRows(value.conversation(), conversation)
+        projectConversation(value.conversation(), next.panelScope(connectionSelection.hostId ?: "local", draftKey))
         publication = value
         if (changes.settings) settings = value.settings()
         isConnected = next.connected()
@@ -473,6 +480,27 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         fileLocation = FileLocation(next.navigation().cwd, next.hostHomeDirectory())
         snapshot = next
         session?.persistenceError()?.let { notice = it }
+    }
+
+    private fun projectConversation(rendered: RenderedConversation?, scope: PanelScope) {
+        val next = rendered?.let {
+            ConversationRows.project(
+                it,
+                scope,
+                activityExpansion,
+                ConversationRowPolicy(requests = true, progress = ProgressRows.ALWAYS),
+                conversation,
+            )
+        }
+        if (next == null || conversation?.let(next::unchanged) != true) conversation = next
+    }
+
+    fun toggleActivity(id: String) {
+        val current = conversation ?: return
+        val change = current.toggleActivity(id) ?: return
+        activityExpansion = change.expansion
+        projectConversation(current.source(), current.scope())
+        change.loadItems?.let { perform(Intent.LoadTurnItems(it)) {} }
     }
 
     private fun updateProfile(next: Snapshot, host: String) {
@@ -559,12 +587,6 @@ internal fun AndroidAppModel.showThreads() {
 internal fun AndroidAppModel.showHosts() {
     screen = Screen.Hosts
     perform(Intent.ShowThreadList)
-}
-
-internal fun AndroidAppModel.older() {
-    if (loadingHistory) return
-    val id = snapshot.navigation().threadId ?: return
-    perform(Intent.ReadOlder(id))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -693,7 +715,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
             model.conversationContext,
             model.conversation,
             model::perform,
-            if (model.loadingHistory) null else model::older,
+            model::toggleActivity,
             Modifier.weight(1f),
             scrollToTopRequest = scrollToTopRequest,
         ) { onSend ->

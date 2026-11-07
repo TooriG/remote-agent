@@ -1,11 +1,11 @@
 use super::*;
-use agent_core::presentation::conversation::{
-    ActionTone, ConversationRowContent, WorkProgress, activity_is_expanded,
-};
+use agent_core::presentation::conversation::rows::{ConversationRowOrigin, VisibleConversationRow};
+use agent_core::presentation::conversation::{ActionTone, ConversationRowContent, WorkProgress};
 
 #[derive(Default, PartialEq)]
 pub(in crate::app) struct ConversationModel {
     context: Arc<agent_core::presentation::context::ConversationContext>,
+    scope: PanelScope,
     busy: bool,
     errors: Vec<super::errors::ErrorRow>,
 }
@@ -109,12 +109,12 @@ impl ConversationView {
             .cloned()
             .collect();
         self.sync_request_inputs(&requests, window, cx);
-        let reset = self.model.context.navigation.draft_key != model.context.navigation.draft_key;
+        let reset = self.model.scope != model.scope;
         if reset {
             self.timeline.forget_rendering();
         }
         self.timeline
-            .sync(rendered, model.context.history.clone(), reset);
+            .sync(rendered, &model.scope, model.context.history.clone(), reset);
         self.model = model;
         cx.notify();
     }
@@ -123,6 +123,7 @@ impl Desktop {
     pub(in crate::app) fn conversation_model(&self) -> ConversationModel {
         ConversationModel {
             context: self.publication.context.clone(),
+            scope: self.panel_scope(),
             busy: self.busy(),
             errors: self.error_rows(&ErrorScope::Conversation {
                 draft_key: self.draft_key().clone(),
@@ -261,20 +262,16 @@ impl ConversationView {
             .iter()
             .enumerate()
             .filter_map(|(index, row)| {
-                let ConversationRow::Turn {
-                    turn,
-                    index: row_index,
-                    ..
-                } = row
-                else {
+                let ConversationRow::Content(row) = row else {
                     return None;
                 };
-                match &turn.rows[*row_index].content {
-                    ConversationRowContent::User { item } => {
-                        item.data.body.as_ref().map(|text| (index, text, turn))
-                    }
-                    _ => None,
-                }
+                let ConversationRowOrigin::Turn { key, .. } = &row.origin else {
+                    return None;
+                };
+                let ConversationRowContent::User { item } = &row.data.content else {
+                    return None;
+                };
+                item.data.body.as_ref().map(|text| (index, text, key))
             })
             .collect();
         let count = entries.len().min(8);
@@ -288,7 +285,7 @@ impl ConversationView {
         let current = self.timeline.list.logical_scroll_top().item_ix;
         for position in 0..count {
             let sample = position * (entries.len() - 1) / count.saturating_sub(1).max(1);
-            let (index, user, turn) = entries[sample];
+            let (index, user, key) = entries[sample];
             let active = current >= index
                 && (position + 1 == count
                     || current < entries[(position + 1) * (entries.len() - 1) / (count - 1)].0);
@@ -306,14 +303,21 @@ impl ConversationView {
             };
             let marker_id = SharedString::from(format!("conversation-marker-{index}"));
             let preview = (distance == Some(0)).then(|| {
-                let answer = turn.rows.iter().find_map(|row| match &row.content {
-                    ConversationRowContent::Response { item, .. } => item
-                        .data
-                        .body
-                        .as_ref()
-                        .map(|text| text.chars().take(240).collect::<String>()),
-                    _ => None,
-                });
+                let answer = self
+                    .timeline
+                    .rendered
+                    .as_ref()
+                    .and_then(|rendered| rendered.turns.iter().find(|turn| turn.key() == *key))
+                    .and_then(|turn| {
+                        turn.rows.iter().find_map(|row| match &row.content {
+                            ConversationRowContent::Response { item, .. } => item
+                                .data
+                                .body
+                                .as_ref()
+                                .map(|text| text.chars().take(240).collect::<String>()),
+                            _ => None,
+                        })
+                    });
                 let preview_width = (self.timeline.list.viewport_bounds().size.width - px(48.))
                     .clamp(px(100.), px(300.));
                 v_flex()
@@ -471,7 +475,8 @@ impl ConversationView {
         &mut self,
         projected: &agent_core::presentation::conversation::RenderedItem,
         item: &Item,
-        turn: Option<&Turn>,
+        turn: Option<&TurnId>,
+        started_at: Option<f64>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
@@ -481,10 +486,7 @@ impl ConversationView {
         let expanded = self.timeline.expanded_items.contains(&id);
         let deferred = projected.data.deferred;
         if expanded && deferred {
-            let key = (
-                turn.map(|turn| turn.id.clone()).unwrap_or_default(),
-                item.id.clone(),
-            );
+            let key = (turn.cloned().unwrap_or_default(), item.id.clone());
             let operation = self
                 .model
                 .context
@@ -495,7 +497,7 @@ impl ConversationView {
                 .map(|thread_id| op::OperationKey::Item {
                     item: op::ReadItem {
                         thread_id,
-                        turn_id: turn.map(|turn| turn.id.clone()).unwrap_or_default(),
+                        turn_id: turn.cloned().unwrap_or_default(),
                         item_id: item.id.clone(),
                     },
                 });
@@ -537,7 +539,7 @@ impl ConversationView {
                 .when_some(error, |body, error| body.child(error_view(error, language)))
                 .into_any_element();
         }
-        let turn_id = turn.map(|turn| turn.id.clone()).unwrap_or_default();
+        let turn_id = turn.cloned().unwrap_or_default();
         match item.body() {
             agent_protocol::items::ItemBody::AssistantText { .. } => {
                 self.markdown(id, body_text.expect("assistant message has text"), cx)
@@ -580,7 +582,7 @@ impl ConversationView {
                     .data
                     .timestamp_ms
                     .and_then(|time| i64::try_from(time / 1000).ok())
-                    .or_else(|| turn.and_then(|turn| turn.started_at.map(|time| time as i64)));
+                    .or_else(|| started_at.map(|time| time as i64));
                 user_message_row(&id, text, body, timestamp, edit, language).into_any_element()
             }
             agent_protocol::items::ItemBody::CommandExecution {
@@ -780,33 +782,40 @@ impl ConversationView {
             }
         }
     }
-    pub(super) fn turn_row(
+    pub(super) fn presented_row(
         &mut self,
         session: Option<&SessionRef>,
-        projected: &Arc<agent_core::presentation::conversation::RenderedTurn>,
-        index: usize,
-        last: bool,
+        projected: &Arc<VisibleConversationRow>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
-        let turn = &projected.source;
+        let (turn_id, provider, started_at) = match &projected.origin {
+            ConversationRowOrigin::Turn {
+                id,
+                provider,
+                started_at,
+                ..
+            } => (Some(id), *provider, *started_at),
+            _ => (None, None, None),
+        };
+        let native_turn_id = turn_id.cloned().unwrap_or_default();
         let mut body = v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4();
-        let row = &projected.rows[index];
+        let row = &projected.data;
         match &row.content {
             ConversationRowContent::User { item } => {
-                body = body.child(self.projected_item(item, Some(turn), cx));
+                body = body.child(self.projected_item(item, turn_id, started_at, cx));
             }
             ConversationRowContent::ActivityHeader { activity } => {
                 let id = &activity.id;
-                let expanded = activity_is_expanded(
-                    &activity.status,
-                    self.timeline.expanded_work.get(id).cloned(),
-                );
+                let expanded = projected.expanded;
                 let (label, content) = if activity.is_in_progress {
                     let view = WorkProgressView::view(
                         &row.id,
-                        projected.work_progress(!expanded),
+                        projected
+                            .progress
+                            .clone()
+                            .expect("running header has progress"),
                         window,
                         cx,
                     );
@@ -822,9 +831,7 @@ impl ConversationView {
                     (label.clone(), div().child(label).into_any_element())
                 };
                 let header = if activity.activity_can_collapse {
-                    let toggle = id.clone();
-                    let status = activity.status.clone();
-                    let load_items = activity.load_items.clone();
+                    let toggle = projected.id.clone();
                     Button::new(format!("work-{id}"))
                         .accessibility_label(format!(
                             "{label} {}",
@@ -835,19 +842,24 @@ impl ConversationView {
                         .child(div().flex_1().min_w_0().text_ellipsis().child(content))
                         .child(if expanded { "⌄" } else { "›" })
                         .on_click(cx.listener(move |view, _, _, cx| {
-                            if expanded {
-                                view.timeline.expanded_work.remove(&toggle);
-                            } else {
-                                view.timeline
-                                    .expanded_work
-                                    .insert(toggle.clone(), status.clone());
-                            }
-                            if !expanded && let Some(params) = &load_items {
-                                view.dispatch(Intent::LoadTurnItems(params.clone()));
+                            let Some(change) = view
+                                .timeline
+                                .projected
+                                .as_ref()
+                                .and_then(|rows| rows.toggle_activity(toggle.clone()))
+                            else {
+                                return;
+                            };
+                            view.timeline.expanded_work = change.expansion;
+                            if let Some(params) = change.load_items {
+                                view.dispatch(Intent::LoadTurnItems(params));
                             }
                             view.timeline.pause_tail();
-                            view.timeline
-                                .rebuild_rows(view.model.context.history.clone(), false);
+                            view.timeline.rebuild_rows(
+                                &view.model.scope,
+                                view.model.context.history.clone(),
+                                false,
+                            );
                             cx.notify();
                         }))
                         .text_color(rgb(appearance::MUTED))
@@ -870,7 +882,7 @@ impl ConversationView {
                 );
             }
             ConversationRowContent::Activity { item, .. } => {
-                body = body.child(self.projected_item(item, Some(turn), cx));
+                body = body.child(self.projected_item(item, turn_id, started_at, cx));
             }
             // Timeline rows leave requests to the composer's docked cards.
             ConversationRowContent::PendingRequest { .. } => {}
@@ -884,7 +896,6 @@ impl ConversationView {
                 );
             }
             ConversationRowContent::Error { error } => {
-                let provider = turn.provider.or_else(|| session.map(|s| s.provider));
                 let accent = if error.is_reconnecting {
                     rgb(appearance::MUTED)
                 } else if error.is_usage_limit {
@@ -926,7 +937,7 @@ impl ConversationView {
                                     ),
                                 ))
                                 .child(icon_button(
-                                    format!("copy-turn-error-{}", turn.id),
+                                    format!("copy-turn-error-{}", native_turn_id),
                                     IconName::Copy,
                                     language.text("エラーの詳細をコピー"),
                                     cx,
@@ -948,7 +959,7 @@ impl ConversationView {
                         .when_some(error.details.clone(), |card, details| {
                             card.child(
                                 div()
-                                    .id(format!("turn-error-details-{}", turn.id))
+                                    .id(format!("turn-error-details-{}", native_turn_id))
                                     .text_xs()
                                     .line_clamp(3)
                                     .text_color(rgb(appearance::MUTED))
@@ -968,7 +979,7 @@ impl ConversationView {
                                     .flex_wrap()
                                     .child(
                                         button(
-                                            format!("usage-settings-{}", turn.id),
+                                            format!("usage-settings-{}", native_turn_id),
                                             language.text("使用量・リセット時刻"),
                                             cx,
                                             move |_, _, cx| {
@@ -983,7 +994,7 @@ impl ConversationView {
                                         |actions| {
                                             actions.child(
                                                 button(
-                                                    format!("usage-manage-{}", turn.id),
+                                                    format!("usage-manage-{}", native_turn_id),
                                                     language.text("追加クレジット・上限を管理"),
                                                     cx,
                                                     |_, _, cx| {
@@ -1003,7 +1014,7 @@ impl ConversationView {
                 show_actions,
                 fork_turn_id,
             } => {
-                body = body.child(self.projected_item(item, Some(turn), cx));
+                body = body.child(self.projected_item(item, turn_id, started_at, cx));
                 if *show_actions {
                     let text = item.data.body.clone().expect("assistant message has text");
                     body = body.child(
@@ -1130,7 +1141,10 @@ impl ConversationView {
                         .child(crate::activity::indicator())
                         .child(WorkProgressView::view(
                             &row.id,
-                            projected.work_progress(false),
+                            projected
+                                .progress
+                                .clone()
+                                .expect("working row has progress"),
                             window,
                             cx,
                         )),
@@ -1146,19 +1160,20 @@ impl ConversationView {
             .justify_center()
             .w_full()
             .px_6()
-            .pb(px(if last { 32. } else { 16. }))
+            .pb(px(if projected.last { 32. } else { 16. }))
             .child(body)
             .into_any_element()
     }
     fn projected_item(
         &mut self,
         item: &agent_core::presentation::conversation::RenderedItem,
-        turn: Option<&Turn>,
+        turn: Option<&TurnId>,
+        started_at: Option<f64>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match &item.source {
             agent_core::presentation::conversation::ItemSource::Native(native) => {
-                self.item(item, native, turn, cx)
+                self.item(item, native, turn, started_at, cx)
             }
             agent_core::presentation::conversation::ItemSource::Pending(_, pending) => {
                 self.pending_item(&item.data, &pending.draft, item.unknown_submission_id(), cx)
@@ -1761,36 +1776,14 @@ impl ConversationView {
                         Some(ConversationRow::History(control)) => {
                             view.history_control(control, cx)
                         }
-                        Some(ConversationRow::Turn { turn, index, last }) => {
+                        Some(ConversationRow::Content(row)) => {
                             let session = view
                                 .timeline
                                 .rendered
                                 .as_ref()
                                 .and_then(|conversation| conversation.source.id.clone());
-                            view.turn_row(session.as_ref(), &turn, index, last, window, cx)
+                            view.presented_row(session.as_ref(), &row, window, cx)
                         }
-                        Some(ConversationRow::Queued(item)) => {
-                            let row = view.projected_item(&item, None, cx);
-                            h_flex()
-                                .justify_center()
-                                .w_full()
-                                .px_6()
-                                .pb_8()
-                                .child(v_flex().w_full().max_w(px(CHAT_WIDTH)).gap_4().child(row))
-                                .into_any_element()
-                        }
-                        Some(ConversationRow::Preparation(preparation)) => h_flex()
-                            .justify_center()
-                            .w_full()
-                            .px_6()
-                            .pb_8()
-                            .child(
-                                v_flex()
-                                    .w_full()
-                                    .max_w(px(CHAT_WIDTH))
-                                    .child(view.preparation_card(&preparation, cx)),
-                            )
-                            .into_any_element(),
                         None => div().into_any_element(),
                     }
                 })

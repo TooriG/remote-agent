@@ -94,7 +94,7 @@ class VisualizationTest {
                             model.conversationContext,
                             model.conversation,
                             model::perform,
-                            null,
+                            model::toggleActivity,
                             composer = {},
                         )
                 }

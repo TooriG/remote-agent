@@ -20,7 +20,7 @@ use agent_core::{
 };
 use agent_protocol::{
     ids::{ItemId, RequestId, TurnId},
-    models::{Item, RemoteHost, Thread, Turn},
+    models::{Item, RemoteHost, Thread},
     requests::Answer,
     session::SessionRef,
 };

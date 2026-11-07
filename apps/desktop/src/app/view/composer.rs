@@ -892,6 +892,7 @@ impl Render for ComposerContent {
 #[cfg(test)]
 mod composer_tests {
     use super::*;
+    use agent_protocol::models::Turn;
     use agent_protocol::{execution::TurnStatus, items::ItemBody};
     use core::prelude::v1::test;
     use gpui_kit as gpui;

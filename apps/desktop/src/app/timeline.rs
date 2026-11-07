@@ -21,96 +21,20 @@ pub(super) struct MarkdownContent {
 #[derive(Clone)]
 pub(super) enum ConversationRow {
     History(agent_core::presentation::conversation::HistoryControl),
-    Turn {
-        turn: Arc<agent_core::presentation::conversation::RenderedTurn>,
-        index: usize,
-        last: bool,
-    },
-    Queued(Arc<agent_core::presentation::conversation::RenderedItem>),
-    Preparation(agent_core::presentation::conversation::PreparationPresentation),
+    Content(Arc<agent_core::presentation::conversation::rows::VisibleConversationRow>),
 }
 impl ConversationRow {
     pub(super) fn same_identity(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::History(_), Self::History(_)) => true,
-            (
-                Self::Turn {
-                    turn: a, index: ai, ..
-                },
-                Self::Turn {
-                    turn: b, index: bi, ..
-                },
-            ) => a.source.id == b.source.id && a.rows[*ai].id == b.rows[*bi].id,
-            (Self::Queued(a), Self::Queued(b)) => a.data.id == b.data.id,
-            (Self::Preparation(_), Self::Preparation(_)) => true,
+            (Self::Content(a), Self::Content(b)) => a.id == b.id,
             _ => false,
         }
     }
     pub(super) fn unchanged(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::History(a), Self::History(b)) => a == b,
-            (
-                Self::Turn {
-                    turn: a,
-                    index: ai,
-                    last: al,
-                },
-                Self::Turn {
-                    turn: b,
-                    index: bi,
-                    last: bl,
-                },
-            ) => {
-                let a_row = &a.rows[*ai];
-                let b_row = &b.rows[*bi];
-                if al != bl || a_row.timestamp_ms != b_row.timestamp_ms {
-                    return false;
-                }
-                match (&a_row.content, &b_row.content) {
-                    (
-                        ConversationRowContent::User { item: a },
-                        ConversationRowContent::User { item: b },
-                    )
-                    | (
-                        ConversationRowContent::Activity { item: a, .. },
-                        ConversationRowContent::Activity { item: b, .. },
-                    ) => Arc::ptr_eq(a, b),
-                    (
-                        ConversationRowContent::Response {
-                            item: a,
-                            show_actions: a_actions,
-                            fork_turn_id: af,
-                        },
-                        ConversationRowContent::Response {
-                            item: b,
-                            show_actions: b_actions,
-                            fork_turn_id: bf,
-                        },
-                    ) => Arc::ptr_eq(a, b) && a_actions == b_actions && af == bf,
-                    (
-                        ConversationRowContent::ActivityHeader { activity: x },
-                        ConversationRowContent::ActivityHeader { activity: y },
-                    ) => {
-                        x == y
-                            && (!x.is_in_progress || a.work_progress(true) == b.work_progress(true))
-                    }
-                    (
-                        ConversationRowContent::InProgress { .. },
-                        ConversationRowContent::InProgress { .. },
-                    ) => a.work_progress(false) == b.work_progress(false),
-                    (
-                        ConversationRowContent::ProviderHandoff { text: a },
-                        ConversationRowContent::ProviderHandoff { text: b },
-                    ) => a == b,
-                    (
-                        ConversationRowContent::Error { error: a },
-                        ConversationRowContent::Error { error: b },
-                    ) => a == b,
-                    _ => false,
-                }
-            }
-            (Self::Queued(a), Self::Queued(b)) => Arc::ptr_eq(a, b),
-            (Self::Preparation(a), Self::Preparation(b)) => a == b,
+            (Self::Content(a), Self::Content(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -120,6 +44,8 @@ pub(super) struct Timeline {
     pub(super) list: ListState,
     pub(super) rows: Vec<ConversationRow>,
     pub(super) rendered: Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
+    pub(super) projected:
+        Option<Arc<agent_core::presentation::conversation::rows::ConversationRows>>,
     pub(super) hovered_marker: Option<usize>,
     pub(super) diffs: HashMap<String, Entity<DiffView>>,
     pub(super) markdown: HashMap<String, MarkdownContent>,
@@ -136,6 +62,7 @@ impl Timeline {
             list,
             rows: Vec::new(),
             rendered: None,
+            projected: None,
             hovered_marker: None,
             diffs: HashMap::new(),
             markdown: HashMap::new(),
@@ -156,6 +83,7 @@ impl Timeline {
     /// Drops rendering derived from the previously open conversation.
     pub(super) fn forget_rendering(&mut self) {
         self.rendered = None;
+        self.projected = None;
         self.diffs.clear();
         self.markdown.clear();
     }
@@ -164,19 +92,43 @@ impl Timeline {
     pub(super) fn sync(
         &mut self,
         rendered: Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
+        scope: &PanelScope,
         history: Option<agent_core::presentation::conversation::HistoryControl>,
         reset: bool,
     ) {
         self.rendered = rendered;
-        self.rebuild_rows(history, reset);
+        self.rebuild_rows(scope, history, reset);
     }
 
     pub(super) fn rebuild_rows(
         &mut self,
+        scope: &PanelScope,
         history: Option<agent_core::presentation::conversation::HistoryControl>,
         reset: bool,
     ) {
-        let mut rows = conversation_rows(&self.rendered, &self.expanded_work);
+        use agent_core::presentation::conversation::rows::{
+            ConversationRowPolicy, ConversationRows, ProgressRows,
+        };
+        self.projected = self.rendered.as_ref().map(|rendered| {
+            ConversationRows::project(
+                rendered.clone(),
+                scope.clone(),
+                self.expanded_work.clone(),
+                ConversationRowPolicy {
+                    requests: false,
+                    progress: ProgressRows::UnlessHeader,
+                },
+                self.projected.clone(),
+            )
+        });
+        let mut rows: Vec<_> = self
+            .projected
+            .as_ref()
+            .into_iter()
+            .flat_map(|projected| &projected.rows)
+            .cloned()
+            .map(ConversationRow::Content)
+            .collect();
         if let Some(control) = history {
             rows.insert(0, ConversationRow::History(control));
         }
@@ -212,9 +164,9 @@ impl Timeline {
                     }
                     match row {
                         ConversationRow::History(_) => continue,
-                        ConversationRow::Turn { turn, index, .. }
+                        ConversationRow::Content(row)
                             if matches!(
-                                turn.rows[*index].content,
+                                row.data.content,
                                 ConversationRowContent::ActivityHeader { .. }
                                     | ConversationRowContent::InProgress { .. }
                             ) =>
@@ -264,12 +216,8 @@ impl Timeline {
     }
     pub(super) fn remeasure_item(&self, id: &str) {
         for (index, row) in self.rows.iter().enumerate() {
-            if let ConversationRow::Turn {
-                turn,
-                index: row_index,
-                ..
-            } = row
-                && match &turn.rows[*row_index].content {
+            if let ConversationRow::Content(row) = row
+                && match &row.data.content {
                     ConversationRowContent::User { item }
                     | ConversationRowContent::Activity { item, .. }
                     | ConversationRowContent::Response { item, .. } => {
@@ -285,269 +233,5 @@ impl Timeline {
                 self.list.remeasure_items(index..index + 1);
             }
         }
-    }
-}
-
-fn conversation_rows(
-    rendered: &Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
-    expanded_work: &HashMap<String, String>,
-) -> Vec<ConversationRow> {
-    let mut rows = Vec::new();
-    if let Some(rendered) = rendered {
-        // T3's timeline virtualizes messages and work rows, never an entire
-        // provider turn. A long-running turn must not mount its offscreen text.
-        for turn in &rendered.turns {
-            let start = rows.len();
-            let mut expanded = false;
-            let mut progress_shown = false;
-            for (index, row) in turn.rows.iter().enumerate() {
-                match &row.content {
-                    ConversationRowContent::ActivityHeader { activity } => {
-                        expanded = agent_core::presentation::conversation::activity_is_expanded(
-                            &activity.status,
-                            expanded_work.get(&activity.id).cloned(),
-                        );
-                    }
-                    ConversationRowContent::Activity { .. } if !expanded => continue,
-                    // The composer answers requests from its docked cards.
-                    ConversationRowContent::PendingRequest { .. } => continue,
-                    // The in-progress header directly above already shows the clock.
-                    ConversationRowContent::InProgress { .. } if progress_shown => continue,
-                    _ => (),
-                }
-                progress_shown = matches!(
-                    &row.content,
-                    ConversationRowContent::ActivityHeader { activity } if activity.is_in_progress
-                );
-                rows.push(ConversationRow::Turn {
-                    turn: turn.clone(),
-                    index,
-                    last: false,
-                });
-            }
-            if rows.len() > start
-                && let Some(ConversationRow::Turn { last, .. }) = rows.last_mut()
-            {
-                *last = true;
-            }
-        }
-        rows.extend(rendered.queued.iter().cloned().map(ConversationRow::Queued));
-    }
-    rows.extend(
-        rendered
-            .iter()
-            .flat_map(|conversation| &conversation.session_rows)
-            .filter_map(|row| match &row.content {
-                ConversationRowContent::Preparation { preparation } => {
-                    Some(ConversationRow::Preparation(preparation.clone()))
-                }
-                _ => None,
-            }),
-    );
-    rows
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        Arc, ConversationRow, ConversationRowContent, Snapshot, Thread, conversation_rows,
-    };
-    use agent_core::presentation::conversation::{RenderedTurn, project_conversation};
-
-    #[test]
-    fn session_and_turn_requests_are_answered_outside_the_timeline() {
-        use agent_protocol::requests::{Request, RequestBody, RequestTarget};
-        let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({
-            "id": {"provider": "claude", "id": "thread"},
-            "turns": [{"id": "turn", "status": "running", "items": [
-                {"id": "answer", "body": {"inline": {"body": {"assistantText": {"text": "Answer", "phase": "unknown"}}}}}
-            ]}]
-        })).unwrap());
-        let question = RequestBody::Question {
-            questions: vec![agent_protocol::requests::Question {
-                id: "question".into(),
-                header: String::new(),
-                prompt: "Which?".into(),
-                secret: false,
-                allow_free_text: true,
-                multiple: false,
-                choices: Vec::new(),
-            }],
-        };
-        let elicitation = RequestBody::Elicitation {
-            server: "fixture".into(),
-            message: "input".into(),
-            input: agent_protocol::requests::ElicitationInput::Form { fields: vec![] },
-        };
-        let turn = RequestTarget::Turn {
-            turn_id: "turn".into(),
-            item_id: None,
-        };
-        for (id, target, body) in [
-            ("session-question", RequestTarget::Session, question.clone()),
-            ("turn-question", turn.clone(), question),
-            ("session-input", RequestTarget::Session, elicitation.clone()),
-            ("turn-input", turn, elicitation),
-        ] {
-            Arc::make_mut(&mut source).requests.insert(
-                id.into(),
-                Arc::new(Request {
-                    id: id.into(),
-                    target,
-                    delivery: agent_protocol::session::RequestDelivery::Awaiting,
-                    body,
-                }),
-            );
-        }
-        let rendered = Some(project_conversation(
-            &Snapshot::default().pane.navigation.draft_key,
-            &Snapshot::default().sessions.pending_submissions,
-            source,
-            &None,
-        ));
-        let requests: Vec<_> = conversation_rows(&rendered, &Default::default())
-            .iter()
-            .filter_map(|row| match row {
-                ConversationRow::Turn { turn, index, .. } => match &turn.rows[*index].content {
-                    ConversationRowContent::PendingRequest { request } => {
-                        Some(request.id.to_string())
-                    }
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect();
-        assert!(requests.is_empty());
-    }
-
-    #[test]
-    fn completing_a_response_refreshes_actions_without_changing_its_text() {
-        let snapshot = Snapshot::default();
-        let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({
-            "id": {"provider": "deepseek", "id": "thread"},
-            "turns": [{"id": "turn", "status": "running", "items": [
-                {"id": "answer", "body": {"inline": {"body": {"assistantText": {"text": "Answer", "phase": "unknown"}}}}}
-            ]}]
-        })).unwrap());
-        let response_row = |turn: &Arc<RenderedTurn>| ConversationRow::Turn {
-            turn: turn.clone(),
-            index: turn
-                .rows
-                .iter()
-                .position(|row| matches!(row.content, ConversationRowContent::Response { .. }))
-                .unwrap(),
-            last: false,
-        };
-        let live = project_conversation(
-            &snapshot.pane.navigation.draft_key,
-            &snapshot.sessions.pending_submissions,
-            source.clone(),
-            &None,
-        );
-        let before = response_row(&live.turns[0]);
-        Arc::make_mut(&mut Arc::make_mut(&mut source).turns.as_mut().unwrap()[0]).status =
-            agent_protocol::execution::TurnStatus::Completed;
-        let completed = project_conversation(
-            &snapshot.pane.navigation.draft_key,
-            &snapshot.sessions.pending_submissions,
-            source,
-            &Some(live),
-        );
-        let after = response_row(&completed.turns[0]);
-        assert!(
-            !before.unchanged(&after),
-            "completion must reveal the copy action"
-        );
-    }
-
-    #[test]
-    fn row_projection_keeps_repeated_turns_and_leaves_requests_to_the_composer() {
-        let mut source: Arc<Thread> = Arc::new(serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"selected"},"turns":[{"id":"repeated","items":[{"id":"first","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"first answer","phase":"unknown"}}}}}],"status":"unknown"},{"id":"repeated","items":[{"id":"second","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"second answer","phase":"unknown"}}}}}],"status":"unknown"}]})).unwrap());
-        let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
-            Some(agent_protocol::session::SessionRef {
-                provider: agent_protocol::session::ProviderKind::Codex,
-                id: "selected".into(),
-            });
-        let request = Arc::new(agent_protocol::requests::Request {
-            id: "global".into(),
-            target: agent_protocol::requests::RequestTarget::Turn {
-                turn_id: "repeated".into(),
-                item_id: None,
-            },
-            delivery: agent_protocol::session::RequestDelivery::Awaiting,
-            body: agent_protocol::requests::RequestBody::Elicitation {
-                server: "fixture".into(),
-                message: "input".into(),
-                input: agent_protocol::requests::ElicitationInput::Form { fields: vec![] },
-            },
-        });
-        Arc::make_mut(&mut source)
-            .requests
-            .insert(request.id.clone(), request.clone());
-        let mut other = (*source).clone();
-        let request = Arc::make_mut(other.requests.get_mut("global").unwrap());
-        request.id = "other".into();
-        other.id = Some(agent_protocol::session::SessionRef {
-            provider: agent_protocol::session::ProviderKind::Codex,
-            id: "other".into(),
-        });
-        Arc::make_mut(&mut snapshot.sessions.conversations)
-            .insert(other.id.clone().unwrap(), Arc::new(other));
-        let before = snapshot.clone();
-        let rendered = Some(
-            agent_core::presentation::conversation::project_conversation(
-                &snapshot.pane.navigation.draft_key,
-                &snapshot.sessions.pending_submissions,
-                source.clone(),
-                &None,
-            ),
-        );
-        let rows = conversation_rows(&rendered, &Default::default());
-        let repeated = conversation_rows(&rendered, &Default::default());
-        let messages: Vec<_> = rows
-            .iter()
-            .filter_map(|row| {
-                let ConversationRow::Turn { turn, index, .. } = row else {
-                    return None;
-                };
-                let ConversationRowContent::Response { item, .. } = &turn.rows[*index].content
-                else {
-                    return None;
-                };
-                Some((&turn.source, item.data.body.as_deref()))
-            })
-            .collect();
-        assert_eq!(messages.len(), 2);
-        for ((row, body), (turn, expected)) in messages.iter().zip(
-            source
-                .turns
-                .as_ref()
-                .unwrap()
-                .iter()
-                .zip(["first answer", "second answer"]),
-        ) {
-            assert!(Arc::ptr_eq(row, turn));
-            assert_eq!(*body, Some(expected));
-        }
-        let is_request = |content: &ConversationRowContent| {
-            matches!(content, ConversationRowContent::PendingRequest { .. })
-        };
-        let projected = rendered.as_ref().unwrap();
-        assert!(
-            projected
-                .turns
-                .iter()
-                .any(|turn| turn.rows.iter().any(|row| is_request(&row.content)))
-        );
-        assert!(
-            !rows.iter().any(|row| matches!(
-                row,
-                ConversationRow::Turn { turn, index, .. } if is_request(&turn.rows[*index].content)
-            )),
-            "the composer docks requests"
-        );
-        assert!(rows.iter().zip(&repeated).all(|(a, b)| a.unchanged(b)));
-        assert_eq!(snapshot, before);
     }
 }

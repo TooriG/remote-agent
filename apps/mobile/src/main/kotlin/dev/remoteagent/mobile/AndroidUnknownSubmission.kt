@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.RenderedItem
+import dev.remoteagent.core.VisibleConversationRow
 import dev.remoteagent.core.localizedUiFormat
 import kotlin.coroutines.resume
 import kotlinx.coroutines.launch
@@ -117,19 +118,20 @@ internal fun UnknownSubmissionActions(submissionId: String, perform: (Intent, (R
 }
 
 internal fun LazyListScope.pendingInputs(
-    queued: List<RenderedItem>,
+    entries: List<Pair<VisibleConversationRow, RenderedItem>>,
     cwd: String,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     expanded: Boolean,
     setExpanded: (Boolean) -> Unit,
 ) {
-    val unknownIds = queued.mapNotNull { it.unknownSubmissionId() }
+    val unknownIds = entries.mapNotNull { it.second.unknownSubmissionId() }
     if (unknownIds.isNotEmpty()) {
         item(key = "unknown-submission-summary") {
             UnknownSubmissionSummary(unknownIds, expanded, setExpanded, perform)
         }
     }
-    items(queued.filter { expanded || it.unknownSubmissionId() == null }, key = { "queued:${it.id()}" }) {
-        ThreadMessageCard(it, true, cwd, perform)
+    items(entries.filter { expanded || it.second.unknownSubmissionId() == null }, key = { it.first.id() }) {
+        val item = remember(it.first) { it.second }
+        ThreadMessageCard(item, true, cwd, perform)
     }
 }

@@ -313,7 +313,7 @@ impl Preferences {
                             )
                             .when(!errors.is_empty(), |body| {
                                 body.child(errors::error_list(
-                                    &errors,
+                                    errors,
                                     ErrorScope::Settings,
                                     None,
                                     cx,

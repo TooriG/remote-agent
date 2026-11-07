@@ -3,7 +3,7 @@ use crate::state::{DraftKey, Snapshot};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PanelScope {
     pub host: String,
     pub storage: String,

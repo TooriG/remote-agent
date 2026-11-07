@@ -33,6 +33,8 @@ final class ConversationModel {
     @ObservationIgnored private var presentationTask: Task<Void, Never>?
     @ObservationIgnored private var pendingPresentation: ProjectionInput?
     @ObservationIgnored private var recentConversations: [ConversationPresentation] = []
+    @ObservationIgnored private var visibleProjection: ConversationRows?
+    @ObservationIgnored private var visibleRows: [ThreadConversationRow] = []
 
     var store: AgentStore? {
         session.store()
@@ -253,11 +255,6 @@ extension ConversationModel {
         }
     }
 
-    func interrupt(_ turnId: String) {
-        guard let threadId = navigation.threadId else { return }
-        perform(.interrupt(Interrupt(threadId: threadId, turnId: turnId)))
-    }
-
     func attach(_ url: URL, temporaryDirectory: URL? = nil) async throws {
         let access = url.startAccessingSecurityScopedResource()
         transferring = true
@@ -332,19 +329,43 @@ extension ConversationModel {
         }
     }
 
+    /// The view owns expansion choices; this owner memoizes the pure Rust result.
+    func conversationRows(_ conversation: ConversationPresentation, expansion: [String: String])
+        -> (rows: [ThreadConversationRow], sourceItemCount: UInt32) {
+        let next = ConversationRows.project(
+            source: conversation.projection, scope: conversation.scope, expansion: expansion,
+            policy: ConversationRowPolicy(requests: false, progress: .hidden), previous: visibleProjection
+        )
+        if let previous = visibleProjection, next.unchanged(other: previous) {
+            return (visibleRows, next.sourceItemCount())
+        }
+        visibleProjection = next
+        visibleRows = conversation.rows(next.rows())
+        return (visibleRows, next.sourceItemCount())
+    }
+
+    func activityExpansion(_ id: String, in conversation: ConversationPresentation,
+                           expansion: [String: String]) -> ActivityExpansionChange? {
+        guard conversation.scope == snapshot.panelScope(host: host, draft: coreDraftKey) else { return nil }
+        _ = conversationRows(conversation, expansion: expansion)
+        return visibleProjection?.toggleActivity(id: id)
+    }
+
     private func projectConversation(_ rendered: RenderedConversation?) {
         guard let rendered else {
             conversation = nil
             pendingPresentation = nil
+            visibleProjection = nil
+            visibleRows = []
             return
         }
-        let id = rendered.source().id()
-        if conversation?.id != id {
-            conversation = recentConversations.first { $0.id == id }
+        let scope = snapshot.panelScope(host: host, draft: coreDraftKey)
+        if conversation?.scope != scope {
+            conversation = recentConversations.first { $0.scope == scope }
         }
         pendingPresentation = ProjectionInput(
             rendered: rendered,
-            key: coreDraftKey,
+            scope: scope,
             connection: snapshot.connectionGeneration()
         )
         guard presentationTask == nil else { return }
@@ -353,12 +374,13 @@ extension ConversationModel {
                 pendingPresentation = nil
                 let previous = conversation
                 let rendered = await Task.detached(priority: .userInitiated) {
-                    ConversationPresentation.project(input.rendered, previous: previous)
+                    ConversationPresentation.project(input.rendered, scope: input.scope, previous: previous)
                 }.value
-                if coreDraftKey == input.key, snapshot.connectionGeneration() == input.connection {
+                if snapshot.panelScope(host: host, draft: coreDraftKey) == input.scope,
+                   snapshot.connectionGeneration() == input.connection {
                     conversation = rendered
                     if rendered.id != nil {
-                        recentConversations.removeAll { $0.id == rendered.id }
+                        recentConversations.removeAll { $0.scope == rendered.scope }
                         recentConversations.insert(rendered, at: 0)
                         if recentConversations.count > 3 {
                             recentConversations.removeLast()
@@ -373,6 +395,6 @@ extension ConversationModel {
 
 private struct ProjectionInput {
     let rendered: RenderedConversation
-    let key: DraftKey
+    let scope: PanelScope
     let connection: UInt64
 }

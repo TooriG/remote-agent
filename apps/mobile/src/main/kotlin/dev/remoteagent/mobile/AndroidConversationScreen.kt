@@ -48,21 +48,22 @@ import dev.remoteagent.core.ComposerPresentation
 import dev.remoteagent.core.ConversationContext
 import dev.remoteagent.core.ConversationRow
 import dev.remoteagent.core.ConversationRowContent
+import dev.remoteagent.core.ConversationRows
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Interrupt
 import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ReadItem
 import dev.remoteagent.core.Respond
-import dev.remoteagent.core.activityIsExpanded
+import dev.remoteagent.core.VisibleConversationRow
 import java.util.UUID
 import kotlinx.coroutines.launch
 
 @Composable
 internal fun ThreadDetailScreen(
     context: ConversationContext,
-    projection: ConversationProjection?,
+    projection: ConversationRows?,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
-    older: (() -> Unit)?,
+    toggleActivity: (String) -> Unit,
     modifier: Modifier = Modifier,
     scrollToTopRequest: Int = 0,
     composer: @Composable (() -> Unit) -> Unit,
@@ -70,16 +71,21 @@ internal fun ThreadDetailScreen(
     val threadId = context.navigation().threadId
     var recoveryExpanded by remember(threadId, context.navigation().draftKey) { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    var activityExpansion by remember(threadId) { mutableStateOf(emptyMap<String, String>()) }
     var following by remember(threadId) { mutableStateOf(true) }
     ObserveFollowing(listState, projection, following) { following = it }
-    ObserveHistoryPrefetch(listState, context.history(), following, older)
+    ObserveHistoryPrefetch(listState, threadId, context.history(), following, perform)
     LaunchedEffect(scrollToTopRequest) {
         if (scrollToTopRequest > 0) {
             following = false
             listState.scrollToItem(0)
         }
     }
+    val turns = remember(projection) { projection?.turnRows().orEmpty() }
+    val queued =
+        remember(projection) {
+            projection?.queuedRows().orEmpty().map { it to (it.data().content as ConversationRowContent.User).item }
+        }
+    val sessionRows = remember(projection) { projection?.sessionRows().orEmpty() }
     Column(modifier.fillMaxSize()) {
         ErrorNotices(context.notices(), perform)
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -93,7 +99,8 @@ internal fun ThreadDetailScreen(
                 context.historyNotice()?.let { notice ->
                     item(key = "history:read-state") { Text(LocalUiLanguage.current.text(notice)) }
                 }
-                val renderRow: @Composable (ConversationRow) -> Unit = { row ->
+                val renderRow: @Composable (VisibleConversationRow) -> Unit = { projected ->
+                    val row = remember(projected) { projected.data() }
                     ConversationContent(
                         row,
                         threadId,
@@ -104,20 +111,13 @@ internal fun ThreadDetailScreen(
                                 context.forkPhase(turn)
                             },
                         activityHeader = { activity ->
-                            ActivityHeader(activity, activityExpansion[activity.id]) { choice ->
-                                activityExpansion =
-                                    if (choice == null) activityExpansion - activity.id
-                                    else activityExpansion + (activity.id to choice)
-                                if (choice != null) activity.loadItems?.let { perform(Intent.LoadTurnItems(it)) {} }
-                            }
+                            ActivityHeader(activity, projected.expanded()) { toggleActivity(projected.id()) }
                         },
                     )
                 }
-                conversationRows(projection?.rows.orEmpty(), activityExpansion, renderRow)
-                pendingInputs(projection?.queued.orEmpty(), context.navigation().cwd, perform, recoveryExpanded) {
-                    recoveryExpanded = it
-                }
-                conversationRows(projection?.sessionRows.orEmpty(), activityExpansion, renderRow)
+                conversationRows(turns, renderRow)
+                pendingInputs(queued, context.navigation().cwd, perform, recoveryExpanded) { recoveryExpanded = it }
+                conversationRows(sessionRows, renderRow)
             }
             LatestMessageButton(listState) { following = true }
         }
@@ -153,20 +153,10 @@ private fun BoxScope.LatestMessageButton(
 }
 
 private fun LazyListScope.conversationRows(
-    rows: List<ConversationRow>,
-    activityExpansion: Map<String, String>,
-    render: @Composable (ConversationRow) -> Unit,
+    rows: List<VisibleConversationRow>,
+    render: @Composable (VisibleConversationRow) -> Unit,
 ) {
-    var expanded = false
-    rows.forEach { row ->
-        val content = row.content
-        if (content is ConversationRowContent.ActivityHeader) {
-            expanded = activityIsExpanded(content.activity.status, activityExpansion[content.activity.id])
-        }
-        if (content !is ConversationRowContent.Activity || expanded) {
-            item(key = row.id) { render(row) }
-        }
-    }
+    rows.forEach { row -> item(key = row.id()) { render(row) } }
 }
 
 @Composable
@@ -231,11 +221,10 @@ private fun ConversationContent(
 @Composable
 private fun ActivityHeader(
     activity: ActivityPresentation,
-    choice: String?,
-    toggle: (String?) -> Unit,
+    expanded: Boolean,
+    toggle: () -> Unit,
 ) {
-    val expanded = activityIsExpanded(activity.status, choice)
-    TextButton(onClick = { if (activity.activityCanCollapse) toggle(if (expanded) null else activity.status) }) {
+    TextButton(onClick = toggle) {
         Text(
             LocalUiLanguage.current.text(activity.activitySummary) +
                 if (activity.activityCanCollapse) if (expanded) " ⌄" else " ›" else ""

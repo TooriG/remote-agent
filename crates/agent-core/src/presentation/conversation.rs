@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 mod images;
+pub mod rows;
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.
@@ -72,8 +73,15 @@ fn conversation_row_id(
 ) -> String {
     // Scope every key, including activity expansion, to one turn occurrence.
     // Escaping the delimiter keeps provider IDs from aliasing another scope.
+    format!(
+        "{base}:occurrence:{row_occurrence}:{}",
+        turn_key(turn, turn_occurrence)
+    )
+}
+
+fn turn_key(turn: &str, occurrence: usize) -> String {
     let scope = percent_encoding::utf8_percent_encode(turn, percent_encoding::NON_ALPHANUMERIC);
-    format!("{base}:occurrence:{row_occurrence}:turn:{scope}:{turn_occurrence}")
+    format!("turn:{scope}:{occurrence}")
 }
 #[derive(Clone)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
@@ -130,7 +138,6 @@ pub struct ActivityPresentation {
 }
 /// Work starts collapsed. A manual choice belongs to the current status;
 /// a transition closes it again, including after deferred-detail hydration.
-#[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn activity_is_expanded(status: &str, expanded_status: Option<String>) -> bool {
     expanded_status.as_deref() == Some(status)
 }
@@ -150,6 +157,9 @@ pub fn should_load_history(
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl RenderedTurn {
+    pub fn key(&self) -> String {
+        turn_key(self.source.id.as_str(), self.occurrence)
+    }
     pub fn conversation_rows(&self) -> Vec<ConversationRow> {
         self.rows.clone()
     }

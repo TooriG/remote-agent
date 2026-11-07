@@ -75,8 +75,11 @@ class MessageActionsTest {
                 )
             var calls = 0
             val response =
-                requireNotNull(projection).rows.single { it.content is ConversationRowContent.Response }.content
-                    as ConversationRowContent.Response
+                requireNotNull(projection)
+                    .rows()
+                    .map { it.data().content }
+                    .filterIsInstance<ConversationRowContent.Response>()
+                    .single()
             var phase by mutableStateOf<OperationPhase?>(null)
             compose.setContent {
                 MaterialTheme {
@@ -122,7 +125,7 @@ class MessageActionsTest {
             lateinit var clipboard: ClipboardManager
             compose.setContent {
                 clipboard = LocalClipboardManager.current
-                MaterialTheme { ThreadDetailFixture(snapshot, projection, { _, _ -> }, null) {} }
+                MaterialTheme { ThreadDetailFixture(snapshot, projection, { _, _ -> }) {} }
             }
             compose.onAllNodesWithContentDescription("コピー").assertCountEquals(2)
             compose.onAllNodesWithContentDescription("コピー")[0].performClick()

@@ -67,7 +67,6 @@ class UnknownSubmissionTest {
                             current.value = store.snapshot()
                             done(Result.success(Outcome.Applied))
                         },
-                        null,
                     ) {}
                 }
             }
@@ -96,7 +95,12 @@ class UnknownSubmissionTest {
         try {
             val snapshot = store.snapshot()
             val item =
-                requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null)).queued.single()
+                (requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null))
+                        .queuedRows()
+                        .single()
+                        .data()
+                        .content as dev.remoteagent.core.ConversationRowContent.User)
+                    .item
             val intents = mutableListOf<Intent>()
             compose.setContent {
                 MaterialTheme {
@@ -149,7 +153,12 @@ class UnknownSubmissionTest {
     fun sendingInputShowsTimeAndCopyWithoutDeliveryOrRecoveryLabels() {
         fixture(false).use { snapshot ->
             val item =
-                requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null)).queued.single()
+                (requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null))
+                        .queuedRows()
+                        .single()
+                        .data()
+                        .content as dev.remoteagent.core.ConversationRowContent.User)
+                    .item
             compose.setContent { MaterialTheme { ThreadMessageCard(item, true, "/fixture", { _, _ -> }) } }
             val sentTime =
                 java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
@@ -182,7 +191,6 @@ class UnknownSubmissionTest {
                             current.value = store.snapshot()
                             done(Result.success(Outcome.Applied))
                         },
-                        null,
                     ) {}
                 }
             }

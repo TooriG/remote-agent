@@ -84,20 +84,11 @@ impl Snapshot {
 }
 #[uniffi::export]
 impl Thread {
-    pub fn active_turn_id(&self) -> Option<agent_protocol::ids::TurnId> {
-        self.0.active_turn_id()
-    }
     pub fn id(&self) -> Option<crate::session::SessionRef> {
         self.0.id.clone()
     }
-    pub fn title(&self) -> String {
-        self.0.name.clone().unwrap_or_default()
-    }
     pub fn history_notice(&self) -> Option<String> {
         crate::presentation::conversation::history_notice(&self.0)
-    }
-    pub fn has_more_history(&self) -> bool {
-        self.0.history_has_more == Some(true)
     }
     pub fn turn_count(&self) -> u64 {
         self.0.turns.as_ref().map_or(0, |turns| turns.len() as u64)
@@ -117,15 +108,9 @@ impl RenderedConversation {
     pub fn queued(&self) -> Vec<Arc<RenderedItem>> {
         self.queued.clone()
     }
-    pub fn session_rows(&self) -> Vec<crate::presentation::conversation::ConversationRow> {
-        self.session_rows.clone()
-    }
 }
 #[uniffi::export]
 impl RenderedTurn {
-    pub fn id(&self) -> String {
-        self.source.id.to_string()
-    }
     pub fn unchanged(&self, other: Arc<Self>) -> bool {
         std::ptr::eq(self, other.as_ref())
     }

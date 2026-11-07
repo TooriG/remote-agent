@@ -24,7 +24,6 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -70,9 +69,9 @@ class StorePersistenceTest {
         try {
             val snapshot = store.snapshot()
             val first = requireNotNull(projectConversationRows(snapshot, source, null))
-            fun answers(projection: ConversationProjection) =
-                projection.rows.mapNotNull {
-                    (it.content as? ConversationRowContent.Response)?.item?.presentation()?.body
+            fun answers(projection: dev.remoteagent.core.ConversationRows) =
+                projection.rows().mapNotNull {
+                    (it.data().content as? ConversationRowContent.Response)?.item?.presentation()?.body
                 }
             assertEquals(listOf("first answer", "second answer"), answers(first))
             val edit = store.dispatch(Intent.SetDraftText(key, "new draft"))
@@ -81,7 +80,7 @@ class StorePersistenceTest {
             assertEquals("", snapshot.draft(key).text)
             edit.wait()
             val second = projectConversationRows(latest, source, first)
-            assertSame(first, second)
+            assertTrue(requireNotNull(second).unchanged(first))
             assertEquals(listOf("first answer", "second answer"), answers(first))
             assertNull(projectConversationRows(latest, null, first))
             val reopened = requireNotNull(projectConversationRows(latest, source, null))

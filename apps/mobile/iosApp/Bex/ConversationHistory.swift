@@ -94,27 +94,24 @@ extension ThreadScreen {
     func conversationRow(_ row: ThreadConversationRow) -> some View {
         switch row.content {
         case let .historyNotice(message): AppText(message).font(.caption).foregroundStyle(.secondary)
-        case let .native(content, item): nativeConversationRow(content, item: item)
-        case let .queued(item):
-            userMessageRow(item, timestampMs: item.data.timestampMs)
+        case let .native(row, item): nativeConversationRow(row, item: item)
         }
     }
 
     @ViewBuilder
-    func nativeConversationRow(_ row: ConversationRow, item: ConversationItem?) -> some View {
+    func nativeConversationRow(_ projected: VisibleConversationRow, item: ConversationItem?) -> some View {
+        let row = projected.data()
         switch (row.content, item) {
         case let (.preparation(preparation), _):
             ThreadPreparationRow(preparation: preparation) { model.perform($0) }
         case let (.providerHandoff(text), _):
             Text(text).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
         case let (.user, item?):
-            userMessageRow(item, timestampMs: row.timestampMs)
-                .padding(
-                    .top,
-                    16
-                )
+            userMessageRow(item, row: projected, timestampMs: row.timestampMs)
+                .padding(.top, projected.origin() == .queued ? 0 : 16)
         case (let .response(_, showActions, turnId), let item?):
             ThreadMessageRow(
+                row: projected,
                 item: item,
                 isUser: false,
                 media: mediaAccess,
@@ -126,15 +123,20 @@ extension ThreadScreen {
                 forking: turnId.map { model.conversationContext.forkPhase(turn: $0) == .running } ?? false,
                 forkError: turnId.flatMap { model.conversationContext.forkError(turn: $0) }
             ).equatable()
-        case let (.activityHeader(activity), _): activityHeader(activity)
+        case let (.activityHeader(activity), _): activityHeader(
+                activity,
+                id: projected.id(),
+                expanded: projected.expanded()
+            )
         case (let .activity(_, turnId), let item?): activityItem(item, turnId: turnId)
         case let (.error(error), _): ThreadErrorRow(error: error)
         case (.inProgress, _), (.pendingRequest, _), (_, nil): EmptyView()
         }
     }
 
-    func userMessageRow(_ item: ConversationItem, timestampMs: UInt64? = nil) -> some View {
+    func userMessageRow(_ item: ConversationItem, row: VisibleConversationRow, timestampMs: UInt64?) -> some View {
         ThreadMessageRow(
+            row: row,
             item: item,
             isUser: true,
             media: mediaAccess,
@@ -170,18 +172,17 @@ extension ThreadScreen {
     }
 
     @ViewBuilder
-    func activityHeader(_ turn: ActivityPresentation) -> some View {
-        let expanded = AgentCore.activityIsExpanded(
-            status: turn.status,
-            expandedStatus: activityExpansionOverrides[turn.id]
-        )
+    func activityHeader(_ turn: ActivityPresentation, id: String, expanded: Bool) -> some View {
         let header = ThreadActivityHeader(summary: turn.activitySummary, canCollapse: turn.activityCanCollapse,
                                           isInProgress: turn.isInProgress, expanded: expanded)
         if turn.activityCanCollapse {
             Button {
                 scroll.following = false
-                activityExpansionOverrides[turn.id] = expanded ? nil : turn.status
-                if !expanded, let params = turn.loadItems {
+                guard let conversation,
+                      let change = model.activityExpansion(id, in: conversation, expansion: activityExpansionOverrides)
+                else { return }
+                activityExpansionOverrides = change.expansion
+                if let params = change.loadItems {
                     model.perform(.loadTurnItems(params))
                 }
             } label: {
@@ -194,15 +195,8 @@ extension ThreadScreen {
         }
     }
 
-    func threadAccessibilityValue(_ thread: ConversationPresentation) -> String {
-        let itemCount = thread.rows.filter { row in
-            guard case let .native(native, _) = row.content else { return false }
-            return switch native.content {
-            case .user, .activity, .response, .pendingRequest, .error: true
-            default: false
-            }
-        }.count
-        return "turns=\(thread.source.turnCount());items=\(itemCount)"
+    func threadAccessibilityValue(_ thread: ConversationPresentation, itemCount: UInt32) -> String {
+        "turns=\(thread.source.turnCount());items=\(itemCount)"
     }
 }
 
@@ -221,23 +215,6 @@ private struct ThreadPreparationRow: View {
                     Button("再試行") { perform(.retryPreparation(retry)) }
                 }
             }.accessibilityIdentifier("task.preparation")
-        }
-    }
-}
-
-func conversationRows(_ rows: [ThreadConversationRow],
-                      expansion: [String: String]) -> [ThreadConversationRow] {
-    var expanded = false
-    return rows.filter { row in
-        guard case let .native(native, _) = row.content else { return true }
-        switch native.content {
-        case let .activityHeader(activity):
-            expanded = AgentCore.activityIsExpanded(status: activity.status, expandedStatus: expansion[activity.id])
-            return true
-        case .activity: return expanded
-        // Requests live in the composer's dock, rather than in the history.
-        case .inProgress, .pendingRequest: return false
-        default: return true
         }
     }
 }

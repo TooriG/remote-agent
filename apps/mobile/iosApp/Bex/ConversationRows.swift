@@ -75,6 +75,7 @@ struct ThreadErrorRow: View {
 }
 
 struct ThreadMessageRow: View, Equatable {
+    let row: VisibleConversationRow
     let item: ConversationItem
     let isUser: Bool
     let media: ConversationMediaAccess
@@ -89,11 +90,9 @@ struct ThreadMessageRow: View, Equatable {
     @State private var copied = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.item === rhs.item && lhs.isUser == rhs.isUser
-            && lhs.showActions == rhs.showActions
+        lhs.row == rhs.row && lhs.item === rhs.item
             && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd && lhs.media.draft == rhs.media.draft
-            && lhs.timestampMs == rhs.timestampMs && lhs.forking == rhs.forking && lhs.forkError == rhs.forkError
-            && (lhs.fork == nil) == (rhs.fork == nil)
+            && lhs.forking == rhs.forking && lhs.forkError == rhs.forkError
             && (lhs.selection.askInSideChat == nil) == (rhs.selection.askInSideChat == nil)
             && (lhs.restoreUnknown == nil) == (rhs.restoreUnknown == nil)
             && (lhs.discardUnknown == nil) == (rhs.discardUnknown == nil)
