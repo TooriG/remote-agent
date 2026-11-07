@@ -4786,6 +4786,7 @@ dependencies = [
  "iroh-tickets",
  "png 0.18.1",
  "reqwest",
+ "rusqlite",
  "rstest",
  "rustix 1.1.5",
  "rustls",
