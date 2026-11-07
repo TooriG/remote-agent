@@ -7,6 +7,7 @@ pub enum KeyProvider {
     DeepSeek,
     OpenRouter,
     NanoGpt,
+    OpenCode,
     OpenAI,
     Anthropic,
     Gemini,
@@ -24,10 +25,11 @@ impl KeyProvider {
         }
     }
 
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::DeepSeek,
         Self::OpenRouter,
         Self::NanoGpt,
+        Self::OpenCode,
         Self::OpenAI,
         Self::Anthropic,
         Self::Gemini,
@@ -41,6 +43,7 @@ impl KeyProvider {
             Self::DeepSeek => "DeepSeek",
             Self::OpenRouter => "OpenRouter",
             Self::NanoGpt => "NanoGPT",
+            Self::OpenCode => "OpenCode",
             Self::OpenAI => "OpenAI",
             Self::Anthropic => "Anthropic",
             Self::Gemini => "Gemini",
@@ -55,6 +58,7 @@ impl KeyProvider {
             Self::DeepSeek => "DEEPSEEK_API_KEY",
             Self::OpenRouter => "OPENROUTER_API_KEY",
             Self::NanoGpt => "NANOGPT_API_KEY",
+            Self::OpenCode => "OPENCODE_API_KEY",
             Self::OpenAI => "OPENAI_API_KEY",
             Self::Anthropic => "ANTHROPIC_API_KEY",
             Self::Gemini => "GEMINI_API_KEY",
@@ -64,17 +68,20 @@ impl KeyProvider {
         }
     }
 
-    pub fn route(self) -> &'static str {
+    /// DSH routes this provider's key authenticates. One OpenCode key serves
+    /// both its Go subscription and its Zen gateway.
+    pub fn routes(self) -> &'static [&'static str] {
         match self {
-            Self::DeepSeek => "deepseek-official",
-            Self::OpenRouter => "openrouter",
-            Self::NanoGpt => "nanogpt",
-            Self::OpenAI => "openai",
-            Self::Anthropic => "anthropic",
-            Self::Gemini => "google",
-            Self::Groq => "groq",
-            Self::Mistral => "mistral",
-            Self::Xai => "xai",
+            Self::DeepSeek => &["deepseek-official"],
+            Self::OpenRouter => &["openrouter"],
+            Self::NanoGpt => &["nanogpt"],
+            Self::OpenCode => &["opencode-go", "opencode"],
+            Self::OpenAI => &["openai"],
+            Self::Anthropic => &["anthropic"],
+            Self::Gemini => &["google"],
+            Self::Groq => &["groq"],
+            Self::Mistral => &["mistral"],
+            Self::Xai => &["xai"],
         }
     }
 
@@ -83,6 +90,7 @@ impl KeyProvider {
             Self::DeepSeek => "https://platform.deepseek.com/api_keys",
             Self::OpenRouter => "https://openrouter.ai/settings/keys",
             Self::NanoGpt => "https://nano-gpt.com/api",
+            Self::OpenCode => "https://opencode.ai/auth",
             Self::OpenAI => "https://platform.openai.com/api-keys",
             Self::Anthropic => "https://console.anthropic.com/settings/keys",
             Self::Gemini => "https://aistudio.google.com/apikey",

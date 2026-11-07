@@ -221,7 +221,9 @@ impl DeepSeek {
         let mut providers = serde_json::Map::new();
         for provider in KeyProvider::ALL {
             if provider != KeyProvider::DeepSeek && keys.get(provider).is_some() {
-                providers.insert(provider.route().into(), provider_profile(provider));
+                for route in provider.routes() {
+                    providers.insert((*route).into(), provider_profile(provider));
+                }
             }
         }
         let mut overlays = vec![
@@ -1717,7 +1719,7 @@ mod tests {
         first.unwrap();
         second.unwrap();
         let credentials = adapter.dsh_credentials().await.unwrap();
-        assert_eq!(credentials.routes.len(), 9);
+        assert_eq!(credentials.routes.len(), KeyProvider::ALL.len());
         assert_eq!(
             credentials
                 .routes

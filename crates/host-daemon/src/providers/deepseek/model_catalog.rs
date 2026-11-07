@@ -7,13 +7,30 @@ use agent_protocol::{
 use serde_json::{Value, json};
 
 pub(super) fn credential_route(id: &str) -> Option<KeyProvider> {
+    model_route(id).map(|(provider, _)| provider)
+}
+
+fn model_route(id: &str) -> Option<(KeyProvider, &'static str)> {
     let [route, model]: [String; 2] = serde_json::from_str(id).ok()?;
     if model.is_empty() {
         return None;
     }
-    KeyProvider::ALL
-        .into_iter()
-        .find(|provider| provider.route() == route)
+    KeyProvider::ALL.into_iter().find_map(|provider| {
+        provider
+            .routes()
+            .iter()
+            .find(|candidate| **candidate == route)
+            .map(|route| (provider, *route))
+    })
+}
+
+/// Names the service behind a route; one key may serve several routes.
+fn route_label(provider: KeyProvider, route: &str) -> &'static str {
+    match route {
+        "opencode-go" => "OpenCode Go",
+        "opencode" => "OpenCode Zen",
+        _ => provider.model_label(),
+    }
 }
 
 pub(super) fn provider_profile(provider: KeyProvider) -> Value {
@@ -68,17 +85,17 @@ pub(super) fn catalog(created: &Value) -> Vec<Model> {
             let id = option["value"].as_str()?;
             let current = model.is_some_and(|m| m["currentValue"] == id);
             let name = option["name"].as_str().unwrap_or(id);
-            let route = credential_route(id);
+            let route = model_route(id);
             Some(Model {
                 id: format!("deepseek:{id}"),
                 model: ModelRef {
                     provider: PROVIDER,
                     id: id.into(),
                 },
-                credential_route: route,
+                credential_route: route.map(|(provider, _)| provider),
                 display_name: route.map_or_else(
                     || name.to_owned(),
-                    |provider| format!("{} · {name}", provider.model_label()),
+                    |(provider, route)| format!("{} · {name}", route_label(provider, route)),
                 ),
                 settings_discovery: true,
                 settings: current.then(|| agent_protocol::models::ModelSettings {
@@ -122,8 +139,10 @@ mod tests {
     #[test]
     fn model_routes_preserve_provider_boundaries() {
         for provider in KeyProvider::ALL {
-            let id = serde_json::to_string(&[provider.route(), "test/model"]).unwrap();
-            assert_eq!(credential_route(&id), Some(provider));
+            for route in provider.routes() {
+                let id = serde_json::to_string(&[route, "test/model"]).unwrap();
+                assert_eq!(credential_route(&id), Some(provider));
+            }
         }
         for id in [
             "deepseek-flash",
@@ -192,6 +211,26 @@ mod tests {
                 .supported_reasoning_efforts
                 .len(),
             3
+        );
+    }
+
+    #[test]
+    fn opencode_routes_share_one_key_but_name_their_service() {
+        let value = json!({"configOptions":[{"id":"model","currentValue":"","options":[
+            {"value":r#"["opencode-go","glm-5.3"]"#,"name":"GLM-5.3"},
+            {"value":r#"["opencode","glm-5.3"]"#,"name":"GLM-5.3"}
+        ]}]});
+        let models = catalog(&value);
+        assert_eq!(models[0].display_name, "OpenCode Go · GLM-5.3");
+        assert_eq!(models[1].display_name, "OpenCode Zen · GLM-5.3");
+        assert!(
+            models
+                .iter()
+                .all(|model| model.credential_route == Some(KeyProvider::OpenCode))
+        );
+        assert_eq!(
+            provider_profile(KeyProvider::OpenCode),
+            json!({"apiKeyEnv":"OPENCODE_API_KEY"})
         );
     }
 
