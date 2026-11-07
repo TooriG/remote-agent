@@ -10,10 +10,45 @@ use agent_protocol::{
     session::SessionRef,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite_migration::{M, Migrations};
 use std::{collections::HashMap, path::Path, sync::Mutex};
 
 /// A window stops growing past this many encoded bytes, keeping at least one turn.
 const WINDOW_BYTES: usize = 1 << 20;
+
+/// Released migrations are append-only: a Host may skip releases, so each
+/// one still runs in order against the user's database.
+const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_STEPS);
+const MIGRATION_STEPS: &[M<'static>] = &[
+    // Databases from before versioning already hold this schema.
+    M::up(
+        "CREATE TABLE IF NOT EXISTS conversations (
+             provider TEXT NOT NULL,
+             id TEXT NOT NULL,
+             cwd TEXT,
+             metadata BLOB,
+             PRIMARY KEY (provider, id)
+         ) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS turns (
+             provider TEXT NOT NULL,
+             id TEXT NOT NULL,
+             position INTEGER NOT NULL,
+             turn_id TEXT NOT NULL,
+             running INTEGER NOT NULL,
+             body BLOB NOT NULL,
+             PRIMARY KEY (provider, id, position)
+         ) WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS turn_ids ON turns (provider, id, turn_id, position);
+         -- Host-wide order of each conversation's latest change.
+         CREATE TABLE IF NOT EXISTS versions (
+             provider TEXT NOT NULL,
+             id TEXT NOT NULL,
+             version INTEGER NOT NULL,
+             PRIMARY KEY (provider, id)
+         ) WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS version_order ON versions (version);",
+    ),
+];
 
 pub(crate) struct Transcripts {
     // A store that failed to open stays failed; reads must not fall back to
@@ -49,7 +84,7 @@ impl Transcripts {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(failure)?;
             }
-            let connection = Connection::open(path).map_err(failure)?;
+            let mut connection = Connection::open(path).map_err(failure)?;
             // A restarting Host can briefly overlap its predecessor.
             connection
                 .busy_timeout(std::time::Duration::from_secs(10))
@@ -57,34 +92,10 @@ impl Transcripts {
             connection
                 .execute_batch(
                     "PRAGMA journal_mode = WAL;
-                     PRAGMA synchronous = NORMAL;
-                     CREATE TABLE IF NOT EXISTS conversations (
-                         provider TEXT NOT NULL,
-                         id TEXT NOT NULL,
-                         cwd TEXT,
-                         metadata BLOB,
-                         PRIMARY KEY (provider, id)
-                     ) WITHOUT ROWID;
-                     CREATE TABLE IF NOT EXISTS turns (
-                         provider TEXT NOT NULL,
-                         id TEXT NOT NULL,
-                         position INTEGER NOT NULL,
-                         turn_id TEXT NOT NULL,
-                         running INTEGER NOT NULL,
-                         body BLOB NOT NULL,
-                         PRIMARY KEY (provider, id, position)
-                     ) WITHOUT ROWID;
-                     CREATE INDEX IF NOT EXISTS turn_ids ON turns (provider, id, turn_id, position);
-                     -- Host-wide order of each conversation's latest change.
-                     CREATE TABLE IF NOT EXISTS versions (
-                         provider TEXT NOT NULL,
-                         id TEXT NOT NULL,
-                         version INTEGER NOT NULL,
-                         PRIMARY KEY (provider, id)
-                     ) WITHOUT ROWID;
-                     CREATE INDEX IF NOT EXISTS version_order ON versions (version);",
+                     PRAGMA synchronous = NORMAL;",
                 )
                 .map_err(failure)?;
+            MIGRATIONS.to_latest(&mut connection).map_err(failure)?;
             Ok(connection)
         })();
         Self {
@@ -1168,6 +1179,45 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["first", "second"]
         );
+    }
+
+    #[test]
+    fn migrations_are_valid() {
+        MIGRATIONS.validate().unwrap();
+    }
+
+    #[test]
+    fn opening_a_database_from_before_versioning_keeps_its_transcripts() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("transcripts.sqlite");
+        let store = Transcripts::open(&path);
+        let target = conversation();
+        store
+            .import(
+                &target,
+                history(vec![turn("first", &["a"], TurnStatus::Completed)]),
+            )
+            .unwrap();
+        store
+            .with(|connection| {
+                connection
+                    .pragma_update(None, "user_version", 0)
+                    .map_err(failure)
+            })
+            .unwrap();
+        drop(store);
+
+        let store = Transcripts::open(&path);
+        let window = store.window(&target, None, 10).unwrap().unwrap();
+        assert_eq!(texts(&window), ["first/a"]);
+        let version: i64 = store
+            .with(|connection| {
+                connection
+                    .pragma_query_value(None, "user_version", |row| row.get(0))
+                    .map_err(failure)
+            })
+            .unwrap();
+        assert_eq!(version, 1);
     }
 
     #[test]
