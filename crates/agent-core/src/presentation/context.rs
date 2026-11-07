@@ -25,7 +25,6 @@ pub struct ConversationContext {
     pub home: Option<String>,
     directory: String,
     pub history: Option<HistoryControl>,
-    pub history_notice: Option<String>,
     pub docked: Vec<super::conversation::Request>,
     notices: Vec<ErrorNotice>,
     operations: BTreeMap<OperationKey, OperationControl>,
@@ -66,9 +65,6 @@ impl ConversationContext {
             home: snapshot.connection.host_home_directory.clone(),
             directory: snapshot.selected_directory(),
             history: session.and_then(|id| snapshot.history_control(id.clone())),
-            history_notice: session
-                .and_then(|id| snapshot.sessions.conversations.get(id))
-                .and_then(|thread| super::conversation::history_notice(thread)),
             notices: snapshot.error_notices(ErrorScope::Conversation {
                 draft_key: snapshot.pane.navigation.draft_key.clone(),
             }),
@@ -138,9 +134,6 @@ impl ConversationContext {
     }
     pub fn history(&self) -> Option<HistoryControl> {
         self.history.clone()
-    }
-    pub fn history_notice(&self) -> Option<String> {
-        self.history_notice.clone()
     }
     pub fn notices(&self) -> Vec<ErrorNotice> {
         self.notices.clone()

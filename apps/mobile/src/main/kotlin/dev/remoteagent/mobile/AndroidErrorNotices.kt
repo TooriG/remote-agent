@@ -132,7 +132,7 @@ internal fun TurnErrorCard(error: TurnErrorPresentation) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (error.isReconnecting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                 Text(
-                    LocalUiLanguage.current.text(error.title),
+                    error.title,
                     style = MaterialTheme.typography.titleSmall,
                     color =
                         if (error.isReconnecting) MaterialTheme.colorScheme.onSurface
@@ -141,7 +141,7 @@ internal fun TurnErrorCard(error: TurnErrorPresentation) {
                 )
             }
             androidx.compose.foundation.text.selection.SelectionContainer {
-                Text(LocalUiLanguage.current.text(error.message), style = MaterialTheme.typography.bodySmall)
+                Text(error.message, style = MaterialTheme.typography.bodySmall)
             }
             error.details
                 ?.takeIf { it.isNotEmpty() }

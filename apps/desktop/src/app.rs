@@ -378,8 +378,8 @@ impl Desktop {
             cx.observe_global_in::<crate::localization::Language>(window, |view, window, cx| {
                 let language = crate::localization::language(cx);
                 for (input, source) in [
-                    (&view.search, language.text("会話を検索")),
-                    (&view.file_search, language.text("ファイルを検索")),
+                    (&view.search, "会話を検索"),
+                    (&view.file_search, "ファイルを検索"),
                 ] {
                     input.update(cx, |input, cx| {
                         input.set_placeholder(language.text(source), window, cx)
@@ -388,10 +388,6 @@ impl Desktop {
                 view.composer.input.update(cx, |input, cx| {
                     input.set_placeholder(language.text("AI に依頼する"), window, cx)
                 });
-                if let Some(prompt) = view.question_prompt() {
-                    view.question
-                        .set_placeholder(language.text(&prompt.placeholder), window, cx);
-                }
                 cx.notify();
             }),
             cx.observe_in(&owner, window, |view, _, window, cx| {
@@ -1109,10 +1105,11 @@ impl Desktop {
         }
         let prompt = self.question_prompt();
         let answer = self.question.show(prompt.as_ref());
-        if let (Some(prompt), Some(answer)) = (prompt, answer) {
-            let language = crate::localization::language(cx);
+        if let Some(prompt) = prompt {
             self.question
-                .set_placeholder(language.text(&prompt.placeholder), window, cx);
+                .set_placeholder(&prompt.placeholder, window, cx);
+        }
+        if let Some(answer) = answer {
             self.question.set_value(answer, window, cx);
         }
         let file = self.snapshot.pane.workspace.file.as_ref();
@@ -1910,20 +1907,83 @@ mod completion_tests {
             )
         });
         view.update(cx, |view, window, cx| {
+            use agent_protocol::{
+                requests::{Question, Request, RequestBody, RequestTarget},
+                session::{ProviderKind, RequestDelivery, SessionRef},
+            };
+            let session = SessionRef::new(ProviderKind::Codex, "question".into()).unwrap();
+            let snapshot = Arc::make_mut(&mut view.snapshot);
+            let navigation = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation);
+            navigation.thread_id = Some(session.clone());
+            navigation.draft_key = session.clone().into();
+            Arc::make_mut(&mut snapshot.sessions.conversations).insert(
+                session.clone(),
+                Arc::new(agent_protocol::models::Thread {
+                    id: Some(session),
+                    requests: [(
+                        "request".into(),
+                        Arc::new(Request {
+                            id: "request".into(),
+                            target: RequestTarget::Session,
+                            delivery: RequestDelivery::Awaiting,
+                            body: RequestBody::Question {
+                                questions: vec![Question {
+                                    id: "question".into(),
+                                    header: String::new(),
+                                    prompt: "質問".into(),
+                                    secret: false,
+                                    allow_free_text: true,
+                                    multiple: false,
+                                    choices: vec![],
+                                }],
+                            },
+                        }),
+                    )]
+                    .into(),
+                    ..Default::default()
+                }),
+            );
+            view.sync_inputs(window, cx);
+            let answer = gpui::SharedString::from("質問への入力 {0}");
+            view.question.text.record(answer.clone());
+            view.question.set_value(answer, window, cx);
             view.composer.input.update(cx, |input, cx| {
                 input.set_value("ユーザーの入力 {0}", window, cx)
             });
         })
         .unwrap();
-        for (language, placeholder) in [
-            (UiLanguage::English, "Ask AI"),
-            (UiLanguage::Japanese, "AI に依頼する"),
+        for (language, placeholder, question_placeholder) in [
+            (
+                UiLanguage::English,
+                "Ask AI",
+                "Enter your answer (leave blank to answer with the chosen option)",
+            ),
+            (
+                UiLanguage::Japanese,
+                "AI に依頼する",
+                "回答を入力（空欄なら選んだ選択肢で回答）",
+            ),
         ] {
             cx.update(|cx| cx.set_global(Language(language)));
-            view.update(cx, |view, _, cx| {
+            view.update(cx, |view, window, cx| {
+                // The global locale changes before the Store publication arrives.
+                Arc::make_mut(&mut view.snapshot).catalog.ui_language = language;
+                view.sync_inputs(window, cx);
                 let input = view.composer.input.read(cx);
                 assert_eq!(input.presentation().placeholder().as_ref(), placeholder);
                 assert_eq!(input.text().to_string(), "ユーザーの入力 {0}");
+                let answer = view.question.input.read(cx);
+                assert_eq!(
+                    answer.presentation().placeholder().as_ref(),
+                    question_placeholder
+                );
+                assert_eq!(answer.text().to_string(), "質問への入力 {0}");
+                let secret = view.question.secret.read(cx);
+                assert_eq!(
+                    secret.presentation().placeholder().as_ref(),
+                    question_placeholder
+                );
+                assert_eq!(secret.text().to_string(), "質問への入力 {0}");
             })
             .unwrap();
         }

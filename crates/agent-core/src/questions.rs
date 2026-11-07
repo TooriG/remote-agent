@@ -227,27 +227,34 @@ impl Snapshot {
         let answer = draft.answers.get(&question.id).cloned().unwrap_or_default();
         let can_respond = request.delivery == RequestDelivery::Awaiting;
         let last = index + 1 == questions.len();
-        let presented = crate::presentation::conversation::request(request);
+        let presented =
+            crate::presentation::conversation::request(self.catalog.ui_language, request);
         Some(QuestionPrompt {
             request_id: request.id.clone(),
             status: (!can_respond).then_some(presented.title),
             progress: (questions.len() > 1).then(|| format!("{}/{}", index + 1, questions.len())),
             chosen_choice_ids: answer.choice_ids,
             text: answer.text,
-            placeholder: if question.allow_free_text {
-                "回答を入力（空欄なら選んだ選択肢で回答）"
-            } else {
-                "上の選択肢から選んでください"
-            }
-            .into(),
+            placeholder: self
+                .catalog
+                .ui_language
+                .text(if question.allow_free_text {
+                    "回答を入力（空欄なら選んだ選択肢で回答）"
+                } else {
+                    "上の選択肢から選んでください"
+                })
+                .into(),
             can_respond,
             can_go_back: can_respond && index > 0,
-            action: if last {
-                "回答を送信"
-            } else {
-                "次の質問"
-            }
-            .into(),
+            action: self
+                .catalog
+                .ui_language
+                .text(if last {
+                    "回答を送信"
+                } else {
+                    "次の質問"
+                })
+                .into(),
             can_advance: can_respond
                 && if last {
                     draft.answers(questions).is_some()

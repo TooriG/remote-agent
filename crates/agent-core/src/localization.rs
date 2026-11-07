@@ -255,10 +255,6 @@ mod tests {
             "残り 42% extra"
         );
         assert_eq!(
-            localized_ui_text(UiLanguage::English, "1時間 2分 3秒 作業しました".into()),
-            "Worked for 1h 2m 3s · completed"
-        );
-        assert_eq!(
             localized_ui_text(
                 UiLanguage::English,
                 "設定\nconnection closed\n未登録".into()

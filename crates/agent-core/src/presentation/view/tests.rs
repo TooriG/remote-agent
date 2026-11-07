@@ -430,3 +430,51 @@ async fn the_native_stream_keeps_acknowledgments_and_selected_history_consistent
     );
     store.close().await.unwrap();
 }
+
+#[test]
+fn language_changes_replace_localized_content_and_reject_old_projection_context() {
+    use crate::{localization::UiLanguage, presentation::conversation::ConversationRowContent};
+    let mut state = snapshot();
+    let thread = Arc::make_mut(&mut state.sessions.conversations)
+        .get_mut(&session("a"))
+        .unwrap();
+    Arc::make_mut(thread).turns = Some(vec![Arc::new(crate::models::Turn {
+        id: "work".into(),
+        status: crate::models::TurnStatus::Completed,
+        items: Some(vec![Arc::new(crate::models::Item::new(
+            "answer".into(),
+            crate::models::ItemStatus::Completed,
+            crate::models::ItemBody::AssistantText {
+                text: "answer".into(),
+                phase: crate::models::AssistantPhase::Final,
+            },
+        ))]),
+        items_summary: true,
+        duration_ms: Some(1000),
+        ..Default::default()
+    })]);
+    let japanese = Presentation::project(Arc::new(state.clone()), None);
+    state.catalog.ui_language = UiLanguage::English;
+    assert!(
+        !japanese.same_context(&state),
+        "a background result in the previous language must not be published"
+    );
+    let english = Presentation::project(Arc::new(state), Some(&japanese));
+    let conversation = english.conversation.as_ref().unwrap();
+    assert_eq!(
+        conversation.turns[0]
+            .rows
+            .iter()
+            .find_map(|row| match &row.content {
+                ConversationRowContent::ActivityHeader { activity } =>
+                    Some(activity.activity_summary.as_str()),
+                _ => None,
+            }),
+        Some("Worked for 1s · completed")
+    );
+    let unchanged = Presentation::project(english.snapshot.clone(), Some(&english));
+    assert!(Arc::ptr_eq(
+        conversation,
+        unchanged.conversation.as_ref().unwrap()
+    ));
+}

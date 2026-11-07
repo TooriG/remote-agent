@@ -1420,6 +1420,7 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
                 "older response missing after restore={restore}"
             );
             let rendered = agent_core::presentation::conversation::project_conversation(
+                agent_core::localization::UiLanguage::Japanese,
                 &snapshot.pane.navigation.draft_key,
                 &snapshot.sessions.pending_submissions,
                 snapshot.sessions.conversations[&id].clone(),
@@ -1512,7 +1513,7 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
         assert_eq!(latest.items.as_ref().unwrap().len(), 1);
         assert!(latest.items_summary);
         assert_eq!(latest.items.as_ref().unwrap()[0].id, "item-11-619".into());
-        let rendered = agent_core::presentation::conversation::project_conversation(&snapshot.pane.navigation.draft_key, &snapshot.sessions.pending_submissions, thread.clone(), &None);
+        let rendered = agent_core::presentation::conversation::project_conversation(agent_core::localization::UiLanguage::Japanese, &snapshot.pane.navigation.draft_key, &snapshot.sessions.pending_submissions, thread.clone(), &None);
         assert_eq!(rendered.turns.len(), window, "the rendered history must contain no empty turn placeholders");
         for _ in 0..20 {
             let snapshot = store.snapshot();
@@ -1586,7 +1587,7 @@ async fn generated_images_are_visible_on_open_reopen_and_older_pages_without_exp
             local.peer.call(&agent_protocol::session::ReadHistory {
                 session: session.clone(), cursor, include_activity: false,
             }).await.unwrap().prepend_to(&mut response.thread);
-            let rendered = project_conversation(&Default::default(), &Default::default(), Arc::new(response.thread), &None);
+            let rendered = project_conversation(agent_core::localization::UiLanguage::Japanese, &Default::default(), &Default::default(), Arc::new(response.thread), &None);
             assert_eq!(rendered.turns.len(), 6);
             for (index, turn) in rendered.turns.iter().enumerate() {
                 assert!(!turn.source.items_summary, "imported turns hold no hidden work");

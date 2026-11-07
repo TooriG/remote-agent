@@ -123,6 +123,10 @@ impl QuestionInput {
     }
 
     pub(super) fn set_placeholder(&self, placeholder: &str, window: &mut Window, cx: &mut App) {
+        if self.input.read(cx).presentation().placeholder().as_ref() == placeholder {
+            return;
+        }
+        // Plain and secret fields share the same placeholder.
         let placeholder = SharedString::from(placeholder.to_owned());
         self.input.update(cx, |input, cx| {
             input.set_placeholder(placeholder.clone(), window, cx)

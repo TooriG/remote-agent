@@ -58,7 +58,7 @@ struct ConversationPresentation: Sendable {
     }
 
     func rows(_ projected: [VisibleConversationRow]) -> [ThreadConversationRow] {
-        let notice = source.historyNotice().map {
+        let notice = projection.historyNotice().map {
             [ThreadConversationRow(id: "history-read-state", content: .historyNotice($0))]
         } ?? []
         return notice + projected.map { row in

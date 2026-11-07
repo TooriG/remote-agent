@@ -134,6 +134,7 @@ mod tests {
         status: models::TurnStatus,
     ) {
         let projected = project_conversation(
+            crate::localization::UiLanguage::Japanese,
             &Snapshot::default().pane.navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             thread(
@@ -189,6 +190,7 @@ mod tests {
             ],
         ] {
             let projected = project_conversation(
+                crate::localization::UiLanguage::Japanese,
                 &Snapshot::default().pane.navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 thread(items, models::TurnStatus::Completed),
@@ -216,6 +218,7 @@ mod tests {
         ));
         for (activity, standalone) in [(deferred_user, true), (command, false)] {
             let projected = project_conversation(
+                crate::localization::UiLanguage::Japanese,
                 &Snapshot::default().pane.navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 thread(
@@ -243,6 +246,7 @@ mod tests {
     fn all_embedded_results_replace_previews_across_live_commentary_segments() {
         for status in [models::TurnStatus::Running, models::TurnStatus::Completed] {
             let projected = project_conversation(
+                crate::localization::UiLanguage::Japanese,
                 &Snapshot::default().pane.navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 thread(
@@ -288,6 +292,7 @@ mod tests {
                 },
             ));
             let projected = project_conversation(
+                crate::localization::UiLanguage::Japanese,
                 &Snapshot::default().pane.navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 thread(
@@ -326,6 +331,7 @@ mod tests {
         #[case] standalone: bool,
     ) {
         let projected = project_conversation(
+            crate::localization::UiLanguage::Japanese,
             &Snapshot::default().pane.navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             thread(
@@ -358,12 +364,14 @@ mod tests {
         ] {
             let source = thread(vec![generated.clone(), answer(text, "final")], status);
             let projected = project_conversation(
+                crate::localization::UiLanguage::Japanese,
                 &Snapshot::default().pane.navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 source.clone(),
                 &previous,
             );
             let reopened = project_conversation(
+                crate::localization::UiLanguage::Japanese,
                 &Snapshot::default().pane.navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 source,

@@ -11,7 +11,7 @@ struct ThreadActivityHeader: View {
     let expanded: Bool
 
     var body: some View {
-        let label = AppText(summary)
+        let label = Text(verbatim: summary)
             .font(.system(size: 16))
             .lineLimit(1).truncationMode(.tail)
         HStack(spacing: 5) {
@@ -54,9 +54,9 @@ struct ThreadErrorRow: View {
                 if error.isReconnecting {
                     ProgressView().controlSize(.small)
                 }
-                AppText(error.title).font(.subheadline.weight(.semibold))
+                Text(verbatim: error.title).font(.subheadline.weight(.semibold))
             }
-            AppText(error.message).textSelection(.enabled)
+            Text(verbatim: error.message).textSelection(.enabled)
             if let details = error.details, !details.isEmpty {
                 DisclosureGroup("詳細を表示") {
                     Text(details).font(.caption).foregroundColor(.secondary).textSelection(.enabled)

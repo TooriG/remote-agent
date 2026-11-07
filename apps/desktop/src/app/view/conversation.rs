@@ -243,7 +243,7 @@ impl WorkProgressView {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0., |duration| duration.as_secs_f64());
-        agent_core::localization::localized_ui_text(language, self.progress.label(now))
+        self.progress.label(language, now)
     }
 }
 
@@ -705,6 +705,7 @@ impl ConversationView {
                         }
                         if change.diff.is_none() || change.proposal.is_some() {
                             let details = agent_core::presentation::body::file_change_details(
+                                language,
                                 None,
                                 change.proposal,
                             );
@@ -819,15 +820,9 @@ impl ConversationView {
                         window,
                         cx,
                     );
-                    (
-                        view.read(cx).label(crate::localization::language(cx)),
-                        view.into_any_element(),
-                    )
+                    (view.read(cx).label(language), view.into_any_element())
                 } else {
-                    let label = agent_core::localization::localized_ui_text(
-                        language,
-                        activity.activity_summary.clone(),
-                    );
+                    let label = activity.activity_summary.clone();
                     (label.clone(), div().child(label).into_any_element())
                 };
                 let header = if activity.activity_can_collapse {
@@ -930,12 +925,13 @@ impl ConversationView {
                                 .when(error.is_reconnecting, |heading| {
                                     heading.child(crate::activity::indicator())
                                 })
-                                .child(div().flex_1().font_semibold().text_color(accent).child(
-                                    agent_core::localization::localized_ui_text(
-                                        language,
-                                        error.title.clone(),
-                                    ),
-                                ))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .font_semibold()
+                                        .text_color(accent)
+                                        .child(error.title.clone()),
+                                )
                                 .child(icon_button(
                                     format!("copy-turn-error-{}", native_turn_id),
                                     IconName::Copy,
@@ -948,14 +944,7 @@ impl ConversationView {
                                     },
                                 )),
                         )
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(agent_core::localization::localized_ui_text(
-                                    language,
-                                    error.message.clone(),
-                                )),
-                        )
+                        .child(div().text_sm().child(error.message.clone()))
                         .when_some(error.details.clone(), |card, details| {
                             card.child(
                                 div()
@@ -1186,7 +1175,7 @@ impl ConversationView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
-        let text = agent_core::localization::localized_ui_text(language, preparation.text.clone());
+        let text = preparation.text.clone();
         if preparation.in_progress {
             return h_flex()
                 .debug_selector(|| "task-preparation".into())
@@ -1275,9 +1264,12 @@ impl ConversationView {
             .gap_2()
             .child(user_message_row(id, text, body, timestamp, edit, language))
             .when_some(data.title.as_deref(), |row, label| {
-                row.child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
-                    agent_core::localization::localized_ui_text(language, label.into()),
-                ))
+                row.child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(label.to_owned()),
+                )
             })
             .when_some(unknown_submission_id, |row, id| {
                 let restore = id.clone();
@@ -1389,9 +1381,12 @@ impl ConversationView {
             .bg(rgb(appearance::SURFACE))
             .border_1()
             .border_color(rgb(appearance::BORDER))
-            .child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
-                agent_core::localization::localized_ui_text(language, request.title.clone()),
-            ))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(appearance::MUTED))
+                    .child(request.title.clone()),
+            )
             .child(request.body.clone());
         if let Some(error) = self
             .model
@@ -1705,7 +1700,7 @@ impl ConversationView {
     ) -> AnyElement {
         let language = crate::localization::language(cx);
         let label: SharedString = if control.has_more {
-            agent_core::localization::localized_ui_text(language, control.load_label).into()
+            control.load_label.into()
         } else {
             language.text("再試行").into()
         };
@@ -1812,10 +1807,13 @@ impl ConversationView {
                     |_, action, _, cx| cx.emit(ConversationAction::Notice(action)),
                 ),
             ));
-        if let Some(notice) = &self.model.context.history_notice {
-            body = body.child(div().px_4().py_2().text_sm().child(
-                agent_core::localization::localized_ui_text(language, notice.clone()),
-            ));
+        if let Some(notice) = self
+            .timeline
+            .rendered
+            .as_ref()
+            .and_then(|rendered| rendered.history_notice())
+        {
+            body = body.child(div().px_4().py_2().text_sm().child(notice));
         }
         if self.timeline.rendered.is_none() {
             if let Some(control) = self.model.context.history.clone() {
@@ -2619,6 +2617,7 @@ mod rendering_tests {
         }))
         .unwrap();
         let conversation = agent_core::presentation::conversation::project_conversation(
+            agent_core::localization::UiLanguage::Japanese,
             &Snapshot::default().pane.navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             Arc::new(source),

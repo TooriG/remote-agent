@@ -110,10 +110,12 @@ impl super::composer::ComposerContent {
                             .path("icons/message-circle-question.svg")
                             .size_4(),
                     )
-                    .child(agent_core::localization::localized_ui_text(
-                        language,
-                        prompt.status.clone().unwrap_or_else(|| "質問".into()),
-                    )),
+                    .child(
+                        prompt
+                            .status
+                            .clone()
+                            .unwrap_or_else(|| language.text("質問").into()),
+                    ),
             )
             .when(!definition.header.is_empty(), |row| {
                 row.child(
@@ -314,7 +316,7 @@ impl super::composer::ComposerContent {
         let request_id = prompt.request_id.clone();
         let advance = Button::new("question-advance")
             .debug_selector(|| "question-advance".into())
-            .label(language.text(&prompt.action).to_owned())
+            .label(prompt.action.clone())
             .primary()
             .rounded_full()
             .h(px(32.))

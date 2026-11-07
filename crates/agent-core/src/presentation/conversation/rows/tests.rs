@@ -39,7 +39,13 @@ fn render(
     source: Arc<Thread>,
     previous: Option<Arc<RenderedConversation>>,
 ) -> Arc<RenderedConversation> {
-    project_conversation(&scope().draft, &Arc::default(), source, &previous)
+    project_conversation(
+        crate::localization::UiLanguage::Japanese,
+        &scope().draft,
+        &Arc::default(),
+        source,
+        &previous,
+    )
 }
 
 fn project(
@@ -123,7 +129,11 @@ fn request_and_progress_placement_is_explicit_and_source_counts_ignore_visibilit
     );
     let timeline = project(raw.clone(), TIMELINE, HashMap::new(), None);
     assert_eq!(
-        header(&timeline).progress.as_ref().unwrap().label(3.0),
+        header(&timeline)
+            .progress
+            .as_ref()
+            .unwrap()
+            .label(crate::localization::UiLanguage::Japanese, 3.0),
         "2秒 作業中 · pwd"
     );
     let requests = |rows: &ConversationRows| {
@@ -173,7 +183,11 @@ fn request_and_progress_placement_is_explicit_and_source_counts_ignore_visibilit
     );
     assert_eq!(opened.source_item_count(), timeline.source_item_count());
     assert_eq!(
-        header(&opened).progress.as_ref().unwrap().label(3.0),
+        header(&opened)
+            .progress
+            .as_ref()
+            .unwrap()
+            .label(crate::localization::UiLanguage::Japanese, 3.0),
         "2秒 作業中…"
     );
     let progress_row = opened
@@ -182,7 +196,11 @@ fn request_and_progress_placement_is_explicit_and_source_counts_ignore_visibilit
         .find(|row| matches!(row.data.content, ConversationRowContent::InProgress { .. }))
         .unwrap();
     assert_eq!(
-        progress_row.progress.as_ref().unwrap().label(3.0),
+        progress_row
+            .progress
+            .as_ref()
+            .unwrap()
+            .label(crate::localization::UiLanguage::Japanese, 3.0),
         "2秒 作業中…"
     );
     assert!(
@@ -496,7 +514,11 @@ fn timestamps_last_row_and_progress_are_part_of_render_identity() {
     assert!(Arc::ptr_eq(old_item, new_item), "only row timing changed");
     assert!(before != after);
     assert_eq!(
-        header(&retimed).progress.as_ref().unwrap().label(3.0),
+        header(&retimed)
+            .progress
+            .as_ref()
+            .unwrap()
+            .label(crate::localization::UiLanguage::Japanese, 3.0),
         "1秒 作業中 · pwd"
     );
     assert!(!Arc::ptr_eq(header(&initial), header(&retimed)));
@@ -625,7 +647,13 @@ fn queued_inputs_keep_their_footer_between_turns_and_session_rows_without_inflat
     )]
     .into_iter()
     .collect();
-    let raw = project_conversation(&scope().draft, &pending, thread.clone(), &None);
+    let raw = project_conversation(
+        crate::localization::UiLanguage::Japanese,
+        &scope().draft,
+        &pending,
+        thread.clone(),
+        &None,
+    );
     let policy = ConversationRowPolicy {
         requests: true,
         progress: ProgressRows::Always,
@@ -661,7 +689,13 @@ fn queued_inputs_keep_their_footer_between_turns_and_session_rows_without_inflat
     );
     Arc::make_mut(pending.get_mut("pending").unwrap()).submitted_at_ms = Some(13_000);
     let updated = project(
-        project_conversation(&scope().draft, &pending, thread, &Some(raw)),
+        project_conversation(
+            crate::localization::UiLanguage::Japanese,
+            &scope().draft,
+            &pending,
+            thread,
+            &Some(raw),
+        ),
         policy,
         HashMap::new(),
         Some(rows),

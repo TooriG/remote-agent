@@ -96,8 +96,8 @@ internal fun ThreadDetailScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 historyControl(threadId, context.history(), perform)
-                context.historyNotice()?.let { notice ->
-                    item(key = "history:read-state") { Text(LocalUiLanguage.current.text(notice)) }
+                projection?.source()?.historyNotice()?.let { notice ->
+                    item(key = "history:read-state") { Text(notice) }
                 }
                 val renderRow: @Composable (VisibleConversationRow) -> Unit = { projected ->
                     val row = remember(projected) { projected.data() }
@@ -225,10 +225,7 @@ private fun ActivityHeader(
     toggle: () -> Unit,
 ) {
     TextButton(onClick = toggle) {
-        Text(
-            LocalUiLanguage.current.text(activity.activitySummary) +
-                if (activity.activityCanCollapse) if (expanded) " ⌄" else " ›" else ""
-        )
+        Text(activity.activitySummary + if (activity.activityCanCollapse) if (expanded) " ⌄" else " ›" else "")
     }
 }
 

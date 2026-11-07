@@ -69,7 +69,7 @@ extension ThreadScreen {
                 } label: {
                     HStack(spacing: 12) {
                         Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
-                        AppText(control.loadLabel).fixedSize()
+                        Text(verbatim: control.loadLabel).fixedSize()
                         Rectangle().frame(height: 1).foregroundStyle(Color(UIColor.separator))
                     }
                     .font(.caption)
@@ -93,7 +93,7 @@ extension ThreadScreen {
     @ViewBuilder
     func conversationRow(_ row: ThreadConversationRow) -> some View {
         switch row.content {
-        case let .historyNotice(message): AppText(message).font(.caption).foregroundStyle(.secondary)
+        case let .historyNotice(message): Text(verbatim: message).font(.caption).foregroundStyle(.secondary)
         case let .native(row, item): nativeConversationRow(row, item: item)
         }
     }
@@ -210,7 +210,7 @@ private struct ThreadPreparationRow: View {
                 .accessibilityIdentifier("task.preparation")
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                AppText(preparation.text).font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: preparation.text).font(.caption).foregroundStyle(.secondary)
                 if let retry = preparation.retry {
                     Button("再試行") { perform(.retryPreparation(retry)) }
                 }

@@ -2295,6 +2295,7 @@ mod tests {
             Some("fast")
         );
         let rendered = crate::presentation::conversation::project_conversation(
+            crate::localization::UiLanguage::Japanese,
             &snapshot.pane.navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
@@ -2308,6 +2309,7 @@ mod tests {
         let mut accepted = thread.as_ref().clone();
         accepted.preparation = None;
         let rendered = crate::presentation::conversation::project_conversation(
+            crate::localization::UiLanguage::Japanese,
             &snapshot.pane.navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(accepted),

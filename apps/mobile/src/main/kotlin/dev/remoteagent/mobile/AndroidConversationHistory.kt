@@ -20,7 +20,7 @@ internal fun LazyListScope.historyControl(
             control.error?.let { ErrorTextView(it) }
             if (control.hasMore || control.error != null) {
                 TextButton(onClick = { perform(Intent.ReadOlder(session)) {} }, enabled = !control.loading) {
-                    Text(LocalUiLanguage.current.text(if (control.hasMore) control.loadLabel else "再試行"))
+                    Text(if (control.hasMore) control.loadLabel else LocalUiLanguage.current.text("再試行"))
                 }
             }
         }

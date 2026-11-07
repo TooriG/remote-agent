@@ -1,4 +1,5 @@
 //! Text and image sources are projected once in Rust; native views render them.
+use crate::localization::{UiLanguage, localized_ui_format};
 use crate::{
     models::{FileChangeKind, Item, ItemBody as WireBody, ItemStatus, MessagePart},
     state::Draft,
@@ -9,13 +10,17 @@ pub struct ItemBody {
     pub text: Option<String>,
     pub images: Vec<String>,
 }
-fn attachment(text: &mut String, name: &str, path: &str) {
+fn attachment(language: UiLanguage, text: &mut String, name: &str, path: &str) {
     if !text.is_empty() {
         text.push('\n');
     }
-    write!(text, "添付: {name} ({path})").expect("String write cannot fail");
+    text.push_str(&localized_ui_format(
+        language,
+        "添付: {0} ({1})".into(),
+        vec![name.into(), path.into()],
+    ));
 }
-fn message(text: Option<&str>, content: &[MessagePart]) -> String {
+fn message(language: UiLanguage, text: Option<&str>, content: &[MessagePart]) -> String {
     let mut result = text.map(str::to_owned).unwrap_or_else(|| {
         content
             .iter()
@@ -27,22 +32,23 @@ fn message(text: Option<&str>, content: &[MessagePart]) -> String {
     });
     for part in content {
         if let MessagePart::Attachment { name, path } = part {
-            attachment(&mut result, name, path);
+            attachment(language, &mut result, name, path);
         }
     }
     result
 }
-pub fn item_body(item: &Item) -> ItemBody {
+pub fn item_body(language: UiLanguage, item: &Item) -> ItemBody {
     let text = match item.body() {
-        WireBody::UserMessage { text, content } => Some(message(text.as_deref(), content)),
-        WireBody::AssistantText { text, .. } => Some(text.clone()),
-        WireBody::Reasoning { .. } => Some("詳細を表示".into()),
-        WireBody::ImageGeneration { .. } => {
-            (item.status == ItemStatus::Failed).then(|| "画像を生成できませんでした".into())
+        WireBody::UserMessage { text, content } => {
+            Some(message(language, text.as_deref(), content))
         }
+        WireBody::AssistantText { text, .. } => Some(text.clone()),
+        WireBody::Reasoning { .. } => Some(language.text("詳細を表示").into()),
+        WireBody::ImageGeneration { .. } => (item.status == ItemStatus::Failed)
+            .then(|| language.text("画像を生成できませんでした").into()),
         _ => Some(
             match item.status {
-                ItemStatus::Unknown => "詳細を表示",
+                ItemStatus::Unknown => language.text("詳細を表示"),
                 ItemStatus::Running => "running",
                 ItemStatus::Completed => "completed",
                 ItemStatus::Failed => "failed",
@@ -76,14 +82,14 @@ pub fn item_body(item: &Item) -> ItemBody {
     };
     ItemBody { text, images }
 }
-pub fn draft_body(draft: &Draft) -> ItemBody {
+pub fn draft_body(language: UiLanguage, draft: &Draft) -> ItemBody {
     let mut text = draft.text.clone();
     let mut images = Vec::new();
     for file in &draft.attachments {
         if file.is_image {
             images.push(file.path.clone());
         } else {
-            attachment(&mut text, &file.name, &file.path);
+            attachment(language, &mut text, &file.name, &file.path);
         }
     }
     ItemBody {
@@ -115,14 +121,18 @@ pub fn file_changes(item: &Item) -> impl Iterator<Item = FileChange<'_>> {
     })
 }
 pub fn file_change_details(
+    language: UiLanguage,
     diff: Option<&str>,
     proposal: Option<&crate::models::FileProposal>,
 ) -> String {
-    let mut details = diff.unwrap_or("差分は取得できません").to_owned();
+    let mut details = diff
+        .unwrap_or_else(|| language.text("差分は取得できません"))
+        .to_owned();
     if let Some(proposal) = proposal {
         write!(
             details,
-            "\n提案された変更:\n{}",
+            "\n{}\n{}",
+            language.text("提案された変更:"),
             serde_json::to_string_pretty(proposal).expect("proposal serializes")
         )
         .expect("String write cannot fail");
@@ -130,9 +140,9 @@ pub fn file_change_details(
     details
 }
 /// Format large output only for expansion.
-pub fn expanded_body(item: &Item) -> String {
+pub fn expanded_body(language: UiLanguage, item: &Item) -> String {
     match item.body() {
-        WireBody::UserMessage { text, content } => message(text.as_deref(), content),
+        WireBody::UserMessage { text, content } => message(language, text.as_deref(), content),
         WireBody::AssistantText { text, .. } => text.clone(),
         WireBody::Plan { text } => text.clone(),
         WireBody::Reasoning { content, summary } => {
@@ -162,7 +172,7 @@ pub fn expanded_body(item: &Item) -> String {
                     "{}: {}\n{}",
                     display.kind,
                     display.path,
-                    file_change_details(change.diff.as_deref(), change.proposal.as_ref())
+                    file_change_details(language, change.diff.as_deref(), change.proposal.as_ref())
                 )
                 .expect("String write cannot fail");
             }
@@ -179,12 +189,23 @@ pub fn expanded_body(item: &Item) -> String {
 }
 
 /// Native detail views consume typed Markdown blocks; output never becomes executable markup.
-pub(super) fn detail_blocks(item: &Item) -> Vec<super::markdown::MarkdownBlock> {
+pub(super) fn detail_blocks(
+    language: UiLanguage,
+    item: &Item,
+) -> Vec<super::markdown::MarkdownBlock> {
     use super::markdown::{markdown_blocks, markdown_code_block};
-    let code = |text: &str, language: Option<&str>, label: &str| {
-        markdown_code_block(text.into(), language.map(str::to_owned), Some(label.into()))
+    let code = |text: &str, syntax: Option<&str>, label: &str| {
+        markdown_code_block(
+            text.into(),
+            syntax.map(str::to_owned),
+            Some(language.text(label).into()),
+        )
     };
     match item.body() {
+        WireBody::UserMessage { text, content } => {
+            markdown_blocks(message(language, text.as_deref(), content))
+        }
+        WireBody::AssistantText { text, .. } => markdown_blocks(text.clone()),
         WireBody::CommandExecution {
             command,
             cwd,
@@ -193,13 +214,21 @@ pub(super) fn detail_blocks(item: &Item) -> Vec<super::markdown::MarkdownBlock> 
         } => {
             let mut blocks = vec![code(command, Some("sh"), "コマンド")];
             if let Some(cwd) = cwd {
-                blocks.extend(markdown_blocks(format!("作業フォルダ: `{cwd}/`")));
+                blocks.extend(markdown_blocks(localized_ui_format(
+                    language,
+                    "作業フォルダ: `{0}/`".into(),
+                    vec![cwd.clone()],
+                )));
             }
             if !output.is_empty() {
                 blocks.push(code(output, None, "出力"));
             }
             if let Some(exit_code) = exit_code {
-                blocks.extend(markdown_blocks(format!("終了コード: **{exit_code}**")));
+                blocks.extend(markdown_blocks(localized_ui_format(
+                    language,
+                    "終了コード: **{0}**".into(),
+                    vec![exit_code.to_string()],
+                )));
             }
             blocks
         }
@@ -265,7 +294,7 @@ pub(super) fn detail_blocks(item: &Item) -> Vec<super::markdown::MarkdownBlock> 
                     agent_protocol::requests::ToolContent::Image { data_url } => {
                         blocks.push(super::markdown::MarkdownBlock::Paragraph {
                             runs: vec![super::markdown::MarkdownRun {
-                                text: "ツールの画像".into(),
+                                text: language.text("ツールの画像").into(),
                                 image: Some(data_url.clone()),
                                 ..Default::default()
                             }],
@@ -277,7 +306,11 @@ pub(super) fn detail_blocks(item: &Item) -> Vec<super::markdown::MarkdownBlock> 
             blocks
         }
         WireBody::WebSearch { query, action } => {
-            let mut blocks = markdown_blocks(format!("検索: **{}**", query.replace('*', "\\*")));
+            let mut blocks = markdown_blocks(localized_ui_format(
+                language,
+                "検索: **{0}**".into(),
+                vec![query.replace('*', "\\*")],
+            ));
             let url = match action {
                 Some(
                     crate::models::WebSearchAction::OpenPage { url }
@@ -297,7 +330,7 @@ pub(super) fn detail_blocks(item: &Item) -> Vec<super::markdown::MarkdownBlock> 
             }
             blocks
         }
-        _ => vec![code(&expanded_body(item), Some("json"), "詳細")],
+        _ => vec![code(&expanded_body(language, item), Some("json"), "詳細")],
     }
 }
 
@@ -306,9 +339,82 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
     #[test]
+    fn plain_message_details_stay_verbatim_in_both_languages() {
+        for body in [
+            WireBody::UserMessage {
+                text: Some("設定{0}".into()),
+                content: vec![],
+            },
+            WireBody::AssistantText {
+                text: "設定{0}".into(),
+                phase: Default::default(),
+            },
+        ] {
+            let item = Item::new("message".into(), ItemStatus::Completed, body);
+            for language in [UiLanguage::Japanese, UiLanguage::English] {
+                let blocks = detail_blocks(language, &item);
+                let super::super::markdown::MarkdownBlock::Paragraph { runs, style } = &blocks[0]
+                else {
+                    panic!()
+                };
+                assert_eq!(style.filename, None);
+                assert_eq!(
+                    runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+                    "設定{0}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn translated_detail_labels_keep_commands_and_output_verbatim() {
+        let item = Item::new(
+            "command".into(),
+            ItemStatus::Completed,
+            WireBody::CommandExecution {
+                command: "設定\n{0}".into(),
+                cwd: Some("/設定/{0}".into()),
+                output: "詳細を表示\n{0}".into(),
+                exit_code: Some(2),
+            },
+        );
+        let blocks = detail_blocks(UiLanguage::English, &item);
+        let super::super::markdown::MarkdownBlock::Paragraph { runs, style } = &blocks[0] else {
+            panic!()
+        };
+        assert_eq!(style.filename.as_deref(), Some("Command"));
+        assert_eq!(
+            runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+            "設定\n{0}"
+        );
+        let output = blocks
+            .iter()
+            .find_map(|block| match block {
+                super::super::markdown::MarkdownBlock::Paragraph { runs, style }
+                    if style.filename.as_deref() == Some("Output") =>
+                {
+                    Some(runs)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            output
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>(),
+            "詳細を表示\n{0}"
+        );
+        assert_eq!(
+            expanded_body(UiLanguage::English, &item),
+            "cwd: /設定/{0}\n詳細を表示\n{0}"
+        );
+    }
+
+    #[test]
     fn command_details_keep_output_literal_and_syntax_information() {
         let item: Item = serde_json::from_value(json!({"id":"cmd","status":"completed","clientInputId":null,"body":{"inline":{"body":{"commandExecution":{"command":"echo hi","cwd":"/workspace","output":"**literal**\n[link](https://example.com)","exitCode":2}}}}})).unwrap();
-        let blocks = detail_blocks(&item);
+        let blocks = detail_blocks(UiLanguage::Japanese, &item);
         let super::super::markdown::MarkdownBlock::Paragraph { style, .. } = &blocks[0] else {
             panic!()
         };
@@ -393,15 +499,18 @@ mod tests {
         #[case] images: &[&str],
     ) {
         let item: Item = serde_json::from_value(wire).unwrap();
-        let body = item_body(&item);
+        let body = item_body(UiLanguage::Japanese, &item);
         assert_eq!(body.text.as_deref(), Some(collapsed));
         assert_eq!(body.images, images);
-        assert_eq!(expanded_body(&item), expanded);
+        assert_eq!(expanded_body(UiLanguage::Japanese, &item), expanded);
     }
 
     #[test]
     fn generated_image_paths_are_displayed() {
         let generated: Item = serde_json::from_value(json!({"id":"image","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"imageGeneration":{"savedPath":"/saved.png","data":"base64","revisedPrompt":null}}}}})).unwrap();
-        assert_eq!(item_body(&generated).images, ["/saved.png"]);
+        assert_eq!(
+            item_body(UiLanguage::Japanese, &generated).images,
+            ["/saved.png"]
+        );
     }
 }

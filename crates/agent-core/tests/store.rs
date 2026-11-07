@@ -1091,6 +1091,7 @@ async fn new_conversation_moves_draft_to_pending_before_creation_reply() {
     assert!(pending.input.drafts[&key].text.is_empty());
     let source = pending.conversation_thread().unwrap();
     let rendered = agent_core::presentation::conversation::project_conversation(
+        agent_core::localization::UiLanguage::Japanese,
         &pending.pane.navigation.draft_key,
         &pending.sessions.pending_submissions,
         source,

@@ -982,14 +982,20 @@ mod tests {
             assert!(
                 matches!(item.body(), ItemBody::Attachment {kind, content} if kind == &expected_kind && content == attachment)
             );
-            let presentation =
-                agent_core::presentation::item_presentation(item, Some(ProviderKind::Claude));
+            let presentation = agent_core::presentation::item_presentation(
+                agent_core::localization::UiLanguage::Japanese,
+                item,
+                Some(ProviderKind::Claude),
+            );
             assert!(presentation.collapsible);
             assert!(matches!(
                 agent_core::presentation::ItemMetadata::from(item.as_ref()).kind,
                 agent_core::presentation::GroupKind::Activity
             ));
-            let body = agent_core::presentation::body::expanded_body(item);
+            let body = agent_core::presentation::body::expanded_body(
+                agent_core::localization::UiLanguage::Japanese,
+                item,
+            );
             assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), *attachment);
         }
         let text = &items[5];

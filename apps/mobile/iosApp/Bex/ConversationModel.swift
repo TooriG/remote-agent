@@ -372,12 +372,12 @@ extension ConversationModel {
         presentationTask = Task { [weak self] in
             while let self, let input = pendingPresentation {
                 pendingPresentation = nil
-                let previous = conversation
-                let rendered = await Task.detached(priority: .userInitiated) {
+                let rendered = await Task.detached(priority: .userInitiated) { [previous = conversation] in
                     ConversationPresentation.project(input.rendered, scope: input.scope, previous: previous)
                 }.value
                 if snapshot.panelScope(host: host, draft: coreDraftKey) == input.scope,
-                   snapshot.connectionGeneration() == input.connection {
+                   snapshot.connectionGeneration() == input.connection,
+                   snapshot.uiLanguage() == input.rendered.language() {
                     conversation = rendered
                     if rendered.id != nil {
                         recentConversations.removeAll { $0.scope == rendered.scope }

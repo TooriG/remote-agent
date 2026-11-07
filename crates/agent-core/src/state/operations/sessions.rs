@@ -809,10 +809,16 @@ mod tests {
         assert_eq!(retained.turns.as_ref().unwrap().len(), 3);
         assert!(retained.history_cursor.is_none());
         assert_eq!(retained.history_read_state.as_ref(), Some(&source_state));
-        assert!(history_notice(retained).is_some());
+        assert!(history_notice(crate::localization::UiLanguage::Japanese, retained).is_some());
         incoming.history_read_state = Some(HistoryReadState::new(HistoryReadKind::Partial, vec![]));
         refresh_thread(&mut snapshot, incoming);
-        assert_eq!(history_notice(&snapshot.sessions.conversations[&id]), None);
+        assert_eq!(
+            history_notice(
+                crate::localization::UiLanguage::Japanese,
+                &snapshot.sessions.conversations[&id]
+            ),
+            None
+        );
     }
 
     #[test]

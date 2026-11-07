@@ -907,7 +907,13 @@ async fn provider_switch_preserves_conversation_identity_history_and_workspace()
                             agent_protocol::items::ItemBody::UserMessage { .. }
                         )
                     })
-                    .filter_map(|item| agent_core::presentation::body::item_body(item).text)
+                    .filter_map(|item| {
+                        agent_core::presentation::body::item_body(
+                            agent_core::localization::UiLanguage::Japanese,
+                            item,
+                        )
+                        .text
+                    })
                     .collect();
                 assert_eq!(messages, expected);
             }
@@ -1885,6 +1891,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
                 .any(|item| item_text(item) == Some("あとで報告します"))
         );
         let projected = agent_core::presentation::conversation::project_conversation(
+            agent_core::localization::UiLanguage::Japanese,
             &snapshot.pane.navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
@@ -1947,6 +1954,7 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
                 .any(|item| item_text(item) == Some("approved"))
         );
         let projected = agent_core::presentation::conversation::project_conversation(
+            agent_core::localization::UiLanguage::Japanese,
             &snapshot.pane.navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
@@ -2029,6 +2037,7 @@ async fn claude_responses_show_their_time_and_fork_from_the_selected_turn() {
     let snapshot = completed(&store, &id, 2, "completed").await;
     let thread = snapshot.sessions.conversations[&id].clone();
     let projected = project_conversation(
+        agent_core::localization::UiLanguage::Japanese,
         &snapshot.pane.navigation.draft_key,
         &snapshot.sessions.pending_submissions,
         thread.clone(),

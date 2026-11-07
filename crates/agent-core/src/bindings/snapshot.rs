@@ -12,6 +12,9 @@ use std::sync::Arc;
 
 #[uniffi::export]
 impl Snapshot {
+    pub fn ui_language(&self) -> crate::localization::UiLanguage {
+        self.catalog.ui_language
+    }
     pub fn connection_generation(&self) -> u64 {
         self.connection.connection_generation
     }
@@ -86,9 +89,6 @@ impl Snapshot {
 impl Thread {
     pub fn id(&self) -> Option<crate::session::SessionRef> {
         self.0.id.clone()
-    }
-    pub fn history_notice(&self) -> Option<String> {
-        crate::presentation::conversation::history_notice(&self.0)
     }
     pub fn turn_count(&self) -> u64 {
         self.0.turns.as_ref().map_or(0, |turns| turns.len() as u64)
@@ -187,6 +187,7 @@ pub fn project_conversation(
     previous: &Option<Arc<RenderedConversation>>,
 ) -> Arc<RenderedConversation> {
     crate::presentation::conversation::project_conversation(
+        snapshot.catalog.ui_language,
         &(snapshot).pane.navigation.draft_key,
         &(snapshot).sessions.pending_submissions,
         source.0.clone(),

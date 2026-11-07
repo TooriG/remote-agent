@@ -85,6 +85,7 @@ impl Presentation {
         });
         let conversation = source.map(|source| {
             project_conversation(
+                snapshot.catalog.ui_language,
                 &snapshot.pane.navigation.draft_key,
                 &snapshot.sessions.pending_submissions,
                 source,
@@ -117,7 +118,8 @@ impl Presentation {
     }
 
     fn same_context(&self, latest: &Snapshot) -> bool {
-        self.snapshot.pane.navigation.draft_key == latest.pane.navigation.draft_key
+        self.snapshot.catalog.ui_language == latest.catalog.ui_language
+            && self.snapshot.pane.navigation.draft_key == latest.pane.navigation.draft_key
             && self.snapshot.pane.navigation.thread_id == latest.pane.navigation.thread_id
             && self.snapshot.connection.epoch == latest.connection.epoch
             && self.snapshot.pane.epoch == latest.pane.epoch
