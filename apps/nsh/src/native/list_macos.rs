@@ -11,8 +11,8 @@ use objc2::{
 use objc2_app_kit::*;
 use objc2_core_foundation::{CGRect, CGSize};
 use objc2_foundation::{
-    NSArray, NSBundle, NSData, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol,
-    NSString,
+    NSArray, NSBundle, NSData, NSEdgeInsets, NSIndexSet, NSInteger, NSNotification, NSObject,
+    NSObjectProtocol, NSString,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -110,9 +110,13 @@ define_class!(
         }
     }
     unsafe impl NSOutlineViewDelegate for Delegate {
-        #[unsafe(method(outlineView:isGroupItem:))]
-        fn group(&self, _: &NSOutlineView, item: &AnyObject) -> bool {
-            self.ivars().row(item).is_some_and(|row| row.group)
+        #[unsafe(method(outlineView:heightOfRowByItem:))]
+        fn height(&self, outline: &NSOutlineView, item: &AnyObject) -> f64 {
+            if self.ivars().sidebar.get() && self.ivars().row(item).is_some_and(|row| row.disclosure) {
+                44.0
+            } else {
+                outline.rowHeight()
+            }
         }
         #[unsafe(method(outlineView:shouldSelectItem:))]
         fn can_select(&self, _: &NSOutlineView, item: &AnyObject) -> bool {
@@ -153,6 +157,9 @@ define_class!(
                     .unwrap_or_else(|| cell_view(self, &identifier, row.group, row.menu.is_some(), row.compose.is_some()));
                 cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
                 for stack in cell.subviews().iter().filter_map(|view| view.downcast::<NSStackView>().ok()) {
+                    if self.ivars().sidebar.get() {
+                        stack.setEdgeInsets(NSEdgeInsets { top: 0.0, left: 12.0 + 24.0 * f64::from(row.level), bottom: 0.0, right: 16.0 });
+                    }
                     // Hidden stacks detach from subviews, but remain owned views.
                     for view in stack.views().iter() {
                         if let Some(button) = view.downcast_ref::<NSPopUpButton>() && let Some(entries) = &row.menu {
@@ -477,16 +484,38 @@ impl List {
             outline.setTarget(Some(&delegate));
             outline.setDoubleAction(Some(sel!(activate:)));
         }
-        outline.setStyle(NSTableViewStyle::SourceList);
         let view = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), CGRect::ZERO);
         view.setDocumentView(Some(&outline));
         view.setBorderType(NSBorderType::NoBorder);
         view.setHasVerticalScroller(true);
-        Self {
+        view.setAutohidesScrollers(true);
+        view.setDrawsBackground(false);
+        let list = Self {
             view,
             outline,
             delegate,
+        };
+        list.style(false);
+        list
+    }
+
+    fn style(&self, sidebar: bool) {
+        self.outline.setStyle(if sidebar {
+            NSTableViewStyle::Plain
+        } else {
+            NSTableViewStyle::SourceList
+        });
+        self.outline
+            .setRowSizeStyle(NSTableViewRowSizeStyle::Custom);
+        self.outline.setRowHeight(if sidebar { 32.0 } else { 24.0 });
+        if sidebar {
+            // Native stacks provide product spacing; AppKit still owns the
+            // hierarchy, disclosure controls and keyboard navigation.
+            self.outline.setIndentationPerLevel(0.0);
+            self.outline.setIntercellSpacing(CGSize::ZERO);
         }
+        // Changing the table style resets its background color.
+        self.outline.setBackgroundColor(&NSColor::clearColor());
     }
 
     fn reload(&self, rows: Vec<ListRow>) {
@@ -568,16 +597,7 @@ impl NativeComponent for List {
         if name == "sidebar" {
             let sidebar = value.and_then(JsonValue::as_bool).unwrap_or(false);
             self.delegate.ivars().sidebar.set(sidebar);
-            if sidebar {
-                // Section labels are root group rows. Only projects own
-                // children; AppKit supplies their 24-point indentation.
-                self.outline.setIndentationPerLevel(24.0);
-                self.outline.setBackgroundColor(&NSColor::clearColor());
-                self.view.setDrawsBackground(false);
-                self.outline
-                    .setIntercellSpacing(CGSize::new(self.outline.intercellSpacing().width, 0.0));
-            }
-            self.outline.setRowHeight(if sidebar { 32.0 } else { 24.0 });
+            self.style(sidebar);
             self.outline.reloadData();
             return;
         }

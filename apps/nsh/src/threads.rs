@@ -109,6 +109,11 @@ fn rows(
     let Some(list) = list else {
         return rows;
     };
+    let more_title = if desktop {
+        "もっと表示する"
+    } else {
+        "さらに表示"
+    };
     let sections = list
         .projects
         .iter()
@@ -167,7 +172,7 @@ fn rows(
             }
             if project.has_more {
                 rows.push(Row {
-                    title: "さらに表示".into(),
+                    title: more_title.into(),
                     symbol: if desktop { "" } else { "ellipsis" },
                     png: None,
                     level: 1,
@@ -200,7 +205,12 @@ fn rows(
     }
     if list.has_more_projects {
         rows.push(Row {
-            title: "プロジェクトをさらに表示".into(),
+            title: if desktop {
+                "もっとプロジェクトを表示"
+            } else {
+                "プロジェクトをさらに表示"
+            }
+            .into(),
             symbol: "folder.badge.plus",
             png: None,
             level: 0,
@@ -224,7 +234,7 @@ fn rows(
     }
     if list.has_more {
         rows.push(Row {
-            title: "さらに表示".into(),
+            title: more_title.into(),
             symbol: if desktop { "" } else { "ellipsis" },
             png: None,
             level: 0,

@@ -278,7 +278,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
             return view()
                 .flex_1()
                 .pt_5().pb_3()
-                .gap_3()
+                .gap_1()
                 .child(
                     view().flex_row().items_center().gap_1().px_3()
                         .child(native::search(query).prop("appearance", json!("plain")).flex_1())
