@@ -6,6 +6,7 @@ fn populate(
     mut menu: PopupMenu,
     entries: Vec<ProjectMenuItem>,
     host: String,
+    storage: String,
     owner: WeakEntity<Desktop>,
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
@@ -16,8 +17,17 @@ fn populate(
             ProjectMenuItem::Submenu { title, items } => {
                 let owner = owner.clone();
                 let host = host.clone();
+                let storage = storage.clone();
                 menu.submenu(title, window, cx, move |menu, window, cx| {
-                    populate(menu, items.clone(), host.clone(), owner.clone(), window, cx)
+                    populate(
+                        menu,
+                        items.clone(),
+                        host.clone(),
+                        storage.clone(),
+                        owner.clone(),
+                        window,
+                        cx,
+                    )
                 })
             }
             ProjectMenuItem::Action {
@@ -28,12 +38,16 @@ fn populate(
             } => {
                 let owner = owner.clone();
                 let host = host.clone();
+                let storage = storage.clone();
                 menu.item(
                     PopupMenuItem::new(title)
                         .checked(checked)
                         .disabled(!enabled)
                         .on_click(move |_, window, cx| {
                             let _ = owner.update(cx, |state, cx| {
+                                if !state.project_scope_matches(&host, &storage, cx) {
+                                    return;
+                                }
                                 match action.clone().into_intent(chrono::Utc::now().timestamp()) {
                                     Ok(intent) => {
                                         state.dispatch_host(&host, intent, cx);
@@ -97,11 +111,26 @@ pub(super) fn project_menu_button(
             let items = agent_core::presentation::project_menu::project_menu(
                 project, &sections, local, label,
             );
-            populate(menu, items, host.clone(), owner.clone(), window, cx)
+            populate(
+                menu,
+                items,
+                host.clone(),
+                snapshot.connection.storage_scope.clone(),
+                owner.clone(),
+                window,
+                cx,
+            )
         })
 }
 
 impl Desktop {
+    fn project_scope_matches(&self, host: &str, storage: &str, cx: &App) -> bool {
+        match self.connection_store(host, cx) {
+            Some(store) => storage == store.snapshot().connection.storage_scope,
+            None => host.is_empty() && storage == self.snapshot.connection.storage_scope,
+        }
+    }
+
     fn edit_project(&mut self, host: &str, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let language = crate::localization::language(cx);
         let snapshot = match self.connection_store(host, cx) {
@@ -141,11 +170,7 @@ impl Desktop {
             .child(h_flex().gap_2()
                 .child(Button::new("save-project").label(language.text("保存")).primary().on_click(cx.listener(move |s, _, _, cx| {
                     let editor = s.project_editor.as_ref().unwrap();
-                    let same_scope = match s.connection_store(&editor.host, cx) {
-                        Some(store) => editor.scope == store.snapshot().connection.storage_scope,
-                        None => editor.host.is_empty() && editor.scope == s.snapshot.connection.storage_scope,
-                    };
-                    if !same_scope {
+                    if !s.project_scope_matches(&editor.host, &editor.scope, cx) {
                         s.set_error(language.text("接続先が変わりました。プロジェクトを開き直してください").into());
                         s.project_editor = None; cx.notify(); return;
                     }

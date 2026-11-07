@@ -27,6 +27,7 @@ scripts/dev-env.sh xcrun simctl launch DEVICE_ID com.bex.nsh-preview
 
 会話切り替え、下書きの保持、送信・停止、Markdown の選択・コピー、モデル設定を確認できます。
 ナビゲーション・ツールバー・一覧・検索・ボタン・メニューは UIKit／AppKit の標準コントロールを使います。
+プロジェクトの編集・整理は Mac の行末の「…」、iPhone の長押しから開きます。Mac のローカル環境では、見出しの「＋」からフォルダを追加できます。非表示にしたプロジェクトも見出しの「＋」から戻せます。
 NSH の native component API はコントロールへのデータとイベントの接続に使います。
 アプリアイコンは既存の素材、操作アイコンは OS のシステムシンボルです。音声の録音は AVFAudio、文字起こしは既存の Host の処理を使います。
 

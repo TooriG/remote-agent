@@ -4,7 +4,7 @@ use nsh_core::JsonValue;
 use nsh_platform_macos::{ComponentContext, NativeComponent};
 use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
-    rc::{Retained, Weak},
+    rc::Retained,
     runtime::{AnyObject, ProtocolObject},
     sel,
 };
@@ -140,24 +140,23 @@ define_class!(
             item: &AnyObject,
         ) -> Option<Retained<NSView>> {
             self.ivars().row(item).map(|row| {
-                let identifier = NSString::from_str(if row.group { "heading" } else { "item" });
+                let identifier = NSString::from_str(if row.group { "heading" } else if row.menu.is_some() { "menu-item" } else { "item" });
                 let reused = unsafe { outline.makeViewWithIdentifier_owner(&identifier, None) };
                 let cell = reused
                     .and_then(|view| view.downcast::<NSTableCellView>().ok())
-                    .unwrap_or_else(|| cell_view(self.mtm(), row.group));
+                    .unwrap_or_else(|| cell_view(self.mtm(), &identifier, row.group, row.menu.is_some()));
                 cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
-                let menu = row.menu.as_ref().map(|entries| {
-                    let menu = NSMenu::new(self.mtm());
-                    super::macos::menu_items(&menu, entries, self);
-                    menu
-                });
+                if let Some(entries) = &row.menu {
+                    for view in cell.subviews().iter() {
+                        if let Some(button) = view.downcast_ref::<NSPopUpButton>() {
+                            super::macos::set_menu_items(button, Some(entries), self);
+                            button.setAccessibilityIdentifier(Some(&NSString::from_str(&format!("{}.menu", row.id))));
+                        }
+                    }
+                }
                 // The cell's subviews retain both outlets for the cell's entire lifetime.
                 unsafe {
-                    // Read-only labels and images receive their own context-menu events.
-                    // AppKit retains the menu; List keeps its action target alive.
-                    cell.setMenu(menu.as_deref());
                     if let Some(field) = cell.textField() {
-                        field.setMenu(menu.as_deref());
                         field.setStringValue(&NSString::from_str(&row.title));
                         if self.ivars().sidebar.get() {
                             let weight = if row.group || row.disclosure { NSFontWeightSemibold } else { NSFontWeightRegular };
@@ -167,7 +166,6 @@ define_class!(
                         }
                     }
                     if let Some(view) = cell.imageView() {
-                        view.setMenu(menu.as_deref());
                         let image = if let Some(png) = &row.png {
                             NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(png))
                                 .inspect(|image| image.setSize(CGSize::new(17.0, 17.0)))
@@ -223,38 +221,19 @@ define_class!(
     }
 );
 
-// Ask AppKit which row the context-menu event belongs to. No selection change
-// or delayed menu population is needed, including when the menu starts empty.
-define_class!(
-    #[unsafe(super(NSOutlineView))]
-    #[thread_kind = MainThreadOnly]
-    #[ivars = Weak<Delegate>]
-    struct Outline;
-    unsafe impl NSObjectProtocol for Outline {}
-    impl Outline {
-        #[unsafe(method_id(menuForEvent:))]
-        fn menu(&self, event: &NSEvent) -> Option<Retained<NSMenu>> {
-            self.ivars().load().and_then(|delegate| {
-                let point = self.convertPoint_fromView(event.locationInWindow(), None);
-                let entries = self.itemAtRow(self.rowAtPoint(point))
-                    .and_then(|item| delegate.ivars().row(&item).and_then(|row| row.menu.clone()))?;
-                let menu = NSMenu::new(self.mtm());
-                super::macos::menu_items(&menu, &entries, &delegate);
-                Some(menu)
-            })
-        }
-    }
-);
-
-fn cell_view(mtm: MainThreadMarker, heading: bool) -> Retained<NSTableCellView> {
+fn cell_view(
+    mtm: MainThreadMarker,
+    identifier: &NSString,
+    heading: bool,
+    has_menu: bool,
+) -> Retained<NSTableCellView> {
     let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), CGRect::ZERO);
-    cell.setIdentifier(Some(&NSString::from_str(if heading {
-        "heading"
-    } else {
-        "item"
-    })));
+    cell.setIdentifier(Some(identifier));
     let field = NSTextField::labelWithString(&NSString::new(), mtm);
     field.setMaximumNumberOfLines(1);
+    if let Some(control_cell) = field.cell() {
+        control_cell.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+    }
     field.setTranslatesAutoresizingMaskIntoConstraints(false);
     cell.addSubview(&field);
     // This unretained outlet points at a subview owned by the standard cell.
@@ -287,11 +266,40 @@ fn cell_view(mtm: MainThreadMarker, heading: bool) -> Retained<NSTableCellView> 
             .leadingAnchor()
             .constraintEqualToAnchor_constant(&image.trailingAnchor(), 6.0)
     };
-    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
-        leading,
+    let trailing = if has_menu {
+        let menu = super::macos::menu_button(mtm);
+        menu.setBordered(false);
+        menu.setAccessibilityLabel(Some(&NSString::from_str("プロジェクトの操作")));
+        if let Some(item) = menu.itemAtIndex(0) {
+            item.setImage(symbol("ellipsis").as_deref());
+        }
+        if let Some(control_cell) = menu
+            .cell()
+            .and_then(|cell| cell.downcast::<NSPopUpButtonCell>().ok())
+        {
+            control_cell.setArrowPosition(NSPopUpArrowPosition::NoArrow);
+        }
+        menu.setTranslatesAutoresizingMaskIntoConstraints(false);
+        cell.addSubview(&menu);
+        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+            menu.trailingAnchor()
+                .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
+            menu.centerYAnchor()
+                .constraintEqualToAnchor(&cell.centerYAnchor()),
+            menu.widthAnchor().constraintEqualToConstant(24.0),
+            menu.heightAnchor().constraintEqualToConstant(24.0),
+        ]));
         field
             .trailingAnchor()
-            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
+            .constraintEqualToAnchor_constant(&menu.leadingAnchor(), -4.0)
+    } else {
+        field
+            .trailingAnchor()
+            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0)
+    };
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+        leading,
+        trailing,
         field
             .centerYAnchor()
             .constraintEqualToAnchor(&cell.centerYAnchor()),
@@ -317,10 +325,7 @@ impl List {
             sidebar: Cell::new(false),
         });
         let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
-        let outline = Outline::alloc(mtm).set_ivars(Weak::from_retained(&delegate));
-        let outline: Retained<Outline> =
-            unsafe { msg_send![super(outline), initWithFrame: CGRect::ZERO] };
-        let outline = outline.into_super();
+        let outline = NSOutlineView::initWithFrame(NSOutlineView::alloc(mtm), CGRect::ZERO);
         let column = NSTableColumn::initWithIdentifier(
             NSTableColumn::alloc(mtm),
             &NSString::from_str("items"),

@@ -251,13 +251,7 @@ struct Menu {
 impl Menu {
     fn new(context: ComponentContext) -> Self {
         let target = ActionTarget::new(context.clone());
-        let view = NSPopUpButton::initWithFrame_pullsDown(
-            NSPopUpButton::alloc(target.mtm()),
-            CGRect::ZERO,
-            true,
-        );
-        // AppKit reserves the first item as a pull-down button's label.
-        view.addItemWithTitle(&NSString::new());
+        let view = menu_button(target.mtm());
         context.set_size(100.0, view.intrinsicContentSize().height as f32);
         Self {
             view,
@@ -267,7 +261,30 @@ impl Menu {
     }
 }
 
-pub(super) fn menu_items(menu: &NSMenu, entries: &JsonValue, target: &objc2::runtime::AnyObject) {
+pub(super) fn menu_button(mtm: MainThreadMarker) -> Retained<NSPopUpButton> {
+    let view =
+        NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), CGRect::ZERO, true);
+    // AppKit reserves the first item as a pull-down button's label.
+    view.addItemWithTitle(&NSString::new());
+    view
+}
+
+pub(super) fn set_menu_items(
+    view: &NSPopUpButton,
+    entries: Option<&JsonValue>,
+    target: &objc2::runtime::AnyObject,
+) {
+    while view.numberOfItems() > 1 {
+        view.removeItemAtIndex(1);
+    }
+    if let Some(entries) = entries
+        && let Some(menu) = view.menu()
+    {
+        menu_items(&menu, entries, target);
+    }
+}
+
+fn menu_items(menu: &NSMenu, entries: &JsonValue, target: &objc2::runtime::AnyObject) {
     menu.setAutoenablesItems(false);
     for entry in entries.as_array().into_iter().flatten() {
         if entry["separator"].as_bool().unwrap_or(false) {
@@ -343,16 +360,7 @@ impl NativeComponent for Menu {
             "enabled" => self
                 .view
                 .setEnabled(value.and_then(JsonValue::as_bool).unwrap_or(true)),
-            "items" => {
-                while self.view.numberOfItems() > 1 {
-                    self.view.removeItemAtIndex(1);
-                }
-                if let Some(entries) = value
-                    && let Some(menu) = self.view.menu()
-                {
-                    menu_items(&menu, entries, &self.target);
-                }
-            }
+            "items" => set_menu_items(&self.view, value, &self.target),
             _ => {}
         }
         let size = self.view.intrinsicContentSize();
