@@ -3,6 +3,23 @@ import NativeSettingsViews
 import XCTest
 
 final class DisplayTests: XCTestCase {
+    func testModelPickerPreservesCoreSearchProviderSelectionAndAccountQuota() throws {
+        guard case let .modelPicker(data) = try content("model-picker")
+        else { return XCTFail("Expected model picker") }
+        let value = try XCTUnwrap(data)
+        XCTAssertEqual(value.provider, "codex")
+        XCTAssertEqual(value.query, "日本語")
+        XCTAssertEqual(value.models.map(\.id), ["codex/native"])
+        XCTAssertEqual(value.models[0].title, "日本語モデル 👋")
+        XCTAssertEqual(value.selectedModel, "codex/native")
+        XCTAssertEqual(value.customModel, "日本語")
+        XCTAssertEqual(value.quick?.effort, "medium")
+        XCTAssertEqual(value.quick?.speed, "priority")
+        XCTAssertEqual(value.account?.title, "native@example.invalid")
+        XCTAssertEqual(value.account?.usage[0].remainingPercent, 42)
+        XCTAssertFalse(value.disabled)
+    }
+
     func testWorktreeSettingsPreserveHostScopeOverridesAndCoreRemovalReason() throws {
         guard case let .worktreeEditor(data) = try content("worktree-editor")
         else { return XCTFail("Expected worktree editor") }

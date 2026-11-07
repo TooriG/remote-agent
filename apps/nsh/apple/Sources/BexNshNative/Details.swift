@@ -42,6 +42,7 @@ enum DetailsContent: Decodable {
     case workspace(summary: WorkspaceSummary)
     case projectEditor(editor: ProjectEditorData?)
     case worktreeEditor(data: WorktreeEditorData?)
+    case modelPicker(data: ModelPickerData?)
 }
 
 private struct DetailsView: View {
@@ -55,6 +56,8 @@ private struct DetailsView: View {
                 ProjectEditorPresenter(editor: editor, send: send)
             case let .worktreeEditor(data):
                 WorktreeEditorPresenter(data: data, send: send)
+            case let .modelPicker(data):
+                ModelPickerPresenter(data: data, send: send)
             case .separator: Divider()
             case let .workspace(summary):
                 WorkspaceCard(summary: summary, send: send)
@@ -192,8 +195,11 @@ private struct DiffCard: View {
 
     func update(_ data: Data) {
         let content: DetailsContent
-        do { content = try JSONDecoder().decode(DetailsContent.self, from: data) }
-        catch { content = .error(message: error.localizedDescription) }
+        do {
+            content = try JSONDecoder().decode(DetailsContent.self, from: data)
+        } catch {
+            content = .error(message: error.localizedDescription)
+        }
         let root = DetailsView(content: content) { [weak self] action in
             guard let self, let data = try? JSONSerialization.data(withJSONObject: action) else { return }
             data.withUnsafeBytes { self.callback?(self.context, $0.bindMemory(to: UInt8.self).baseAddress, data.count) }

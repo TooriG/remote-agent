@@ -1,0 +1,33 @@
+{
+  "modelPicker": {
+    "data": {
+      "id": "native-picker",
+      "provider": "codex",
+      "query": "日本語",
+      "disabled": false,
+      "providers": [
+        {"id": "codex", "title": "Codex"},
+        {"id": "claude", "title": "Claude Code"},
+        {"id": "deepseek", "title": "DeepSeek Harness"}
+      ],
+      "models": [{"id": "codex/native", "title": "日本語モデル 👋"}],
+      "selectedModel": "codex/native",
+      "loading": false,
+      "errors": [],
+      "notices": [],
+      "customModel": "日本語",
+      "quick": {
+        "efforts": ["low", "medium"],
+        "effort": "medium",
+        "speeds": [{"id": "default", "title": "通常"}, {"id": "priority", "title": "高速"}],
+        "speed": "priority"
+      },
+      "permissions": null,
+      "account": {
+        "title": "native@example.invalid",
+        "asset": "openai",
+        "usage": [{"label": "週間枠", "remainingPercent": 42, "resetsAt": null}]
+      }
+    }
+  }
+}
