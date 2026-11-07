@@ -18,6 +18,8 @@ pub(crate) mod colors {
     pub(crate) const BORDER: Rgba = rgb(0x303030);
     pub(crate) const FOREGROUND: Rgba = rgb(0xe6e6e6);
     pub(crate) const MUTED: Rgba = rgb(0xa6a6a6);
+    #[cfg(target_os = "macos")]
+    pub(crate) const ACCENT: Rgba = rgb(0x346bf1);
     /// A ghost control under the pointer: the selection fill at half opacity.
     pub(crate) const GHOST_HOVER: Rgba = rgba(0x28282880);
     /// A sidebar row under the pointer.
@@ -31,7 +33,11 @@ pub(crate) enum Icon {
     ArrowDown,
     ArrowUp,
     Branch,
+    #[cfg(target_os = "macos")]
+    Check,
     ChevronDown,
+    #[cfg(target_os = "macos")]
+    ChevronRight,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     Close,
     Copy,
@@ -68,7 +74,9 @@ impl Icon {
             Self::ArrowDown => "arrow.down",
             Self::ArrowUp => "arrow.up",
             Self::Branch => "arrow.triangle.branch",
+            Self::Check => "checkmark",
             Self::ChevronDown => "chevron.down",
+            Self::ChevronRight => "chevron.right",
             Self::Close => "xmark",
             Self::Copy => "doc.on.doc",
             Self::Diff => "plusminus",
@@ -93,7 +101,11 @@ impl Icon {
             Self::ArrowDown => include_str!("../assets/icons/arrow-down.svg"),
             Self::ArrowUp => include_str!("../assets/icons/arrow-up.svg"),
             Self::Branch => include_str!("../../desktop/assets/branch.svg"),
+            #[cfg(target_os = "macos")]
+            Self::Check => include_str!("../assets/icons/check.svg"),
             Self::ChevronDown => include_str!("../assets/icons/chevron-down.svg"),
+            #[cfg(target_os = "macos")]
+            Self::ChevronRight => include_str!("../assets/icons/chevron-right.svg"),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             Self::Close => include_str!("../assets/icons/x.svg"),
             Self::Copy => include_str!("../assets/icons/copy.svg"),

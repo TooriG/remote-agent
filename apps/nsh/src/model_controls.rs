@@ -1,10 +1,14 @@
+use crate::Connection;
+#[cfg(not(target_os = "macos"))]
+use crate::native;
 use crate::ui::Enabled;
-use crate::{Connection, native};
 use agent_core::{
     presentation::{permissions::PERMISSION_CHOICES, view::Presentation},
     state::{DraftKey, Intent, operations as op},
 };
 use agent_protocol::session::ProviderKind;
+#[cfg(target_os = "macos")]
+use nsh_core::element::{ImageSrc, input};
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
 
@@ -24,7 +28,7 @@ impl Picker {
     }
 }
 
-pub(crate) fn controls() -> impl Element {
+pub(crate) fn controls() -> View {
     let connection = use_context::<Connection>().unwrap();
     let publication = connection.publication;
     let picker = signal(None::<Picker>);
@@ -49,105 +53,507 @@ pub(crate) fn controls() -> impl Element {
             .settings
             .with(|p| p.selected_model_name().unwrap_or_else(|| "モデル".into()))
     });
-    view()
-        .flex_row()
-        .items_center()
-        .child(
-            crate::ui::text_button(
-                move || SharedString::from(label.get()),
-                move || {
-                    let host = connection.host.get_untracked();
-                    picker.set(Some(publication.with_untracked(|p| Picker {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        host,
-                        storage: p.snapshot.connection.storage_scope.clone(),
-                        draft: p.settings.draft_key(),
-                        provider: p.settings.provider(),
-                        query: String::new(),
-                    })));
-                    connection.dispatch(Intent::ReadProviderSettings(op::ReadProviderSettings {}));
-                    connection.dispatch(Intent::ListAccounts(op::ListAccounts {}));
-                },
-            )
-            .enabled(move || {
-                connection.settings.with(|p| p.connected())
-                    && !connection.composer.with(|c| c.controls.sending)
-            }),
-        )
-        .child(
-            native("bex.details")
-                .prop("data", move || {
-                    json!({"modelPicker": {"data": picker.with(|picker| {
-                        picker.as_ref().map(|picker| publication.with(|p| picker_data(p, picker)))
-                    })}})
+    let trigger = crate::ui::text_button(
+        move || SharedString::from(label.get()),
+        move || {
+            let host = connection.host.get_untracked();
+            picker.set(Some(publication.with_untracked(|p| Picker {
+                id: uuid::Uuid::new_v4().to_string(),
+                host,
+                storage: p.snapshot.connection.storage_scope.clone(),
+                draft: p.settings.draft_key(),
+                provider: p.settings.provider(),
+                query: String::new(),
+            })));
+            connection.dispatch(Intent::ReadProviderSettings(op::ReadProviderSettings {}));
+            connection.dispatch(Intent::ListAccounts(op::ListAccounts {}));
+        },
+    )
+    .enabled(move || {
+        connection.settings.with(|p| p.connected())
+            && !connection.composer.with(|c| c.controls.sending)
+    });
+    let data = computed(move || {
+        picker.with(|picker| {
+            picker
+                .as_ref()
+                .map(|picker| publication.with(|p| picker_data(p, picker)))
+        })
+    });
+    let act = move |action: &str, value: &str| act(connection, picker, action, value);
+    #[cfg(target_os = "macos")]
+    {
+        use nsh_core::overlay::{Align, Placement};
+        view().flex_row().items_center().child(
+            nsh_base::popover()
+                .open(move || Some(picker.with(Option::is_some)))
+                .on_open_change(move |event: &nsh_base::PopoverEvent| {
+                    if matches!(event, nsh_base::PopoverEvent::OpenChange(false, _)) {
+                        picker.set(None);
+                    }
                 })
+                .placement(Placement::Top)
+                .align(Align::End)
+                .offset(px(8.0))
+                .popup_class("bg-[#0f0f0f] rounded-[10px] border border-[#303030]")
+                .trigger(trigger)
+                .child(panel(data, act)),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        view().flex_row().items_center().child(trigger).child(
+            native("bex.details")
+                .prop("data", move || json!({"modelPicker": {"data": data.get()}}))
                 .on_native_event(move |event: &NativeEvent| {
-                    let Some(current) = picker.get_untracked().filter(|picker| {
-                        event.data["token"].as_str() == Some(&picker.id)
-                            && publication.with_untracked(|p| {
-                                picker.owns(
-                                    &connection.host.get_untracked(),
-                                    &p.snapshot.connection.storage_scope,
-                                    &p.settings.draft_key(),
-                                )
-                            })
-                    }) else {
-                        return;
-                    };
-                    let action = event.data["action"].as_str().unwrap_or_default();
-                    let value = event.data["value"].as_str().unwrap_or_default();
-                    match action {
-                        "close" => picker.set(None),
-                        "search" => picker.update(|picker| {
-                            if let Some(picker) = picker {
-                                picker.query = value.into();
-                            }
-                        }),
-                        "accounts" => {
-                            if let Some(provider) = current.provider {
-                                picker.set(None);
-                                connection.application.with(|app| {
-                                    app.navigate(crate::Navigation::Provider(Some(provider)))
-                                });
-                            }
-                        }
-                        "provider"
-                            if publication.with_untracked(|p| {
-                                p.settings.connected() && !p.composer.controls.sending
-                            }) =>
-                        {
-                            if let Ok(provider) =
-                                serde_json::from_value::<ProviderKind>(json!(value))
-                            {
-                                picker.update(|picker| {
-                                    if let Some(picker) = picker {
-                                        picker.provider = Some(provider);
-                                        picker.query.clear();
-                                    }
-                                });
-                                if let Some(model) = connection
-                                    .settings
-                                    .with_untracked(|p| p.model_for_provider(provider))
-                                {
-                                    connection.dispatch(Intent::SelectModel {
-                                        thread_id: current.draft,
-                                        model,
-                                    });
-                                }
-                            }
-                        }
-                        _ => {
-                            if let Some(intent) = publication
-                                .with_untracked(|p| picker_intent(p, &current, action, value))
-                            {
-                                connection.dispatch(intent);
-                            }
-                        }
+                    if picker.with_untracked(|picker| {
+                        picker
+                            .as_ref()
+                            .is_some_and(|picker| event.data["token"].as_str() == Some(&picker.id))
+                    }) {
+                        act(
+                            event.data["action"].as_str().unwrap_or_default(),
+                            event.data["value"].as_str().unwrap_or_default(),
+                        );
                     }
                 })
                 .w(px(0.0))
                 .h(px(0.0)),
         )
+    }
+}
+
+/// Applies a model form action while its picker still owns the current draft.
+fn act(connection: Connection, picker: Signal<Option<Picker>>, action: &str, value: &str) {
+    let publication = connection.publication;
+    let Some(current) = picker.get_untracked().filter(|picker| {
+        publication.with_untracked(|p| {
+            picker.owns(
+                &connection.host.get_untracked(),
+                &p.snapshot.connection.storage_scope,
+                &p.settings.draft_key(),
+            )
+        })
+    }) else {
+        return;
+    };
+    match action {
+        "close" => picker.set(None),
+        "search" => picker.update(|picker| {
+            if let Some(picker) = picker {
+                picker.query = value.into();
+            }
+        }),
+        "accounts" => {
+            if let Some(provider) = current.provider {
+                picker.set(None);
+                connection
+                    .application
+                    .with(|app| app.navigate(crate::Navigation::Provider(Some(provider))));
+            }
+        }
+        "provider"
+            if publication
+                .with_untracked(|p| p.settings.connected() && !p.composer.controls.sending) =>
+        {
+            if let Ok(provider) = serde_json::from_value::<ProviderKind>(json!(value)) {
+                picker.update(|picker| {
+                    if let Some(picker) = picker {
+                        picker.provider = Some(provider);
+                        picker.query.clear();
+                    }
+                });
+                if let Some(model) = connection
+                    .settings
+                    .with_untracked(|p| p.model_for_provider(provider))
+                {
+                    connection.dispatch(Intent::SelectModel {
+                        thread_id: current.draft,
+                        model,
+                    });
+                }
+            }
+        }
+        _ => {
+            if let Some(intent) =
+                publication.with_untracked(|p| picker_intent(p, &current, action, value))
+            {
+                connection.dispatch(intent);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn provider_mark(id: &str) -> Option<(&'static str, nsh_core::element::Rgba)> {
+    use crate::ui::colors::FOREGROUND;
+    use nsh_core::element::rgb;
+    Some(match id {
+        "codex" => (
+            include_str!("../../mobile/iosApp/Bex/Assets.xcassets/openai.imageset/openai.svg"),
+            FOREGROUND,
+        ),
+        "claude" => (
+            include_str!("../../mobile/iosApp/Bex/Assets.xcassets/claude.imageset/claude.svg"),
+            rgb(0xd97757),
+        ),
+        "deepseek" => (
+            include_str!("../../mobile/iosApp/Bex/Assets.xcassets/deepseek.imageset/deepseek.svg"),
+            rgb(0x4d6bfe),
+        ),
+        _ => return None,
+    })
+}
+
+/// The desktop model form, as the desktop client's popover: the agents beside the
+/// account, the model search and list, and the response settings.
+#[cfg(target_os = "macos")]
+fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -> View {
+    use crate::ui::{self, Icon, colors};
+    let field = move |key: &'static str| {
+        move || {
+            data.with(|data| {
+                data.as_ref()
+                    .map(|data| data[key].clone())
+                    .unwrap_or_default()
+            })
+        }
+    };
+    let disabled = move || field("disabled")().as_bool().unwrap_or(true);
+    let agents = view()
+        .flex_shrink_0()
+        .gap_2()
+        .pr_2()
+        .border_r_1()
+        .border_r_color(colors::BORDER)
+        .child(each(
+            move || field("providers")().as_array().cloned().unwrap_or_default(),
+            |choice: &Value| choice["id"].as_str().unwrap_or_default().to_owned(),
+            move |choice, _| {
+                let choice = choice.get_untracked();
+                let id = choice["id"].as_str().unwrap_or_default().to_owned();
+                let title = choice["title"].as_str().unwrap_or_default().to_owned();
+                let selected = {
+                    let id = id.clone();
+                    move || field("provider")().as_str() == Some(id.as_str())
+                };
+                let mark = provider_mark(&id);
+                nsh_base::button()
+                    .accessibility_label(Some(SharedString::from(title.clone())))
+                    .disabled(disabled)
+                    .w(px(44.0))
+                    .h(px(44.0))
+                    .rounded(px(8.0))
+                    .items_center()
+                    .justify_center()
+                    .hover(|s| s.bg(colors::GHOST_HOVER))
+                    .style_when(selected, |s| s.bg(colors::SELECTED))
+                    .on_press(move || act("provider", &id))
+                    .child(match mark {
+                        Some((markup, color)) => svg(ImageSrc::svg_markup(&markup.replacen(
+                            "<svg ",
+                            "<svg fill=\"currentColor\" ",
+                            1,
+                        )))
+                        .w(px(20.0))
+                        .h(px(20.0))
+                        .text_color(color)
+                        .into_element(),
+                        None => text(title).text_size(px(12.0)).into_element(),
+                    })
+            },
+        ));
+    let account = nsh_base::button()
+        .accessibility_label(Some(SharedString::from("アカウントと週間残量")))
+        .p_2()
+        .gap_2()
+        .rounded(px(8.0))
+        .hover(|s| s.bg(colors::GHOST_HOVER))
+        .on_press(move || act("accounts", ""))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    text(move || {
+                        field("account")()["title"]
+                            .as_str()
+                            .unwrap_or("未選択")
+                            .to_owned()
+                    })
+                    .flex_1()
+                    .min_w_0()
+                    .number_of_lines(1)
+                    .text_size(px(16.0)),
+                )
+                .child(ui::icon(Icon::ChevronRight, 16.0)),
+        )
+        .child(each(
+            move || {
+                field("account")()["usage"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            },
+            |usage: &Value| usage["label"].as_str().unwrap_or_default().to_owned(),
+            |usage, _| {
+                let usage = usage.get_untracked();
+                let percent = usage["remainingPercent"].as_f64().unwrap_or_default() as f32;
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        text(usage["label"].as_str().unwrap_or_default().to_owned())
+                            .text_size(px(12.0))
+                            .text_color(colors::MUTED),
+                    )
+                    .child(
+                        view()
+                            .flex_1()
+                            .h(px(4.0))
+                            .rounded_full()
+                            .bg(colors::RAISED)
+                            .child(
+                                view()
+                                    .h(px(4.0))
+                                    .rounded_full()
+                                    .w(relative(percent / 100.0))
+                                    .bg(if percent <= 20.0 {
+                                        nsh_core::element::rgb(0xfb923c)
+                                    } else {
+                                        colors::FOREGROUND
+                                    }),
+                            ),
+                    )
+                    .child(text(format!("{percent}%")).text_size(px(12.0)))
+            },
+        ));
+    let models = scroll().max_h(px(264.0)).child(
+        view()
+            .child(when(
+                move || field("models")().as_array().is_none_or(Vec::is_empty),
+                move || {
+                    text(move || {
+                        if field("loading")().as_bool().unwrap_or(false) {
+                            "モデルを読み込み中…"
+                        } else {
+                            "利用可能なモデルがありません"
+                        }
+                    })
+                    .p_2()
+                    .text_color(colors::MUTED)
+                },
+            ))
+            .child(each(
+                move || field("models")().as_array().cloned().unwrap_or_default(),
+                |model: &Value| model["id"].as_str().unwrap_or_default().to_owned(),
+                move |model, _| {
+                    let model = model.get_untracked();
+                    let id = model["id"].as_str().unwrap_or_default().to_owned();
+                    let title = model["title"].as_str().unwrap_or_default().to_owned();
+                    let selected = {
+                        let id = id.clone();
+                        let selected = computed(move || {
+                            field("selectedModel")().as_str() == Some(id.as_str())
+                        });
+                        move || selected.get()
+                    };
+                    nsh_base::button()
+                        .accessibility_label(Some(SharedString::from(title.clone())))
+                        .disabled(disabled)
+                        .h(px(44.0))
+                        .px_2()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .rounded(px(ui::RADIUS))
+                        .hover(|s| s.bg(colors::GHOST_HOVER))
+                        .style_when(selected, |s| s.bg(colors::RAISED))
+                        .on_press(move || act("model", &id))
+                        .child(text(title).text_size(px(16.0)).number_of_lines(1).min_w_0())
+                        .child(when(selected, || {
+                            view()
+                                .text_color(colors::ACCENT)
+                                .child(ui::icon(Icon::Check, 20.0))
+                        }))
+                },
+            ))
+            .child(when(
+                move || field("customModel")().is_string(),
+                move || {
+                    ui::text_button(
+                        move || {
+                            SharedString::from(format!(
+                                "モデルIDを指定: {}",
+                                field("customModel")().as_str().unwrap_or_default()
+                            ))
+                        },
+                        move || act("custom", ""),
+                    )
+                },
+            )),
+    );
+    let choice_menu = move |key: &'static str, title: &'static str, action: &'static str| {
+        ui::text_button(
+            move || {
+                let current = field("quick")()[key].clone();
+                SharedString::from(format!("{title}: {}", current.as_str().unwrap_or("既定")))
+            },
+            move || {
+                let quick = field("quick")();
+                let items = if key == "effort" {
+                    quick["efforts"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|effort| json!({"id": effort, "title": effort, "selected": effort == &quick["effort"]}))
+                        .collect::<Vec<_>>()
+                } else {
+                    quick["speeds"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|speed| json!({"id": speed["id"], "title": speed["title"], "selected": speed["id"] == quick["speed"]}))
+                        .collect::<Vec<_>>()
+                };
+                ui::popup(&json!(items), move |value: &str| act(action, value));
+            },
+        )
+    };
+    let permission_menu = move || {
+        ui::text_button(
+            move || {
+                let permissions = field("permissions")();
+                let selected = permissions["selected"].clone();
+                SharedString::from(format!(
+                    "アクセス権限: {}",
+                    permissions["choices"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|choice| choice["id"] == selected)
+                        .and_then(|choice| choice["title"].as_str())
+                        .unwrap_or("未設定")
+                ))
+            },
+            move || {
+                let permissions = field("permissions")();
+                let items = permissions["choices"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|choice| json!({"id": choice["id"], "title": choice["title"], "selected": choice["id"] == permissions["selected"]}))
+                    .collect::<Vec<_>>();
+                ui::popup(&json!(items), move |value: &str| act("permission", value));
+            },
+        )
+    };
+    let body = view()
+        .flex_1()
+        .min_w_0()
+        .gap_2()
+        .child(each(
+            move || field("notices")().as_array().cloned().unwrap_or_default(),
+            |notice: &Value| notice["id"].as_str().unwrap_or_default().to_owned(),
+            move |notice, _| {
+                let notice = notice.get_untracked();
+                let id = notice["id"].as_str().unwrap_or_default().to_owned();
+                let dismiss = id.clone();
+                view()
+                    .gap_1()
+                    .child(text(
+                        notice["title"].as_str().unwrap_or_default().to_owned(),
+                    ))
+                    .child(
+                        text(notice["text"].as_str().unwrap_or_default().to_owned())
+                            .selectable(true)
+                            .text_size(px(12.0))
+                            .text_color(colors::MUTED),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .gap_2()
+                            .child(notice["recovery"].as_str().map(|recovery| {
+                                ui::text_button(recovery.to_owned(), move || act("recover", &id))
+                            }))
+                            .child(ui::text_button("閉じる", move || {
+                                act("dismiss", &dismiss)
+                            })),
+                    )
+            },
+        ))
+        .child(account)
+        .child(view().h(px(1.0)).bg(colors::RAISED))
+        .child(
+            input()
+                .h(px(32.0))
+                .px_2()
+                .text_size(px(16.0))
+                .placeholder("モデルを検索")
+                .label("モデルを検索")
+                .value(move || field("query")().as_str().unwrap_or_default().to_owned())
+                .on_change(move |value: &str| act("search", value)),
+        )
+        .child(models)
+        .child(each(
+            move || field("errors")().as_array().cloned().unwrap_or_default(),
+            |error: &Value| error.as_str().unwrap_or_default().to_owned(),
+            |error, _| {
+                text(
+                    error
+                        .get_untracked()
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                )
+                .selectable(true)
+                .text_size(px(12.0))
+                .text_color(nsh_core::element::rgb(0xff7777))
+            },
+        ))
+        .child(when(
+            move || !field("quick")().is_null(),
+            move || {
+                view()
+                    .flex_row()
+                    .gap_3()
+                    .pt_2()
+                    .border_t_1()
+                    .border_t_color(colors::BORDER)
+                    .child(when(
+                        move || {
+                            field("quick")()["efforts"]
+                                .as_array()
+                                .is_some_and(|e| !e.is_empty())
+                        },
+                        move || choice_menu("effort", "思考の深さ", "effort"),
+                    ))
+                    .child(when(
+                        move || {
+                            field("quick")()["speeds"]
+                                .as_array()
+                                .is_some_and(|s| s.len() > 1)
+                        },
+                        move || choice_menu("speed", "速度", "speed"),
+                    ))
+            },
+        ))
+        .child(when(
+            move || !field("permissions")().is_null(),
+            permission_menu,
+        ));
+    view()
+        .w(px(440.0))
+        .p_3()
+        .flex_row()
+        .items_stretch()
+        .gap_3()
+        .text_color(colors::FOREGROUND)
+        .child(agents)
+        .child(body)
 }
 
 fn picker_data(p: &Presentation, picker: &Picker) -> Value {
