@@ -12,6 +12,14 @@ final class ConversationTextView: UITextView {
     /// UITextView does not retain storage that it did not create.
     private let storage = NSTextStorage()
 
+    #if AGENT_DEV_DIAGNOSTICS
+        private let diagnosticID = UUID()
+        private var diagnosticWidth: CGFloat?
+        private var diagnosticProbe: Task<Void, Never>?
+        private var diagnosticInput: ConversationTextDiagnosticInput?
+        private var diagnosticHadIssue = false
+    #endif
+
     init() {
         // Decorations draw with the text, so they share its tiles instead of a message-sized backing store.
         let layoutManager = DecoratingLayoutManager()
@@ -55,11 +63,67 @@ final class ConversationTextView: UITextView {
         let proposedWidth = proposal.flatMap { $0.isFinite ? $0 : nil }
         let width = proposedWidth ?? .greatestFiniteMagnitude
         guard width > 0 else { return .zero }
+        #if AGENT_DEV_DIAGNOSTICS
+            diagnosticWidth = width
+        #endif
         return ConversationTextSizes.size(content, width: width) {
             let measured = sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
             return CGSize(width: proposedWidth ?? measured.width, height: measured.height)
         }
     }
+
+    #if AGENT_DEV_DIAGNOSTICS
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard window != nil, diagnosticProbe == nil else { return }
+            // Coalesce streamed updates without generating glyphs or changing the live layout.
+            diagnosticProbe = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self else { return }
+                diagnosticProbe = nil
+                guard let window, let content, bounds.width > 0, bounds.height > 0 else { return }
+                // Offscreen tails may legitimately have no glyphs yet; do not lay out copies for them.
+                let tail = CGRect(x: bounds.minX, y: bounds.maxY - 1, width: bounds.width, height: 1)
+                guard convert(tail, to: window).intersects(window.bounds) else { return }
+                let input = ConversationTextDiagnosticInput(
+                    content: ObjectIdentifier(content), size: bounds.size,
+                    container: textContainer.size, offset: contentOffset, proposedWidth: diagnosticWidth
+                )
+                guard input != diagnosticInput else { return }
+                diagnosticInput = input
+                let metrics = textLayoutDiagnostic()
+                let recovered = diagnosticHadIssue && !metrics.incomplete
+                diagnosticHadIssue = metrics.incomplete
+                await ConversationTextDiagnosticLog.shared.record(metrics, recovered: recovered)
+            }
+        }
+
+        /// Reads the existing layout; the independent reference layout never touches the displayed text.
+        func textLayoutDiagnostic() -> ConversationTextDiagnostic {
+            let existing = layoutManager.glyphRange(
+                forBoundingRectWithoutAdditionalLayout: CGRect(origin: .zero, size: textContainer.size),
+                in: textContainer
+            )
+            let characters = layoutManager.characterRange(forGlyphRange: existing, actualGlyphRange: nil)
+            let visible = (textStorage.string as NSString).rangeOfCharacter(
+                from: CharacterSet.whitespacesAndNewlines.inverted, options: .backwards
+            )
+            let requiredEnd = visible.location == NSNotFound ? 0 : NSMaxRange(visible)
+            let placedEnd = NSMaxRange(characters)
+            let measured = content.flatMap { content in
+                diagnosticWidth.flatMap { ConversationTextSizes.cached(content, width: $0) }
+            }
+            return ConversationTextDiagnostic(
+                view: diagnosticID, characters: textStorage.length, requiredEnd: requiredEnd,
+                placedEnd: placedEnd, firstUnlaid: layoutManager.firstUnlaidCharacterIndex(),
+                frame: bounds.size, container: textContainer.size, contentSize: contentSize,
+                offset: contentOffset, measured: measured, scale: traitCollection.displayScale,
+                category: traitCollection.preferredContentSizeCategory.rawValue,
+                referenceHeight: placedEnd < requiredEnd
+                    ? ConversationTextDiagnostic.referenceHeight(textStorage, width: bounds.width) : nil
+            )
+        }
+    #endif
 
     /// Every copy path, including the edit menu and a hardware keyboard, copies the message's source text.
     override func copy(_: Any?) {
@@ -181,6 +245,12 @@ private enum ConversationTextSizes {
         cache.setObject(NSValue(cgSize: size), forKey: key)
         return size
     }
+
+    #if AGENT_DEV_DIAGNOSTICS
+        static func cached(_ content: ConversationTextContent, width: CGFloat) -> CGSize? {
+            cache.object(forKey: Key(content, width: width))?.cgSizeValue
+        }
+    #endif
 }
 
 /// Draws quote bars and rules beneath the glyphs of each drawn tile.

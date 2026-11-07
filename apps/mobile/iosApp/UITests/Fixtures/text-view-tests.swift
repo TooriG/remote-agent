@@ -70,7 +70,7 @@ struct ConversationTextViewTests {
         })
     }
 
-    @MainActor static func main() {
+    @MainActor static func main() async throws {
         let blocks = (0 ..< 400).map { $0 >= 300 ? "> Quoted line \($0)" : "Line \($0) of a long message with words." }
         let view = ConversationTextView()
         view.update(blocks: blocks, dark: false, sizeCategory: .large)
@@ -108,22 +108,29 @@ struct ConversationTextViewTests {
         check(view.contentOffset == .zero, "Streaming text must not scroll inside the message")
         check(view.selectedRange == selection, "Streaming must keep the reader's selection")
 
+        checkReopening(blocks: blocks + ["Streamed line"], previousSize: view.frame.size)
+        checkRestyling()
+        #if AGENT_DEV_DIAGNOSTICS
+            try await checkDiagnostics()
+        #endif
+        print("Conversation text view tests passed")
+    }
+
+    @MainActor private static func checkReopening(blocks: [String], previousSize: CGSize) {
         // Reopened conversations share measurements, keyed by what the view shows.
         let reopened = ConversationTextView()
-        reopened.update(blocks: blocks + ["Streamed line"], dark: false, sizeCategory: .large)
-        check(reopened.measure(width: 320) == view.frame.size, "The same message must measure the same when reopened")
-        check(reopened.measure(width: 160).height > view.frame.height, "A narrower width must be measured again")
+        reopened.update(blocks: blocks, dark: false, sizeCategory: .large)
+        check(reopened.measure(width: 320) == previousSize, "The same message must measure the same when reopened")
+        check(reopened.measure(width: 160).height > previousSize.height, "A narrower width must be measured again")
         let short = Array(blocks.prefix(10))
         reopened.update(blocks: short, dark: false, sizeCategory: .large)
         reopened.frame.size = reopened.measure(width: 320)
-        check(reopened.frame.height < view.frame.height / 10, "Changed text must not reuse an old size")
+        check(reopened.frame.height < previousSize.height / 10, "Changed text must not reuse an old size")
         reopened.layoutIfNeeded()
         check(reopened.text == short.joined(separator: "\n"), "Changed text must not show an old layout")
         reopened.update(blocks: ["Short answer"], dark: false, sizeCategory: .large)
         check(reopened.measure(width: 320).width == 320,
               "Short messages must fill the proposed column width instead of shrinking to their text")
-        checkRestyling()
-        print("Conversation text view tests passed")
     }
 
     @MainActor private static func checkRestyling() {
@@ -139,4 +146,66 @@ struct ConversationTextViewTests {
         view.update(blocks: ["日本語 😃", "tail extended"], dark: false, sizeCategory: .large)
         check(view.text == "日本語 😃\ntail extended", "Tail replacement must preserve Unicode boundaries")
     }
+
+    #if AGENT_DEV_DIAGNOSTICS
+        @MainActor private static func checkDiagnostics() async throws {
+            let body = "本文をログに記録しない検査\n最終行まで配置される必要があります。"
+            let view = ConversationTextView()
+            view.update(blocks: [body], dark: false, sizeCategory: .large)
+            let size = view.measure(width: 320)
+            view.frame.size = size
+            view.layoutIfNeeded()
+            _ = drawnRows(view, in: view.bounds)
+            let complete = view.textLayoutDiagnostic()
+            check(!complete.incomplete, "Fully drawn text must not report missing characters")
+
+            view.frame.size.height -= 1
+            view.layoutIfNeeded()
+            _ = drawnRows(view, in: view.bounds)
+            let container = view.textContainer.size
+            let offset = view.contentOffset
+            let incomplete = view.textLayoutDiagnostic()
+            check(incomplete.incomplete, "A clipped last line must be detected from the existing layout")
+            check(incomplete.referenceHeight.map { $0 > view.bounds.height } == true,
+                  "An independent layout must show the height the text needs")
+            check(view.textContainer.size == container && view.contentOffset == offset && view.text == body,
+                  "Diagnostics must not fix or otherwise change the layout being investigated")
+
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let log = ConversationTextDiagnosticLog(directory: directory, byteLimit: 4096)
+            await log.record(complete)
+            await log.record(complete)
+            await log.record(incomplete)
+            await log.record(complete, recovered: true)
+            let current = directory.appendingPathComponent("text-layout.jsonl")
+            let data = try Data(contentsOf: current)
+            let text = String(data: data, encoding: .utf8)
+            check(text?.split(separator: "\n").count == 3, "Log one normal baseline, an anomaly, and its recovery")
+            check(text?.contains("本文をログに記録しない検査") == false,
+                  "Layout diagnostics must never contain message text")
+            for _ in 0 ..< 30 {
+                await log.record(incomplete)
+            }
+            for name in ["text-layout.jsonl", "text-layout.previous.jsonl"] {
+                let bytes = try Data(contentsOf: directory.appendingPathComponent(name))
+                check(bytes.count <= 4096, "Rotated diagnostic files must stay bounded")
+            }
+            try await checkDiagnosticWriteRecovery(complete, directory: directory)
+        }
+
+        private static func checkDiagnosticWriteRecovery(
+            _ metrics: ConversationTextDiagnostic,
+            directory: URL
+        ) async throws {
+            let unavailable = directory.appendingPathComponent("temporarily-unavailable")
+            try Data().write(to: unavailable)
+            let log = ConversationTextDiagnosticLog(directory: unavailable)
+            await log.record(metrics)
+            try FileManager.default.removeItem(at: unavailable)
+            await log.record(metrics)
+            check(FileManager.default.fileExists(atPath: unavailable.appendingPathComponent("text-layout.jsonl").path),
+                  "A failed diagnostic write must recover without breaking text display")
+        }
+    #endif
 }
