@@ -118,38 +118,27 @@ publish ゲートもこの段階で見直す。純粋な Model の再構築が�
 
 受け入れ: 古い完了が新しい入力を変更しない検査と、snapshot のバーストをフレーム単位に集約する検査、接続失敗・保存失敗・閉鎖後の完了の検査が通る。
 
-## 段階 7: iOS の view model を会話ペインと Host 一覧に分ける
+## 段階 7: iOS の会話ペインと Host 一覧の更新経路を整理する
 
-対象: `apps/mobile/iosApp/Bex/AppViewModel.swift`、`AppViewConnection.swift`、`AppViewActions.swift`、`ConversationModel.swift`、`ConversationPresentation.swift`、`AppPresentationData.swift`、`WorkspaceScreen.swift`、`ConversationSideChat.swift` と core の `client/session.rs`、`client/session/hosts.rs`。
+対象: `AppViewModel.swift`、`AppViewConnection.swift`、`ConversationModel.swift`、`ConversationPresentation.swift`、`WorkspaceScreen.swift`、`ConversationSideChat.swift` と core の `client/session` API。段階 2 の行投影を利用し、Host 一覧と会話のそれぞれが必要な表示だけを更新する。
 
-現状（確認済み）:
-
-- `AppViewModel` と `ConversationModel` が同じ `Presentation` を別々に `changes(previous:)` で差分し、`publication` / `snapshot` / `settings` / `isConnected` を両方に複製している（`AppViewModel.swift:248`、`ConversationModel.swift:96`）。
-- `ConversationModel` への publish 経路が 3 つある。`AppViewModel` の Host 購読からの `chat?.publish`、`perform` 直後と receipt 後の再 publish、サイドチャット用 pane の購読 Task。`AppViewModel.perform` も receipt 後に再 publish する。段階 6 の desktop と同じ「完了通知による再配信」。
-- 主会話は session レベルの presentation、サイドチャットは `AgentPane` を使うため、`pane.map { dispatch } ?? session.dispatch`、`currentPresentation()`、`pane?.prepareDictation() ?? store?.prepareDictation()` の二重経路がある。core の `ClientSession` は主 pane を公開していない（desktop は `store.primary_pane()` を使う）。
-- `ConversationPresentation.project`、`ConversationItem` の再利用判定、`recentConversations`（3 件）、detached Task の投影と `ProjectionInput` の鍵照合は、段階 2 の core 表示行で置き換わる iOS 側の実装。
-- ワークベンチの `panels`、`migrateWorkbench`（`WorkspaceScreen.swift:69`）、`workbenchSideChats`、`workbenchTerminalHandle` を `ConversationModel` が所有し、draft → session の rekey を desktop `app.rs:1036` と同じ規則で再実装している。
-- `notice: String?` が `AppViewModel` と `ConversationModel` にあり、代入が 35 か所。接続失敗・一覧失敗・永続化失敗・操作失敗の catch-all で、`threadLoadState == .failed` の判定にも使われる。desktop の `local_errors` と同じ影の通知経路。
-- `connections` / `observations` / `connectionStates` / `pairingConnection` の Task 辞書と、`connect(_:afterForeground:)` の再接続方針（`AppViewConnection.swift:20-56`）は Android `App.kt:393` と同じ内容。`HostConnectionState` は snapshot から導ける値のキャッシュ。
-- `HostProfile`（id / name / ticket）を UserDefaults に保存し、publish ごとに `updateProfile` で name / ticket を snapshot から書き戻す。Android も同じ。core の `ClientSessions` は Host ごとのセッション map を既に持つ。desktop は local Host の `management.remotes` を使うので対象外。
-- `ConversationTextDiagnostics.swift`（120 行）は Dev 構成限定の計測コードで、`ConversationTextLayout.swift` と UI テスト fixture から参照されている。
-
-手順:
-
-1. `ClientSession` に主 pane を公開し、`ConversationModel` は常に `AgentPane` を持つ。session を直接 dispatch する経路と `??` の fallback を削除し、pane の購読 Task を唯一の publish 経路にする。
-2. `Presentation` の差分と複製を、`ConversationModel`（会話ペインの表示）と `AppViewModel`（Host 一覧・接続・設定・ナビゲーション）で重ならないよう分ける。`settings` / `isConnected` / `snapshot` は一方だけが持つ。`perform` 直後と receipt 後の再 publish は、入力の即時反映に必要なもの（`BufferedTextInput` が既に保持）を確認してから削除する。段階 6 と同じ基準。
-3. 段階 2 の core 表示行を使い、`ConversationPresentation.project`、`ConversationItem` の再利用判定、`recentConversations`、detached 投影を削除する。native に残るのは展開値の所有、`ConversationMarkdownContent.Part` へのレイアウト分割、`ConversationList` の仮想化。
-4. ワークベンチの `Panels` 状態と draft → session の rekey は desktop と iOS が同じ規則を持つので、所有者を一つにする。段階 4・5 と同じ変更で、ペインの presentation に含めるか、core の純粋関数に両アプリから渡すかを決め、両アプリの rekey 実装を削除する。
-5. `notice` を段階 1 の通知モデルに揃える。接続失敗（Host 単位）、一覧失敗、永続化失敗、操作失敗をそれぞれの scope の通知にし、`threadLoadState` は一覧操作の状態から導く。
-6. Host プロファイルの保存と再接続方針（起動時・ネットワーク復帰・フォアグラウンド復帰・接続有効化）を core の `ClientSessions` に移す。iOS と Android は保存アダプターと UI だけを持つ。`HostConnectionState` は `sessions.session(host).snapshot()` から都度導く。
-7. `ConversationTextDiagnostics` は、Native clients の夜間実行で参照している計測かを UI テスト fixture から確認し、不要なら Dev 構成の条件ごと削除する。
+1. 主会話とサイドチャットはともに pane の API を使い、session への直接 dispatch との二重経路をなくす。主 pane を公開する API では寿命も明示する。主会話の画面を閉じても Host 一覧の ClientSession を終了せず、サイドチャットの終了ではその pane だけを retire する。
+2. `AppViewModel` は Host 一覧・接続表示・アプリのナビゲーション、`ConversationModel` は会話ペインの表示と入力を所有する。不変 Snapshot / Presentation の参照や、別の表示に必要な設定・接続情報を読むことまで重複状態と扱わない。同じ `changes(previous:)` を何回呼ぶかは製品要件にせず、独立した書き手・重い重複投影・不要な再配信を取り除く。
+3. pane の購読、Host 一覧の購読、操作受付直後と receipt 後の読み直しを用途別に確認する。core の受付状態、操作中の無効化、画面遷移、質問回答などが必要な時点で反映されることを確認してから、同じ状態を再配信するだけの経路を削除する。`BufferedTextInput` があることだけを根拠にすべての即時反映を削除しない。
+4. 段階 2 の共通行投影を利用し、置き換わった iOS の行フィルター・内容比較を削除する。`ConversationMarkdownContent.Part` への分割、native レイアウト、主スレッドを塞がない処理と再表示時のキャッシュは別の役割として扱う。`recentConversations`、detached 投影、`ProjectionInput` の鍵照合は、それぞれの役割が置き換わり、長い会話の表示・復帰と古い結果の拒否が保たれることを確認した場合だけ削除する。単に core に表示行ができたことを削除理由にしない。
+5. ワークベンチの状態と browser / terminal / side-chat の native 資源はペインが所有する。draft → session の付け替えは既存の `Snapshot.submittedSession` と `Panels.rekey` を使う。desktop / iOS に残る共通判断があれば、必要な値だけを受け取る core の純粋な処理にまとめ、置き換えられた判断を両方から削除する。共通の規則があることを理由に native 資源や Panels の全状態を Store へ移さない。
+6. `notice` は段階 1 と同じ発生元・Host / pane scope の通知モデルに揃える。`threadLoadState` は一覧の読み込みと失敗を表す値から導き、無関係なローカル通知によって一覧の状態を変えない。接続前、Host 切替後、永続化失敗時にも通知を保持・dismiss できる所有者を明示する。
+7. 保存する Host プロファイルと実行中の `ClientSessions` の map は別の事実として保持する。未接続の登録先を失わず、ticket の保存は現在のプラットフォームの保存契約を維持する。iOS / Android の接続処理は、既存の core が所有する再試行・接続有効化・active 状態の API を使う。共通判断が実際に重複している部分だけ core に移し、フォアグラウンド / ネットワークの OS 通知と UI の Task の寿命まで一律に移さない。
+8. `ConversationTextDiagnostics` は native レイアウトと UI テストで使用される観測として扱う。Dev 専用であることだけを理由に削除しない。変更した範囲で利用者がなくなった定義だけを削除する。
 
 受け入れ:
 
-- 既存の XCUITest（`SynchronizationUITests`、`HistoryUITests`、`NavigationUITests` ほか）が Native clients CI で通る。
-- 会話を開く・戻る・サイドチャット・フォアグラウンド復帰・再接続で、入力中の draft と質問回答が保持される。
-- 同じ `Presentation` を 2 回差分しない。`ConversationModel` の observed プロパティは会話ペインの表示だけが使う。
-- Android に同じ構造（`AndroidAppModel` の `connect` / `publish` / `HostProfile`）があるので、6 の core 移動は Android も同じ変更で切り替える。
+- 主 pane の公開・retire と、移した接続判断は core のユニットテストで境界・失敗・復旧を検証する。
+- 既存の Synchronization / History / Navigation / Pagination の XCUITest が Native clients CI で通る。`items=` の元データ件数、履歴の読書位置と仮想化を保つ。
+- 会話を開く・戻る・サイドチャット・フォアグラウンド復帰・再接続で、入力中の draft と質問回答が保持される。主会話を閉じても一覧の接続・永続化が続き、サイドチャットの閉鎖は他の pane に影響しない。
+- 長い会話への再表示で不要な本文の再処理・主スレッドの停止を増やさず、古い detached 処理の結果が別の会話を上書きしない。
+- 非選択 Host の一覧更新が、選択中の会話の重い投影や描画を不要に更新しない。操作の受付・完了と core の購読だけで必要な表示が欠けないことを確認する。
+- 共通の接続判断を core に移した場合は Android の同じ利用側も同じ変更で切り替え、pairing のキャンセル、接続失敗からの再試行、背景移行後の復帰、未接続プロファイルの保持を検証する。
 
 ## この計画に含めないもの
 
