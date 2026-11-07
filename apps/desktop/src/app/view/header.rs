@@ -15,8 +15,6 @@ pub(in crate::app) struct HeaderView {
     desktop: WeakEntity<Desktop>,
     model: Option<HeaderModel>,
     #[cfg(test)]
-    pub(in crate::app) projections: usize,
-    #[cfg(test)]
     pub(super) renders: usize,
 }
 impl HeaderView {
@@ -28,16 +26,10 @@ impl HeaderView {
             desktop: desktop.downgrade(),
             model: None,
             #[cfg(test)]
-            projections: 0,
-            #[cfg(test)]
             renders: 0,
         }
     }
     pub(in crate::app) fn set_model(&mut self, model: HeaderModel, cx: &mut Context<Self>) {
-        #[cfg(test)]
-        {
-            self.projections += 1;
-        }
         if self.model.as_ref() != Some(&model) {
             self.model = Some(model);
             cx.notify();

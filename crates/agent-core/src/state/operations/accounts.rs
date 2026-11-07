@@ -619,7 +619,10 @@ mod account_model_tests {
             Some("b")
         );
         assert_eq!(
-            snapshot.models_matching(Some(crate::session::ProviderKind::Codex), String::new()),
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .models_matching(Some(crate::session::ProviderKind::Codex), String::new()),
             vec![restricted]
         );
         assert_eq!(

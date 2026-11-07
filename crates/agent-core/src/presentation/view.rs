@@ -28,12 +28,9 @@ pub struct PresentationChanges {
     pub changed: bool,
     pub groups: Changed,
     pub list: bool,
-    pub models: bool,
     pub conversation: bool,
     pub composer: bool,
     pub composer_controls: bool,
-    pub attachments: bool,
-    pub sources: bool,
     pub context: bool,
     pub agents: bool,
     pub settings: bool,
@@ -205,20 +202,6 @@ impl Presentation {
         let agents = !self.agents.same(&previous.agents);
         let settings = !self.settings.equivalent(&previous.settings);
         let groups = self.snapshot.changes_from(&previous.snapshot);
-        let sources = self
-            .conversation
-            .as_ref()
-            .map(|value| &value.source_paths)
-            .zip(
-                previous
-                    .conversation
-                    .as_ref()
-                    .map(|value| &value.source_paths),
-            )
-            .map_or(
-                self.conversation.is_some() != previous.conversation.is_some(),
-                |(a, b)| !a.same(b),
-            );
         PresentationChanges {
             changed: groups.any
                 || list
@@ -229,16 +212,9 @@ impl Presentation {
                 || settings,
             groups,
             list,
-            models: !self
-                .snapshot
-                .catalog
-                .models
-                .same(&previous.snapshot.catalog.models),
             conversation,
             composer,
             composer_controls: self.composer.controls != previous.composer.controls,
-            attachments: self.composer.draft.attachments != previous.composer.draft.attachments,
-            sources,
             context,
             agents,
             settings,

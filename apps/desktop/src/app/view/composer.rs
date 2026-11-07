@@ -474,9 +474,16 @@ impl ComposerContent {
                     .capture_action(cx.listener(
                         |view, action: &gpui_kit::component::input::Enter, window, cx| {
                             let owner = view.desktop.clone();
-                            let _ = owner.update(cx, |desktop, cx| {
-                                desktop.composer_enter(action, window, cx)
-                            });
+                            if owner
+                                .update(cx, |desktop, cx| {
+                                    desktop.composer_enter(action, window, cx)
+                                })
+                                .unwrap_or(false)
+                            {
+                                // Use the same deferred owner event as the send button;
+                                // its publication cannot update this active listener.
+                                cx.emit(ComposerAction::Send);
+                            }
                         },
                     ))
                     .capture_action(cx.listener(
@@ -675,21 +682,20 @@ struct ComposerModel {
 impl Desktop {
     fn composer_model(&self, cx: &App) -> ComposerModel {
         let language = crate::localization::language(cx);
-        let permission = self.snapshot.permission_control(self.draft_key());
+        let composer = &self.publication.composer;
+        let controls = &composer.controls;
+        let permission = &self.publication.settings.permission;
         ComposerModel {
-            key: self.draft_key().clone(),
-            session: self.selected().cloned(),
-            attachments: self.draft().attachments.clone(),
-            running: self.thread().and_then(|thread| thread.active_turn_id()),
+            key: controls.navigation.draft_key.clone(),
+            session: controls.navigation.thread_id.clone(),
+            attachments: composer.draft.attachments.clone(),
+            running: controls.running_turn.clone(),
             empty: self.composer.input.read(cx).value().trim().is_empty()
-                && self.draft().attachments.is_empty(),
-            connected: self.snapshot.connection.connected,
-            busy: self.busy > 0,
-            provider_available: permission.provider.is_some(),
-            input_unavailable: self.selected().and_then(|id| {
-                self.snapshot
-                    .input_unavailable_reason(id.clone(), permission.provider)
-            }),
+                && composer.draft.attachments.is_empty(),
+            connected: controls.connected,
+            busy: self.busy(),
+            provider_available: controls.provider.is_some(),
+            input_unavailable: controls.unavailable.clone(),
             phase: self.dictation.as_ref().map(|state| state.phase),
             levels: self
                 .dictation
@@ -698,19 +704,21 @@ impl Desktop {
                 .unwrap_or_default(),
             remote: self.remote.clone(),
             hosts: self.hosts.clone(),
-            cwd: self.snapshot.pane.navigation.cwd.clone(),
-            selected_directory: self.snapshot.selected_directory(),
-            has_session: self.selected().is_some(),
+            cwd: controls.navigation.cwd.clone(),
+            selected_directory: self.publication.context.selected_directory(),
+            has_session: controls.navigation.thread_id.is_some(),
             review: self.snapshot.pane.workspace.review.clone(),
             review_expanded: self.review_expanded,
             model_label: self
-                .selected_model()
+                .publication
+                .settings
+                .current_model()
                 .map_or(language.text("モデルを選択").to_owned(), |model| {
-                    model.display_name.clone()
+                    model.display_name
                 }),
             permission_label: permission.label,
             permission_mode: permission.mode,
-            quick_controls: self.snapshot.model_quick_controls(self.draft_key().clone()),
+            quick_controls: controls.quick.clone(),
             controls_enabled: self.preferences.read(cx).model_controls_enabled(),
             suggestions: self.completion_suggestions(cx),
             completion_index: self.composer.completion_index,
@@ -737,8 +745,6 @@ pub(in crate::app) struct ComposerContent {
     model: Option<ComposerModel>,
     folders: Vec<(String, String)>,
     more_projects: bool,
-    #[cfg(test)]
-    pub(in crate::app) projections: usize,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
@@ -786,8 +792,6 @@ impl ComposerView {
                 folders: Vec::new(),
                 more_projects: false,
                 #[cfg(test)]
-                projections: 0,
-                #[cfg(test)]
                 renders: 0,
             }
         });
@@ -830,10 +834,6 @@ impl ComposerContent {
         }
     }
     fn set_model(&mut self, model: ComposerModel, cx: &mut Context<Self>) {
-        #[cfg(test)]
-        {
-            self.projections += 1;
-        }
         if self.model.as_ref() != Some(&model) {
             self.model = Some(model);
             cx.notify();
@@ -904,6 +904,93 @@ mod composer_tests {
     }
 
     #[gpui::test]
+    fn enter_sends_once_without_updating_the_composer_inside_its_listener(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let app_runtime = crate::Runtime {
+            handle: runtime.handle().clone(),
+            sessions: Default::default(),
+            connections: Default::default(),
+            closing: Default::default(),
+            logging_error: None,
+        };
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(app_runtime.clone());
+        });
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.input.drafts).insert(
+            snapshot.pane.navigation.draft_key.clone(),
+            Arc::new(Draft {
+                text: "send once".into(),
+                model: Some(agent_protocol::models::ModelRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "custom".into(),
+                }),
+                ..Default::default()
+            }),
+        );
+        // The parked executor leaves the submitted RPC pending.
+        let store =
+            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
+        let (desktop, window) = cx.add_window_view(|window, cx| {
+            let mut desktop = Desktop::new(
+                Mode::Fixture {
+                    remote: None,
+                    cwd: "/fixture".into(),
+                },
+                window,
+                cx,
+            );
+            desktop.session = Some(StoreSession::new(store.clone(), app_runtime));
+            desktop.accept_snapshot(window, cx);
+            Arc::make_mut(&mut desktop.snapshot).connection.connected = true;
+            desktop.project_fixture();
+            desktop.publish_views(window, cx);
+            desktop.composer.input.update(cx, |input, cx| {
+                input.set_readonly(false, cx);
+                input.focus_handle(cx).focus(window, cx);
+            });
+            desktop
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        drop(store.dispatch(Intent::SetDraftText {
+            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
+            text: "another message while sending".into(),
+        }));
+        window.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                view.snapshot = store.snapshot();
+                // Keep connectivity and nonempty input eligible so only the
+                // synchronous sending guard can stop another submission.
+                Arc::make_mut(&mut view.snapshot).connection.connected = true;
+                view.project_fixture();
+                view.sync_inputs(window, cx);
+                view.publish_views(window, cx);
+                view.composer.input.update(cx, |input, cx| {
+                    input.set_readonly(false, cx);
+                    input.focus_handle(cx).focus(window, cx);
+                });
+                assert!(view.snapshot.connection.connected);
+                assert!(view.publication.composer.controls.sending);
+                assert!(!view.composer.input.read(cx).value().trim().is_empty());
+            });
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        desktop.read_with(window, |view, _| {
+            assert!(view.publication.composer.controls.sending);
+            assert_eq!(view.local_busy, 0, "core owns send acceptance");
+        });
+        assert_eq!(store.snapshot().sessions.pending_submissions.len(), 1);
+    }
+
+    #[gpui::test]
     fn project_publications_refresh_settings_and_folder_choices_without_navigation(
         cx: &mut TestAppContext,
     ) {
@@ -949,7 +1036,7 @@ mod composer_tests {
                     view.project_fixture();
                     let changes = view.publication.changes(previous);
                     assert!(changes.list && !changes.groups.pane);
-                    view.publish_presentation(changes, window, cx);
+                    view.publish_views(window, cx);
                     let expected = name
                         .map(|name| vec![("project".into(), name.into())])
                         .unwrap_or_default();
@@ -1195,7 +1282,7 @@ mod composer_tests {
                 );
                 thread.history_has_more = Some(false);
                 thread.history_cursor = None;
-
+                view.project_fixture();
                 cx.notify();
             })
         });
@@ -1489,6 +1576,7 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
+                view.project_fixture();
                 view.publish_views(window, cx);
                 view.media.update(cx, |media, cx| {
                     media.fixture_image(&source, source.clone().into(), cx);

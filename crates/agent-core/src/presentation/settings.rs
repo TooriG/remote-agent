@@ -24,13 +24,19 @@ pub struct SettingsPresentation {
     model: Option<ModelRef>,
     connected: bool,
     connection_enabled: bool,
+    pub connection_epoch: u64,
+    pub permission: super::permissions::PermissionControl,
+    cwd: String,
     host: Option<String>,
     software: Option<Arc<HostSoftware>>,
     models: Arc<Vec<Model>>,
     providers: Option<Arc<ProviderSettings>>,
-    accounts: Option<Arc<Accounts>>,
-    login: Option<Arc<AccountLogin>>,
-    cli: Option<Arc<CodexCliStatus>>,
+    pub accounts: Option<Arc<Accounts>>,
+    pub login: Option<Arc<AccountLogin>>,
+    pub cli: Option<Arc<CodexCliStatus>>,
+    pub worktree_settings: Option<Arc<agent_protocol::models::WorktreeSettings>>,
+    pub worktrees: Option<Arc<Vec<agent_protocol::models::Worktree>>>,
+    custom_models: bool,
     setup: ConnectionSetup,
     credentials: Vec<CredentialControl>,
     quick: ModelQuickControls,
@@ -79,6 +85,18 @@ impl SettingsPresentation {
                 && snapshot.connection.connected == before.connection.connected
                 && snapshot.connection.connection_disabled == before.connection.connection_disabled
                 && snapshot.connection.host_name == before.connection.host_name
+                && snapshot.connection.epoch == before.connection.epoch
+                && snapshot.pane.navigation.cwd == before.pane.navigation.cwd
+                && snapshot
+                    .files
+                    .workspace
+                    .settings
+                    .same(&before.files.workspace.settings)
+                && snapshot
+                    .files
+                    .workspace
+                    .worktrees
+                    .same(&before.files.workspace.worktrees)
                 && draft(snapshot) == draft(before)
             {
                 return previous.settings.clone();
@@ -94,6 +112,9 @@ impl SettingsPresentation {
                 .and_then(|draft| draft.model.clone()),
             connected: snapshot.connection.connected,
             connection_enabled: !snapshot.connection.connection_disabled,
+            connection_epoch: snapshot.connection.epoch,
+            permission: snapshot.permission_control(key),
+            cwd: snapshot.pane.navigation.cwd.clone(),
             host: snapshot.connection.host_name.clone(),
             software: snapshot.catalog.host_software.clone(),
             models: snapshot.catalog.models.clone(),
@@ -101,6 +122,9 @@ impl SettingsPresentation {
             accounts: snapshot.catalog.account.accounts.clone(),
             login: snapshot.catalog.account.login.clone(),
             cli: snapshot.catalog.account.codex_cli.clone(),
+            worktree_settings: snapshot.files.workspace.settings.clone(),
+            worktrees: snapshot.files.workspace.worktrees.clone(),
+            custom_models: snapshot.allows_custom_codex_models(),
             setup: snapshot.connection_setup(),
             credentials: snapshot.credential_controls(),
             quick: snapshot.model_quick_controls(key.clone()),
@@ -133,6 +157,30 @@ impl SettingsPresentation {
             return previous.settings.clone();
         }
         Arc::new(next)
+    }
+
+    pub fn worktree_is_current(&self, path: &str) -> bool {
+        std::path::Path::new(&self.cwd).starts_with(path)
+    }
+
+    pub fn custom_model_choice(
+        &self,
+        provider: Option<ProviderKind>,
+        query: &str,
+    ) -> Option<ModelRef> {
+        let id = query.trim();
+        (self.custom_models
+            && provider == Some(ProviderKind::Codex)
+            && !id.is_empty()
+            && !id.chars().any(char::is_whitespace)
+            && !self
+                .models
+                .iter()
+                .any(|model| model.model.provider == ProviderKind::Codex && model.model.id == id))
+        .then(|| ModelRef {
+            provider: ProviderKind::Codex,
+            id: id.into(),
+        })
     }
 }
 
@@ -263,6 +311,108 @@ mod tests {
             .unwrap(),
         );
         state
+    }
+
+    #[test]
+    fn workspace_and_connection_inputs_invalidate_settings_independently() {
+        let changes: [(&str, fn(&mut Snapshot)); 5] = [
+            ("settings", |state| {
+                Arc::make_mut(&mut state.files.workspace).settings = Some(Arc::default());
+            }),
+            ("worktrees", |state| {
+                Arc::make_mut(&mut state.files.workspace).worktrees = Some(Arc::new(Vec::new()));
+            }),
+            ("directory", |state| {
+                Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).cwd =
+                    "/repo/task/src".into();
+            }),
+            ("reconnection", |state| state.connection.epoch += 1),
+            ("permissions", |state| {
+                Arc::make_mut(&mut state.catalog.permission_settings).insert(
+                    ProviderKind::Codex,
+                    Arc::new(crate::state::operations::PermissionSettingsState { result: None }),
+                );
+            }),
+        ];
+        for (name, change) in changes {
+            let mut state = snapshot();
+            Arc::make_mut(&mut state.input.drafts).insert(
+                state.pane.navigation.draft_key.clone(),
+                Arc::new(Draft {
+                    model: Some(state.catalog.models[0].model.clone()),
+                    ..Default::default()
+                }),
+            );
+            let initial = Presentation::project(Arc::new(state.clone()), None);
+            change(&mut state);
+            let changed = Presentation::current(Arc::new(state.clone()), &initial);
+            assert!(!Arc::ptr_eq(&initial.settings, &changed.settings), "{name}");
+            assert!(changed.changes(initial).settings, "{name}");
+            assert_eq!(
+                changed.settings.worktree_settings,
+                state.files.workspace.settings
+            );
+            assert_eq!(changed.settings.worktrees, state.files.workspace.worktrees);
+            assert_eq!(changed.settings.connection_epoch, state.connection.epoch);
+            assert_eq!(changed.settings.permission.loading, name == "permissions");
+            assert_eq!(
+                changed.settings.permission.load_provider,
+                (name != "permissions").then_some(ProviderKind::Codex),
+            );
+            assert_eq!(
+                changed.settings.permission.provider,
+                Some(ProviderKind::Codex)
+            );
+            assert_eq!(
+                changed.settings.worktree_is_current("/repo/task"),
+                name == "directory"
+            );
+            assert!(!changed.settings.worktree_is_current("/repo/tasks"));
+            let stable = Presentation::project(Arc::new(state), Some(&changed));
+            assert!(Arc::ptr_eq(&stable.settings, &changed.settings), "{name}");
+        }
+    }
+
+    #[test]
+    fn custom_model_choices_follow_the_presented_account() {
+        let mut state = snapshot();
+        let initial = Presentation::project(Arc::new(state.clone()), None);
+        assert_eq!(
+            initial
+                .settings
+                .custom_model_choice(Some(ProviderKind::Codex), " custom ")
+                .unwrap()
+                .id,
+            "custom"
+        );
+        for query in ["a", "", "two words"] {
+            assert!(
+                initial
+                    .settings
+                    .custom_model_choice(Some(ProviderKind::Codex), query)
+                    .is_none()
+            );
+        }
+        assert!(
+            initial
+                .settings
+                .custom_model_choice(Some(ProviderKind::Claude), "custom")
+                .is_none()
+        );
+        Arc::make_mut(&mut state.catalog.account).accounts = Some(Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "accounts":[{"provider":"codex", "id":"subscription", "planType":"Pro"}],
+                "selected":{"codex":"subscription"}
+            }))
+            .unwrap(),
+        ));
+        let selected = Presentation::current(Arc::new(state), &initial);
+        assert!(
+            selected
+                .settings
+                .custom_model_choice(Some(ProviderKind::Codex), "custom")
+                .is_none()
+        );
     }
 
     #[test]

@@ -38,9 +38,7 @@ impl Preferences {
             .on_open_change(move |open, _, cx| {
                 if *open {
                     let _ = opening.update(cx, |view, _| {
-                        if let Some(provider) =
-                            view.snapshot.permission_control(view.draft_key()).provider
-                        {
+                        if let Some(provider) = view.metadata.permission.provider {
                             view.dispatch(Intent::ReadPermissionSettings(
                                 op::ReadPermissionSettings { provider },
                             ));
@@ -59,7 +57,7 @@ impl Preferences {
 
     fn permission_menu_content(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let control = self.snapshot.permission_control(self.draft_key());
+        let control = &self.metadata.permission;
         let provider = control.provider;
         let mut body = v_flex().w(px(430.)).p_3().gap_1().child(
             div()
@@ -74,7 +72,7 @@ impl Preferences {
                 }),
         );
         for (index, (mode, label, description)) in PERMISSION_CHOICES.into_iter().enumerate() {
-            let version = control.version.map(str::to_owned);
+            let version = control.version.clone();
             body = body.child(
                 Button::new(format!("permission-choice-{index}"))
                     .debug_selector(move || format!("permission-choice-{index}"))
@@ -110,9 +108,7 @@ impl Preferences {
                         mode == PermissionMode::FullAccess && control.mode == Some(mode),
                         |button| button.text_color(rgb(0xf58b42)),
                     )
-                    .disabled(
-                        control.loading || version.is_none() || !self.snapshot.connection.connected,
-                    )
+                    .disabled(control.loading || version.is_none() || !self.metadata.connected())
                     .on_click(cx.listener(move |view, _, _, _| {
                         if let (Some(provider), Some(version)) = (provider, &version) {
                             view.dispatch(Intent::UpdatePermissionSettings(
@@ -129,7 +125,7 @@ impl Preferences {
         if control.loading {
             body = body.child(div().text_xs().child(language.text("読み込み中…")));
         }
-        if let Some(error) = control.error {
+        if let Some(error) = &control.error {
             body = body
                 .child(div().text_sm().whitespace_normal().child(error.to_owned()))
                 .child(button(
@@ -209,6 +205,7 @@ mod tests {
                         ..Default::default()
                     }),
                 );
+                view.project_fixture();
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
             ComposerView(desktop)

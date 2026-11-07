@@ -5,19 +5,9 @@ use agent_core::presentation::conversation::{
 
 #[derive(Default, PartialEq)]
 pub(in crate::app) struct ConversationModel {
-    draft_key: DraftKey,
-    session: Option<SessionRef>,
-    cwd: String,
-    home: Option<String>,
-    epoch: u64,
-    connected: bool,
+    context: Arc<agent_core::presentation::context::ConversationContext>,
     busy: bool,
-    history_notice: Option<String>,
-    history: Option<agent_core::presentation::conversation::HistoryControl>,
-    docked: Vec<agent_core::presentation::conversation::Request>,
     errors: Vec<super::errors::ErrorRow>,
-    running: std::collections::BTreeSet<op::OperationKey>,
-    failures: BTreeMap<op::OperationKey, agent_core::presentation::error::ErrorText>,
 }
 
 pub(in crate::app) enum ConversationAction {
@@ -42,8 +32,6 @@ pub(in crate::app) struct ConversationView {
     pub(in crate::app) timeline: Timeline,
     selection: Entity<selection::ConversationSelection>,
     #[cfg(test)]
-    pub(in crate::app) projections: usize,
-    #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
 impl EventEmitter<ConversationAction> for ConversationView {}
@@ -65,8 +53,6 @@ impl ConversationView {
             selection,
             media,
             #[cfg(test)]
-            projections: 0,
-            #[cfg(test)]
             renders: 0,
         }
     }
@@ -79,15 +65,10 @@ impl ConversationView {
         &mut self,
         model: ConversationModel,
         rendered: Option<Arc<agent_core::presentation::conversation::RenderedConversation>>,
-        requests: Vec<Arc<agent_protocol::requests::Request>>,
         metadata: agent_core::presentation::files::FileMetadataCache,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(test)]
-        {
-            self.projections += 1;
-        }
         let same_content = match (&rendered, &self.timeline.rendered) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
@@ -102,9 +83,11 @@ impl ConversationView {
         if self.model == model && same_content {
             return;
         }
-        if self.model.cwd != model.cwd || self.model.home != model.home {
+        if self.model.context.navigation.cwd != model.context.navigation.cwd
+            || self.model.context.home != model.context.home
+        {
             self.timeline.markdown.clear();
-        } else if self.model.epoch != model.epoch
+        } else if self.model.context.epoch != model.context.epoch
             && let Some(desktop) = self.desktop.upgrade()
         {
             // Rebind native handlers without dropping code/table presentation choices.
@@ -112,91 +95,48 @@ impl ConversationView {
                 cached.file_chips = super::markdown_file::FileChips::new(
                     cached.file_chips.files.clone(),
                     &desktop,
-                    model.epoch,
+                    model.context.epoch,
                     &self.metadata,
                     cx,
                 );
                 cached.parser_revision = uuid::Uuid::new_v4().as_u64_pair().0;
             }
         }
+        let requests: Vec<_> = rendered
+            .as_ref()
+            .into_iter()
+            .flat_map(|value| value.source.requests.values())
+            .cloned()
+            .collect();
         self.sync_request_inputs(&requests, window, cx);
-        let reset = self.model.draft_key != model.draft_key;
+        let reset = self.model.context.navigation.draft_key != model.context.navigation.draft_key;
         if reset {
             self.timeline.forget_rendering();
         }
-        self.timeline.sync(rendered, model.history.clone(), reset);
+        self.timeline
+            .sync(rendered, model.context.history.clone(), reset);
         self.model = model;
         cx.notify();
     }
 }
 impl Desktop {
     pub(in crate::app) fn conversation_model(&self) -> ConversationModel {
-        let mut running = std::collections::BTreeSet::new();
-        let mut failures = BTreeMap::new();
-        for key in self.snapshot.operations.keys().filter(|key| match key {
-            op::OperationKey::Item { item } => self.selected() == Some(&item.thread_id),
-            op::OperationKey::Fork { session, .. } => self.selected() == Some(session),
-            op::OperationKey::Request { id } => self
-                .thread()
-                .is_some_and(|thread| thread.requests.contains_key(id)),
-            _ => false,
-        }) {
-            if self.snapshot.operation_running(key.clone()) {
-                running.insert(key.clone());
-            }
-            if let Some(error) = self.snapshot.operation_error(key.clone()) {
-                failures.insert(key.clone(), error);
-            }
-        }
         ConversationModel {
-            draft_key: self.draft_key().clone(),
-            session: self.selected().cloned(),
-            cwd: self.snapshot.pane.navigation.cwd.clone(),
-            home: self.snapshot.connection.host_home_directory.clone(),
-            epoch: self.snapshot.connection.epoch,
-            connected: self.snapshot.connection.connected,
-            busy: self.busy > 0,
-            history_notice: self
-                .thread()
-                .and_then(|thread| agent_core::presentation::conversation::history_notice(thread)),
-            history: self
-                .selected()
-                .cloned()
-                .and_then(|session| self.snapshot.history_control(session)),
-            docked: self
-                .selected()
-                .into_iter()
-                .flat_map(|session| self.snapshot.docked_requests(session.clone()))
-                // Questions use the composer's answer field and question panel.
-                .filter(|request| {
-                    !matches!(
-                        request.request_body,
-                        agent_protocol::requests::RequestBody::Question { .. }
-                    )
-                })
-                .collect(),
+            context: self.publication.context.clone(),
+            busy: self.busy(),
             errors: self.error_rows(&ErrorScope::Conversation {
                 draft_key: self.draft_key().clone(),
             }),
-            running,
-            failures,
         }
     }
     pub(in crate::app) fn publish_conversation(&self, window: &mut Window, cx: &mut Context<Self>) {
         let model = self.conversation_model();
         let rendered = self.publication.conversation.clone();
-        let requests = rendered
-            .as_ref()
-            .into_iter()
-            .flat_map(|value| value.source.requests.values())
-            .cloned()
-            .collect();
         self.conversation.update(cx, |view, cx| {
             view.pane = self.session.as_ref().map(|session| session.pane.clone());
             view.sync(
                 model,
                 rendered,
-                requests,
                 self.snapshot.files.workspace.file_metadata.clone(),
                 window,
                 cx,
@@ -227,13 +167,13 @@ impl Desktop {
                 self.open_browser(self.panel_scope(), "https://chatgpt.com/settings/usage", cx)
             }
             ConversationAction::Fork(thread, turn) => {
-                if !self.snapshot.connection.connected || self.busy > 0 {
+                if !self.snapshot.connection.connected || self.busy() {
                     return;
                 }
-                self.busy += 1;
+                self.local_busy += 1;
                 self.perform(
                     Intent::ForkSession(op::ForkSession::new(thread.clone(), turn.clone())),
-                    OperationCompletion::Busy,
+                    OperationCompletion::Local,
                 );
                 self.accept_snapshot(window, cx);
                 self.conversation
@@ -545,24 +485,26 @@ impl ConversationView {
                 turn.map(|turn| turn.id.clone()).unwrap_or_default(),
                 item.id.clone(),
             );
-            let operation =
-                self.model
-                    .session
-                    .as_ref()
-                    .cloned()
-                    .map(|thread_id| op::OperationKey::Item {
-                        item: op::ReadItem {
-                            thread_id,
-                            turn_id: turn.map(|turn| turn.id.clone()).unwrap_or_default(),
-                            item_id: item.id.clone(),
-                        },
-                    });
+            let operation = self
+                .model
+                .context
+                .navigation
+                .thread_id
+                .as_ref()
+                .cloned()
+                .map(|thread_id| op::OperationKey::Item {
+                    item: op::ReadItem {
+                        thread_id,
+                        turn_id: turn.map(|turn| turn.id.clone()).unwrap_or_default(),
+                        item_id: item.id.clone(),
+                    },
+                });
             let error = operation
                 .as_ref()
-                .and_then(|key| self.model.failures.get(key));
+                .and_then(|key| self.model.context.operation_error(key));
             let label = if operation
                 .as_ref()
-                .is_some_and(|key| self.model.running.contains(key))
+                .is_some_and(|key| self.model.context.operation_running(key))
             {
                 language.text("詳細を読み込み中…").to_owned()
             } else if error.is_some() {
@@ -905,7 +847,7 @@ impl ConversationView {
                             }
                             view.timeline.pause_tail();
                             view.timeline
-                                .rebuild_rows(view.model.history.clone(), false);
+                                .rebuild_rows(view.model.context.history.clone(), false);
                             cx.notify();
                         }))
                         .text_color(rgb(appearance::MUTED))
@@ -1086,17 +1028,18 @@ impl ConversationView {
                                 |actions, (thread_id, turn_id)| {
                                     let fork_error = self
                                         .model
-                                        .failures
-                                        .get(&op::OperationKey::Fork {
+                                        .context
+                                        .operation_error(&op::OperationKey::Fork {
                                             session: thread_id.clone(),
                                             turn: turn_id.clone(),
                                         })
                                         .cloned();
-                                    let forking =
-                                        self.model.running.contains(&op::OperationKey::Fork {
+                                    let forking = self.model.context.operation_running(
+                                        &op::OperationKey::Fork {
                                             session: thread_id.clone(),
                                             turn: turn_id.clone(),
-                                        });
+                                        },
+                                    );
                                     actions
                                         .when_some(fork_error, |row, error| {
                                             row.child(
@@ -1140,7 +1083,7 @@ impl ConversationView {
                                                 })
                                                 .debug_selector(|| "response-fork".into())
                                                 .disabled(
-                                                    !self.model.connected
+                                                    !self.model.context.connected
                                                         || self.model.busy
                                                         || forking,
                                                 ),
@@ -1437,8 +1380,8 @@ impl ConversationView {
             .child(request.body.clone());
         if let Some(error) = self
             .model
-            .failures
-            .get(&op::OperationKey::Request { id: key.clone() })
+            .context
+            .operation_error(&op::OperationKey::Request { id: key.clone() })
         {
             body = body.child(
                 div()
@@ -1605,7 +1548,7 @@ impl ConversationView {
     }
     /// Requests wait above the composer, as in T3 Code.
     fn docked_requests(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let docked = self.model.docked.clone();
+        let docked = self.model.context.docked.clone();
         (!docked.is_empty()).then(|| {
             // Long details scroll instead of hiding the conversation.
             v_flex()
@@ -1786,7 +1729,9 @@ impl ConversationView {
                                         ),
                                 )
                                 .on_click(cx.listener(|view, _, _, cx| {
-                                    if let Some(thread_id) = view.model.session.as_ref().cloned() {
+                                    if let Some(thread_id) =
+                                        view.model.context.navigation.thread_id.as_ref().cloned()
+                                    {
                                         view.timeline.pause_tail();
                                         view.dispatch(Intent::ReadOlder { thread_id });
                                         cx.notify();
@@ -1867,20 +1812,20 @@ impl ConversationView {
                 errors::error_list(
                     &self.model.errors,
                     ErrorScope::Conversation {
-                        draft_key: self.model.draft_key.clone(),
+                        draft_key: self.model.context.navigation.draft_key.clone(),
                     },
                     None,
                     cx,
                     |_, action, _, cx| cx.emit(ConversationAction::Notice(action)),
                 ),
             ));
-        if let Some(notice) = &self.model.history_notice {
+        if let Some(notice) = &self.model.context.history_notice {
             body = body.child(div().px_4().py_2().text_sm().child(
                 agent_core::localization::localized_ui_text(language, notice.clone()),
             ));
         }
         if self.timeline.rendered.is_none() {
-            if let Some(control) = self.model.history.clone() {
+            if let Some(control) = self.model.context.history.clone() {
                 body = body.child(self.history_control(control, cx));
             }
             body = body.child(
@@ -1894,12 +1839,12 @@ impl ConversationView {
                             .text_2xl()
                             .child(language.text("何から始めましょうか？")),
                     )
-                    .child(if self.model.cwd.is_empty() {
+                    .child(if self.model.context.navigation.cwd.is_empty() {
                         language
                             .text("メッセージを入力して、作業を始めましょう。")
                             .into()
                     } else {
-                        file_name(&self.model.cwd)
+                        file_name(&self.model.context.navigation.cwd)
                     }),
             );
         } else {
@@ -1970,8 +1915,8 @@ impl ConversationView {
         {
             let presentation = agent_core::presentation::markdown::markdown_presentation(
                 source,
-                &self.model.cwd,
-                self.model.home.as_deref(),
+                &self.model.context.navigation.cwd,
+                self.model.context.home.as_deref(),
             );
             let Some(desktop) = self.desktop.upgrade() else {
                 return div().into_any_element();
@@ -1986,7 +1931,7 @@ impl ConversationView {
                     super::markdown_file::FileChips::new(
                         presentation.files.into(),
                         &desktop,
-                        self.model.epoch,
+                        self.model.context.epoch,
                         &self.metadata,
                         cx,
                     )

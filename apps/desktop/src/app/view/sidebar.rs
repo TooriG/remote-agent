@@ -418,17 +418,36 @@ impl PartialEq for Conversations {
 }
 
 impl Desktop {
-    pub(in crate::app) fn sidebar_model(&self) -> Conversations {
+    pub(in crate::app) fn sidebar_model(&self, cx: &App) -> Conversations {
+        let hosts = self.hosts.as_ref().map(|hosts| hosts.read(cx));
+        let mut connections = vec![(
+            "local".into(),
+            self.runtime
+                .sessions
+                .store(None)
+                .and_then(|store| store.snapshot().connection.host_name.clone())
+                .unwrap_or_else(|| "このPC".into()),
+        )];
+        if let Some(hosts) = hosts {
+            connections.extend(hosts.choices().into_iter().map(|host| (host.id, host.name)));
+        }
         Conversations {
-            list: self
-                .connection_list
-                .clone()
+            list: hosts
+                .and_then(|hosts| {
+                    hosts.thread_list(if self.connection_selection.all {
+                        None
+                    } else {
+                        self.connection_selection.host_id.as_deref()
+                    })
+                })
                 .or_else(|| self.publication.list.clone()),
             selected: self.selected().cloned(),
             host: self.connection_id(),
             all: self.connection_selection.all,
-            connections: self.connection_names.clone(),
-            connected_hosts: self.connected_hosts.clone(),
+            connections,
+            connected_hosts: hosts
+                .map(|hosts| hosts.connected_hosts())
+                .unwrap_or_default(),
             storage_scope: self.snapshot.connection.storage_scope.clone(),
             connected: self.snapshot.connection.connected,
             local: self.remote.is_none(),
@@ -448,8 +467,6 @@ pub(in crate::app) struct SidebarView {
     search: Entity<InputState>,
     app_updates: Option<Entity<crate::updates::Updates>>,
     pane: Option<Arc<agent_core::store::Pane>>,
-    #[cfg(test)]
-    pub(in crate::app) projections: usize,
     #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
@@ -471,8 +488,6 @@ impl SidebarView {
             search,
             app_updates,
             #[cfg(test)]
-            projections: 0,
-            #[cfg(test)]
             renders: 0,
             pane,
         }
@@ -486,7 +501,7 @@ pub(in crate::app) enum SidebarAction {
     List(Option<String>, Intent),
     Settings(SettingsPage),
     Refresh,
-    DismissLocal(op::ErrorId),
+    DismissLocal(uuid::Uuid),
 }
 impl EventEmitter<SidebarAction> for SidebarView {}
 impl SidebarView {
@@ -496,10 +511,6 @@ impl SidebarView {
         pane: Option<Arc<agent_core::store::Pane>>,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(test)]
-        {
-            self.projections += 1;
-        }
         self.pane = pane;
         if self.model != model {
             self.model = model;
@@ -1090,7 +1101,7 @@ mod tests {
                 let sidebar = cx.new(|cx| {
                     super::SidebarView::new(
                         &entity,
-                        desktop.sidebar_model(),
+                        desktop.sidebar_model(cx),
                         desktop.search.clone(),
                         desktop.app_updates.clone(),
                         desktop.session.as_ref().map(|s| s.pane.clone()),
@@ -1101,7 +1112,7 @@ mod tests {
                 sidebar
             });
             self.0.update(cx, |desktop, cx| {
-                let model = desktop.sidebar_model();
+                let model = desktop.sidebar_model(cx);
                 let pane = desktop.session.as_ref().map(|session| session.pane.clone());
                 sidebar.update(cx, |view, cx| view.sync(model, pane, cx));
             });
@@ -1183,7 +1194,7 @@ mod tests {
                 let sidebar = cx.new(|cx| {
                     super::SidebarView::new(
                         &entity,
-                        desktop.sidebar_model(),
+                        desktop.sidebar_model(cx),
                         desktop.search.clone(),
                         desktop.app_updates.clone(),
                         desktop.session.as_ref().map(|s| s.pane.clone()),
@@ -1622,7 +1633,7 @@ mod tests {
                 desktop.snapshot = store.snapshot();
                 desktop.project_fixture();
                 desktop.session = Some(session);
-                desktop.busy = 1;
+                desktop.local_busy = 1;
             });
             TaskNavigation(desktop)
         });
@@ -1648,7 +1659,7 @@ mod tests {
             );
             view.update(window, |view, cx| {
                 assert_eq!(
-                    view.0.read(cx).busy,
+                    view.0.read(cx).local_busy,
                     1,
                     "opening a task must not block later navigation"
                 );

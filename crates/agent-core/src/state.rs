@@ -579,13 +579,6 @@ impl Snapshot {
             states: self.terminals.clone(),
         })
     }
-
-    pub fn model_error_messages(
-        &self,
-        provider: Option<crate::session::ProviderKind>,
-    ) -> Vec<String> {
-        crate::presentation::model_settings::error_messages(&self.catalog.model_errors, provider)
-    }
 }
 
 mod notifications;

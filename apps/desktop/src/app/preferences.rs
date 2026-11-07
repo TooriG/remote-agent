@@ -1,55 +1,33 @@
 //! Native settings forms and their asynchronous work belong to this owner.
 //! The window only opens/closes the surface and supplies immutable core state.
 use super::*;
-use agent_core::{presentation::settings::SettingsPresentation, state::Same};
+use agent_core::presentation::settings::SettingsPresentation;
 use view::{errors, settings::SettingsNavigation};
 
 pub(super) enum PreferencesEvent {
     Closed,
     ImportProjects,
     Notice(errors::NoticeAction),
+    Failed(String),
     OpenBrowser(String),
     OpenChat(SessionRef),
+    Completed {
+        epoch: u64,
+        completion: Completion,
+        result: Result<Outcome, String>,
+    },
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum Completion {
     Account,
     WorktreeSettings,
     RemoveWorktree,
 }
 
-struct DisplayInputs {
-    permission: Option<Arc<op::PermissionSettingsState>>,
-    settings: Option<Arc<agent_protocol::models::WorktreeSettings>>,
-    worktrees: Option<Arc<Vec<agent_protocol::models::Worktree>>>,
-    cwd: String,
-}
-impl DisplayInputs {
-    fn from_snapshot(
-        snapshot: &Snapshot,
-        provider: Option<agent_protocol::session::ProviderKind>,
-    ) -> Self {
-        Self {
-            permission: provider
-                .and_then(|provider| snapshot.catalog.permission_settings.get(&provider).cloned()),
-            settings: snapshot.files.workspace.settings.clone(),
-            worktrees: snapshot.files.workspace.worktrees.clone(),
-            cwd: snapshot.pane.navigation.cwd.clone(),
-        }
-    }
-    fn equivalent(&self, other: &Self) -> bool {
-        self.permission.same(&other.permission)
-            && self.settings.same(&other.settings)
-            && self.worktrees.same(&other.worktrees)
-            && self.cwd == other.cwd
-    }
-}
-
 pub(super) struct Preferences {
-    pub(super) snapshot: Arc<Snapshot>,
     pub(super) metadata: Arc<SettingsPresentation>,
     pub(super) projects: Vec<(String, String)>,
-    inputs: DisplayInputs,
     pub(super) pane: Option<Arc<agent_core::store::Pane>>,
     handle: tokio::runtime::Handle,
     epoch: u64,
@@ -60,13 +38,12 @@ pub(super) struct Preferences {
     pub(super) remote: Option<RemoteHost>,
     pub(super) hosts: Option<Entity<Hosts>>,
     pub(super) app_updates: Option<Entity<crate::updates::Updates>>,
-    pub(super) busy: usize,
+    pub(super) blocked: bool,
     pub(super) settings_page: SettingsPage,
     pub(super) settings_search: Entity<InputState>,
     pub(super) settings_focus: FocusHandle,
     pub(super) settings_navigation: Entity<SettingsNavigation>,
-    pub(super) local_errors: BTreeMap<ErrorScope, String>,
-    pub(super) window_error: Option<errors::ErrorRow>,
+    pub(super) notices: Vec<errors::ErrorRow>,
     pub(super) opened: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -90,9 +67,13 @@ impl Preferences {
         cx.spawn_in(window, async move |view, cx| {
             while let Ok((epoch, completion, result)) = receive.recv().await {
                 if view
-                    .update_in(cx, |view: &mut Self, window, cx| {
+                    .update(cx, |view: &mut Self, cx| {
                         if epoch == view.epoch {
-                            view.completed(epoch, completion, result, window, cx);
+                            cx.emit(PreferencesEvent::Completed {
+                                epoch,
+                                completion,
+                                result,
+                            });
                         }
                     })
                     .is_err()
@@ -165,10 +146,8 @@ impl Preferences {
             }),
         ];
         Self {
-            snapshot: Arc::default(),
             metadata: agent_core::presentation::view::Presentation::empty().settings(),
             projects: Vec::new(),
-            inputs: DisplayInputs::from_snapshot(&Snapshot::default(), None),
             pane: None,
             handle: cx.global::<Runtime>().handle.clone(),
             epoch: 0,
@@ -179,13 +158,12 @@ impl Preferences {
             remote: None,
             hosts,
             app_updates,
-            busy: 0,
+            blocked: false,
             settings_page: SettingsPage::General,
             settings_search,
             settings_focus: cx.focus_handle(),
             settings_navigation,
-            local_errors: BTreeMap::new(),
-            window_error: None,
+            notices: Vec::new(),
             opened: false,
             _subscriptions: subscriptions,
         }
@@ -193,14 +171,11 @@ impl Preferences {
 
     pub(super) fn sync(
         &mut self,
-        snapshot: Arc<Snapshot>,
         metadata: Arc<SettingsPresentation>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let inputs = DisplayInputs::from_snapshot(&snapshot, metadata.provider());
-        let reconnected = self.snapshot.connection.epoch != snapshot.connection.epoch;
-        if reconnected {
+        if self.metadata.connection_epoch != metadata.connection_epoch {
             self.epoch += 1;
             self.account.busy = false;
             self.account.polling = false;
@@ -208,19 +183,8 @@ impl Preferences {
             self.worktrees.removing = false;
             self.worktrees.save_pending = false;
         }
-        if self
-            .snapshot
-            .catalog
-            .account
-            .login
-            .as_ref()
-            .map(|login| &login.login_id)
-            != snapshot
-                .catalog
-                .account
-                .login
-                .as_ref()
-                .map(|login| &login.login_id)
+        if self.metadata.login.as_ref().map(|login| &login.login_id)
+            != metadata.login.as_ref().map(|login| &login.login_id)
         {
             self.account
                 .code
@@ -228,14 +192,12 @@ impl Preferences {
         }
         if !self.worktrees.dirty
             && !self.worktrees.saving
-            && self.snapshot.files.workspace.settings != snapshot.files.workspace.settings
-            && let Some(settings) = &snapshot.files.workspace.settings
+            && self.metadata.worktree_settings != metadata.worktree_settings
+            && let Some(settings) = &metadata.worktree_settings
         {
             self.worktrees.show(settings, window, cx);
         }
-        self.snapshot = snapshot;
-        if reconnected || !self.inputs.equivalent(&inputs) || !self.metadata.equivalent(&metadata) {
-            self.inputs = inputs;
+        if !self.metadata.equivalent(&metadata) {
             cx.notify();
         }
         self.metadata = metadata;
@@ -269,7 +231,7 @@ impl Preferences {
                 .code
                 .update(cx, |input, cx| input.set_value("", window, cx));
             self.worktrees.scope = None;
-            self.snapshot = Arc::default();
+            self.metadata = agent_core::presentation::view::Presentation::empty().settings();
             cx.notify();
         }
         if self.remote != remote {
@@ -294,16 +256,11 @@ impl Preferences {
             drop(pane.dispatch(intent));
         }
     }
-    pub(super) fn sync_from_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(view) = self.pane.as_ref().and_then(|pane| pane.presentation().ok()) {
-            self.sync(view.snapshot.clone(), view.settings.clone(), window, cx);
-        }
-    }
     fn poll_account(&mut self, cx: &mut Context<Self>) {
         if self.account.polling
             && !self.account.busy
-            && self.snapshot.connection.connected
-            && let Some(login) = &self.snapshot.catalog.account.login
+            && self.metadata.connected()
+            && let Some(login) = &self.metadata.login
         {
             let (provider, id) = (login.provider, login.login_id.clone());
             self.account.busy = true;
@@ -318,27 +275,24 @@ impl Preferences {
             cx.notify();
         }
     }
-    fn completed(
+    pub(super) fn completed(
         &mut self,
         epoch: u64,
         completion: Completion,
         result: Result<Outcome, String>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sync_from_pane(window, cx);
         if self.epoch != epoch {
             return;
         }
         match completion {
             Completion::Account => {
                 self.account.busy = false;
-                self.account.polling =
-                    result.is_ok() && self.snapshot.catalog.account.login.is_some();
+                self.account.polling = result.is_ok() && self.metadata.login.is_some();
                 if result.is_err() {
                     self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
                 }
-                if self.snapshot.catalog.account.login.is_none() {
+                if self.metadata.login.is_none() {
                     self.account.login_draft = None;
                 }
             }
@@ -346,7 +300,7 @@ impl Preferences {
                 self.worktrees.saving = false;
                 self.worktrees.dirty = !self
                     .worktrees
-                    .matches(self.snapshot.files.workspace.settings.as_deref(), cx);
+                    .matches(self.metadata.worktree_settings.as_deref(), cx);
                 self.worktrees.saved = !self.worktrees.dirty;
                 if std::mem::take(&mut self.worktrees.save_pending) {
                     self.save_worktree_settings(None, cx);
@@ -364,24 +318,10 @@ impl Preferences {
         cx.notify();
     }
     pub(super) fn model_controls_enabled(&self) -> bool {
-        self.snapshot.connection.connected
+        self.metadata.connected()
             && !self.account.busy
-            && self.busy == 0
-            && self.snapshot.catalog.account.login.is_none()
-    }
-    pub(super) fn draft_key(&self) -> &DraftKey {
-        &self.snapshot.pane.navigation.draft_key
-    }
-    pub(super) fn draft(&self) -> &Draft {
-        static EMPTY: std::sync::LazyLock<Draft> = std::sync::LazyLock::new(Draft::default);
-        self.snapshot
-            .input
-            .drafts
-            .get(self.draft_key())
-            .map_or(&EMPTY, AsRef::as_ref)
-    }
-    pub(super) fn selected_model(&self) -> Option<&Model> {
-        selected_model(&self.snapshot.catalog.models, self.draft().model.as_ref())
+            && !self.blocked
+            && self.metadata.login.is_none()
     }
     pub(super) fn language_changed(&self, window: &mut Window, cx: &mut Context<Self>) {
         let language = crate::localization::language(cx);
@@ -412,7 +352,7 @@ impl Preferences {
     fn worktree_input_changed(&mut self, cx: &App) {
         self.worktrees.dirty = !self
             .worktrees
-            .matches(self.snapshot.files.workspace.settings.as_deref(), cx);
+            .matches(self.metadata.worktree_settings.as_deref(), cx);
         self.worktrees.saved = false;
     }
     pub(super) fn save_worktree_settings(
@@ -420,7 +360,7 @@ impl Preferences {
         toggle: Option<WorktreeToggle>,
         cx: &Context<Self>,
     ) {
-        let Some(settings) = &self.snapshot.files.workspace.settings else {
+        let Some(settings) = &self.metadata.worktree_settings else {
             return;
         };
         let mut settings = self.worktrees.edited(settings, cx);
@@ -437,7 +377,7 @@ impl Preferences {
                 }
             }
         }
-        if self.snapshot.files.workspace.settings.as_deref() == Some(&settings) {
+        if self.metadata.worktree_settings.as_deref() == Some(&settings) {
             return;
         }
         if self.worktrees.saving {
@@ -460,25 +400,7 @@ impl Preferences {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let errors::NoticeAction::DismissLocal(scope, op::ErrorId::Application { message }) =
-            &action
-            && self.local_errors.get(scope) == Some(message)
-        {
-            self.local_errors.remove(scope);
-        } else {
-            cx.emit(PreferencesEvent::Notice(action));
-        }
-    }
-}
-
-impl Preferences {
-    pub(in crate::app) fn settings_errors(&self) -> Vec<errors::ErrorRow> {
-        let mut rows =
-            errors::error_rows(&self.snapshot, &self.local_errors, &ErrorScope::Settings);
-        if let Some(error) = &self.window_error {
-            rows.push(error.clone());
-        }
-        rows
+        cx.emit(PreferencesEvent::Notice(action));
     }
 }
 
@@ -527,8 +449,8 @@ mod tests {
         });
         cx.run_until_parked();
         let desktop = desktop.unwrap();
-        let projections = desktop.read_with(cx, |view, cx| {
-            view.composer_view.read(cx).content.read(cx).projections
+        let renders = desktop.read_with(cx, |view, cx| {
+            view.composer_view.read(cx).content.read(cx).renders
         });
         let notifications = Rc::new(Cell::new(0));
         let count = notifications.clone();
@@ -561,9 +483,9 @@ mod tests {
                 .read(cx)
                 .content
                 .read(cx)
-                .projections),
-            projections,
-            "settings text must not rebuild the composer's model"
+                .renders),
+            renders,
+            "settings text must not redraw the composer"
         );
         assert_eq!(
             notifications.get(),
@@ -581,12 +503,7 @@ mod tests {
             agent_core::presentation::view::Presentation::project(Arc::default(), None);
         window.update(|window, cx| {
             view.update(cx, |view, cx| {
-                view.sync(
-                    publication.snapshot.clone(),
-                    publication.settings.clone(),
-                    window,
-                    cx,
-                )
+                view.sync(publication.settings.clone(), window, cx)
             })
         });
         window.run_until_parked();
@@ -624,12 +541,7 @@ mod tests {
                     Some(&publication),
                 );
                 view.update(cx, |view, cx| {
-                    view.sync(
-                        publication.snapshot.clone(),
-                        publication.settings.clone(),
-                        window,
-                        cx,
-                    )
+                    view.sync(publication.settings.clone(), window, cx)
                 })
             });
             window.run_until_parked();
@@ -647,12 +559,7 @@ mod tests {
                 Some(&publication),
             );
             view.update(cx, |view, cx| {
-                view.sync(
-                    publication.snapshot.clone(),
-                    publication.settings.clone(),
-                    window,
-                    cx,
-                )
+                view.sync(publication.settings.clone(), window, cx)
             });
         });
         window.run_until_parked();
@@ -660,6 +567,109 @@ mod tests {
             notifications.get() > 0,
             "catalog changes must still reach open controls"
         );
+    }
+
+    #[gpui::test]
+    fn reconnect_preserves_edits_and_rejects_old_completions(cx: &mut TestAppContext) {
+        let _runtime = runtime(cx);
+        let (view, window) =
+            cx.add_window_view(|window, cx| Preferences::new(None, None, window, cx));
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.worktrees
+                    .directory
+                    .update(cx, |input, cx| input.set_value("/my/edits", window, cx));
+                view.worktrees.dirty = true;
+                view.account.busy = true;
+                view.account.polling = true;
+                view.worktrees.saving = true;
+                view.worktrees.removing = true;
+                view.worktrees.save_pending = true;
+                let old_epoch = view.epoch;
+                let mut snapshot = Snapshot::default();
+                snapshot.connection.epoch = 1;
+                Arc::make_mut(&mut snapshot.files.workspace).settings = Some(Arc::default());
+                view.sync(
+                    SettingsPresentation::from_snapshot(Arc::new(snapshot)),
+                    window,
+                    cx,
+                );
+                assert!(!view.account.busy && !view.account.polling);
+                assert!(!view.worktrees.saving && !view.worktrees.removing);
+                assert!(!view.worktrees.save_pending);
+                assert!(view.worktrees.dirty);
+                assert_eq!(
+                    view.worktrees.directory.read(cx).value().as_str(),
+                    "/my/edits"
+                );
+                view.account.busy = true;
+                view.worktrees.saving = true;
+                view.completed(old_epoch, Completion::Account, Ok(Outcome::Applied), cx);
+                view.completed(
+                    old_epoch,
+                    Completion::WorktreeSettings,
+                    Ok(Outcome::Applied),
+                    cx,
+                );
+                assert!(view.account.busy && view.worktrees.saving);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn completion_adopts_settings_before_the_next_display_frame(cx: &mut TestAppContext) {
+        let runtime = runtime(cx);
+        let settings = Arc::new(agent_protocol::models::WorktreeSettings {
+            worktree_directory: "/saved".into(),
+            ..Default::default()
+        });
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut snapshot.files.workspace).settings = Some(settings.clone());
+        let store =
+            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
+        let (owner, window) = cx.add_window_view(|window, cx| {
+            Desktop::new(
+                Mode::Fixture {
+                    remote: None,
+                    cwd: "/fixture".into(),
+                },
+                window,
+                cx,
+            )
+        });
+        let preferences = owner.read_with(window, |owner, _| owner.preferences.clone());
+        window.update(|window, cx| {
+            owner.update(cx, |owner, cx| {
+                let session = StoreSession::new(store.clone(), cx.global::<Runtime>().clone());
+                preferences.update(cx, |view, cx| {
+                    view.bind(Some(session.pane.clone()), None, window, cx);
+                    let mut stale = store.snapshot().as_ref().clone();
+                    Arc::make_mut(&mut stale.files.workspace).settings = Some(Arc::default());
+                    view.sync(
+                        SettingsPresentation::from_snapshot(Arc::new(stale)),
+                        window,
+                        cx,
+                    );
+                    view.worktrees.show(&settings, window, cx);
+                    view.worktrees.dirty = true;
+                    view.worktrees.saving = true;
+                    view.updates
+                        .try_send((
+                            view.epoch,
+                            Completion::WorktreeSettings,
+                            Ok(Outcome::Applied),
+                        ))
+                        .unwrap();
+                });
+                owner.session = Some(session);
+            });
+        });
+        window.run_until_parked();
+        preferences.read_with(window, |view, _| {
+            assert_eq!(view.metadata.worktree_settings.as_ref(), Some(&settings));
+            assert!(!view.worktrees.saving && !view.worktrees.dirty);
+            assert!(view.worktrees.saved);
+        });
     }
 
     #[gpui::test]
@@ -674,25 +684,46 @@ mod tests {
                 })
             })
             .collect();
-        let (view, window) =
-            cx.add_window_view(|window, cx| Preferences::new(None, None, window, cx));
+        let (owner, window) = cx.add_window_view(|window, cx| {
+            Desktop::new(
+                Mode::Fixture {
+                    remote: None,
+                    cwd: "/fixture".into(),
+                },
+                window,
+                cx,
+            )
+        });
+        let view = owner.read_with(window, |owner, _| owner.preferences.clone());
         let mut old_epoch = 0;
         window.update(|window, cx| {
+            owner.update(cx, |owner, cx| {
+                owner.session = Some(StoreSession::new(
+                    stores[0].clone(),
+                    cx.global::<Runtime>().clone(),
+                ));
+                owner.accept_snapshot(window, cx);
+            });
             view.update(cx, |view, cx| {
-                view.bind(Some(stores[0].primary_pane()), None, window, cx);
-                view.sync_from_pane(window, cx);
                 view.account
                     .code
                     .update(cx, |input, cx| input.set_value("previous-key", window, cx));
                 old_epoch = view.epoch;
-                view.bind(Some(stores[1].primary_pane()), None, window, cx);
-                view.sync_from_pane(window, cx);
+            });
+            owner.update(cx, |owner, cx| {
+                owner.session = Some(StoreSession::new(
+                    stores[1].clone(),
+                    cx.global::<Runtime>().clone(),
+                ));
+                owner.accept_snapshot(window, cx);
+            });
+            view.update(cx, |view, cx| {
                 assert!(view.account.code.read(cx).value().is_empty());
                 view.account.busy = true;
                 view.updates
                     .try_send((old_epoch, Completion::Account, Err("old".into())))
                     .unwrap();
-            })
+            });
         });
         window.run_until_parked();
         window.update(|_, cx| {
@@ -704,18 +735,20 @@ mod tests {
                 view.updates
                     .try_send((view.epoch, Completion::Account, Err("current".into())))
                     .unwrap();
-            })
+            });
         });
         window.run_until_parked();
         window.update(|window, cx| {
             view.update(cx, |view, cx| {
                 assert!(!view.account.busy);
                 assert!(!view.account.polling);
-                let mut snapshot = (*view.snapshot).clone();
+                let mut snapshot = Snapshot::default();
                 snapshot.connection.connected = true;
-                let snapshot = Arc::new(snapshot);
-                let metadata = SettingsPresentation::from_snapshot(snapshot.clone());
-                view.sync(snapshot, metadata, window, cx);
+                view.sync(
+                    SettingsPresentation::from_snapshot(Arc::new(snapshot)),
+                    window,
+                    cx,
+                );
                 view.account_operation(Intent::StartAccountLogin(op::StartAccountLogin {
                     provider: agent_protocol::session::ProviderKind::Codex,
                 }));
@@ -723,7 +756,7 @@ mod tests {
                     view.account.busy,
                     "a current connection can retry after failure"
                 );
-            })
+            });
         });
     }
 }

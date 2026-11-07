@@ -85,8 +85,6 @@ pub(in crate::app) struct WorkbenchView {
     titles: BTreeMap<u64, String>,
     _browsers: Vec<Subscription>,
     #[cfg(test)]
-    pub(in crate::app) projections: usize,
-    #[cfg(test)]
     pub(in crate::app) renders: usize,
 }
 
@@ -106,8 +104,6 @@ impl WorkbenchView {
             titles: BTreeMap::new(),
             _browsers: Vec::new(),
             #[cfg(test)]
-            projections: 0,
-            #[cfg(test)]
             renders: 0,
         }
     }
@@ -119,10 +115,6 @@ impl WorkbenchView {
     }
 
     fn set_model(&mut self, model: Option<WorkbenchModel>, cx: &mut Context<Self>) {
-        #[cfg(test)]
-        {
-            self.projections += 1;
-        }
         if self.model == model {
             return;
         }
@@ -450,7 +442,7 @@ impl Desktop {
                         .as_ref()
                         .is_some_and(|file| file.truncated),
                 path: file,
-                saving: kind == Panel::File && self.busy > 0,
+                saving: kind == Panel::File && self.busy(),
                 failed: self
                     .snapshot
                     .operation_error(op::OperationKey::File)

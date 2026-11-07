@@ -192,8 +192,14 @@ fn body_deltas_reuse_the_list_but_shortcut_metadata_updates_it() {
     let changes = streamed.changes(initial.clone());
     assert!(changes.conversation);
     assert!(!changes.composer_controls);
-    assert!(!changes.attachments);
-    assert!(!changes.sources);
+    assert_eq!(
+        streamed.composer.draft.attachments,
+        initial.composer.draft.attachments
+    );
+    assert!(Arc::ptr_eq(
+        &streamed.conversation.as_ref().unwrap().source_paths,
+        &initial.conversation.as_ref().unwrap().source_paths,
+    ));
     assert!(Arc::ptr_eq(&streamed.composer, &initial.composer));
     assert!(Arc::ptr_eq(&streamed.context, &initial.context));
     assert!(Arc::ptr_eq(
@@ -244,11 +250,17 @@ fn draft_attachments_model_controls_and_transcript_sources_have_distinct_subject
         }),
     );
     let attached = Presentation::project(Arc::new(state.clone()), Some(&initial));
-    let changes = attached.changes(initial);
-    assert!(changes.attachments);
+    let changes = attached.changes(initial.clone());
+    assert_ne!(
+        attached.composer.draft.attachments,
+        initial.composer.draft.attachments
+    );
     assert!(changes.composer);
     assert!(!changes.composer_controls);
-    assert!(!changes.sources);
+    assert!(Arc::ptr_eq(
+        &attached.conversation.as_ref().unwrap().source_paths,
+        &initial.conversation.as_ref().unwrap().source_paths,
+    ));
     Arc::make_mut(
         Arc::make_mut(&mut state.input.drafts)
             .get_mut(&key)
@@ -259,10 +271,16 @@ fn draft_attachments_model_controls_and_transcript_sources_have_distinct_subject
         id: "chosen".into(),
     });
     let chosen = Presentation::project(Arc::new(state.clone()), Some(&attached));
-    let changes = chosen.changes(attached);
+    let changes = chosen.changes(attached.clone());
     assert!(changes.composer_controls);
-    assert!(!changes.attachments);
-    assert!(!changes.sources);
+    assert_eq!(
+        chosen.composer.draft.attachments,
+        attached.composer.draft.attachments
+    );
+    assert!(Arc::ptr_eq(
+        &chosen.conversation.as_ref().unwrap().source_paths,
+        &attached.conversation.as_ref().unwrap().source_paths,
+    ));
     let file = Arc::new(crate::models::Item::new(
         "file".into(),
         Default::default(),
@@ -284,8 +302,10 @@ fn draft_attachments_model_controls_and_transcript_sources_have_distinct_subject
         ..Default::default()
     })]);
     let sourced = Presentation::project(Arc::new(state), Some(&chosen));
-    let changes = sourced.changes(chosen);
-    assert!(changes.sources);
+    assert!(!Arc::ptr_eq(
+        &sourced.conversation.as_ref().unwrap().source_paths,
+        &chosen.conversation.as_ref().unwrap().source_paths,
+    ));
     assert_eq!(
         sourced
             .conversation

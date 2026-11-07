@@ -981,7 +981,10 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         );
         assert_eq!(*state.input.drafts[&DraftKey::from("saved")], draft);
         assert_eq!(
-            state.model_error_messages(None),
+            agent_core::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                state.clone()
+            ))
+            .model_error_messages(None),
             if failed {
                 vec!["codex: offline"]
             } else {

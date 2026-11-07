@@ -89,14 +89,18 @@ mod tests {
         }
         .apply(&mut snapshot, catalog());
         assert!(
-            snapshot
-                .models_matching(Some(ProviderKind::Codex), String::new())
-                .is_empty()
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .models_matching(Some(ProviderKind::Codex), String::new())
+            .is_empty()
         );
         assert!(
-            snapshot
-                .custom_model_choice(Some(ProviderKind::Codex), "custom")
-                .is_none()
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .custom_model_choice(Some(ProviderKind::Codex), "custom")
+            .is_none()
         );
         let setup = snapshot.connection_setup();
         let codex = setup
@@ -121,9 +125,11 @@ mod tests {
         }
         .apply(&mut snapshot, catalog());
         assert_eq!(
-            snapshot
-                .models_matching(Some(ProviderKind::Codex), String::new())
-                .len(),
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .models_matching(Some(ProviderKind::Codex), String::new())
+            .len(),
             1
         );
     }

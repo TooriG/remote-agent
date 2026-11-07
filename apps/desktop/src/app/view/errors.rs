@@ -27,7 +27,29 @@ pub(in crate::app) fn error_view(
 pub(in crate::app) struct ErrorRow {
     pub(in crate::app) notice: ErrorNotice,
     /// Raised by this window rather than the Store.
-    pub(in crate::app) local: bool,
+    pub(in crate::app) local: Option<uuid::Uuid>,
+}
+
+pub(in crate::app) struct LocalNotice {
+    id: uuid::Uuid,
+    message: String,
+    pub(in crate::app) lifetime: NoticeLifetime,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(in crate::app) enum NoticeLifetime {
+    Connection,
+    Window,
+}
+
+impl LocalNotice {
+    pub(in crate::app) fn new(message: String, lifetime: NoticeLifetime) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            message,
+            lifetime,
+        }
+    }
 }
 
 impl Desktop {
@@ -44,7 +66,34 @@ impl Desktop {
     }
 
     pub(in crate::app) fn error_rows(&self, scope: &ErrorScope) -> Vec<ErrorRow> {
-        error_rows(&self.snapshot, &self.local_errors, scope)
+        let mut rows: Vec<_> = self
+            .snapshot
+            .error_notices(scope.clone())
+            .into_iter()
+            .map(|notice| ErrorRow {
+                notice,
+                local: None,
+            })
+            .collect();
+        if let Some(notice) = self.local_errors.get(scope) {
+            rows.push(local_error_row(scope, notice));
+        }
+        rows
+    }
+
+    pub(in crate::app) fn raise_notice(&mut self, scope: ErrorScope, message: String) {
+        self.local_errors
+            .insert(scope, LocalNotice::new(message, NoticeLifetime::Connection));
+    }
+
+    pub(in crate::app) fn dismiss_notice(&mut self, scope: &ErrorScope, id: uuid::Uuid) {
+        if self
+            .local_errors
+            .get(scope)
+            .is_some_and(|notice| notice.id == id)
+        {
+            self.local_errors.remove(scope);
+        }
     }
 
     pub(super) fn error_notices(&self, scope: ErrorScope, cx: &Context<Self>) -> Div {
@@ -96,12 +145,7 @@ impl Desktop {
         match action {
             NoticeAction::Dispatch(intent) => self.dispatch(intent),
             NoticeAction::Reconnect => self.switch_host(self.remote.clone(), window, cx),
-            NoticeAction::DismissLocal(scope, op::ErrorId::Application { message }) => {
-                if self.local_errors.get(&scope) == Some(&message) {
-                    self.local_errors.remove(&scope);
-                }
-            }
-            NoticeAction::DismissLocal(_, _) => {}
+            NoticeAction::DismissLocal(scope, id) => self.dismiss_notice(&scope, id),
         }
     }
 }
@@ -110,7 +154,7 @@ impl Desktop {
 pub(in crate::app) enum NoticeAction {
     Dispatch(Intent),
     Reconnect,
-    DismissLocal(ErrorScope, op::ErrorId),
+    DismissLocal(ErrorScope, uuid::Uuid),
 }
 
 /// `reconnect` offers to reconnect, disabled while connecting.
@@ -214,11 +258,8 @@ pub(in crate::app) fn error_list<V: 'static>(
                         language.text("エラーを閉じる"),
                         cx,
                         move |view, window, cx| {
-                            let notice = if local {
-                                NoticeAction::DismissLocal(
-                                    dismiss_target.clone(),
-                                    dismissed.clone(),
-                                )
+                            let notice = if let Some(id) = local {
+                                NoticeAction::DismissLocal(dismiss_target.clone(), id)
                             } else {
                                 NoticeAction::Dispatch(Intent::DismissError {
                                     id: dismissed.clone(),
@@ -235,43 +276,28 @@ pub(in crate::app) fn error_list<V: 'static>(
         }))
 }
 
-pub(in crate::app) fn error_rows(
-    snapshot: &Snapshot,
-    local_errors: &BTreeMap<ErrorScope, String>,
-    scope: &ErrorScope,
-) -> Vec<ErrorRow> {
-    let mut rows: Vec<_> = snapshot
-        .error_notices(scope.clone())
-        .into_iter()
-        .map(|notice| ErrorRow {
-            notice,
-            local: false,
-        })
-        .collect();
-    if let Some(message) = local_errors.get(scope) {
-        rows.push(local_error_row(scope, message));
-    }
-    rows
-}
-
-pub(in crate::app) fn local_error_row(scope: &ErrorScope, message: &str) -> ErrorRow {
+fn local_error_row(scope: &ErrorScope, notice: &LocalNotice) -> ErrorRow {
+    let message = &notice.message;
     ErrorRow {
         notice: ErrorNotice {
             id: op::ErrorId::Application {
-                message: message.into(),
+                message: message.clone(),
             },
             context: scope.label().into(),
             title: "操作に失敗しました".into(),
             text: agent_core::presentation::error::error_text(message),
             recovery_label: None,
         },
-        local: true,
+        local: Some(notice.id),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Arc, Desktop, DraftKey, ErrorScope, Mode, Runtime, appearance, platform};
+    use super::{
+        Arc, Desktop, DraftKey, ErrorScope, LocalNotice, Mode, NoticeLifetime, Runtime, appearance,
+        platform,
+    };
     use gpui_kit as gpui;
     use gpui_kit::{Modifiers, TestAppContext, px, size};
 
@@ -310,18 +336,45 @@ mod tests {
         let desktop = handle.unwrap();
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
+                view.raise_notice(ErrorScope::Settings, "repeated".into());
+                let old_id = view.error_rows(&ErrorScope::Settings)[0].local.unwrap();
+                view.raise_notice(ErrorScope::Settings, "repeated".into());
+                let latest = view.error_rows(&ErrorScope::Settings)[0].local.unwrap();
+                assert_ne!(old_id, latest);
+                view.dismiss_notice(&ErrorScope::Settings, old_id);
+                assert_eq!(
+                    view.error_rows(&ErrorScope::Settings)[0].local,
+                    Some(latest)
+                );
+                view.dismiss_notice(&ErrorScope::Projects, latest);
+                assert!(!view.error_rows(&ErrorScope::Settings).is_empty());
+                view.dismiss_notice(&ErrorScope::Settings, latest);
+                assert!(view.error_rows(&ErrorScope::Settings).is_empty());
+                let device_notice =
+                    LocalNotice::new("language save failed".into(), NoticeLifetime::Window);
+                let device_id = device_notice.id;
+                view.local_errors
+                    .insert(ErrorScope::Settings, device_notice);
+                view.raise_notice(ErrorScope::Projects, "pairing failed".into());
+                view.connect(None, None);
+                assert_eq!(
+                    view.error_rows(&ErrorScope::Settings)[0].local,
+                    Some(device_id)
+                );
+                assert!(view.error_rows(&ErrorScope::Projects).is_empty());
+                view.dismiss_notice(&ErrorScope::Settings, device_id);
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
                     first.clone();
-                view.local_errors
-                    .insert(ErrorScope::Application, "draft persistence failed".into());
-                view.local_errors.insert(
+                view.raise_notice(ErrorScope::Application, "draft persistence failed".into());
+                view.raise_notice(
                     ErrorScope::Conversation {
                         draft_key: first.clone(),
                     },
                     "attachment failed".into(),
                 );
+                view.project_fixture();
                 cx.notify();
             })
         });
@@ -336,6 +389,7 @@ mod tests {
                         &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
                     )
                     .draft_key = key.clone();
+                    view.project_fixture();
                     cx.notify();
                 })
             });

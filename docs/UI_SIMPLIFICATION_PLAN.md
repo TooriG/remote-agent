@@ -20,26 +20,6 @@
 - ドッキング表示の設定と一時的な details popover は別の事実として保持する。画面幅の変更で一方の設定を失わない。
 - 接続前・接続失敗時にも設定と言語・エラー表示を利用できる。複数ウィンドウ・複数 Host の設定更新を失わない。
 
-## 段階 1: 表示モデルの入力と所有者を揃える
-
-対象: `apps/desktop/src/app.rs`、`app/preferences.rs`、`app/connections.rs`、`app/view/` と `crates/agent-core/src/presentation/`。
-
-1. desktop の各 Model が参照する値を調べ、共通判断と native ローカル値を分ける。共通判断は既存の `SettingsPresentation`、`ComposerPresentation`、会話 context などへ追加し、呼び出し側の計算を同じ変更で削除する。並行する独自の presentation 層は増やさない。追加する入力は投影の再利用判定にも反映する。現在の `SettingsPresentation::project` の早期 return は workspace 設定・worktrees・cwd を見ないため、これらを移す際は条件とテストも同時に更新する。
-2. `Preferences` の呼び出し側を presentation に移した後で `snapshot` と `DisplayInputs` を削除する。単に Snapshot の複製フィールドへ置き換えない。設定完了と publication の前後関係を検証してから `sync_from_pane` の独自読み直しをなくす。再接続は、渡す presentation に含めた connection epoch と既存の bound pane の同一性から判定する。削除前と同様に polling / saving / removing / save_pending をリセットし、古い完了を拒否する。これは段階 6 まで延期しない。
-3. `connection_list` / `connection_names` / `connected_hosts` は既存の `Hosts` を入力として sidebar に渡し、Desktop の再構築用状態を除く。合成した一覧の不要な再計算も避ける。
-4. `busy` の使用箇所を操作単位で置き換える。core が知る操作は受付中・待機中・実行中を含む既存状態から導く。OS ダイアログや複数操作にまたがる native ワークフローはローカルで所有し、汎用の二重カウンターを残さない。
-5. core の操作エラーは引き続き core が所有し、OS 操作や接続準備など native のローカル失敗はウィンドウの通知所有者に集める。`Preferences` の別保存と `window_error` の再合流をなくし、通知の発生をウィンドウへ渡す。共通の ErrorNotice を使って描画し、発生元・Host / ペイン / 画面の scope・通知 ID から適切な所有者へ dismiss を返す。native の失敗を Store に入れるだけの Intent は追加しない。接続前にも表示でき、同じ文面や遅れた dismiss で別の通知を消さないようにし、ペイン閉鎖など対応する scope の終了時に破棄する。
-
-publish ゲートもこの段階で見直す。純粋な Model の再構築が安価なら `PartialEq` に任せ、重い共通投影は core の Arc を再利用する。`publish_views` には `sync_surfaces` など資源操作も含まれるので、無条件呼び出しで監視・接続・録音停止などの副作用が繰り返されないことを確認する。不要なゲートと、その利用者がなくなった変更フラグを削除する。
-
-受け入れ:
-
-- 各 Model の共通判断に実装が一つだけあり、snapshot と presentation の両方を参照する過渡実装を残さない。
-- 入力・ストリーミング時の描画・通知の検査を維持し、重い投影の再利用は core の `RenderedConversation` と表示行の `Arc::ptr_eq`、必要な行だけの再構築・再計測で検証する。単なるモデル受け渡し回数と区別する。
-- presentation に追加した入力ごとに、他の入力を固定してその値だけを変えるテストを用意する。workspace 設定・worktrees・cwd の単独変更を取りこぼさず、無関係な更新では元の Arc を再利用する。
-- 同じ Pane で再接続が起きた場合も、アカウント polling 中・worktree 保存中のフラグが戻り、再接続前の完了が状態を変更しない。
-- 接続失敗、ローカル操作失敗、遅れた dismiss、操作の連打、設定更新失敗と再試行が既存どおり動く。
-
 ## 段階 2: 会話の表示行を共通化する
 
 対象: core の `presentation/conversation.rs`、desktop の `timeline.rs`、Android の `ConversationProjection` / 会話画面、iOS の `ConversationHistory` / `ConversationPresentation` / `ConversationItem`。

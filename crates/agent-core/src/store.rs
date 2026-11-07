@@ -2859,7 +2859,12 @@ mod model_reconnection_tests {
             },
         );
         assert_eq!(
-            next.models_matching(None, "6.1".into())[0].model.id,
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                next.clone()
+            ))
+            .models_matching(None, "6.1".into())[0]
+                .model
+                .id,
             "gpt-6.1-sol"
         );
     }

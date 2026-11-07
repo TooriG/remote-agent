@@ -23,7 +23,6 @@ pub(super) enum HostEvent {
     Selected(Option<RemoteHost>),
     Enabled(Option<RemoteHost>, bool),
     Removed(String),
-    ListsChanged,
     Failed(String),
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -70,6 +69,12 @@ pub(super) struct Hosts {
     wsl_hosts: std::collections::BTreeMap<String, RemoteHost>,
     connected: std::collections::BTreeSet<String>,
     lists: std::collections::BTreeMap<String, Arc<agent_core::presentation::list::ThreadList>>,
+    list_cache: std::cell::RefCell<
+        std::collections::HashMap<
+            Option<String>,
+            Option<Arc<agent_core::presentation::list::ThreadList>>,
+        >,
+    >,
     background: std::collections::BTreeMap<String, StoreSession>,
     opening: std::collections::BTreeSet<String>,
     error: Option<String>,
@@ -111,6 +116,7 @@ impl Hosts {
             wsl_distros: Vec::new(),
             wsl_hosts: Default::default(),
             lists: Default::default(),
+            list_cache: Default::default(),
             connected: Default::default(),
             background: Default::default(),
             opening: Default::default(),
@@ -277,9 +283,7 @@ impl Hosts {
                 } else {
                     self.connected.remove(&host)
                 };
-                if self.set_list(host, list) || changed {
-                    cx.emit(HostEvent::ListsChanged);
-                } else {
+                if !self.set_list(host, list) && !changed {
                     return;
                 }
             }
@@ -342,7 +346,6 @@ impl Hosts {
         }
         if refresh_hosts {
             self.open_backgrounds();
-            cx.emit(HostEvent::ListsChanged);
         }
         cx.notify();
     }
@@ -412,10 +415,9 @@ impl Hosts {
                 }
                 Action::Remove(id) => {
                     self.background.remove(&id);
-                    self.lists.remove(&id);
+                    self.set_list(id.clone(), None);
                     self.connected.remove(&id);
                     self.opening.remove(&id);
-                    cx.emit(HostEvent::ListsChanged);
                     cx.emit(HostEvent::Removed(id));
                 }
                 Action::None => {}
@@ -436,6 +438,7 @@ impl Hosts {
         } else {
             self.lists.remove(&host);
         }
+        self.list_cache.get_mut().clear();
         true
     }
 
@@ -499,13 +502,20 @@ impl Hosts {
     pub(super) fn thread_list(
         &self,
         host: Option<&str>,
-    ) -> Option<agent_core::presentation::list::ThreadList> {
-        agent_core::presentation::connection_list::combine_connection_lists(
-            self.lists
-                .iter()
-                .filter(|(id, _)| host.is_none_or(|host| host == id.as_str()))
-                .map(|(id, list)| (id.clone(), list.as_ref().clone())),
-        )
+    ) -> Option<Arc<agent_core::presentation::list::ThreadList>> {
+        self.list_cache
+            .borrow_mut()
+            .entry(host.map(str::to_owned))
+            .or_insert_with(|| {
+                agent_core::presentation::connection_list::combine_connection_lists(
+                    self.lists
+                        .iter()
+                        .filter(|(id, _)| host.is_none_or(|host| host == id.as_str()))
+                        .map(|(id, list)| (id.clone(), list.as_ref().clone())),
+                )
+                .map(Arc::new)
+            })
+            .clone()
     }
 
     fn pair(&mut self, invitation: Invitation) {
@@ -891,6 +901,80 @@ impl Hosts {
                 }
                 menu
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    #[gpui::test]
+    fn combined_lists_reuse_sources_and_invalidate_on_replacement_or_removal(
+        cx: &mut TestAppContext,
+    ) {
+        // Leave discovery on the unpolled runtime; this test owns the list inputs.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                sessions: Default::default(),
+                connections: Default::default(),
+                closing: Default::default(),
+                logging_error: None,
+            });
+        });
+        let (hosts, window) = cx.add_window_view(Hosts::new);
+        window.update(|_, cx| {
+            hosts.update(cx, |hosts, _| {
+                let list = |notice: &str| {
+                    Arc::new(agent_core::presentation::list::ThreadList {
+                        loading_projects: false,
+                        loading_chats: false,
+                        notice: Some(notice.into()),
+                        threads: Vec::new(),
+                        projects: Vec::new(),
+                        hidden_projects: Vec::new(),
+                        has_more: false,
+                        has_more_projects: false,
+                    })
+                };
+                assert!(hosts.thread_list(None).is_none());
+                let first = list("first");
+                assert!(hosts.set_list("a".into(), Some(first.clone())));
+                assert!(hosts.set_list("b".into(), Some(list("second"))));
+                let combined = hosts.thread_list(None).unwrap();
+                let selected = hosts.thread_list(Some("a")).unwrap();
+                assert_eq!(combined.notice.as_deref(), Some("first\nsecond"));
+                assert_eq!(selected.notice.as_deref(), Some("first"));
+                assert!(Arc::ptr_eq(&combined, &hosts.thread_list(None).unwrap()));
+                assert!(Arc::ptr_eq(
+                    &selected,
+                    &hosts.thread_list(Some("a")).unwrap()
+                ));
+                assert!(!hosts.set_list("a".into(), Some(first)));
+                assert!(Arc::ptr_eq(&combined, &hosts.thread_list(None).unwrap()));
+                assert!(hosts.set_list("a".into(), Some(list("updated"))));
+                assert_eq!(
+                    hosts.thread_list(Some("a")).unwrap().notice.as_deref(),
+                    Some("updated")
+                );
+                assert_eq!(
+                    hosts.thread_list(None).unwrap().notice.as_deref(),
+                    Some("updated\nsecond")
+                );
+                assert!(hosts.set_list("a".into(), None));
+                assert!(hosts.thread_list(Some("a")).is_none());
+                assert_eq!(
+                    hosts.thread_list(None).unwrap().notice.as_deref(),
+                    Some("second")
+                );
+            })
+        });
     }
 }
 impl Render for Hosts {

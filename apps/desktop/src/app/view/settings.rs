@@ -7,14 +7,13 @@ impl Preferences {
     fn provider_settings(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let selected = self.account_provider();
-        let disabled = !self.snapshot.connection.connected
-            || self.account.busy
-            || self.snapshot.catalog.account.login.is_some();
+        let disabled =
+            !self.metadata.connected() || self.account.busy || self.metadata.login.is_some();
         let mut providers = settings_group()
             .w(px(250.))
             .flex_shrink_0()
             .overflow_hidden();
-        for provider in self.snapshot.connection_setup().agents {
+        for provider in self.metadata.connection_setup().agents {
             let id = provider.provider;
             let name = provider.name.clone();
             providers = providers.child(
@@ -85,7 +84,7 @@ impl Preferences {
                             .checked(provider.enabled)
                             .disabled(
                                 disabled
-                                    || self.snapshot.catalog.provider_settings.is_none()
+                                    || !self.metadata.provider_settings_loaded()
                                     || self.metadata.provider_settings_busy(),
                             )
                             .on_click(cx.listener(move |view, enabled, _, cx| {
@@ -114,7 +113,7 @@ impl Preferences {
                     )
                     .icon(IconName::Redo)
                     .ghost()
-                    .disabled(!self.snapshot.connection.connected),
+                    .disabled(!self.metadata.connected()),
                 ),
             )
             .child(
@@ -128,7 +127,7 @@ impl Preferences {
     }
 
     pub(super) fn close_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.snapshot.catalog.account.login.is_some() || self.account.busy {
+        if self.metadata.login.is_some() || self.account.busy {
             return;
         }
         self.opened = false;
@@ -241,7 +240,7 @@ impl Preferences {
             SettingsPage::Connections => self.connection_settings(cx),
             SettingsPage::Worktrees => self.worktree_settings(cx),
         };
-        let errors = self.settings_errors();
+        let errors = &self.notices;
         let header = if self.settings_page == SettingsPage::General {
             h_flex()
                 .debug_selector(|| "settings-general-breadcrumb".into())
@@ -278,9 +277,7 @@ impl Preferences {
                             |view, window, cx| view.close_settings(window, cx),
                         )
                         .debug_selector(|| "settings-close".into())
-                        .disabled(
-                            self.snapshot.catalog.account.login.is_some() || self.account.busy,
-                        ),
+                        .disabled(self.metadata.login.is_some() || self.account.busy),
                     )
                     .border_b_1()
                     .border_color(rgb(appearance::BORDER)),
@@ -341,10 +338,10 @@ impl Preferences {
                 self.remote
                     .as_ref()
                     .map_or("Local", |host| host.name.as_str()),
-                self.busy > 0
+                self.blocked
                     || self.worktrees.dirty
                     || self.worktrees.saving
-                    || self.snapshot.catalog.account.login.is_some(),
+                    || self.metadata.login.is_some(),
                 cx,
             )
             .into_any_element()
@@ -373,7 +370,7 @@ impl Preferences {
             .child(
                 div()
                     .text_color(rgb(appearance::MUTED))
-                    .child(language.text(if self.snapshot.connection.connected {
+                    .child(language.text(if self.metadata.connected() {
                         "接続済み"
                     } else {
                         "未接続"
@@ -389,8 +386,8 @@ impl Preferences {
             .child(
                 settings_group()
                     .p_5()
-                    .child(language_settings(cx, |view, error| {
-                        view.local_errors.insert(ErrorScope::Settings, error);
+                    .child(language_settings(cx, |_, error, cx| {
+                        cx.emit(super::super::preferences::PreferencesEvent::Failed(error));
                     })),
             )
             .when_some(self.app_updates.as_ref(), |body, updates| {
@@ -413,7 +410,7 @@ impl Preferences {
 
     fn connection_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let setup = self.snapshot.connection_setup();
+        let setup = self.metadata.connection_setup();
         let agent_controls = self.connection_agent_controls(&setup.agents, cx);
         let header = h_flex()
             .flex_wrap()
@@ -437,7 +434,7 @@ impl Preferences {
                 .outline()
                 .h(px(32.))
                 .debug_selector(|| "settings-import-projects".into())
-                .disabled(!self.snapshot.connection.connected),
+                .disabled(!self.metadata.connected()),
             );
         v_flex()
             .gap_8()
@@ -449,7 +446,7 @@ impl Preferences {
                         .child(view.connection_choices(
                             ConnectionLayout::Settings,
                             self.remote.as_ref().map(|host| host.id.as_str()),
-                            self.snapshot.connection.connected,
+                            self.metadata.connected(),
                             self.metadata.connection_enabled(),
                             agent_controls,
                             cx,
@@ -462,10 +459,9 @@ impl Preferences {
 
     fn worktree_settings(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let disabled = !self.snapshot.connection.connected
-            || self.snapshot.files.workspace.settings.is_none()
-            || self.busy > 0;
-        let settings = self.snapshot.files.workspace.settings.as_ref();
+        let disabled =
+            !self.metadata.connected() || self.metadata.worktree_settings.is_none() || self.blocked;
+        let settings = self.metadata.worktree_settings.as_ref();
         let body = v_flex()
             .gap_8()
             .child(settings_group().p_5().child(self.worktree_scope(cx)));
@@ -577,7 +573,7 @@ impl Preferences {
 
     fn project_worktree_cleanup(&self, project: String, disabled: bool, cx: &Context<Self>) -> Div {
         let language = crate::localization::language(cx);
-        let settings = self.snapshot.files.workspace.settings.as_deref();
+        let settings = self.metadata.worktree_settings.as_deref();
         let current =
             settings.and_then(|settings| settings.project_delete_unchanged.get(&project).copied());
         let shared = settings.is_some_and(|settings| settings.delete_unchanged);
@@ -658,10 +654,10 @@ impl Preferences {
                             s.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
                         },
                     )
-                    .disabled(!self.snapshot.connection.connected || self.worktrees.removing),
+                    .disabled(!self.metadata.connected() || self.worktrees.removing),
                 ),
         );
-        let Some(worktrees) = &self.snapshot.files.workspace.worktrees else {
+        let Some(worktrees) = &self.metadata.worktrees else {
             return body
                 .child(language.text("一覧を読み込み中…"))
                 .into_any_element();
@@ -677,7 +673,7 @@ impl Preferences {
         }
         for (index, worktree) in worktrees.iter().enumerate() {
             let path = worktree.path.clone();
-            let current = Path::new(&self.snapshot.pane.navigation.cwd).starts_with(&worktree.path);
+            let current = self.metadata.worktree_is_current(&worktree.path);
             let reason = worktree
                 .blocked_reason
                 .as_deref()
@@ -710,7 +706,7 @@ impl Preferences {
                             .outline()
                             .disabled(
                                 reason.is_some()
-                                    || !self.snapshot.connection.connected
+                                    || !self.metadata.connected()
                                     || self.worktrees.removing,
                             ),
                         ),
@@ -743,7 +739,7 @@ impl Preferences {
                         },
                     )
                     .icon(IconName::FileText)
-                    .disabled(!self.snapshot.connection.connected || self.worktrees.removing),
+                    .disabled(!self.metadata.connected() || self.worktrees.removing),
                 );
             }
             if let Some(reason) = reason {
@@ -760,7 +756,7 @@ impl Preferences {
                     .child(h_flex().gap_2()
                         .child(button(format!("cancel-remove-worktree-{index}"), language.text("取消"), cx, |s, _, _| s.worktrees.removal = None).disabled(self.worktrees.removing))
                         .child(button(format!("confirm-remove-worktree-{index}"), language.text("ワークツリーを削除"), cx, move |s, _, _| s.remove_worktree(path.clone()))
-                            .disabled(reason.is_some() || !self.snapshot.connection.connected || self.worktrees.removing)));
+                            .disabled(reason.is_some() || !self.metadata.connected() || self.worktrees.removing)));
             }
             body = body.child(entry);
         }
@@ -768,7 +764,7 @@ impl Preferences {
     }
 
     fn remove_worktree(&mut self, path: String) {
-        if self.worktrees.removing || !self.snapshot.connection.connected {
+        if self.worktrees.removing || !self.metadata.connected() {
             return;
         }
         self.worktrees.removing = true;
@@ -876,7 +872,10 @@ impl Desktop {
     }
 }
 
-pub(super) fn language_settings<V: 'static>(cx: &Context<V>, failed: fn(&mut V, String)) -> Div {
+pub(super) fn language_settings<V: 'static>(
+    cx: &Context<V>,
+    failed: fn(&mut V, String, &mut Context<V>),
+) -> Div {
     use agent_core::localization::UiLanguage;
     let language = crate::localization::language(cx);
     let owner = cx.entity().downgrade();
@@ -922,7 +921,7 @@ pub(super) fn language_settings<V: 'static>(cx: &Context<V>, failed: fn(&mut V, 
                                 .on_click(move |_, _, cx| {
                                     let _ = owner.update(cx, |view, cx| {
                                         if let Err(error) = crate::localization::select(value, cx) {
-                                            failed(view, error);
+                                            failed(view, error, cx);
                                         }
                                         cx.notify();
                                     });

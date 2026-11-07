@@ -152,42 +152,6 @@ impl Desktop {
             }
         }
         self.save_connection_selection();
-        self.rebuild_connection_list(cx);
-    }
-
-    pub(super) fn rebuild_connection_list(&mut self, cx: &mut Context<Self>) {
-        self.connected_hosts = self
-            .hosts
-            .as_ref()
-            .map(|hosts| hosts.read(cx).connected_hosts())
-            .unwrap_or_default();
-        self.connection_names = vec![(
-            "local".into(),
-            self.runtime
-                .sessions
-                .store(None)
-                .and_then(|store| store.snapshot().connection.host_name.clone())
-                .unwrap_or_else(|| "このPC".into()),
-        )];
-        if let Some(hosts) = &self.hosts {
-            self.connection_names.extend(
-                hosts
-                    .read(cx)
-                    .choices()
-                    .into_iter()
-                    .map(|host| (host.id, host.name)),
-            );
-        }
-        self.connection_list = self.hosts.as_ref().and_then(|hosts| {
-            hosts
-                .read(cx)
-                .thread_list(if self.connection_selection.all {
-                    None
-                } else {
-                    self.connection_selection.host_id.as_deref()
-                })
-                .map(Arc::new)
-        });
         cx.notify();
     }
 

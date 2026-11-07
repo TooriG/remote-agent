@@ -76,28 +76,39 @@ fn explicit_codex_model_survives_selection_and_catalog_refresh() {
         id: "gpt-6.1-sol".into(),
     };
     assert_eq!(
-        snapshot.custom_model_choice(Some(ProviderKind::Codex), " gpt-6.1-sol "),
+        crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+            snapshot.clone()
+        ))
+        .custom_model_choice(Some(ProviderKind::Codex), " gpt-6.1-sol "),
         Some(model.clone())
     );
     assert!(
-        snapshot
-            .custom_model_choice(Some(ProviderKind::Claude), "gpt-6.1-sol")
-            .is_none()
+        crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+            snapshot.clone()
+        ))
+        .custom_model_choice(Some(ProviderKind::Claude), "gpt-6.1-sol")
+        .is_none()
     );
     assert!(
-        snapshot
-            .custom_model_choice(Some(ProviderKind::Codex), " ")
-            .is_none()
+        crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+            snapshot.clone()
+        ))
+        .custom_model_choice(Some(ProviderKind::Codex), " ")
+        .is_none()
     );
     assert!(
-        snapshot
-            .custom_model_choice(Some(ProviderKind::Codex), "two words")
-            .is_none()
+        crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+            snapshot.clone()
+        ))
+        .custom_model_choice(Some(ProviderKind::Codex), "two words")
+        .is_none()
     );
     assert!(
-        snapshot
-            .custom_model_choice(Some(ProviderKind::Codex), "shared")
-            .is_none()
+        crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+            snapshot.clone()
+        ))
+        .custom_model_choice(Some(ProviderKind::Codex), "shared")
+        .is_none()
     );
     let selected = apply(
         &snapshot,
@@ -141,9 +152,11 @@ fn chatgpt_catalog_repairs_unavailable_saved_model_but_api_keeps_explicit_ids() 
             id: "gpt-6.1-sol".into(),
         };
         assert_eq!(
-            snapshot
-                .custom_model_choice(Some(ProviderKind::Codex), "gpt-6.1-sol")
-                .is_some(),
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .custom_model_choice(Some(ProviderKind::Codex), "gpt-6.1-sol")
+            .is_some(),
             plan == "API key"
         );
         snapshot = apply(

@@ -956,7 +956,7 @@ mod file_panel_tests {
                     );
                     assert!(view.media.read(cx).gallery.is_none());
                     assert_eq!(
-                        view.busy, 0,
+                        view.local_busy, 0,
                         "{name} must not start an implicit download or OS launch"
                     );
                     assert_eq!(
@@ -1109,7 +1109,7 @@ mod file_panel_tests {
                         view.composer.input.read(cx).value().as_ref(),
                         "Keep this draft"
                     );
-                    assert_eq!(view.busy, 0, "local files do not require downloading");
+                    assert_eq!(view.local_busy, 0, "local files do not require downloading");
                 })
             });
             assert_eq!(

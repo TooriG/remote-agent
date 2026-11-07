@@ -20,7 +20,7 @@ use agent_core::{
 };
 use agent_protocol::{
     ids::{ItemId, RequestId, TurnId},
-    models::{Item, Model, RemoteHost, Thread, Turn},
+    models::{Item, RemoteHost, Thread, Turn},
     requests::Answer,
     session::SessionRef,
 };
@@ -59,7 +59,7 @@ struct ProjectEditor {
 
 enum OperationCompletion {
     ProjectImport,
-    Busy,
+    Local,
     Composer(u64),
     Answer(u64),
     Editor(u64),
@@ -157,9 +157,6 @@ pub(crate) struct Desktop {
     local_shell: bool,
     remote: Option<RemoteHost>,
     connection_selection: agent_core::presentation::connection_list::ConnectionSelection,
-    connection_list: Option<Arc<agent_core::presentation::list::ThreadList>>,
-    connection_names: Vec<(String, String)>,
-    connected_hosts: std::collections::BTreeSet<String>,
     hosts: Option<Entity<Hosts>>,
     app_updates: Option<Entity<crate::updates::Updates>>,
     side_chat_mode: bool,
@@ -167,8 +164,10 @@ pub(crate) struct Desktop {
     onboarding: bool,
     import_projects: bool,
     pending_project: Option<(Option<String>, String)>,
-    busy: usize,
-    local_errors: BTreeMap<ErrorScope, String>,
+    // Pane-owned workflows can include native work and shared Host operations;
+    // resource operation keys alone do not identify their initiating pane.
+    local_busy: usize,
+    local_errors: BTreeMap<ErrorScope, view::errors::LocalNotice>,
     composer: forms::ComposerInput,
     question: forms::QuestionInput,
     selection: Entity<selection::ConversationSelection>,
@@ -204,9 +203,12 @@ pub(crate) struct Desktop {
     _subscriptions: Vec<Subscription>,
 }
 impl Desktop {
+    fn busy(&self) -> bool {
+        self.local_busy > 0 || self.publication.composer.controls.sending
+    }
     fn set_error(&mut self, error: String) {
         tracing::error!(target: "agent", operation = "desktop", message = %error);
-        self.local_errors.insert(self.local_error_scope(), error);
+        self.raise_notice(self.local_error_scope(), error);
     }
     pub(crate) fn new(mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let language = crate::localization::language(cx);
@@ -313,8 +315,24 @@ impl Desktop {
             cx.subscribe_in(
                 &preferences,
                 window,
-                |view, _, event: &preferences::PreferencesEvent, window, cx| {
+                |view, preferences, event: &preferences::PreferencesEvent, window, cx| {
                     match event {
+                        preferences::PreferencesEvent::Completed {
+                            epoch,
+                            completion,
+                            result,
+                        } => {
+                            // A receipt can overtake the frame-coalesced publication.
+                            // Adopt once at the owner before completing the native form.
+                            let changed = view.accept_snapshot(window, cx);
+                            preferences.update(cx, |preferences, cx| {
+                                preferences.completed(*epoch, *completion, result.clone(), cx);
+                            });
+                            if changed {
+                                cx.notify();
+                            }
+                            return;
+                        }
                         preferences::PreferencesEvent::Closed => {
                             view.tab = Tab::Chat;
                             view.composer
@@ -332,6 +350,15 @@ impl Desktop {
                         }
                         preferences::PreferencesEvent::Notice(action) => {
                             view.notice_action(action.clone(), window, cx)
+                        }
+                        preferences::PreferencesEvent::Failed(message) => {
+                            view.local_errors.insert(
+                                ErrorScope::Settings,
+                                view::errors::LocalNotice::new(
+                                    message.clone(),
+                                    view::errors::NoticeLifetime::Window,
+                                ),
+                            );
                         }
                     }
                     cx.notify();
@@ -379,7 +406,7 @@ impl Desktop {
                     match action {
                         NewChat(cwd) => view.new_chat(cwd.clone(), window, cx),
                         PickFolder => view.pick_folder(),
-                        Send => view.send(cx),
+                        Send => view.send(window, cx),
                         Attach => view.attach(),
                         StartDictation => view.start_dictation(),
                         CancelDictation => view.cancel_recording(),
@@ -512,7 +539,6 @@ impl Desktop {
                         HostEvent::Enabled(remote, enabled) => {
                             view.set_connection_enabled(remote.clone(), *enabled)
                         }
-                        HostEvent::ListsChanged => view.rebuild_connection_list(cx),
                         HostEvent::Failed(error) => view.set_error(error.clone()),
                         HostEvent::Removed(id) => {
                             let removed = view.runtime.sessions.remove(id);
@@ -552,9 +578,6 @@ impl Desktop {
                 host_id: Some("local".into()),
                 all: false,
             },
-            connection_list: None,
-            connected_hosts: Default::default(),
-            connection_names: vec![("local".into(), "このPC".into())],
             hosts,
             app_updates,
             side_chat_mode,
@@ -563,7 +586,7 @@ impl Desktop {
                 && !platform::state_dir()
                     .is_ok_and(|directory| directory.join("onboarding.completed").is_file()),
             import_projects: false,
-            busy: 0,
+            local_busy: 0,
             local_errors: BTreeMap::new(),
             composer,
             question,
@@ -601,7 +624,7 @@ impl Desktop {
             let sidebar = cx.new(|cx| {
                 view::SidebarView::new(
                     &desktop,
-                    view.sidebar_model(),
+                    view.sidebar_model(cx),
                     view.search.clone(),
                     view.app_updates.clone(),
                     view.session.as_ref().map(|s| s.pane.clone()),
@@ -641,12 +664,9 @@ impl Desktop {
                             }
                         }
                         view::SidebarAction::Refresh => view.refresh_threads(cx),
-                        view::SidebarAction::DismissLocal(op::ErrorId::Application { message })
-                            if view.local_errors.get(&ErrorScope::Projects) == Some(message) =>
-                        {
-                            view.local_errors.remove(&ErrorScope::Projects);
+                        view::SidebarAction::DismissLocal(id) => {
+                            view.dismiss_notice(&ErrorScope::Projects, *id);
                         }
-                        _ => {}
                     }
                     cx.notify();
                 },
@@ -677,10 +697,11 @@ impl Desktop {
         self.epoch += 1;
         self.connecting = true;
         self.local_shell = false;
-        self.busy = 0;
-        self.local_errors.clear();
+        self.local_busy = 0;
+        self.local_errors
+            .retain(|_, notice| notice.lifetime == view::errors::NoticeLifetime::Window);
         if let Some(error) = self.runtime.logging_error.clone() {
-            self.local_errors.insert(ErrorScope::Application, error);
+            self.raise_notice(ErrorScope::Application, error);
         }
         let epoch = self.epoch;
         let remote = self.remote.clone();
@@ -821,14 +842,13 @@ impl Desktop {
                 if let (Some(hosts), Some(remote)) = (&self.hosts, &self.remote) {
                     hosts.update(cx, |hosts, _| hosts.track_remote(remote));
                 }
-                self.rebuild_connection_list(cx);
             }
             Update::Connected(result) => {
                 self.connecting = false;
                 match result {
                     Ok((session, local_shell)) => self.connected(session, local_shell, window, cx),
                     Err(error) => {
-                        self.local_errors.insert(ErrorScope::Application, error);
+                        self.raise_notice(ErrorScope::Application, error);
                     }
                 }
             }
@@ -869,11 +889,11 @@ impl Desktop {
                 }
             }
             Update::LocalCompleted { scope, result } => {
-                self.busy = self.busy.saturating_sub(1);
+                self.local_busy = self.local_busy.saturating_sub(1);
                 match result {
                     Ok(()) => {}
                     Err(error) => {
-                        self.local_errors.insert(scope, error);
+                        self.raise_notice(scope, error);
                     }
                 }
                 self.accept_snapshot(window, cx);
@@ -886,7 +906,7 @@ impl Desktop {
                 self.complete_file_preview(generation, scope, result, cx);
             }
             Update::PersistenceError(error) => {
-                self.local_errors.insert(ErrorScope::Application, error);
+                self.raise_notice(ErrorScope::Application, error);
             }
             Update::OnboardingCompleted(result) => match result {
                 Ok(()) => {
@@ -896,7 +916,7 @@ impl Desktop {
                 Err(error) => self.set_error(error),
             },
             Update::Folder(result) => {
-                self.busy = self.busy.saturating_sub(1);
+                self.local_busy = self.local_busy.saturating_sub(1);
                 match result {
                     Ok(Some(platform::ProjectSelection { remote, cwd })) => {
                         self.add_selected_project(remote, cwd, window, cx);
@@ -943,8 +963,8 @@ impl Desktop {
             OperationCompletion::Composer(revision) => self.composer.text.saved(revision),
             OperationCompletion::Answer(revision) => self.question.text.saved(revision),
             OperationCompletion::Editor(revision) => self.editor.text.saved(revision),
-            OperationCompletion::Busy => {
-                self.busy = self.busy.saturating_sub(1);
+            OperationCompletion::Local => {
+                self.local_busy = self.local_busy.saturating_sub(1);
             }
             OperationCompletion::Item {
                 generation,
@@ -1002,12 +1022,10 @@ impl Desktop {
         let application_error_changed = self.snapshot.pane.error != snapshot.pane.error;
         self.publication = publication;
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
-        if let Some(request) = self
-            .snapshot
-            .permission_control(self.draft_key())
-            .load_request
-        {
-            self.dispatch(Intent::ReadPermissionSettings(request));
+        if let Some(provider) = self.publication.settings.permission.load_provider {
+            self.dispatch(Intent::ReadPermissionSettings(op::ReadPermissionSettings {
+                provider,
+            }));
         }
         if previous.pane.error != self.snapshot.pane.error
             && let Some(error) = &self.snapshot.pane.error
@@ -1068,7 +1086,7 @@ impl Desktop {
                 self.activate_surface(id, window, cx);
             }
         }
-        self.publish_presentation(changes, window, cx);
+        self.publish_views(window, cx);
         window_uses_snapshot && changes.changed
             || navigation_changed
             || connection_changed
@@ -1147,9 +1165,6 @@ impl Desktop {
             .drafts
             .get(self.draft_key())
             .map_or(&EMPTY, Arc::as_ref)
-    }
-    fn selected_model(&self) -> Option<&Model> {
-        selected_model(&self.snapshot.catalog.models, self.draft().model.as_ref())
     }
     fn remote_key(&self) -> &str {
         self.remote.as_ref().map_or("local", |remote| &remote.id)
@@ -1246,7 +1261,7 @@ impl Desktop {
         self.remote = remote;
         self.connection_selection.host_id = Some(self.connection_id());
         self.save_connection_selection();
-        self.rebuild_connection_list(cx);
+        cx.notify();
         self.snapshot = Arc::default();
         self.publication = agent_core::presentation::view::Presentation::empty();
         self.pending_quote = None;
@@ -1265,8 +1280,8 @@ impl Desktop {
             .update(cx, |input, cx| input.set_value(value, window, cx));
         self.connect(previous, None);
     }
-    fn send(&mut self, cx: &Context<Self>) {
-        if !self.snapshot.connection.connected || self.busy > 0 {
+    fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.snapshot.connection.connected || self.busy() {
             return;
         }
         if let Some(dictation) = &self.dictation {
@@ -1280,14 +1295,11 @@ impl Desktop {
         {
             return;
         }
-        self.busy += 1;
-        self.perform(
-            Intent::Submit {
-                thread_id: None,
-                client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
-            },
-            OperationCompletion::Busy,
-        );
+        self.dispatch(Intent::Submit {
+            thread_id: None,
+            client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
+        });
+        self.accept_snapshot(window, cx);
     }
     fn quote_selection(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.session.is_none() {
@@ -1324,7 +1336,7 @@ impl Desktop {
             "次の選択範囲について詳しく説明してください。\n\n{0}".into(),
             vec![text.to_string()],
         );
-        self.busy += 1;
+        self.local_busy += 1;
         self.effect(
             async move {
                 let Outcome::StartedThread { id } = store
@@ -1357,7 +1369,7 @@ impl Desktop {
                     .await
                     .map_err(|error| error.to_string())
             },
-            |result| Update::Completed(OperationCompletion::Busy, result),
+            |result| Update::Completed(OperationCompletion::Local, result),
         );
         cx.notify();
     }
@@ -1517,7 +1529,7 @@ impl Desktop {
         cx.notify();
     }
     fn pick_folder(&mut self) {
-        self.busy += 1;
+        self.local_busy += 1;
         let initial = self
             .remote
             .as_ref()
@@ -1631,18 +1643,19 @@ impl Desktop {
         action: &gpui_kit::component::input::Enter,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if !action.shift && !action.secondary && self.accept_completion(window, cx) {
             cx.stop_propagation();
-            return;
+            return false;
         }
         let submit = self.composer.input.update(cx, |input, cx| {
             composer_should_submit(input, action, window, cx)
         });
-        if submit && self.snapshot.connection.connected && self.busy == 0 {
+        if submit && self.snapshot.connection.connected && !self.busy() {
             cx.stop_propagation();
-            self.send(cx);
+            return true;
         }
+        false
     }
     fn paste_image(
         &mut self,
@@ -1661,7 +1674,7 @@ impl Desktop {
             return;
         }
         cx.stop_propagation();
-        if self.busy > 0 || self.dictation.is_some() {
+        if self.busy() || self.dictation.is_some() {
             return;
         }
         self.attach_sources(move || {
@@ -1686,7 +1699,7 @@ impl Desktop {
             return;
         };
         let key = self.draft_key().to_owned();
-        self.busy += 1;
+        self.local_busy += 1;
         let error_scope = ErrorScope::Conversation {
             draft_key: key.clone(),
         };
@@ -1761,10 +1774,10 @@ impl Desktop {
         let Some(path) = self.editor.path.clone() else {
             return;
         };
-        self.busy += 1;
+        self.local_busy += 1;
         self.perform(
             Intent::SaveFile(op::SaveFile { path }),
-            OperationCompletion::Busy,
+            OperationCompletion::Local,
         );
     }
 
@@ -1814,13 +1827,6 @@ fn composer_should_submit(
     cx: &mut Context<TextareaState>,
 ) -> bool {
     !action.shift && !action.secondary && input.marked_text_range(window, cx).is_none()
-}
-
-fn selected_model<'a>(
-    models: &'a [Model],
-    selected: Option<&agent_protocol::models::ModelRef>,
-) -> Option<&'a Model> {
-    models.iter().find(|model| Some(&model.model) == selected)
 }
 
 #[cfg(test)]
@@ -1950,7 +1956,7 @@ mod completion_tests {
         view.update(cx, |view, window, cx| {
             view.epoch = 3;
             Arc::make_mut(&mut view.snapshot).connection.epoch = 5;
-            view.busy = 2;
+            view.local_busy = 2;
             view.composer.text.pending = Some(9);
             view.editor.text.pending = Some(12);
             let deliver = |view: &mut Desktop,
@@ -1964,12 +1970,12 @@ mod completion_tests {
             deliver(
                 view,
                 2,
-                OperationCompletion::Busy,
+                OperationCompletion::Local,
                 Err("obsolete host".into()),
                 window,
                 cx,
             );
-            assert_eq!(view.busy, 2);
+            assert_eq!(view.local_busy, 2);
             assert!(view.local_errors.is_empty());
             deliver(
                 view,
@@ -2010,12 +2016,12 @@ mod completion_tests {
             deliver(
                 view,
                 3,
-                OperationCompletion::Busy,
+                OperationCompletion::Local,
                 Ok(Outcome::Applied),
                 window,
                 cx,
             );
-            assert_eq!(view.busy, 1);
+            assert_eq!(view.local_busy, 1);
         })
         .unwrap();
     }

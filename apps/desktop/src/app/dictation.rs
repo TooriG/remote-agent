@@ -109,7 +109,7 @@ impl super::view::composer::ComposerContent {
 }
 impl Desktop {
     pub(super) fn start_dictation(&mut self) {
-        if self.dictation.is_some() || !self.snapshot.connection.connected || self.busy > 0 {
+        if self.dictation.is_some() || !self.snapshot.connection.connected || self.busy() {
             return;
         }
         let (events, incoming) = async_channel::unbounded();

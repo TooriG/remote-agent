@@ -6,8 +6,8 @@ impl Preferences {
     ) -> Div {
         let language = crate::localization::language(cx);
         let login_provider = self.account_provider();
-        let login = self.snapshot.catalog.account.login.is_some();
-        let disabled = !self.snapshot.connection.connected || self.account.busy || login;
+        let login = self.metadata.login.is_some();
+        let disabled = !self.metadata.connected() || self.account.busy || login;
         let mut body = v_flex().gap_2().child(
             div()
                 .text_xs()
@@ -58,12 +58,7 @@ impl Preferences {
                     )
                     .small()
                     .ghost()
-                    .disabled(
-                        disabled
-                            || self
-                                .snapshot
-                                .operation_running(op::OperationKey::ProviderSettings),
-                    ),
+                    .disabled(disabled || self.metadata.provider_settings_busy()),
                 );
             } else if matches!(
                 agent.availability,
@@ -180,7 +175,7 @@ impl Desktop {
             .flex_shrink_0()
             .gap_5()
             .p_6()
-            .child(super::settings::language_settings(cx, |view, error| {
+            .child(super::settings::language_settings(cx, |view, error, _| {
                 view.set_error(error)
             }))
             .child(
@@ -625,6 +620,7 @@ mod tests {
                     {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Sonnet", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
                 ])).unwrap());
                 Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({"accounts":[],"selected":{}})).unwrap()));
+                view.project_fixture();
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
             let preferences = desktop.read(cx).preferences.clone();
@@ -670,6 +666,7 @@ mod tests {
                         user_code: String::new(),
                         verification_url: "https://example.invalid/login".into(),
                     }));
+                view.project_fixture();
                 cx.notify();
             })
         });
@@ -737,6 +734,7 @@ mod tests {
                 account.accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({
                     "accounts":[{"id":"native","provider":"codex"}], "selected":{"codex":"native"}
                 })).unwrap()));
+                view.project_fixture();
                 cx.notify();
             });
         });

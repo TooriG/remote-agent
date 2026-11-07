@@ -81,7 +81,7 @@ impl Desktop {
         };
         let generation = self.file_open_generation;
         let scope = self.local_error_scope();
-        self.busy += 1;
+        self.local_busy += 1;
         self.effect(
             async move {
                 let root = platform::state_dir()?.join("file-previews");
@@ -102,14 +102,14 @@ impl Desktop {
         result: Result<DownloadedPreview, String>,
         cx: &mut Context<Self>,
     ) {
-        self.busy = self.busy.saturating_sub(1);
+        self.local_busy = self.local_busy.saturating_sub(1);
         if generation != self.file_open_generation || scope != self.local_error_scope() {
             return;
         }
         match result.and_then(DownloadedPreview::into_url) {
             Ok(url) => cx.open_url(&url),
             Err(error) => {
-                self.local_errors.insert(scope, error);
+                self.raise_notice(scope, error);
             }
         }
         cx.notify();
@@ -163,7 +163,7 @@ mod tests {
             cx.update(|_, cx| {
                 desktop.update(cx, |view, cx| {
                     view.file_open_generation = 2;
-                    view.busy = 1;
+                    view.local_busy = 1;
                     let scope = if stale_scope {
                         ErrorScope::Application
                     } else {
@@ -178,7 +178,7 @@ mod tests {
                         }),
                         cx,
                     );
-                    assert_eq!(view.busy, 0);
+                    assert_eq!(view.local_busy, 0);
                 })
             });
             assert_eq!(path.exists(), accepted);

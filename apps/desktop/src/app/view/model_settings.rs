@@ -68,7 +68,7 @@ impl Preferences {
             .on_open_change(move |open, window, cx| {
                 if *open {
                     let _ = opening.update(cx, |view, cx| {
-                        if view.snapshot.catalog.account.login.is_some() {
+                        if view.metadata.login.is_some() {
                             view.model_controls.panel = ModelPanel::Accounts;
                         } else {
                             view.model_controls.provider = None;
@@ -139,7 +139,7 @@ impl Preferences {
                             op::SelectAccountForDraft {
                                 provider,
                                 id: id.clone(),
-                                thread_id: s.draft_key().clone(),
+                                thread_id: s.metadata.draft_key(),
                             },
                         ));
                         cx.notify();
@@ -252,12 +252,12 @@ impl Preferences {
     pub(in crate::app) fn account_controls(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
         let in_settings = self.opened;
-        let accounts = self.snapshot.catalog.account.accounts.as_ref();
+        let accounts = self.metadata.accounts.as_ref();
         let provider = self.account_provider();
         let disabled = self.account.busy
-            || self.busy > 0
-            || self.snapshot.catalog.account.login.is_some()
-            || !self.snapshot.connection.connected;
+            || self.blocked
+            || self.metadata.login.is_some()
+            || !self.metadata.connected();
         let mut body = v_flex()
             .id("model-account-controls")
             .gap_3()
@@ -299,7 +299,7 @@ impl Preferences {
             }
             body = body.child(services);
         } else if let Some(agent) = self
-            .snapshot
+            .metadata
             .connection_setup()
             .agents
             .into_iter()
@@ -332,7 +332,7 @@ impl Preferences {
                 })
                 .into_any_element();
         }
-        if self.snapshot.catalog.account.login.is_some() {
+        if self.metadata.login.is_some() {
             body = body.child(self.account_login_controls(None, cx));
         } else {
             body = body.child(
@@ -423,7 +423,7 @@ impl Preferences {
                 },
             )
             .children(
-                self.snapshot
+                self.metadata
                     .model_error_messages(Some(provider))
                     .into_iter()
                     .map(|error| {
@@ -443,7 +443,7 @@ impl Preferences {
         }
         if !in_settings {
             body = body.child(super::errors::error_list(
-                &self.settings_errors(),
+                &self.notices,
                 ErrorScope::Settings,
                 None,
                 cx,
@@ -458,7 +458,7 @@ impl Preferences {
 
     fn codex_cli_controls(&self, disabled: bool, cx: &Context<Self>) -> Div {
         let language = crate::localization::language(cx);
-        let cli = self.snapshot.catalog.account.codex_cli.as_deref();
+        let cli = self.metadata.cli.as_deref();
         let updating = self.metadata.codex_cli_busy();
         v_flex().gap_4().mt_2()
             .child(div().text_lg().font_semibold().child("Codex CLI"))
@@ -486,18 +486,8 @@ impl Preferences {
     pub(in crate::app) fn account_provider(&self) -> Option<ProviderKind> {
         self.model_controls
             .provider
-            .or_else(|| {
-                self.snapshot
-                    .catalog
-                    .account
-                    .login
-                    .as_ref()
-                    .map(|login| login.provider)
-            })
-            .or_else(|| {
-                self.snapshot
-                    .model_provider_for_draft(self.draft_key().clone())
-            })
+            .or_else(|| self.metadata.login.as_ref().map(|login| login.provider))
+            .or_else(|| self.metadata.provider())
     }
 
     pub(in crate::app) fn start_provider_setup(
@@ -519,12 +509,12 @@ impl Preferences {
         }
     }
     pub(in crate::app) fn account_operation(&mut self, intent: Intent) {
-        if self.account.busy || self.pane.is_none() || !self.snapshot.connection.connected {
+        if self.account.busy || self.pane.is_none() || !self.metadata.connected() {
             return;
         }
         if let Intent::StartAccountLogin(start) = &intent {
             self.model_controls.provider = Some(start.provider);
-            self.account.login_draft = Some(self.draft_key().clone());
+            self.account.login_draft = Some(self.metadata.draft_key());
         }
         self.account.busy = true;
         self.perform(intent, super::super::preferences::Completion::Account);
@@ -532,8 +522,8 @@ impl Preferences {
 
     fn credential_controls(&self, cx: &Context<Self>) -> AnyElement {
         let language = crate::localization::language(cx);
-        let disabled = !self.snapshot.connection.connected || self.metadata.credential_busy();
-        let controls = self.snapshot.credential_controls();
+        let disabled = !self.metadata.connected() || self.metadata.credential_busy();
+        let controls = self.metadata.credential_controls();
         let selected = controls
             .iter()
             .find(|route| route.provider == self.account.dsh_key_provider)
@@ -671,10 +661,10 @@ impl Preferences {
         cx: &Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
-        let Some(login) = &self.snapshot.catalog.account.login else {
+        let Some(login) = &self.metadata.login else {
             return div().into_any_element();
         };
-        let disabled = !self.snapshot.connection.connected || self.account.busy || self.busy > 0;
+        let disabled = !self.metadata.connected() || self.account.busy || self.blocked;
         let url = login.verification_url.clone();
         let cancel_id = login.login_id.clone();
         let provider = login.provider;
@@ -892,7 +882,8 @@ impl Preferences {
         let language = crate::localization::language(cx);
         let mut controls = Vec::new();
         if let Some(selected) = self
-            .selected_model()
+            .metadata
+            .current_model()
             .and_then(|model| model.credential_route)
         {
             controls.push(
@@ -910,7 +901,7 @@ impl Preferences {
             );
         }
         if let Some(model) = self
-            .snapshot
+            .metadata
             .models_matching(
                 Some(ProviderKind::DeepSeek),
                 r#"["openrouter","deepseek/deepseek-v4.1-flash"]"#.into(),
@@ -919,7 +910,7 @@ impl Preferences {
             .next()
         {
             let value = model.model;
-            let selected = self.draft().model.as_ref() == Some(&value);
+            let selected = self.metadata.selected_model().as_ref() == Some(&value);
             controls.push(
                 Button::new("model-select-openrouter-flash")
                     .label(if selected {
@@ -934,10 +925,9 @@ impl Preferences {
                     .disabled(disabled)
                     .on_click(cx.listener(move |s, _, window, cx| {
                         s.dispatch(Intent::SelectModel {
-                            thread_id: s.draft_key().clone(),
+                            thread_id: s.metadata.draft_key(),
                             model: value.clone(),
                         });
-                        s.sync_from_pane(window, cx);
                         s.model_controls
                             .search
                             .update(cx, |input, cx| input.set_value("openrouter", window, cx));
@@ -979,7 +969,7 @@ impl Preferences {
                             s.model_controls.panel = ModelPanel::Models;
                         },
                     )
-                    .disabled(self.snapshot.catalog.account.login.is_some())
+                    .disabled(self.metadata.login.is_some())
                     .debug_selector(|| "model-panel-back".into()),
                 )
                 .child(div().text_base().child(language.text("アカウント")));
@@ -997,9 +987,9 @@ impl Preferences {
         }
         let provider = self.account_provider();
         let disabled = self.account.busy
-            || self.busy > 0
-            || !self.snapshot.connection.connected
-            || self.snapshot.catalog.account.login.is_some();
+            || self.blocked
+            || !self.metadata.connected()
+            || self.metadata.login.is_some();
         let mut agents = v_flex()
             .flex_shrink_0()
             .gap_2()
@@ -1037,11 +1027,9 @@ impl Preferences {
                         s.model_controls
                             .search
                             .update(cx, |input, cx| input.set_value("", window, cx));
-                        if let Some(model) =
-                            s.snapshot.model_for_provider(s.draft_key().clone(), value)
-                        {
+                        if let Some(model) = s.metadata.model_for_provider(value) {
                             s.dispatch(Intent::SelectModel {
-                                thread_id: s.draft_key().clone(),
+                                thread_id: s.metadata.draft_key(),
                                 model,
                             });
                         }
@@ -1049,17 +1037,12 @@ impl Preferences {
                     })),
             );
         }
-        let account = self
-            .snapshot
-            .catalog
-            .account
-            .accounts
-            .as_ref()
-            .and_then(|accounts| {
-                accounts.accounts.iter().find(|account| {
-                    Some(account.provider) == provider && accounts.is_selected(account)
-                })
-            });
+        let account = self.metadata.accounts.as_ref().and_then(|accounts| {
+            accounts
+                .accounts
+                .iter()
+                .find(|account| Some(account.provider) == provider && accounts.is_selected(account))
+        });
         body = body.child(
             Button::new("model-account-summary")
                 .accessibility_label(language.text("アカウントと週間残量"))
@@ -1101,7 +1084,7 @@ impl Preferences {
                         .child(weekly_usage_view(
                             account
                                 .map(|a| {
-                                    self.snapshot.account_weekly_usage(a.provider, a.id.clone())
+                                    self.metadata.account_weekly_usage(a.provider, a.id.clone())
                                 })
                                 .unwrap_or_default(),
                             language,
@@ -1118,12 +1101,12 @@ impl Preferences {
                     .aria_label(language.text("モデルを検索")),
             );
         let custom_model = self
-            .snapshot
+            .metadata
             .custom_model_choice(provider, &self.model_controls.search.read(cx).value());
         if provider == Some(ProviderKind::DeepSeek) {
             body = body.child(self.dsh_model_controls(disabled, cx));
         }
-        let models = self.snapshot.models_matching(
+        let models = self.metadata.models_matching(
             provider,
             self.model_controls.search.read(cx).value().to_string(),
         );
@@ -1132,7 +1115,7 @@ impl Preferences {
             .max_h(px(264.))
             .overflow_y_scroll();
         if models.is_empty() && custom_model.is_none() {
-            list = list.child(language.text(if self.snapshot.models_loading(provider) {
+            list = list.child(language.text(if self.metadata.models_loading(provider) {
                 "モデルを読み込み中…"
             } else {
                 "利用可能なモデルがありません"
@@ -1141,13 +1124,13 @@ impl Preferences {
         for model in models {
             let value = model.model.clone();
             let selector = format!("model-choice-{}", model.id);
-            let selected = self.draft().model.as_ref() == Some(&model.model);
+            let selected = self.metadata.selected_model().as_ref() == Some(&model.model);
             list = list.child(
                 Button::new(selector.clone())
                     .accessibility_label(model.display_name.clone())
                     .on_click(cx.listener(move |s, _, _, _| {
                         s.dispatch(Intent::SelectModel {
-                            thread_id: s.draft_key().clone(),
+                            thread_id: s.metadata.draft_key(),
                             model: value.clone(),
                         });
                     }))
@@ -1198,7 +1181,7 @@ impl Preferences {
                     .disabled(disabled)
                     .on_click(cx.listener(move |s, _, _, _| {
                         s.dispatch(Intent::SelectModel {
-                            thread_id: s.draft_key().clone(),
+                            thread_id: s.metadata.draft_key(),
                             model: model.clone(),
                         });
                     })),
@@ -1207,7 +1190,7 @@ impl Preferences {
         body = body
             .child(list)
             .children(
-                self.snapshot
+                self.metadata
                     .model_error_messages(provider)
                     .into_iter()
                     .map(|error| {
@@ -1218,7 +1201,11 @@ impl Preferences {
                     }),
             )
             .when(
-                self.draft().model.as_ref().map(|model| model.provider) == provider,
+                self.metadata
+                    .selected_model()
+                    .as_ref()
+                    .map(|model| model.provider)
+                    == provider,
                 |body| {
                     body.child(
                         h_flex()
@@ -1226,20 +1213,20 @@ impl Preferences {
                             .border_t_1()
                             .border_color(rgb(appearance::BORDER))
                             .child(Self::effort_control(
-                                self.snapshot.model_quick_controls(self.draft_key().clone()),
+                                self.metadata.quick_controls(),
                                 self.model_controls_enabled(),
                                 "model-picker-effort",
                                 true,
-                                self.draft_key().clone(),
+                                self.metadata.draft_key(),
                                 self.pane.clone(),
                                 cx,
                             ))
                             .child(Self::fast_control(
-                                self.snapshot.model_quick_controls(self.draft_key().clone()),
+                                self.metadata.quick_controls(),
                                 self.model_controls_enabled(),
                                 "model-picker-speed",
                                 true,
-                                self.draft_key().clone(),
+                                self.metadata.draft_key(),
                                 self.pane.clone(),
                                 cx,
                             )),
@@ -1522,16 +1509,17 @@ mod tests {
                         .child(
                             h_flex()
                                 .child(Preferences::fast_control(
-                                    view.snapshot.model_quick_controls(view.draft_key().clone()),
+                                    view.metadata.quick_controls(),
                                     view.model_controls_enabled(),
                                     "model-fast",
                                     false,
-                                    view.draft_key().clone(),
+                                    view.metadata.draft_key(),
                                     view.pane.clone(),
                                     cx,
                                 ))
                                 .child(Preferences::model_menu(
-                                    view.selected_model()
+                                    view.metadata
+                                        .current_model()
                                         .map_or("モデルを選択".to_owned(), |model| {
                                             model.display_name.clone()
                                         }),
@@ -1540,11 +1528,11 @@ mod tests {
                                     cx,
                                 ))
                                 .child(Preferences::effort_control(
-                                    view.snapshot.model_quick_controls(view.draft_key().clone()),
+                                    view.metadata.quick_controls(),
                                     view.model_controls_enabled(),
                                     "model-effort",
                                     false,
-                                    view.draft_key().clone(),
+                                    view.metadata.draft_key(),
                                     view.pane.clone(),
                                     cx,
                                 )),

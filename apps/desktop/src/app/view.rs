@@ -248,29 +248,21 @@ impl Desktop {
                 window,
                 cx,
             );
-            let window_error = self
-                .local_errors
-                .get(&ErrorScope::Settings)
-                .map(|message| errors::local_error_row(&ErrorScope::Settings, message));
-            let changed = view.window_error != window_error
-                || view.busy != self.busy
+            let notices = self.error_rows(&ErrorScope::Settings);
+            let changed = view.notices != notices
+                || view.blocked != self.busy()
                 || view.opened != (self.tab == Tab::Settings)
                 || view.hosts != self.hosts
                 || view.app_updates != self.app_updates;
-            view.window_error = window_error;
-            view.busy = self.busy;
+            view.notices = notices;
+            view.blocked = self.busy();
             view.opened = self.tab == Tab::Settings;
             view.hosts = self.hosts.clone();
             view.app_updates = self.app_updates.clone();
             if changed {
                 cx.notify();
             }
-            view.sync(
-                self.snapshot.clone(),
-                self.publication.settings.clone(),
-                window,
-                cx,
-            );
+            view.sync(self.publication.settings.clone(), window, cx);
         });
     }
     // Fixtures inject immutable state at the same core projection boundary as Store.
@@ -302,7 +294,7 @@ impl Desktop {
     }
     fn publish_sidebar(&self, cx: &mut Context<Self>) {
         if let Some(sidebar) = &self.sidebar_view {
-            let model = self.sidebar_model();
+            let model = self.sidebar_model(cx);
             let pane = self.session.as_ref().map(|session| session.pane.clone());
             sidebar.update(cx, |view, cx| view.sync(model, pane, cx));
         }
@@ -322,52 +314,6 @@ impl Desktop {
         self.sync_composer(cx);
         self.publish_header(cx);
         self.sync_surfaces(window, cx);
-    }
-    pub(in crate::app) fn publish_presentation(
-        &mut self,
-        changes: agent_core::presentation::view::PresentationChanges,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Native layout changes affect the entire window; core publications use
-        // their projected subjects so tokens cannot rebuild unrelated models.
-        let shared = changes.groups.connection || changes.groups.pane;
-        if shared || changes.list {
-            self.publish_projects(cx);
-        }
-        self.publish_preferences(window, cx);
-        if shared {
-            self.publish_media(cx);
-        }
-        if shared || changes.list || changes.groups.operations {
-            self.publish_sidebar(cx);
-        }
-        if shared || changes.context {
-            self.publish_header(cx);
-        }
-        if shared
-            || changes.conversation
-            || changes.context
-            || changes.composer_controls
-            || changes.groups.operations
-            || changes.groups.files
-        {
-            self.publish_conversation(window, cx);
-        }
-        if shared || changes.composer || changes.groups.files || changes.groups.catalog {
-            self.sync_composer(cx);
-        }
-        if shared
-            || changes.sources
-            || changes.attachments
-            || changes.groups.files
-            || changes.groups.operations
-        {
-            self.publish_workspace(cx);
-        }
-        if shared || changes.groups.files || changes.groups.operations || changes.agents {
-            self.sync_surfaces(window, cx);
-        }
     }
 }
 
@@ -960,16 +906,6 @@ mod cache_tests {
         ]
     }
 
-    fn projections(desktop: &Desktop, cx: &App) -> [usize; 5] {
-        [
-            desktop.sidebar_view.as_ref().unwrap().read(cx).projections,
-            desktop.conversation.read(cx).projections,
-            desktop.composer_view.read(cx).content.read(cx).projections,
-            desktop.workbench_view.read(cx).projections,
-            desktop.header_view.read(cx).projections,
-        ]
-    }
-
     #[gpui::test]
     fn browser_frames_do_not_broadcast_desktop_notifications(cx: &mut TestAppContext) {
         let (runtime, app_runtime) = init(cx);
@@ -1338,7 +1274,7 @@ mod cache_tests {
             })
         });
         let before = desktop.read_with(cx, renders);
-        let before_projections = desktop.read_with(cx, projections);
+        let previous = desktop.read_with(cx, |view, _| view.publication.clone());
         for text in ["typing", "typing more", "typing more日本語🙂"] {
             window
                 .update(cx, |_, window, cx| {
@@ -1393,17 +1329,16 @@ mod cache_tests {
                 &before[3..],
                 "typing must reuse the open panel and header"
             );
-            let projected = desktop.read_with(cx, projections);
-            assert_eq!(
-                &projected[..2],
-                &before_projections[..2],
-                "typing must not rebuild list/conversation models"
-            );
-            assert_eq!(
-                &projected[3..],
-                &before_projections[3..],
-                "typing must not rebuild workbench/header models"
-            );
+            desktop.read_with(cx, |view, _| {
+                use agent_core::state::Same;
+                assert!(view.publication.list.same(&previous.list));
+                assert!(view.publication.conversation.same(&previous.conversation));
+                assert!(Arc::ptr_eq(&view.publication.context, &previous.context));
+                assert!(Arc::ptr_eq(
+                    &view.snapshot.files.workspace,
+                    &previous.snapshot.files.workspace,
+                ));
+            });
             assert_eq!(
                 notifications.get(),
                 0,
@@ -1421,11 +1356,10 @@ mod cache_tests {
         });
         cx.run_until_parked();
         let before = desktop.read_with(cx, renders);
-        let before_projections = desktop.read_with(cx, projections);
+        let previous = desktop.read_with(cx, |view, _| view.publication.clone());
         window
             .update(cx, |_, window, cx| {
                 desktop.update(cx, |view, cx| {
-                    let previous = view.publication.clone();
                     let snapshot = Arc::make_mut(&mut view.snapshot);
                     let thread = Arc::make_mut(
                         Arc::make_mut(&mut snapshot.sessions.conversations)
@@ -1442,21 +1376,23 @@ mod cache_tests {
                         },
                     ));
                     view.project_fixture();
-                    let changes = view.publication.changes(previous);
-                    view.publish_presentation(changes, window, cx);
+                    view.publish_views(window, cx);
                 });
             })
             .unwrap();
         cx.run_until_parked();
         let after = desktop.read_with(cx, renders);
-        let projected = desktop.read_with(cx, projections);
-        for index in [0, 2, 3, 4] {
-            assert_eq!(
-                projected[index], before_projections[index],
-                "a transcript delta must not rebuild unrelated native model {index}"
-            );
-        }
-        assert!(projected[1] > before_projections[1]);
+        desktop.read_with(cx, |view, _| {
+            use agent_core::state::Same;
+            assert!(view.publication.list.same(&previous.list));
+            assert!(!view.publication.conversation.same(&previous.conversation));
+            assert!(Arc::ptr_eq(&view.publication.composer, &previous.composer));
+            assert!(Arc::ptr_eq(&view.publication.context, &previous.context));
+            assert!(Arc::ptr_eq(
+                &view.snapshot.files.workspace,
+                &previous.snapshot.files.workspace,
+            ));
+        });
         assert_eq!(after[0], before[0], "streaming must reuse the sidebar");
         assert!(
             after[1] > before[1],

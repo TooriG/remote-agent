@@ -29,7 +29,7 @@ impl Desktop {
             cx.notify();
             return;
         }
-        self.busy += 1;
+        self.local_busy += 1;
         self.perform(
             Intent::OpenInEditor(op::OpenInEditor {
                 path,
@@ -38,7 +38,7 @@ impl Desktop {
                 editor,
                 reveal,
             }),
-            OperationCompletion::Busy,
+            OperationCompletion::Local,
         );
         cx.notify();
     }
@@ -51,7 +51,7 @@ impl Desktop {
             self.set_error("ホストに接続していません".into());
             return;
         };
-        self.busy += 1;
+        self.local_busy += 1;
         let scope = self.local_error_scope();
         self.effect(
             async move {

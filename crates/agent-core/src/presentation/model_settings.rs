@@ -160,42 +160,9 @@ impl Snapshot {
         })
     }
 
-    pub fn models_matching(&self, provider: Option<ProviderKind>, query: String) -> Vec<Model> {
-        matching_models(
-            self.catalog
-                .models
-                .iter()
-                .filter(|model| self.provider_enabled(model.model.provider)),
-            provider,
-            &query,
-        )
-    }
-
     pub(crate) fn allows_custom_codex_models(&self) -> bool {
         self.provider_enabled(ProviderKind::Codex)
             && crate::state::allows_custom_codex_models(self.catalog.account.accounts.as_deref())
-    }
-
-    /// A recommended picker catalog is not an exhaustive allowlist of Codex IDs.
-    pub fn custom_model_choice(
-        &self,
-        provider: Option<ProviderKind>,
-        query: &str,
-    ) -> Option<ModelRef> {
-        let id = query.trim();
-        (self.allows_custom_codex_models()
-            && provider == Some(ProviderKind::Codex)
-            && !id.is_empty()
-            && !id.chars().any(char::is_whitespace)
-            && !self
-                .catalog
-                .models
-                .iter()
-                .any(|model| model.model.provider == ProviderKind::Codex && model.model.id == id))
-        .then(|| ModelRef {
-            provider: ProviderKind::Codex,
-            id: id.into(),
-        })
     }
 
     pub fn model_for_provider(
@@ -222,12 +189,6 @@ impl Snapshot {
             self.allows_custom_codex_models(),
         );
         model.cloned()
-    }
-
-    /// Keep every weekly bucket (including model-specific limits); never turn
-    /// an unavailable quota into a full or empty bar. Labels are Host-normalized.
-    pub fn account_weekly_usage(&self, provider: ProviderKind, id: String) -> Vec<UsageWindow> {
-        weekly_usage(self.catalog.account.accounts.as_deref(), provider, &id)
     }
 
     pub fn model_quick_controls(&self, thread_id: crate::state::DraftKey) -> ModelQuickControls {
@@ -504,7 +465,7 @@ mod tests {
                 }),
             );
             assert_eq!(snapshot.model_provider_for_draft(key.clone()), None);
-            assert!(snapshot.permission_control(&key).load_request.is_none());
+            assert!(snapshot.permission_control(&key).load_provider.is_none());
             let (next, effects) = reduce(
                 &snapshot,
                 Event::Intent(Intent::Submit {
@@ -549,11 +510,11 @@ mod tests {
                     proptest::prop_assert_eq!(snapshot.model_for_provider(key.clone(), provider), Some(selected.clone()));
                     proptest::prop_assert_eq!(snapshot.model_quick_controls(key).effort, effort);
                 }
-                let choices = snapshot.models_matching(Some(provider), id.clone());
+                let choices = crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(snapshot.clone())).models_matching(Some(provider), id.clone());
                 proptest::prop_assert_eq!(choices.len(), 1);
                 proptest::prop_assert_eq!(&choices[0].model, &selected);
             }
-            proptest::prop_assert_eq!(snapshot.models_matching(None, id).len(), 2);
+            proptest::prop_assert_eq!(crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(snapshot.clone())).models_matching(None, id).len(), 2);
         }
     }
 
@@ -587,7 +548,10 @@ mod tests {
                 .map(|index| snapshot.catalog.models[index].clone())
                 .collect();
             assert_eq!(
-                snapshot.models_matching(provider, query.into()),
+                crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                    snapshot.clone()
+                ))
+                .models_matching(provider, query.into()),
                 expected,
                 "query: {query:?}"
             );
@@ -610,14 +574,27 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            snapshot.model_error_messages(Some(ProviderKind::Codex)),
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .model_error_messages(Some(ProviderKind::Codex)),
             ["codex: Codex catalog failed"]
         );
         assert_eq!(
-            snapshot.model_error_messages(Some(ProviderKind::Claude)),
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .model_error_messages(Some(ProviderKind::Claude)),
             ["claude: Claude catalog failed"]
         );
-        assert_eq!(snapshot.model_error_messages(None).len(), 2);
+        assert_eq!(
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .model_error_messages(None)
+            .len(),
+            2
+        );
     }
 
     #[test]
@@ -673,9 +650,11 @@ mod tests {
         assert!(controls.efforts.is_empty());
         assert!(controls.toggle_fast_to.is_none());
         assert!(
-            snapshot
-                .models_matching(Some(ProviderKind::Codex), "haiku".into())
-                .is_empty()
+            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
+                snapshot.clone()
+            ))
+            .models_matching(Some(ProviderKind::Codex), "haiku".into())
+            .is_empty()
         );
     }
 }
