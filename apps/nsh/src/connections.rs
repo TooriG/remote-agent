@@ -50,6 +50,7 @@ pub(crate) fn selector(
 
 /// The composer's destination: the Host the next chat runs on.
 pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> impl IntoElement {
+    #[cfg(not(target_os = "macos"))]
     use crate::ui::{self, Icon};
     let connection = use_context::<Connection>().unwrap();
     let name = move || {
@@ -67,18 +68,30 @@ pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> imp
                 .unwrap_or_else(|| "Local".into())
         })
     };
-    ui::labeled_button(Icon::Monitor, name, move || {
-        let items = json!(hosts.with_untracked(|hosts| hosts
+    let items = move || {
+        json!(hosts.with(|hosts| hosts
             .iter()
-            .map(|host| json!({"id": host.id, "title": host.name, "selected": host.id == selected.get_untracked()}))
-            .collect::<Vec<_>>()));
-        ui::popup(&items, move |id: &str| {
-            connection
-                .application
-                .with(|application| application.select_host(id.to_owned(), true))
+            .map(|host| json!({"id": host.id, "title": host.name, "selected": host.id == selected.get()}))
+            .collect::<Vec<_>>()))
+    };
+    let select = move |id: &str| {
+        connection
+            .application
+            .with(|application| application.select_host(id.to_owned(), true))
+    };
+    #[cfg(target_os = "macos")]
+    {
+        native::menu("desktopcomputer", "接続先", items, select)
+            .prop("title", move || json!(name()))
+            .prop("appearance", json!("plain"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        ui::labeled_button(Icon::Monitor, name, move || {
+            ui::popup(&untracked(items), select)
         })
-    })
-    .child(ui::icon(Icon::ChevronDown, 14.0))
+        .child(ui::icon(Icon::ChevronDown, 14.0))
+    }
 }
 
 pub(crate) fn screen(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl IntoElement {

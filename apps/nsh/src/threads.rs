@@ -631,7 +631,7 @@ fn section(title: String) -> View {
 }
 
 /// A sidebar menu item: 28 pt, a fill under the pointer.
-fn menu_row() -> crate::ui::Control {
+fn menu_row() -> nsh_base::ButtonElement {
     use crate::ui::{self, colors};
     nsh_base::button()
         .flex_row()

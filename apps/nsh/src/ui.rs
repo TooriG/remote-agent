@@ -1,7 +1,7 @@
 //! The app's controls, drawn with NSH's views in the existing desktop client's look.
 //! Text input, scrolling, menus, alerts and web views stay the platform's.
 use nsh_core::{
-    element::{ImageSrc, Prop, Rgba, desktop::MenuItem, rgb, rgba},
+    element::{ImageSrc, Rgba, desktop::MenuItem, rgb, rgba},
     prelude::*,
 };
 use serde_json::Value;
@@ -43,6 +43,7 @@ pub(crate) enum Icon {
     Merge,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     Microphone,
+    #[cfg(not(target_os = "macos"))]
     Monitor,
     NewChat,
     #[cfg(target_os = "macos")]
@@ -55,13 +56,38 @@ pub(crate) enum Icon {
     #[cfg(target_os = "macos")]
     Refresh,
     #[cfg(target_os = "macos")]
-    Search,
-    #[cfg(target_os = "macos")]
     Settings,
     Stop,
 }
 
 impl Icon {
+    /// The SF Symbol AppKit draws for this icon.
+    #[cfg(target_os = "macos")]
+    fn symbol(self) -> &'static str {
+        match self {
+            Self::ArrowDown => "arrow.down",
+            Self::ArrowUp => "arrow.up",
+            Self::Branch => "arrow.triangle.branch",
+            Self::ChevronDown => "chevron.down",
+            Self::Close => "xmark",
+            Self::Copy => "doc.on.doc",
+            Self::Diff => "plusminus",
+            Self::Ellipsis => "ellipsis",
+            Self::Folder => "folder",
+            Self::FolderPlus => "folder.badge.plus",
+            Self::Loader => "progress.indicator",
+            Self::Merge => "arrow.triangle.merge",
+            Self::Microphone => "mic",
+            Self::NewChat => "square.and.pencil",
+            Self::PanelLeftClose | Self::PanelLeftOpen => "sidebar.left",
+            Self::PanelRight => "sidebar.right",
+            Self::Plus => "plus",
+            Self::Refresh => "arrow.clockwise",
+            Self::Settings => "gearshape",
+            Self::Stop => "stop.fill",
+        }
+    }
+
     fn markup(self) -> &'static str {
         match self {
             Self::ArrowDown => include_str!("../assets/icons/arrow-down.svg"),
@@ -79,6 +105,7 @@ impl Icon {
             Self::Merge => include_str!("../../desktop/assets/merge.svg"),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             Self::Microphone => include_str!("../../desktop/assets/microphone.svg"),
+            #[cfg(not(target_os = "macos"))]
             Self::Monitor => include_str!("../../desktop/assets/monitor.svg"),
             Self::NewChat => include_str!("../../desktop/assets/square-pen.svg"),
             #[cfg(target_os = "macos")]
@@ -90,8 +117,6 @@ impl Icon {
             Self::Plus => include_str!("../assets/icons/plus.svg"),
             #[cfg(target_os = "macos")]
             Self::Refresh => include_str!("../assets/icons/rotate-cw.svg"),
-            #[cfg(target_os = "macos")]
-            Self::Search => include_str!("../assets/icons/search.svg"),
             #[cfg(target_os = "macos")]
             Self::Settings => include_str!("../assets/icons/settings.svg"),
             Self::Stop => include_str!("../../desktop/assets/stop.svg"),
@@ -118,11 +143,15 @@ pub(crate) fn spinner() -> impl IntoElement {
 
 /// A control: nsh-base's button (focus, keys, accessibility) in the desktop client's
 /// ghost look, its content filling it.
+#[cfg(not(target_os = "macos"))]
 pub(crate) type Control = nsh_base::ButtonElement;
 
+#[cfg(not(target_os = "macos"))]
 fn ghost(label: impl IntoReactive<SharedString>, content: View) -> Control {
     nsh_base::button()
-        .accessibility_label(Prop::from(label.into_reactive().map(Some)))
+        .accessibility_label(nsh_core::element::Prop::from(
+            label.into_reactive().map(Some),
+        ))
         .flex_shrink_0()
         .flex_row()
         .items_center()
@@ -137,11 +166,13 @@ fn ghost(label: impl IntoReactive<SharedString>, content: View) -> Control {
 }
 
 /// A small ghost icon button (24 pt, a 14 pt icon) with its label as tooltip.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn icon_button(icon: Icon, label: &'static str, press: impl Fn() + 'static) -> Control {
     icon_button_sized(icon, label, 24.0, 14.0, press)
 }
 
 /// An extra-small ghost icon button (20 pt, a 12 pt icon).
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn small_icon_button(
     icon: Icon,
     label: &'static str,
@@ -150,6 +181,7 @@ pub(crate) fn small_icon_button(
     icon_button_sized(icon, label, 20.0, 12.0, press)
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn icon_button_sized(
     glyph: Icon,
     label: &'static str,
@@ -167,6 +199,7 @@ pub(crate) fn icon_button_sized(
 }
 
 /// A hint over a control, as the desktop client's tooltips.
+#[cfg(not(target_os = "macos"))]
 fn tooltip(label: &'static str) -> AnyElement {
     view()
         .px_2()
@@ -184,6 +217,7 @@ fn tooltip(label: &'static str) -> AnyElement {
 }
 
 /// A small ghost text button.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn text_button(
     title: impl IntoReactive<SharedString>,
     press: impl Fn() + 'static,
@@ -199,6 +233,7 @@ pub(crate) fn text_button(
 }
 
 /// A ghost button with an icon and a label (32 pt), as the composer's folder.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn labeled_button(
     glyph: Icon,
     title: impl Fn() -> String + Copy + 'static,
@@ -223,9 +258,98 @@ pub(crate) trait Enabled {
     fn enabled(self, enabled: impl Fn() -> bool + Copy + 'static) -> Self;
 }
 
-impl Enabled for Control {
+impl Enabled for nsh_base::ButtonElement {
     fn enabled(self, enabled: impl Fn() -> bool + Copy + 'static) -> Self {
         self.disabled(move || !enabled())
+    }
+}
+
+/// On the Mac a control is AppKit's own: a borderless `NSButton` with an SF Symbol,
+/// placed and sized by NSH.
+#[cfg(target_os = "macos")]
+pub(crate) type Control = nsh_core::element::NativeView;
+
+#[cfg(target_os = "macos")]
+fn appkit_button(label: impl IntoReactive<SharedString>, press: impl Fn() + 'static) -> Control {
+    let label = label.into_reactive();
+    native("bex.button")
+        .prop(
+            "label",
+            label
+                .clone()
+                .map(|label| serde_json::json!(label.to_string())),
+        )
+        .prop(
+            "tooltip",
+            label.map(|label| serde_json::json!(label.to_string())),
+        )
+        .prop("appearance", serde_json::json!("plain"))
+        .on_native_event(move |event: &NativeEvent| {
+            if &*event.name == "press" {
+                press();
+            }
+        })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn icon_button(icon: Icon, label: &'static str, press: impl Fn() + 'static) -> Control {
+    icon_button_sized(icon, label, 24.0, 14.0, press)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn small_icon_button(
+    icon: Icon,
+    label: &'static str,
+    press: impl Fn() + 'static,
+) -> Control {
+    icon_button_sized(icon, label, 20.0, 12.0, press)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn icon_button_sized(
+    glyph: Icon,
+    label: &'static str,
+    size: f32,
+    icon_size: f32,
+    press: impl Fn() + 'static,
+) -> Control {
+    appkit_button(label, press)
+        .prop("symbol", serde_json::json!(glyph.symbol()))
+        .prop("symbolSize", serde_json::json!(icon_size))
+        .w(px(size))
+        .h(px(size))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn text_button(
+    title: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> Control {
+    let title = title.into_reactive();
+    appkit_button(title.clone(), press).prop(
+        "title",
+        title.map(|title| serde_json::json!(title.to_string())),
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn labeled_button(
+    glyph: Icon,
+    title: impl Fn() -> String + Copy + 'static,
+    press: impl Fn() + 'static,
+) -> Control {
+    appkit_button(move || SharedString::from(title()), press)
+        .prop("symbol", serde_json::json!(glyph.symbol()))
+        .prop("symbolSize", serde_json::json!(16.0))
+        .prop("title", move || serde_json::json!(title()))
+        .min_w_0()
+        .max_w(px(260.0))
+}
+
+#[cfg(target_os = "macos")]
+impl Enabled for Control {
+    fn enabled(self, enabled: impl Fn() -> bool + Copy + 'static) -> Self {
+        self.prop("enabled", move || serde_json::json!(enabled()))
     }
 }
 

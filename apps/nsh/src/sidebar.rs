@@ -4,7 +4,7 @@ use crate::{
     application::{Host, ListRequest, Navigation},
     ui::{self, Enabled, Icon, colors},
 };
-use nsh_core::{element::input, prelude::*};
+use nsh_core::prelude::*;
 use serde_json::json;
 
 pub(crate) const WIDTH: f32 = 272.0;
@@ -44,7 +44,12 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                         .flex_row()
                         .items_center()
                         .gap_1()
-                        .child(search_field(query, "会話を検索").flex_1().min_w_0())
+                        .child(
+                            crate::native::search(query)
+                                .prop("appearance", json!("plain"))
+                                .flex_1()
+                                .min_w_0(),
+                        )
                         .child(
                             ui::icon_button(Icon::NewChat, "新しいチャット", compose)
                                 .enabled(connected),
@@ -214,27 +219,4 @@ fn connection_menu(hosts: Memo<Vec<Host>>) -> impl IntoElement {
         })
         .child(text(title).text_size(px(14.0)).number_of_lines(1))
         .child(ui::icon(Icon::ChevronDown, 14.0))
-}
-
-/// A borderless search field with a leading magnifier, as the sidebar's.
-fn search_field(query: Signal<String>, placeholder: &'static str) -> View {
-    view()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .h(px(24.0))
-        .px_2()
-        .text_color(colors::MUTED)
-        .child(ui::icon(Icon::Search, 14.0))
-        .child(
-            input()
-                .flex_1()
-                .min_w_0()
-                .text_size(px(14.0))
-                .text_color(colors::FOREGROUND)
-                .placeholder(placeholder)
-                .label(placeholder)
-                .value(move || query.get())
-                .on_change(move |value: &str| query.set(value.into())),
-        )
 }

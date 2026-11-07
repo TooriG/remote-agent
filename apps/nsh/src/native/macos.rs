@@ -155,6 +155,8 @@ struct Button {
     view: Retained<NSButton>,
     context: ComponentContext,
     _target: Retained<ActionTarget>,
+    symbol: String,
+    symbol_size: f64,
 }
 impl Button {
     fn new(context: ComponentContext) -> Self {
@@ -174,7 +176,28 @@ impl Button {
             view,
             context,
             _target: target,
+            symbol: String::new(),
+            symbol_size: 0.0,
         }
+    }
+
+    /// The SF Symbol at the requested point size, else at the button's own.
+    fn apply_symbol(&self) {
+        let image = symbol(&self.symbol).map(|image| {
+            if self.symbol_size > 0.0 {
+                image
+                    .imageWithSymbolConfiguration(
+                        &NSImageSymbolConfiguration::configurationWithPointSize_weight(
+                            self.symbol_size,
+                            0.0,
+                        ),
+                    )
+                    .unwrap_or(image)
+            } else {
+                image
+            }
+        });
+        self.view.setImage(image.as_deref());
     }
 }
 impl NativeComponent for Button {
@@ -187,12 +210,15 @@ impl NativeComponent for Button {
                 value.and_then(JsonValue::as_str).unwrap_or(""),
             )),
             "symbol" => {
-                self.view.setImage(
-                    value
-                        .and_then(JsonValue::as_str)
-                        .and_then(symbol)
-                        .as_deref(),
-                );
+                self.symbol = value
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                self.apply_symbol();
+            }
+            "symbolSize" => {
+                self.symbol_size = value.and_then(JsonValue::as_f64).unwrap_or_default();
+                self.apply_symbol();
             }
             "asset" => self.view.setImage(
                 value
@@ -207,6 +233,12 @@ impl NativeComponent for Button {
                     .as_deref(),
             ),
             "identifier" => self.view.setAccessibilityIdentifier(
+                value
+                    .and_then(JsonValue::as_str)
+                    .map(NSString::from_str)
+                    .as_deref(),
+            ),
+            "tooltip" => self.view.setToolTip(
                 value
                     .and_then(JsonValue::as_str)
                     .map(NSString::from_str)
