@@ -102,10 +102,39 @@ fn coordinator_url(project_id: &str) -> Option<String> {
 }
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct ThreadCopyItem {
+    pub label: String,
+    pub value: Option<String>,
+}
+
+fn thread_copy_items(
+    title: &str,
+    id: &str,
+    cwd: Option<&str>,
+    branch: Option<&str>,
+) -> Vec<ThreadCopyItem> {
+    [
+        ("パス", cwd),
+        ("ブランチ", branch),
+        // BEX has no public thread URL, so a thread copies its undecorated title.
+        ("スレッド", Some(title)),
+        ("スレッドID", Some(id)),
+    ]
+    .into_iter()
+    .map(|(label, value)| ThreadCopyItem {
+        label: label.into(),
+        value: value.filter(|value| !value.is_empty()).map(str::to_owned),
+    })
+    .collect()
+}
+
+#[derive(Clone, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadSummary {
     pub host_id: String,
     pub id: crate::session::SessionRef,
     pub title: String,
+    pub copy_items: Vec<ThreadCopyItem>,
     pub project_id: Option<String>,
     pub active: bool,
     pub waiting: bool,
@@ -757,15 +786,22 @@ fn thread_summaries<'a>(
             } else {
                 waiting.contains(id)
             };
+            let title = task_title(thread.name.as_deref(), thread.preview.as_deref());
             ThreadSummary {
                 host_id: String::new(),
                 id: id.clone(),
-                title: task_title(thread.name.as_deref(), thread.preview.as_deref()).to_owned()
+                title: title.to_owned()
                     + if thread.list_stale == Some(true) {
                         "（保存済み・未確認）"
                     } else {
                         ""
                     },
+                copy_items: thread_copy_items(
+                    title,
+                    &id.id,
+                    thread.cwd.as_deref(),
+                    thread.git_branch.as_deref(),
+                ),
                 project_id: project_override
                     .or_else(|| thread.project_id.as_deref())
                     .filter(|id| project_ids.contains(*id))
