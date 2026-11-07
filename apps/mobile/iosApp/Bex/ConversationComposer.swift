@@ -80,7 +80,7 @@ struct ConversationComposer: View {
                 AppNotice(text: error)
             }
             if let reason = controls.unavailable {
-                AppNotice(text: reason)
+                AppNotice(text: ErrorText(message: reason, details: nil))
             }
             if let request = model.dockedRequest {
                 RequestPanel(

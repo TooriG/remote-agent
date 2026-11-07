@@ -75,26 +75,32 @@ internal class AndroidAppModel(private val context: Context, private val prefere
 
     fun selectLanguage(value: dev.remoteagent.core.UiLanguage) {
         preferences.selectLanguage(value)
-        language = preferences.language()
+        updateLanguage(preferences.language())
+    }
+
+    private fun updateLanguage(value: dev.remoteagent.core.UiLanguage) {
+        if (language == value) return
+        language = value
+        if (owner == null) publish(session?.presentation() ?: Presentation.empty(value))
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
-    private var publication = Presentation.empty()
+    private var publication = Presentation.empty(language)
     @Volatile
-    var snapshot = Snapshot.empty()
+    var snapshot = publication.snapshot()
         private set
 
-    var settings by mutableStateOf(Presentation.empty().settings())
+    var settings by mutableStateOf(publication.settings())
         private set
 
-    var conversationContext by mutableStateOf(Presentation.empty().conversationContext())
+    var conversationContext by mutableStateOf(publication.conversationContext())
         private set
 
-    var composer by mutableStateOf(Presentation.empty().composer())
+    var composer by mutableStateOf(publication.composer())
         private set
 
-    var files by mutableStateOf(Snapshot.empty().files())
+    var files by mutableStateOf(snapshot.files())
         private set
 
     var terminals by mutableStateOf(dev.remoteagent.core.Terminals.empty())
@@ -109,7 +115,7 @@ internal class AndroidAppModel(private val context: Context, private val prefere
     var loadingThreads by mutableStateOf(false)
         private set
 
-    var listQuery by mutableStateOf(Snapshot.empty().listQuery())
+    var listQuery by mutableStateOf(snapshot.listQuery())
         private set
 
     var applicationNotices by mutableStateOf(emptyList<dev.remoteagent.core.ErrorNotice>())
@@ -168,7 +174,7 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         scope.launch {
             while (isActive) {
                 preferences.nextLanguage(language)
-                language = preferences.language()
+                updateLanguage(preferences.language())
             }
         }
         try {
@@ -238,7 +244,7 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         connectionSelection = connectionSelection.copy(hostId = id)
         repository.selected = id
         notice = null
-        publish(Presentation.empty())
+        publish(Presentation.empty(language))
         selected.dispatch(Intent.ShowThreadList)
         publish(selected.presentation())
         observe(id, selected)
@@ -337,13 +343,15 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         if (!enabled) connections.remove(host)?.cancel()
         try {
             val receipt = selected.dispatch(Intent.SetConnectionEnabled(enabled))
-            connectionStates[host] = HostConnectionState(selected.snapshot())
+            val current = selected.snapshot()
+            connectionStates[host] = HostConnectionState(current.connectionEnabled(), current.connected())
             scope.launch {
                 try {
                     receipt.wait()
                     selected.flush()
                     if (profiles.none { it.id == host }) return@launch
-                    connectionStates[host] = HostConnectionState(selected.snapshot())
+                    val updated = selected.snapshot()
+                    connectionStates[host] = HostConnectionState(updated.connectionEnabled(), updated.connected())
                     if (enabled) profiles.firstOrNull { it.id == host }?.let { connect(it) }
                 } catch (error: AgentException) {
                     notice = error.displayMessage()
@@ -365,7 +373,7 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         if (connectionSelection.hostId == host) {
             session = null
             owner = null
-            publish(Presentation.empty())
+            publish(Presentation.empty(language))
         }
         connectionSelection =
             dev.remoteagent.core.resolveConnectionSelection(
@@ -448,8 +456,9 @@ internal class AndroidAppModel(private val context: Context, private val prefere
     }
 
     private fun receiveHost(next: Presentation, host: String, listChanged: Boolean) {
-        connectionStates[host] = HostConnectionState(next.snapshot())
-        updateProfile(next.snapshot(), host)
+        val current = next.snapshot()
+        connectionStates[host] = HostConnectionState(current.connectionEnabled(), current.connected())
+        updateProfile(current, host)
         if (connectionSelection.hostId == host) {
             owner = session?.store()
             publish(next)

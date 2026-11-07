@@ -1,4 +1,4 @@
-use crate::state::Snapshot;
+use crate::{localization::UiLanguage, state::Snapshot};
 use agent_protocol::composer::*;
 
 /// Keep selected lines quoted and leave room for the user's question.
@@ -61,6 +61,7 @@ pub struct ComposerSuggestions {
 impl Snapshot {
     pub fn composer_suggestions(&self, text: String, cursor: u32) -> Option<ComposerSuggestions> {
         suggestions(
+            self.catalog.ui_language,
             self.catalog
                 .composer_catalogs
                 .get(&self.pane.navigation.cwd)
@@ -73,6 +74,7 @@ impl Snapshot {
 }
 
 pub(crate) fn suggestions(
+    language: UiLanguage,
     catalog: Option<&agent_protocol::composer::ComposerCatalog>,
     provider: Option<agent_protocol::session::ProviderKind>,
     text: String,
@@ -93,8 +95,10 @@ pub(crate) fn suggestions(
         .cloned()
         .collect();
     let status = match catalog {
-        None => Some("候補を読み込み中…".into()),
-        Some(c) if c.loading && candidates.is_empty() => Some("候補を読み込み中…".into()),
+        None => Some(language.text("候補を読み込み中…").into()),
+        Some(c) if c.loading && candidates.is_empty() => {
+            Some(language.text("候補を読み込み中…").into())
+        }
         Some(c)
             if provider
                 .and_then(|provider| c.errors.get(&provider))
@@ -102,7 +106,7 @@ pub(crate) fn suggestions(
         {
             Some(c.errors[&provider.unwrap()].join("\n"))
         }
-        Some(_) if candidates.is_empty() => Some("該当する候補がありません".into()),
+        Some(_) if candidates.is_empty() => Some(language.text("該当する候補がありません").into()),
         _ => None,
     };
     Some(ComposerSuggestions { candidates, status })

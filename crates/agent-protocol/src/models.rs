@@ -858,8 +858,24 @@ pub fn task_active(observed: Option<bool>, status: SessionStatus) -> bool {
         SessionStatus::Preparing | SessionStatus::Running
     ))
 }
-pub fn task_title<'a>(name: Option<&'a str>, preview: Option<&'a str>) -> &'a str {
+pub fn task_title<'a>(name: Option<&'a str>, preview: Option<&'a str>) -> Option<&'a str> {
     name.filter(|name| !name.is_empty())
         .or_else(|| preview.filter(|preview| !preview.is_empty()))
-        .unwrap_or("無題のタスク")
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    #[test]
+    fn task_titles_return_only_names_or_previews_without_display_copy() {
+        for (name, preview, expected) in [
+            (None, None, None),
+            (Some(""), Some(""), None),
+            (Some(""), Some("preview"), Some("preview")),
+            (Some("設定{0}"), Some("preview"), Some("設定{0}")),
+            (Some(" "), None, Some(" ")),
+        ] {
+            assert_eq!(task_title(name, preview), expected);
+        }
+    }
 }

@@ -23,7 +23,7 @@ class EnvironmentSettingsTest {
             MaterialTheme {
                 EnvironmentSettingsScreen(
                     HostProfile("server", "Development server", ""),
-                    Presentation.empty().settings(),
+                    Presentation.empty(dev.remoteagent.core.UiLanguage.JAPANESE).settings(),
                     { host, enabled -> changes += host to enabled },
                     { _, _ -> },
                     { closed++ },

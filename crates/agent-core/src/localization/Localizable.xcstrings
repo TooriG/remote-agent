@@ -13809,22 +13809,6 @@
         }
       }
     },
-    "（保存済み・未確認）": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "（保存済み・未確認）"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "(saved · unverified)"
-          }
-        }
-      }
-    },
     "送信結果不明・{0}件": {
       "localizations": {
         "ja": {
@@ -16445,6 +16429,118 @@
           "stringUnit": {
             "state": "translated",
             "value": "History is unavailable. Saved content may be out of date."
+          }
+        }
+      }
+    },
+    "無題のタスク": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無題のタスク"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Untitled task"
+          }
+        }
+      }
+    },
+    "list.saved_title": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}（保存済み・未確認）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} (saved · unverified)"
+          }
+        }
+      }
+    },
+    "候補を読み込み中…": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "候補を読み込み中…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading suggestions…"
+          }
+        }
+      }
+    },
+    "該当する候補がありません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "該当する候補がありません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching suggestions"
+          }
+        }
+      }
+    },
+    "保存済み（キーは非表示）": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存済み（キーは非表示）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved (key hidden)"
+          }
+        }
+      }
+    },
+    "設定状態を取得してください": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "設定状態を取得してください"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load configuration status"
+          }
+        }
+      }
+    },
+    "キーの接続先を確認してください": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キーの接続先を確認してください"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the key's destination"
           }
         }
       }

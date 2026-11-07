@@ -1,6 +1,8 @@
 //! The selected conversation's agent fleet, independent of conversation navigation.
+use super::task_title;
+use crate::localization::UiLanguage;
 use crate::{
-    models::{Item, ItemBody, ItemStatus, SessionStatus, TurnStatus, task_title},
+    models::{Item, ItemBody, ItemStatus, SessionStatus, TurnStatus},
     session::{ProviderKind, SessionRef},
     state::Snapshot,
 };
@@ -33,8 +35,13 @@ impl Snapshot {
             };
             let observed = self.lists.activity.active.get(id).copied();
             let row = session_agent(
+                self.catalog.ui_language,
                 id,
-                task_title(thread.name.as_deref(), thread.preview.as_deref()),
+                task_title(
+                    self.catalog.ui_language,
+                    thread.name.as_deref(),
+                    thread.preview.as_deref(),
+                ),
                 match thread.status {
                     SessionStatus::Running => TurnStatus::Running,
                     _ => TurnStatus::Unknown,
@@ -67,6 +74,7 @@ impl Snapshot {
                     continue;
                 }
                 let row = local_agent(
+                    self.catalog.ui_language,
                     owner,
                     &item.id,
                     item.status,
@@ -86,6 +94,7 @@ impl Snapshot {
                     }
                     let entry = entries.entry(key).or_insert_with(|| {
                         let row = session_agent(
+                            self.catalog.ui_language,
                             receiver,
                             &receiver.id,
                             TurnStatus::Unknown,
@@ -105,7 +114,7 @@ impl Snapshot {
                             state.status,
                             self.lists.activity.active.get(receiver).copied(),
                         );
-                        entry.2.status = status.into();
+                        entry.2.status = self.catalog.ui_language.text(status).into();
                         entry.2.active = active;
                         entry.2.detail = state.message.clone().or_else(|| detail.clone());
                     } else if detail.is_some() {
@@ -136,6 +145,7 @@ pub(super) fn project(
         return empty();
     }
     if let Some(previous) = previous
+        && snapshot.catalog.ui_language == previous.snapshot.catalog.ui_language
         && snapshot.pane.observed_agents == previous.snapshot.pane.observed_agents
         && snapshot
             .sessions
@@ -181,6 +191,7 @@ fn session_key(id: &SessionRef) -> String {
 }
 
 fn session_agent(
+    language: UiLanguage,
     id: &SessionRef,
     title: &str,
     status: TurnStatus,
@@ -191,7 +202,7 @@ fn session_agent(
     AgentSummary {
         key: session_key(id),
         title: title.into(),
-        status: status.into(),
+        status: language.text(status).into(),
         active,
         unread,
         model: None,
@@ -201,6 +212,7 @@ fn session_agent(
 }
 
 fn local_agent(
+    language: UiLanguage,
     owner: &SessionRef,
     item_id: &agent_protocol::ids::ItemId,
     item_status: ItemStatus,
@@ -224,8 +236,8 @@ fn local_agent(
         title: prompt
             .map(crate::models::compact_title)
             .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| "サブエージェント".into()),
-        status: status.into(),
+            .unwrap_or_else(|| language.text("サブエージェント").into()),
+        status: language.text(status).into(),
         active,
         unread: false,
         model,
@@ -374,6 +386,32 @@ mod tests {
         );
         let projected = Presentation::project(Arc::new(state), Some(&closed));
         assert!(!projected.changes(closed).agents);
+    }
+
+    #[test]
+    fn language_changes_refresh_agent_copy_and_keep_names_and_identity() {
+        use crate::presentation::view::Presentation;
+        let mut state = snapshot(serde_json::json!([
+            {"id":{"provider":"codex","id":"root"}},
+            {"id":{"provider":"codex","id":"named"},"parentId":{"provider":"codex","id":"root"},"name":"設定\n{0}","status":"running"},
+            {"id":{"provider":"codex","id":"unnamed"},"parentId":{"provider":"codex","id":"root"},"status":"idle"}
+        ]));
+        Arc::make_mut(&mut state.pane).observed_agents = Some(session("root"));
+        let japanese = Presentation::project(Arc::new(state.clone()), None);
+        assert_eq!(japanese.agents[0].status, "実行中");
+        assert_eq!(japanese.agents[1].title, "無題のタスク");
+        state.catalog.ui_language = UiLanguage::English;
+        let english = Presentation::project(Arc::new(state.clone()), Some(&japanese));
+        assert!(english.changes(japanese.clone()).agents);
+        assert_eq!(english.agents[0].title, "設定\n{0}");
+        assert_eq!(english.agents[0].status, "Running");
+        assert_eq!(english.agents[1].title, "Untitled task");
+        assert_eq!(english.agents[1].status, "Idle");
+        assert_eq!(english.agents[0].key, japanese.agents[0].key);
+        assert_eq!(english.agents[1].key, japanese.agents[1].key);
+        assert_eq!(japanese.agents[0].status, "実行中");
+        let same = Presentation::project(Arc::new(state), Some(&english));
+        assert!(Arc::ptr_eq(&same.agents, &english.agents));
     }
 
     #[test]
@@ -579,6 +617,11 @@ mod tests {
         assert_eq!(completed[0].key, running[0].key);
         assert_eq!(completed[0].status, "完了");
         assert!(!completed[0].active);
+        state.catalog.ui_language = UiLanguage::English;
+        let english = state.agent_panel();
+        assert_eq!(english[0].status, "Done");
+        assert_eq!(english[0].title, "Check the change");
+        assert_eq!(english[0].key, completed[0].key);
         assert!(state.thread_list().unwrap().threads.is_empty());
     }
 

@@ -224,6 +224,7 @@ impl Snapshot {
             return ModelQuickControls::default();
         };
         quick_controls(
+            self.catalog.ui_language,
             self.catalog
                 .models
                 .iter()
@@ -235,6 +236,7 @@ impl Snapshot {
 }
 
 fn quick_controls(
+    language: UiLanguage,
     model: Option<&Model>,
     effort: Option<&str>,
     service_tier: Option<&str>,
@@ -267,7 +269,7 @@ fn quick_controls(
         .any(|speed| speed.fast && speed.id == tier);
     let mut speed_choices = vec![ModelSpeedChoice {
         id: "default".into(),
-        label: "通常".into(),
+        label: language.text("通常").into(),
         description: None,
         selected: tier == "default",
     }];
@@ -359,6 +361,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn only_default_speed_copy_is_translated() {
+        let model = serde_json::from_value(serde_json::json!({"id":"model","model":{"provider":"codex","id":"model"},"displayName":"設定","settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[],"serviceTiers":[{"id":"priority","name":"設定{0}","description":"設定\n{1}","fast":true}]}})).unwrap();
+        let controls = quick_controls(UiLanguage::English, Some(&model), None, None);
+        assert_eq!(controls.speed_choices[0].label, "Standard");
+        assert_eq!(controls.speed_choices[1].label, "設定{0}");
+        assert_eq!(
+            controls.speed_choices[1].description.as_deref(),
+            Some("設定\n{1}")
+        );
+    }
+
     #[rstest::rstest]
     #[case(ProviderKind::Codex, "shared", vec![("週間枠", 86)])]
     #[case(ProviderKind::Claude, "shared", vec![("Fable · 週間枠", 66), ("Sonnet · 週間枠", 42)])]
@@ -414,7 +428,8 @@ mod tests {
                 {"id":"ultrafast","name":"Ultrafast","description":"Fastest processing","fast":true}]
         }})).unwrap();
         for id in ["default", "priority", "ultrafast"] {
-            let controls = quick_controls(Some(&model), Some("low"), Some(id));
+            let controls =
+                quick_controls(UiLanguage::Japanese, Some(&model), Some("low"), Some(id));
             assert_eq!(
                 controls
                     .speed_choices
@@ -461,10 +476,20 @@ mod tests {
             automatic_provider(&models, Some(&selected), &errors),
             Some(ProviderKind::Claude)
         );
-        let controls = quick_controls(Some(&models[1]), None, Some("express"));
+        let controls = quick_controls(
+            UiLanguage::Japanese,
+            Some(&models[1]),
+            None,
+            Some("express"),
+        );
         assert!(controls.fast);
         assert_eq!(controls.toggle_fast_to.as_deref(), Some("default"));
-        let controls = quick_controls(Some(&models[1]), None, Some("priority"));
+        let controls = quick_controls(
+            UiLanguage::Japanese,
+            Some(&models[1]),
+            None,
+            Some("priority"),
+        );
         assert!(!controls.fast);
         assert_eq!(controls.toggle_fast_to.as_deref(), Some("express"));
         models[1].is_default = Some(false);
@@ -786,7 +811,7 @@ impl Snapshot {
                     provider,
                     label: provider.label().into(),
                     key_url: provider.key_url().into(),
-                    status: status.into(),
+                    status: self.catalog.ui_language.text(status).into(),
                     can_remove: route
                         .is_some_and(|route| route.source == CredentialSource::Managed),
                 }

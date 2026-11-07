@@ -148,7 +148,7 @@ extension ProviderAccountScreen {
                 ForEach(controls, id: \.provider) { route in Text(route.label).tag(route.provider) }
             }.onChange(of: credentialProvider) { _ in loginCode = "" }
             if let selected {
-                AppText(selected.status).font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: selected.status).font(.caption).foregroundStyle(.secondary)
                 if let url = URL(string: selected.keyUrl) {
                     Link("APIキーを取得", destination: url)
                 }

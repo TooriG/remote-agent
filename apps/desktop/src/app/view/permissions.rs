@@ -23,10 +23,7 @@ impl Preferences {
                 Button::new("composer-permissions")
                     .debug_selector(|| "composer-permissions".into())
                     .icon(Icon::default().path("icons/shield.svg"))
-                    .label(agent_core::localization::localized_ui_text(
-                        language,
-                        label.to_string(),
-                    ))
+                    .label(label.to_string())
                     .accessibility_label(language.text("承認方法を変更"))
                     .ghost()
                     .h(px(40.))

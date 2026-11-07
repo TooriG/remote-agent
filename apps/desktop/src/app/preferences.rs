@@ -146,7 +146,7 @@ impl Preferences {
             }),
         ];
         Self {
-            metadata: agent_core::presentation::view::Presentation::empty().settings(),
+            metadata: agent_core::presentation::view::Presentation::empty(language).settings(),
             projects: Vec::new(),
             pane: None,
             handle: cx.global::<Runtime>().handle.clone(),
@@ -231,7 +231,10 @@ impl Preferences {
                 .code
                 .update(cx, |input, cx| input.set_value("", window, cx));
             self.worktrees.scope = None;
-            self.metadata = agent_core::presentation::view::Presentation::empty().settings();
+            self.metadata = agent_core::presentation::view::Presentation::empty(
+                crate::localization::language(cx),
+            )
+            .settings();
             cx.notify();
         }
         if self.remote != remote {

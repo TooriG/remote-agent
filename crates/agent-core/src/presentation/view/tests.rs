@@ -478,3 +478,38 @@ fn language_changes_replace_localized_content_and_reject_old_projection_context(
         unchanged.conversation.as_ref().unwrap()
     ));
 }
+
+#[test]
+fn language_changes_refresh_lazy_settings_and_composer_copy_without_host_data() {
+    use crate::localization::UiLanguage;
+    let japanese = Presentation::empty(UiLanguage::Japanese);
+    let mut next = japanese.snapshot.as_ref().clone();
+    next.catalog.ui_language = UiLanguage::English;
+    let english = Presentation::project(Arc::new(next), Some(&japanese));
+    let changes = english.changes(japanese.clone());
+    assert!(changes.settings && changes.composer);
+    assert_eq!(english.settings.connection_status_label(), "Disconnected");
+    assert_eq!(english.settings.permission.label, "No agent selected");
+    assert_eq!(
+        english
+            .composer
+            .composer_suggestions("/".into(), 1)
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("Loading suggestions…")
+    );
+    assert_eq!(japanese.settings.connection_status_label(), "未接続");
+    assert_eq!(
+        japanese
+            .composer
+            .composer_suggestions("/".into(), 1)
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("候補を読み込み中…")
+    );
+    let unchanged = Presentation::project(english.snapshot.clone(), Some(&english));
+    assert!(Arc::ptr_eq(&english.settings, &unchanged.settings));
+    assert!(Arc::ptr_eq(&english.composer, &unchanged.composer));
+}

@@ -7,9 +7,9 @@ import UIKit
 @MainActor
 @Observable
 final class AppViewModel {
-    @ObservationIgnored private(set) var publication = Presentation.empty()
-    @ObservationIgnored private(set) var snapshot = AgentCore.Snapshot.empty()
-    private(set) var settings = Presentation.empty().settings()
+    @ObservationIgnored private(set) var publication: Presentation
+    @ObservationIgnored private(set) var snapshot: AgentCore.Snapshot
+    private(set) var settings: SettingsPresentation
     private(set) var connectionStates: [String: HostConnectionState] = [:]
     private(set) var isConnected = false
     private(set) var loadingThreads = false
@@ -50,7 +50,12 @@ final class AppViewModel {
 
     init(preferences: DevicePreferences) {
         self.preferences = preferences
-        language = preferences.language()
+        let language = preferences.language()
+        self.language = language
+        let empty = Presentation.empty(language: language)
+        publication = empty
+        snapshot = empty.snapshot()
+        settings = empty.settings()
         observeLiveActivityRequests()
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let available = path.status == .satisfied
@@ -79,7 +84,12 @@ final class AppViewModel {
     func selectLanguage(_ value: UiLanguage) {
         // UserDefaults keeps the existing non-throwing mobile save contract.
         try? preferences.selectLanguage(language: value)
-        language = preferences.language()
+        let next = preferences.language()
+        guard language != next else { return }
+        language = next
+        if session?.store() == nil {
+            publish(session?.presentation() ?? Presentation.empty(language: next))
+        }
     }
 
     func selectProfile(_ id: String) {
@@ -168,9 +178,9 @@ final class AppViewModel {
 
     private func resetPresentation() {
         notice = nil
-        publication = Presentation.empty()
+        publication = Presentation.empty(language: language)
         settings = publication.settings()
-        snapshot = AgentCore.Snapshot.empty()
+        snapshot = publication.snapshot()
         isConnected = false
         loadingThreads = false
     }
@@ -294,7 +304,7 @@ extension AppViewModel {
     }
 
     func updateConnectionState(_ snapshot: AgentCore.Snapshot, host: String) {
-        let next = HostConnectionState(snapshot)
+        let next = HostConnectionState(enabled: snapshot.connectionEnabled(), connected: snapshot.connected())
         if connectionStates[host] != next {
             connectionStates[host] = next
         }

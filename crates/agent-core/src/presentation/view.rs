@@ -171,8 +171,10 @@ impl Presentation {
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Presentation {
     #[cfg_attr(feature = "bindings", uniffi::constructor)]
-    pub fn empty() -> Arc<Self> {
-        Self::pending(Arc::default())
+    pub fn empty(language: crate::localization::UiLanguage) -> Arc<Self> {
+        let mut snapshot = Snapshot::default();
+        snapshot.catalog.ui_language = language;
+        Self::pending(Arc::new(snapshot))
     }
     pub fn snapshot(&self) -> Arc<Snapshot> {
         self.snapshot.clone()

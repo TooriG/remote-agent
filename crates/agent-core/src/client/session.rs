@@ -76,12 +76,12 @@ impl ClientSession {
 
     pub fn snapshot(&self) -> Arc<Snapshot> {
         self.store()
-            .map_or_else(|| self.empty.clone(), |store| store.snapshot())
+            .map_or_else(|| self.pending_snapshot(), |store| store.snapshot())
     }
 
     pub fn presentation(&self) -> Arc<crate::presentation::view::Presentation> {
         self.store().map_or_else(
-            || crate::presentation::view::Presentation::pending(self.empty.clone()),
+            || crate::presentation::view::Presentation::pending(self.pending_snapshot()),
             |store| store.presentation(),
         )
     }
@@ -253,6 +253,15 @@ impl ClientSession {
 }
 
 impl ClientSession {
+    fn pending_snapshot(&self) -> Arc<Snapshot> {
+        let language = self.persistence.device.language();
+        if language == self.empty.catalog.ui_language {
+            return self.empty.clone();
+        }
+        let mut snapshot = self.empty.as_ref().clone();
+        snapshot.catalog.ui_language = language;
+        Arc::new(snapshot)
+    }
     fn set_active(&self, active: bool) {
         self.active.store(active, Ordering::SeqCst);
         if let Some(store) = self.store() {
@@ -267,6 +276,8 @@ impl ClientSession {
         client_build: ClientBuild,
         device_name: String,
     ) -> Arc<Self> {
+        let mut empty = Snapshot::default();
+        empty.catalog.ui_language = persistence.device.language();
         Arc::new(Self {
             persistence,
             platform,
@@ -280,7 +291,7 @@ impl ClientSession {
             initialization: Default::default(),
             operations: Default::default(),
             stop: CancellationToken::new(),
-            empty: Arc::default(),
+            empty: Arc::new(empty),
         })
     }
     async fn restore(&self, new_pairing: bool) -> Result<Arc<AgentStore>, AgentError> {
@@ -426,6 +437,39 @@ mod tests {
     use tokio::sync::Notify;
 
     #[tokio::test]
+    async fn pending_presentations_use_device_language_before_host_storage_is_read() {
+        use crate::localization::UiLanguage;
+        let storage = Arc::new(Storage::default());
+        *storage.language.lock().unwrap() = br#""en""#.to_vec();
+        let device = DevicePreferences::new(storage.clone());
+        let session = ClientSession::create(
+            Persistence::new(storage.clone(), device.clone()),
+            storage.clone(),
+            false,
+            client_build(42),
+            "Fixture device".into(),
+        );
+        let first = session.snapshot();
+        assert_eq!(
+            session.presentation().settings.connection_status_label(),
+            "Disconnected"
+        );
+        assert_eq!(first.catalog.ui_language, UiLanguage::English);
+        assert!(Arc::ptr_eq(&first, &session.snapshot()));
+        device.select_language(UiLanguage::Japanese).unwrap();
+        assert_eq!(session.snapshot().catalog.ui_language, UiLanguage::Japanese);
+        assert_eq!(
+            session.presentation().settings.connection_status_label(),
+            "未接続"
+        );
+        assert_eq!(storage.loads.load(Ordering::SeqCst), 0);
+        assert!(storage.writes.lock().unwrap().is_empty());
+        session.clone().ready().await.unwrap();
+        assert_eq!(session.snapshot().catalog.ui_language, UiLanguage::Japanese);
+        session.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn switching_a_connection_off_survives_restore_without_losing_the_draft() {
         let storage = Arc::new(Storage::default());
         let session = open(storage.clone());
@@ -562,6 +606,7 @@ mod tests {
         bytes: Mutex<Vec<u8>>,
         model_preferences: Mutex<Vec<u8>>,
         editor_preferences: Mutex<Vec<u8>>,
+        language: Mutex<Vec<u8>>,
         writes: Mutex<Vec<Vec<u8>>>,
         loads: AtomicUsize,
         read_gate: Mutex<Option<Arc<Gate>>>,
@@ -599,7 +644,7 @@ mod tests {
             Ok(match key {
                 PreferenceKey::Models => self.model_preferences.lock().unwrap().clone(),
                 PreferenceKey::Editor => self.editor_preferences.lock().unwrap().clone(),
-                PreferenceKey::Language => Vec::new(),
+                PreferenceKey::Language => self.language.lock().unwrap().clone(),
             })
         }
         fn save(&self, key: PreferenceKey, bytes: Vec<u8>) -> Result<(), AgentError> {
@@ -613,7 +658,10 @@ mod tests {
                         .unwrap();
                     *self.editor_preferences.lock().unwrap() = bytes;
                 }
-                PreferenceKey::Language => panic!("this fixture never edits language"),
+                PreferenceKey::Language => {
+                    serde_json::from_slice::<crate::localization::UiLanguage>(&bytes).unwrap();
+                    *self.language.lock().unwrap() = bytes;
+                }
             }
             Ok(())
         }

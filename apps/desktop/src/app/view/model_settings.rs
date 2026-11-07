@@ -313,7 +313,7 @@ impl Preferences {
                         div()
                             .text_sm()
                             .text_color(rgb(appearance::MUTED))
-                            .child(language.text(&agent.label).to_owned()),
+                            .child(agent.label.clone()),
                     ),
             );
         }
@@ -555,10 +555,7 @@ impl Preferences {
                         .debug_selector(move || format!("dsh-key-{}", provider.reference()))
                     })),
             )
-            .child(agent_core::localization::localized_ui_text(
-                language,
-                selected.status.clone(),
-            ))
+            .child(selected.status.clone())
             .child(
                 button(
                     "account-open-login",

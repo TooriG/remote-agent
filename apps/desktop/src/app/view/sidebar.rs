@@ -165,8 +165,7 @@ impl SidebarRow {
                             cx,
                             move |mut menu, _, _| {
                                 for item in &copy_items {
-                                    let entry =
-                                        PopupMenuItem::new(language.text(&item.label).to_owned());
+                                    let entry = PopupMenuItem::new(item.label.clone());
                                     let entry = if let Some(value) = &item.value {
                                         let value = value.clone();
                                         entry.on_click(move |_, _, cx| {

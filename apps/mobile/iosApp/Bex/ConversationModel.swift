@@ -1,7 +1,6 @@
 import AgentCore
 import Foundation
 import Observation
-import UniformTypeIdentifiers
 
 /// One pane owns its native presentation and input. The Host session owns transport and persistence.
 @MainActor
@@ -10,14 +9,14 @@ final class ConversationModel {
     let host: String
     @ObservationIgnored let session: ClientSession
     @ObservationIgnored let pane: AgentPane?
-    @ObservationIgnored private(set) var publication = Presentation.empty()
-    @ObservationIgnored private(set) var snapshot = AgentCore.Snapshot.empty()
-    private(set) var settings = Presentation.empty().settings()
+    @ObservationIgnored private(set) var publication: Presentation
+    @ObservationIgnored private(set) var snapshot: AgentCore.Snapshot
+    private(set) var settings: SettingsPresentation
     private(set) var isConnected = false
-    private(set) var conversationContext = Presentation.empty().conversationContext()
-    private(set) var composer = Presentation.empty().composer()
-    private(set) var composerControls = Presentation.empty().composer().controls()
-    private(set) var files = AgentCore.Snapshot.empty().files()
+    private(set) var conversationContext: ConversationContext
+    private(set) var composer: ComposerPresentation
+    private(set) var composerControls: ComposerControls
+    private(set) var files: AgentCore.Files
     private(set) var terminals = Terminals.empty()
     private(set) var conversation: ConversationPresentation?
     private(set) var agents: [AgentSummary] = []
@@ -44,6 +43,16 @@ final class ConversationModel {
         self.host = host
         self.session = session
         self.pane = pane
+        let empty = Presentation.empty(language: session.snapshot().uiLanguage())
+        let snapshot = empty.snapshot()
+        let composer = empty.composer()
+        publication = empty
+        self.snapshot = snapshot
+        settings = empty.settings()
+        conversationContext = empty.conversationContext()
+        self.composer = composer
+        composerControls = composer.controls()
+        files = snapshot.files()
         if let value = try? currentPresentation() {
             publish(value)
         }
@@ -235,10 +244,6 @@ extension ConversationModel {
         perform(.discardUnknownSubmission(clientUserMessageId: id)) { [weak self] _ in self?.persist() }
     }
 
-    func removeAttachment(_ id: Int) {
-        perform(.removeAttachment(draftKey: coreDraftKey, index: UInt32(id))) { [weak self] _ in self?.persist() }
-    }
-
     func transcribe(_ audio: Data, draftKey key: DraftIdentity, sendImmediately: Bool,
                     preparation: DictationPreparation?) {
         guard !transcribing, key == draftKey else { return }
@@ -253,28 +258,6 @@ extension ConversationModel {
                 self?.persist()
             }
         }
-    }
-
-    func attach(_ url: URL, temporaryDirectory: URL? = nil) async throws {
-        let access = url.startAccessingSecurityScopedResource()
-        transferring = true
-        transferError = nil
-        defer {
-            persist()
-            if access {
-                url.stopAccessingSecurityScopedResource()
-            }
-            if let temporaryDirectory {
-                try? FileManager.default.removeItem(at: temporaryDirectory)
-            }
-            transferring = false
-        }
-        let attachment = Attachment(path: url.path, name: url.lastPathComponent,
-                                    isImage: UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true)
-        _ = try await outcome(for: .uploadAttachment(UploadAttachment(
-            draftKey: coreDraftKey,
-            attachment: attachment
-        )))
     }
 
     func respond(_ requestId: String, _ answer: Answer) {

@@ -40,7 +40,7 @@ impl Snapshot {
         PermissionControl {
             provider,
             load_provider: provider.filter(|_| self.connection.connected && state.is_none()),
-            label: match mode {
+            label: self.catalog.ui_language.text(match mode {
                 Some(mode) => {
                     PERMISSION_CHOICES
                         .iter()
@@ -52,7 +52,7 @@ impl Snapshot {
                 None if settings.is_some() => "カスタム・未設定",
                 None if result.is_some() => "取得できません",
                 None => "読み込み中…",
-            },
+            }),
             mode,
             version: settings.map(|settings| settings.version.clone()),
             loading: state.is_some() && result.is_none(),

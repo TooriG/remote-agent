@@ -1,6 +1,7 @@
 import AgentCore
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ComposerAttachmentStrip: View {
     let attachments: [Attachment]
@@ -43,5 +44,33 @@ struct ComposerAttachmentStrip: View {
             }.padding(8)
         }
         .frame(height: attachments.contains(where: \.isImage) ? 136 : 60)
+    }
+}
+
+extension ConversationModel {
+    func removeAttachment(_ id: Int) {
+        perform(.removeAttachment(draftKey: coreDraftKey, index: UInt32(id))) { [weak self] _ in self?.persist() }
+    }
+
+    func attach(_ url: URL, temporaryDirectory: URL? = nil) async throws {
+        let access = url.startAccessingSecurityScopedResource()
+        transferring = true
+        transferError = nil
+        defer {
+            persist()
+            if access {
+                url.stopAccessingSecurityScopedResource()
+            }
+            if let temporaryDirectory {
+                try? FileManager.default.removeItem(at: temporaryDirectory)
+            }
+            transferring = false
+        }
+        let attachment = Attachment(path: url.path, name: url.lastPathComponent,
+                                    isImage: UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true)
+        _ = try await outcome(for: .uploadAttachment(UploadAttachment(
+            draftKey: coreDraftKey,
+            attachment: attachment
+        )))
     }
 }

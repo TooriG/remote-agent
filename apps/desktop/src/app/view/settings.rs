@@ -48,9 +48,7 @@ impl Preferences {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(appearance::MUTED))
-                                                    .child(
-                                                        language.text(&provider.label).to_owned(),
-                                                    ),
+                                                    .child(provider.label.clone()),
                                             ),
                                     ),
                             )

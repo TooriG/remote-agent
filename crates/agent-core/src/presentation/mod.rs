@@ -35,6 +35,15 @@ pub mod markdown;
 pub mod task_activity;
 pub mod terminals;
 
+/// Names and previews are opaque; only the absence of both has UI copy.
+fn task_title<'a>(
+    language: UiLanguage,
+    name: Option<&'a str>,
+    preview: Option<&'a str>,
+) -> &'a str {
+    crate::models::task_title(name, preview).unwrap_or_else(|| language.text("無題のタスク"))
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum GroupKind {
     Hidden,

@@ -13,7 +13,7 @@ struct ThreadsScreen: View {
             if !model.profiles.isEmpty {
                 ErrorNotices(notices: model.notices[.projects] ?? [], perform: { model.perform($0) }).taskListRowStyle()
                 if let notice = model.list?.notice {
-                    AppNotice(text: notice).taskListRowStyle()
+                    AppNotice(text: ErrorText(message: notice, details: nil)).taskListRowStyle()
                 }
                 if model.threadLoadState == .failed {
                     Section {

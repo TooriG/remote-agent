@@ -19,6 +19,7 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct SettingsPresentation {
+    language: crate::localization::UiLanguage,
     key: DraftKey,
     provider: Option<ProviderKind>,
     model: Option<ModelRef>,
@@ -103,6 +104,7 @@ impl SettingsPresentation {
             }
         }
         let next = Self {
+            language: snapshot.catalog.ui_language,
             key: key.clone(),
             provider,
             model: snapshot
@@ -211,7 +213,11 @@ impl SettingsPresentation {
         self.connection_enabled
     }
     pub fn connection_status_label(&self) -> String {
-        super::connections::status_label(self.connected, self.connection_enabled)
+        super::connections::connection_status_label(
+            self.language,
+            self.connected,
+            self.connection_enabled,
+        )
     }
     pub fn account_login_error(&self, provider: ProviderKind) -> Option<ErrorText> {
         self.login_errors.get(&provider).cloned()

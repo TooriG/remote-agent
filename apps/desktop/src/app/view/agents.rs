@@ -86,12 +86,7 @@ impl Desktop {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(appearance::MUTED))
-                                                    .child(
-                                                        agent_core::localization::localized_ui_text(
-                                                            language,
-                                                            agent.status.clone(),
-                                                        ),
-                                                    ),
+                                                    .child(agent.status.clone()),
                                             ),
                                     )
                                     .child(

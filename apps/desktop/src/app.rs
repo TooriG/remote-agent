@@ -214,7 +214,7 @@ impl Desktop {
         let language = crate::localization::language(cx);
         StoreSession::on_app_quit(cx, |view| &mut view.session);
         cx.on_release(|view, _| view.close_file_browser()).detach();
-        let (remote, side_session, side_chat_mode, initial_snapshot) = match mode {
+        let (remote, side_session, side_chat_mode, mut initial_snapshot) = match mode {
             Mode::Main => (None, None, false, Snapshot::default()),
             Mode::SideChat { remote, session } => {
                 (remote, Some(session), true, Snapshot::default())
@@ -229,6 +229,10 @@ impl Desktop {
                 (remote, None, true, initial_snapshot)
             }
         };
+        initial_snapshot.catalog.ui_language = language;
+        let initial_snapshot = Arc::new(initial_snapshot);
+        let publication =
+            agent_core::presentation::view::Presentation::project(initial_snapshot.clone(), None);
         let (updates, incoming) = async_channel::unbounded();
         cx.spawn_in(window, async move |view, cx| {
             while let Ok(update) = incoming.recv().await {
@@ -388,6 +392,15 @@ impl Desktop {
                 view.composer.input.update(cx, |input, cx| {
                     input.set_placeholder(language.text("AI に依頼する"), window, cx)
                 });
+                if view.session.is_none() {
+                    Arc::make_mut(&mut view.snapshot).catalog.ui_language = language;
+                    view.publication = agent_core::presentation::view::Presentation::project(
+                        view.snapshot.clone(),
+                        Some(&view.publication),
+                    );
+                    view.sync_inputs(window, cx);
+                    view.publish_views(window, cx);
+                }
                 cx.notify();
             }),
             cx.observe_in(&owner, window, |view, _, window, cx| {
@@ -560,8 +573,8 @@ impl Desktop {
         }
         let mut view = Self {
             session: None,
-            snapshot: Arc::new(initial_snapshot),
-            publication: agent_core::presentation::view::Presentation::empty(),
+            snapshot: initial_snapshot,
+            publication,
             runtime: cx.global::<Runtime>().clone(),
             updates,
             snapshot_pending: None,
@@ -1262,8 +1275,9 @@ impl Desktop {
         self.connection_selection.host_id = Some(self.connection_id());
         self.save_connection_selection();
         cx.notify();
-        self.snapshot = Arc::default();
-        self.publication = agent_core::presentation::view::Presentation::empty();
+        self.publication =
+            agent_core::presentation::view::Presentation::empty(crate::localization::language(cx));
+        self.snapshot = self.publication.snapshot();
         self.pending_quote = None;
         self.pending_explanation = None;
         self.editor.text.pending = None;
@@ -1887,7 +1901,7 @@ mod completion_tests {
             .unwrap();
         cx.update(|cx| {
             crate::appearance::init(cx);
-            cx.set_global(Language(UiLanguage::Japanese));
+            cx.set_global(Language(UiLanguage::English));
             cx.set_global(crate::Runtime {
                 handle: runtime.handle().clone(),
                 sessions: Default::default(),
@@ -1907,6 +1921,15 @@ mod completion_tests {
             )
         });
         view.update(cx, |view, window, cx| {
+            assert_eq!(view.snapshot.catalog.ui_language, UiLanguage::English);
+            assert_eq!(
+                view.publication.settings.connection_status_label(),
+                "Disconnected"
+            );
+            assert_eq!(
+                view.preferences.read(cx).metadata.connection_status_label(),
+                "Disconnected"
+            );
             use agent_protocol::{
                 requests::{Question, Request, RequestBody, RequestTarget},
                 session::{ProviderKind, RequestDelivery, SessionRef},
@@ -1954,21 +1977,28 @@ mod completion_tests {
         .unwrap();
         for (language, placeholder, question_placeholder) in [
             (
-                UiLanguage::English,
-                "Ask AI",
-                "Enter your answer (leave blank to answer with the chosen option)",
-            ),
-            (
                 UiLanguage::Japanese,
                 "AI に依頼する",
                 "回答を入力（空欄なら選んだ選択肢で回答）",
             ),
+            (
+                UiLanguage::English,
+                "Ask AI",
+                "Enter your answer (leave blank to answer with the chosen option)",
+            ),
         ] {
             cx.update(|cx| cx.set_global(Language(language)));
-            view.update(cx, |view, window, cx| {
-                // The global locale changes before the Store publication arrives.
-                Arc::make_mut(&mut view.snapshot).catalog.ui_language = language;
-                view.sync_inputs(window, cx);
+            view.update(cx, |view, _, cx| {
+                assert_eq!(view.snapshot.catalog.ui_language, language);
+                assert_eq!(view.publication.snapshot().catalog.ui_language, language);
+                assert_eq!(
+                    view.preferences.read(cx).metadata.connection_status_label(),
+                    if language == UiLanguage::English {
+                        "Disconnected"
+                    } else {
+                        "未接続"
+                    }
+                );
                 let input = view.composer.input.read(cx);
                 assert_eq!(input.presentation().placeholder().as_ref(), placeholder);
                 assert_eq!(input.text().to_string(), "ユーザーの入力 {0}");

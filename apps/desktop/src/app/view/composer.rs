@@ -610,9 +610,12 @@ impl ComposerContent {
             })
             .child(Self::composer_context(model, cx))
             .when_some(model.input_unavailable.as_ref(), |column, reason| {
-                column.child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
-                    agent_core::localization::localized_ui_text(language, reason.clone()),
-                ))
+                column.child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(appearance::MUTED))
+                        .child(reason.clone()),
+                )
             })
             .child(composer);
         h_flex()

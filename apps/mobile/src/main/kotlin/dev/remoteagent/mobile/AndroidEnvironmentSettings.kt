@@ -78,7 +78,7 @@ internal fun EnvironmentSettingsScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text(language.text("接続"))
-                    Text(language.text(settings.connectionStatusLabel()), style = MaterialTheme.typography.bodySmall)
+                    Text(settings.connectionStatusLabel(), style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(
                     settings.connectionEnabled(),
@@ -112,7 +112,7 @@ private fun ProviderSettingsList(
             TextButton(onClick = { choose(agent.provider) }, modifier = Modifier.weight(1f)) {
                 Column(Modifier.fillMaxWidth()) {
                     Text(agent.name)
-                    Text(language.text(agent.label), style = MaterialTheme.typography.bodySmall)
+                    Text(agent.label, style = MaterialTheme.typography.bodySmall)
                 }
             }
             Switch(

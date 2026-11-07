@@ -15,7 +15,7 @@ struct ComposerMessageField: View {
                 )
                 let candidates = suggestions?.candidates ?? []
                 if let status = suggestions?.status {
-                    AppText(status).font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: status).font(.caption).foregroundStyle(.secondary)
                 }
                 if !candidates.isEmpty {
                     ScrollView {

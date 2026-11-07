@@ -1,6 +1,8 @@
 //! The visible list combines wire summaries with locally observed activity.
+use super::task_title;
+use crate::localization::{UiLanguage, localized_ui_format};
 use crate::{
-    models::{Project, ProjectRoot, task_active, task_title},
+    models::{Project, ProjectRoot, task_active},
     state::{
         Snapshot,
         projects::{ChatPlacements, project_chat_visible},
@@ -108,6 +110,7 @@ pub struct ThreadCopyItem {
 }
 
 fn thread_copy_items(
+    language: UiLanguage,
     title: &str,
     id: &str,
     cwd: Option<&str>,
@@ -122,7 +125,7 @@ fn thread_copy_items(
     ]
     .into_iter()
     .map(|(label, value)| ThreadCopyItem {
-        label: label.into(),
+        label: language.text(label).into(),
         value: value.filter(|value| !value.is_empty()).map(str::to_owned),
     })
     .collect()
@@ -157,6 +160,7 @@ pub struct ThreadList {
 /// Only the data consumed by list presentation. Conversation bodies and
 /// operation generations are deliberately absent from its equality contract.
 pub(crate) struct ListSource<'a> {
+    language: UiLanguage,
     lists: &'a crate::state::Lists,
     accounts: &'a Option<std::sync::Arc<agent_protocol::operations::Accounts>>,
     conversations: &'a std::sync::Arc<
@@ -168,6 +172,7 @@ pub(crate) struct ListSource<'a> {
 }
 impl<'a> ListSource<'a> {
     pub(crate) fn new(
+        language: UiLanguage,
         lists: &'a crate::state::Lists,
         accounts: &'a Option<std::sync::Arc<agent_protocol::operations::Accounts>>,
         conversations: &'a std::sync::Arc<
@@ -178,6 +183,7 @@ impl<'a> ListSource<'a> {
         connected: bool,
     ) -> Self {
         Self {
+            language,
             lists,
             accounts,
             conversations,
@@ -215,7 +221,8 @@ impl<'a> ListSource<'a> {
     }
     pub(crate) fn equivalent(&self, other: &Self) -> bool {
         use crate::state::Same;
-        self.lists.threads.same(&other.lists.threads)
+        self.language == other.language
+            && self.lists.threads.same(&other.lists.threads)
             && self
                 .lists
                 .project_threads
@@ -311,6 +318,7 @@ fn list_metadata(thread: &crate::models::Thread) -> impl PartialEq + '_ {
 impl Snapshot {
     pub(crate) fn list_source(&self) -> ListSource<'_> {
         ListSource::new(
+            self.catalog.ui_language,
             &self.lists,
             &self.catalog.account.accounts,
             &self.sessions.conversations,
@@ -386,7 +394,7 @@ impl ListSource<'_> {
             .map(|project| project.id.as_str())
             .collect();
         let errors = self.list_error_providers(list);
-        let notice = (!errors.is_empty()).then(|| format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.join("、")));
+        let notice = (!errors.is_empty()).then(|| localized_ui_format(self.language, "会話一覧は部分結果です（{0}）。取得できない提供元の保存済み表示は最新とは限りません。".into(), vec![errors.join("、")]));
         let preferences = self.lists.project_preferences.get(self.storage_scope);
         let mut projects = Vec::new();
         let mut hidden_projects = Vec::new();
@@ -427,6 +435,7 @@ impl ListSource<'_> {
         let placements = ChatPlacements::new(preferences);
         let summaries = if include_standalone {
             thread_summaries(
+                self.language,
                 list.data.iter().filter(|thread| {
                     thread
                         .project_id
@@ -486,7 +495,10 @@ impl ListSource<'_> {
                             || archived_ids.is_some_and(|ids| !ids.is_empty());
                         if !self.connected && page.is_none() {
                             summary.error = Some(super::error::ErrorText {
-                                message: "接続するとタスクを読み込めます".into(),
+                                message: self
+                                    .language
+                                    .text("接続するとタスクを読み込めます")
+                                    .into(),
                                 details: None,
                             });
                         }
@@ -513,6 +525,7 @@ impl ListSource<'_> {
                             });
                             summary.threads = if !has_archive_filter {
                                 thread_summaries(
+                                    self.language,
                                     data,
                                     &self.lists.activity.active,
                                     &self.lists.activity.unread,
@@ -522,6 +535,7 @@ impl ListSource<'_> {
                                 )
                             } else {
                                 thread_summaries(
+                                    self.language,
                                     data.filter(|thread| {
                                         project_chat_visible(
                                             archived_before,
@@ -548,9 +562,10 @@ impl ListSource<'_> {
                             let errors = self.list_error_providers(page);
                             if !errors.is_empty() {
                                 summary.error = Some(super::error::ErrorText {
-                                    message: format!(
-                                        "一部を取得できません（{}）",
-                                        errors.join("、")
+                                    message: localized_ui_format(
+                                        self.language,
+                                        "一部を取得できません（{0}）".into(),
+                                        vec![errors.join("、")],
                                     ),
                                     details: None,
                                 });
@@ -606,14 +621,19 @@ impl ListSource<'_> {
                             })
                             .filter(|thread| {
                                 search.is_empty()
-                                    || task_title(thread.name.as_deref(), thread.preview.as_deref())
-                                        .to_lowercase()
-                                        .contains(&search)
+                                    || task_title(
+                                        self.language,
+                                        thread.name.as_deref(),
+                                        thread.preview.as_deref(),
+                                    )
+                                    .to_lowercase()
+                                    .contains(&search)
                             })
                             .collect::<Vec<_>>();
                         summary.threads.splice(
                             0..0,
                             thread_summaries(
+                                self.language,
                                 placed.iter().map(AsRef::as_ref),
                                 &self.lists.activity.active,
                                 &self.lists.activity.unread,
@@ -685,6 +705,7 @@ impl ListSource<'_> {
         list.has_more |= rows.len() > limit;
         rows.truncate(limit);
         list.threads = thread_summaries(
+            self.language,
             rows.into_iter(),
             &self.lists.activity.active,
             &self.lists.activity.unread,
@@ -715,6 +736,7 @@ impl ListSource<'_> {
 }
 
 fn thread_summaries<'a>(
+    language: UiLanguage,
     data: impl Iterator<Item = &'a crate::models::Thread>,
     active: &BTreeMap<crate::session::SessionRef, bool>,
     unread: &BTreeSet<crate::session::SessionRef>,
@@ -729,17 +751,17 @@ fn thread_summaries<'a>(
             let active = task_active(active.get(id).copied(), thread.status);
             let unread = unread.contains(id);
             let waiting = waiting.contains(id);
-            let title = task_title(thread.name.as_deref(), thread.preview.as_deref());
+            let title = task_title(language, thread.name.as_deref(), thread.preview.as_deref());
             ThreadSummary {
                 host_id: String::new(),
                 id: id.clone(),
-                title: title.to_owned()
-                    + if thread.list_stale == Some(true) {
-                        "（保存済み・未確認）"
-                    } else {
-                        ""
-                    },
+                title: if thread.list_stale == Some(true) {
+                    localized_ui_format(language, "list.saved_title".into(), vec![title.into()])
+                } else {
+                    title.into()
+                },
                 copy_items: thread_copy_items(
+                    language,
                     title,
                     &id.id,
                     thread.cwd.as_deref(),

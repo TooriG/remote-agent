@@ -118,7 +118,9 @@ pub(super) fn move_chat(snapshot: &mut Snapshot, id: &crate::session::SessionRef
         if thread.parent_id.is_some() {
             return;
         }
-        crate::models::task_title(thread.name.as_deref(), thread.preview.as_deref()).to_owned()
+        crate::models::task_title(thread.name.as_deref(), thread.preview.as_deref())
+            .unwrap_or_default()
+            .to_owned()
     } else if let Some(chat) = snapshot
         .lists
         .project_preferences
@@ -250,6 +252,44 @@ mod tests {
     fn task(id: &str, at: Option<f64>, status: &str) -> Thread {
         serde_json::from_value(json!({"id":{"provider":"claude","id":id},"projectId":"a","updatedAt":at,"status":status})).unwrap()
     }
+    #[test]
+    fn saved_shortcuts_keep_raw_titles_and_localize_only_missing_titles() {
+        for (name, expected) in [
+            (None, "Untitled task"),
+            (Some("無題のタスク"), "無題のタスク"),
+            (Some("設定{0}"), "設定{0}"),
+        ] {
+            let mut state = fixture();
+            let pages = state.lists.threads.clone();
+            let mut thread = task("shortcut", None, "idle");
+            thread.name = name.map(str::to_owned);
+            let id = thread.id.clone().unwrap();
+            Arc::make_mut(state.lists.threads.as_mut().unwrap()).data = vec![thread];
+            let moved = dispatch(
+                &state,
+                Intent::MoveChatToProject {
+                    thread_id: id,
+                    project_id: "b".into(),
+                },
+            );
+            let mut restored =
+                crate::persistence::decode(&crate::persistence::encode(&moved).unwrap()).unwrap();
+            restored.lists.threads = pages;
+            Arc::make_mut(&mut restored.lists.expanded_projects).insert("b".into(), 5);
+            restored.catalog.ui_language = crate::localization::UiLanguage::English;
+            let list = restored.thread_list().unwrap();
+            assert_eq!(
+                list.projects
+                    .iter()
+                    .find(|project| project.id == "b")
+                    .unwrap()
+                    .threads[0]
+                    .title,
+                expected
+            );
+        }
+    }
+
     #[test]
     fn project_drop_reorders_both_directions_and_adopts_the_destination_group() {
         let s = fixture();

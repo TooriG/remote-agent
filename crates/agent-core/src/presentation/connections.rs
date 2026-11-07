@@ -1,17 +1,19 @@
 //! Availability is derived from the connected Host's catalog and authentication.
-use crate::{models::Model, session::ProviderKind, state::Snapshot};
+use crate::{localization::UiLanguage, models::Model, session::ProviderKind, state::Snapshot};
 use agent_protocol::operations::Accounts;
 use serde_json::{Map, Value};
 
-pub(super) fn status_label(connected: bool, enabled: bool) -> String {
-    if !enabled {
-        "オフ"
-    } else if connected {
-        "接続済み"
-    } else {
-        "未接続"
-    }
-    .into()
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn connection_status_label(language: UiLanguage, connected: bool, enabled: bool) -> String {
+    language
+        .text(if !enabled {
+            "オフ"
+        } else if connected {
+            "接続済み"
+        } else {
+            "未接続"
+        })
+        .into()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,10 +79,6 @@ fn availability(
 impl Snapshot {
     pub fn connection_enabled(&self) -> bool {
         !self.connection.connection_disabled
-    }
-
-    pub fn connection_status_label(&self) -> String {
-        status_label(self.connection.connected, self.connection_enabled())
     }
 
     pub fn provider_enabled(&self, provider: ProviderKind) -> bool {
@@ -151,17 +149,20 @@ impl Snapshot {
                     })
                     .flatten(),
                 availability,
-                label: if !enabled {
-                    "オフ"
-                } else {
-                    match availability {
-                        AgentAvailability::Checking => "確認中…",
-                        AgentAvailability::Ready => "利用可能",
-                        AgentAvailability::LoginRequired => "未ログイン",
-                        AgentAvailability::Unavailable => "設定が必要",
-                    }
-                }
-                .into(),
+                label: self
+                    .catalog
+                    .ui_language
+                    .text(if !enabled {
+                        "オフ"
+                    } else {
+                        match availability {
+                            AgentAvailability::Checking => "確認中…",
+                            AgentAvailability::Ready => "利用可能",
+                            AgentAvailability::LoginRequired => "未ログイン",
+                            AgentAvailability::Unavailable => "設定が必要",
+                        }
+                    })
+                    .into(),
             }
         })
         .collect();
@@ -497,6 +498,29 @@ mod tests {
             "user@$(command)",
         ] {
             assert!(validate_ssh_destination(target).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    #[test]
+    fn connection_copy_uses_current_language_and_the_saved_enabled_flag() {
+        for (connected, enabled, japanese, english) in [
+            (false, true, "未接続", "Disconnected"),
+            (true, true, "接続済み", "Connected"),
+            (false, false, "オフ", "Off"),
+            (true, false, "オフ", "Off"),
+        ] {
+            assert_eq!(
+                connection_status_label(UiLanguage::Japanese, connected, enabled),
+                japanese
+            );
+            assert_eq!(
+                connection_status_label(UiLanguage::English, connected, enabled),
+                english
+            );
         }
     }
 }

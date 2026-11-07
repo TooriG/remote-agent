@@ -119,7 +119,7 @@ struct ModelSettingsScreen: View {
                         controls.speedChoices.first { $0.selected }?.id ?? "default"
                     }, set: model.chooseServiceTier)) {
                         ForEach(controls.speedChoices, id: \.id) { choice in
-                            AppText(choice.label).tag(choice.id)
+                            Text(verbatim: choice.label).tag(choice.id)
                         }
                     }
                     .pickerStyle(.menu)

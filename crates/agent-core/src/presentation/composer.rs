@@ -37,6 +37,7 @@ pub struct ComposerControls {
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct ComposerPresentation {
+    language: crate::localization::UiLanguage,
     pub draft: Arc<Draft>,
     pub controls: ComposerControls,
     models: Arc<Vec<Model>>,
@@ -45,7 +46,8 @@ pub struct ComposerPresentation {
 
 impl ComposerPresentation {
     pub(crate) fn equivalent(&self, other: &Self) -> bool {
-        self.draft.same(&other.draft)
+        self.language == other.language
+            && self.draft.same(&other.draft)
             && self.controls == other.controls
             && self.models.same(&other.models)
             && self.catalog.same(&other.catalog)
@@ -117,6 +119,7 @@ impl ComposerPresentation {
             .get(&snapshot.pane.navigation.cwd)
             .cloned();
         let next = Self {
+            language: snapshot.catalog.ui_language,
             draft,
             controls,
             models: snapshot.catalog.models.clone(),
@@ -165,6 +168,7 @@ impl Snapshot {
                 self.thread_metadata(&session)
                     .and_then(crate::session::input_unavailable_reason)
             })
+            .map(|reason| self.catalog.ui_language.text(&reason).to_owned())
     }
 }
 
@@ -202,6 +206,7 @@ impl ComposerPresentation {
         cursor: u32,
     ) -> Option<crate::composer::ComposerSuggestions> {
         crate::composer::suggestions(
+            self.language,
             self.catalog.as_deref(),
             self.controls.provider,
             text,
