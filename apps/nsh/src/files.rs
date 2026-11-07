@@ -196,8 +196,8 @@ pub(crate) fn screen(id: u64) -> impl Element {
             return;
         }
         let workspace_root = connection
-            .publication
-            .with_untracked(|p| p.composer.controls.navigation.cwd.clone());
+            .composer
+            .with_untracked(|p| p.controls.navigation.cwd.clone());
         connection.client.with(|client| {
             client.dispatch(
                 &host,

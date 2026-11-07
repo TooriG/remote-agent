@@ -34,7 +34,7 @@ pub(crate) fn screen(
             .application
             .with(|app| app.account_request(host.get(), intent))
     };
-    let login = computed(move || publication.with(|p| p.settings.account_login()));
+    let login = computed(move || connection.settings.with(|p| p.account_login()));
     let busy = computed(move || {
         pending.get()
             || login.get().is_some()
@@ -42,7 +42,7 @@ pub(crate) fn screen(
                 !p.settings.connected() || p.snapshot.operation_running(op::OperationKey::Accounts)
             })
     });
-    let ready = computed(move || publication.with(|p| p.settings.connected()));
+    let ready = computed(move || connection.settings.with(|p| p.connected()));
     effect(move || {
         if ready.get() {
             connection.dispatch(Intent::ListAccounts(op::ListAccounts {}));
@@ -71,7 +71,9 @@ pub(crate) fn screen(
                 .text_size(px(22.0))
             }))
             .child(text(move || {
-                publication.with(|p| p.settings.host_name().unwrap_or_default())
+                connection
+                    .settings
+                    .with(|p| p.host_name().unwrap_or_default())
             }))
             .child(
                 text(move || {
@@ -267,7 +269,7 @@ fn login_panel(
             connection.host.get(),
             login.get(),
             lifecycle(),
-            connection.publication.with(|p| p.settings.connected()),
+            connection.settings.with(|p| p.connected()),
         )
     });
     effect(move || {
@@ -410,12 +412,7 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
                 .find(|c| c.provider == selected.get())
         })
     });
-    let enabled = move || {
-        !busy.get()
-            && !connection
-                .publication
-                .with(|p| p.settings.credential_busy())
-    };
+    let enabled = move || !busy.get() && !connection.settings.with(|p| p.credential_busy());
     view().gap_3()
         .child(text("APIキー").text_size(px(18.0)))
         .child(native::menu("key", "接続先", native::items(KeyProvider::ALL.into_iter().map(|provider| (provider.reference(), provider.label()))), move |id| {
@@ -445,7 +442,7 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
         }))
         .child(native::text_button(json!("設定状態を取得"), move || perform(Intent::ReadDshCredentials(op::ReadDshCredentials {})))
             .prop("enabled", move || json!(enabled())))
-        .child(text(move || connection.publication.with(|p| p.settings.credential_error().map(|error| error.to_string()).unwrap_or_default())).selectable(true))
+        .child(text(move || connection.settings.with(|p| p.credential_error().map(|error| error.to_string()).unwrap_or_default())).selectable(true))
         .child(text("APIキーは選択したPCに保存されます。保存済みのキーは表示されません。"))
 }
 
@@ -458,11 +455,7 @@ fn runtime(
     if provider != ProviderKind::Codex {
         return text("このプロバイダーはBexと一緒に更新されます。").into_element();
     }
-    let status = computed(move || {
-        connection
-            .publication
-            .with(|p| p.settings.codex_cli_status())
-    });
+    let status = computed(move || connection.settings.with(|p| p.codex_cli_status()));
     view()
         .gap_2()
         .child(text("Codex CLI").text_size(px(18.0)))
@@ -488,7 +481,7 @@ fn runtime(
                 perform(Intent::ManageCodexCli(op::ManageCodexCli { update: false }))
             })
             .prop("enabled", move || {
-                json!(!busy.get() && !connection.publication.with(|p| p.settings.codex_cli_busy()))
+                json!(!busy.get() && !connection.settings.with(|p| p.codex_cli_busy()))
             }),
         )
         .child(
@@ -496,7 +489,7 @@ fn runtime(
                 perform(Intent::ManageCodexCli(op::ManageCodexCli { update: true }))
             })
             .prop("enabled", move || {
-                json!(!busy.get() && !connection.publication.with(|p| p.settings.codex_cli_busy()))
+                json!(!busy.get() && !connection.settings.with(|p| p.codex_cli_busy()))
             }),
         )
         .into_element()

@@ -2,21 +2,15 @@
 use crate::{
     Connection,
     application::{Host, ListRequest, Navigation},
-    shared::Shared,
     ui::{self, Enabled, Icon, colors},
 };
-use agent_core::presentation::view::Presentation;
 use nsh_core::{element::input, prelude::*};
 use serde_json::json;
 
 pub(crate) const WIDTH: f32 = 272.0;
 pub(crate) const HEADER_HEIGHT: f32 = 44.0;
 
-pub(crate) fn sidebar(
-    publication: Memo<Shared<Presentation>>,
-    hosts: Memo<Vec<Host>>,
-    compose: impl Fn() + 'static,
-) -> impl IntoElement {
+pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let query = signal(String::new());
     let navigate = move |action| {
@@ -24,7 +18,7 @@ pub(crate) fn sidebar(
             .application
             .with(|application| application.navigate(action))
     };
-    let connected = move || publication.with(|p| p.settings.connected());
+    let connected = move || connection.settings.with(|p| p.connected());
     view()
         .w(px(WIDTH))
         .flex_shrink_0()
@@ -50,7 +44,7 @@ pub(crate) fn sidebar(
                         ),
                 ),
         )
-        .child(crate::threads::list(publication, query, || {}))
+        .child(crate::threads::list(query, || {}))
         .child(
             view()
                 .flex_row()

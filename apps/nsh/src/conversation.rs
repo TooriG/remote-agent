@@ -1,12 +1,9 @@
 use crate::ui::Enabled;
 use crate::{Connection, shared::Shared};
 use agent_core::{
-    presentation::{
-        conversation::{
-            ActivityPresentation, ConversationRowContent, RenderedConversation, WorkProgress,
-            activity_is_expanded,
-        },
-        view::Presentation,
+    presentation::conversation::{
+        ActivityPresentation, ConversationRowContent, RenderedConversation, WorkProgress,
+        activity_is_expanded,
     },
     state::{Intent, operations as op},
 };
@@ -133,10 +130,7 @@ fn project(
         .collect()
 }
 
-pub(crate) fn list(
-    publication: Memo<Shared<Presentation>>,
-    following: Signal<bool>,
-) -> impl IntoElement {
+pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let list = element_ref();
     let expanded = signal(HashMap::<String, String>::new());
@@ -148,8 +142,8 @@ pub(crate) fn list(
         loop {
             timer(std::time::Duration::from_secs(1)).await;
             if connection
-                .publication
-                .with_untracked(|p| p.composer.controls.running_turn.is_some())
+                .composer
+                .with_untracked(|p| p.controls.running_turn.is_some())
             {
                 clock.set(std::time::SystemTime::now());
             }
@@ -158,7 +152,9 @@ pub(crate) fn list(
     let target = computed(move || {
         (
             connection.host.get(),
-            publication.with(|p| p.composer.controls.navigation.draft_key.clone()),
+            connection
+                .composer
+                .with(|p| p.controls.navigation.draft_key.clone()),
         )
     });
     effect(move || {
@@ -168,8 +164,8 @@ pub(crate) fn list(
         expanded_items.set(HashSet::new());
     });
     let rows = computed(move || {
-        publication.with(|p| {
-            p.conversation
+        connection.conversation.with(|conversation| {
+            conversation
                 .as_ref()
                 .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
                 .unwrap_or_default()
@@ -192,7 +188,7 @@ pub(crate) fn list(
             });
         }
     });
-    let history = computed(move || publication.with(|p| p.context.history()));
+    let history = computed(move || connection.context.with(|p| p.history()));
     view()
         .flex_1()
         .min_h_0()
@@ -215,7 +211,7 @@ pub(crate) fn list(
                             move || {
                                 following.set(false);
                                 if let Some(thread_id) =
-                                    publication.with_untracked(|p| p.context.navigation().thread_id)
+                                    connection.context.with_untracked(|p| p.navigation().thread_id)
                                 {
                                     connection.dispatch(Intent::ReadOlder { thread_id });
                                 }
@@ -239,7 +235,7 @@ pub(crate) fn list(
             },
         ))
         .child(text(move || {
-            publication.with(|p| p.context.history_notice().unwrap_or_default())
+            connection.context.with(|p| p.history_notice().unwrap_or_default())
         }))
         .child(
             virtual_list(
@@ -381,9 +377,10 @@ pub(crate) fn list(
                                                                         row.fork.clone()
                                                                     })
                                                                 })
-                                                                && let Some(thread_id) = publication
+                                                                && let Some(thread_id) = connection
+                                                                    .context
                                                                     .with_untracked(|p| {
-                                                                        p.context
+                                                                        p
                                                                             .navigation()
                                                                             .thread_id
                                                                     })

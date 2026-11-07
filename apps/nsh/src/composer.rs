@@ -1,16 +1,9 @@
-use crate::shared::Shared;
 use crate::{Connection, native};
-use agent_core::{
-    presentation::view::Presentation,
-    state::{Intent, operations as op},
-};
+use agent_core::state::{Intent, operations as op};
 use nsh_core::{GlassEffect, element::input, prelude::*};
 use serde_json::json;
 
-pub(crate) fn composer(
-    publication: Memo<Shared<Presentation>>,
-    following: Signal<bool>,
-) -> impl IntoElement {
+pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let files = use_context::<crate::files::Browser>().unwrap();
     let workspace = use_context::<crate::workbench::Workbench>().unwrap();
@@ -25,7 +18,7 @@ pub(crate) fn composer(
     let (recording, requesting) = (dictation.active, dictation.requesting);
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     let (recording, requesting) = (signal(false), signal(false));
-    let composer = computed(move || publication.with(|p| Shared(p.composer.clone())));
+    let composer = connection.composer;
     let controls = computed(move || composer.with(|c| c.controls.clone()));
     let draft = computed(move || composer.with(|c| c.draft.text.clone()));
     let answering = computed(move || {
@@ -447,7 +440,7 @@ pub(crate) fn composer(
     let desktop_context = move || {
         use crate::ui::{self, Enabled, Icon};
         let hosts = computed(move || connection.state.with(|s| s.hosts.clone()));
-        let directory = computed(move || publication.with(|p| p.context.selected_directory()));
+        let directory = computed(move || connection.context.with(|p| p.selected_directory()));
         view()
             .flex_row()
             .items_center()

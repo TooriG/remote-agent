@@ -31,13 +31,12 @@ pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
                 .and_then(|pane| pane.failure.clone())
         })
     });
-    provide_context(Connection {
-        pane: Some(id),
-        composer_ref: element_ref(),
-        host: computed(move || host.get()),
+    provide_context(Connection::new(
+        parent.handles(),
+        computed(move || host.get()),
         publication,
-        ..parent
-    });
+        Some(id),
+    ));
     view()
         .flex_1()
         .min_w_0()
@@ -81,8 +80,8 @@ pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
                     .flex_1()
                     .min_w_0()
                     .child(crate::notices::notices(|| false, || false))
-                    .child(crate::conversation::list(publication, following))
-                    .child(crate::composer::composer(publication, following))
+                    .child(crate::conversation::list(following))
+                    .child(crate::composer::composer(following))
             },
         ))
 }

@@ -155,8 +155,8 @@ pub(crate) fn image_view(
         (
             connection.host.get(),
             connection
-                .publication
-                .with(|p| p.composer.controls.navigation.cwd.clone()),
+                .composer
+                .with(|p| p.controls.navigation.cwd.clone()),
             source(),
         )
     });

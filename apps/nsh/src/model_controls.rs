@@ -45,11 +45,9 @@ pub(crate) fn controls() -> impl Element {
         });
     });
     let label = computed(move || {
-        publication.with(|p| {
-            p.settings
-                .selected_model_name()
-                .unwrap_or_else(|| "モデル".into())
-        })
+        connection
+            .settings
+            .with(|p| p.selected_model_name().unwrap_or_else(|| "モデル".into()))
     });
     view()
         .flex_row()
@@ -72,7 +70,8 @@ pub(crate) fn controls() -> impl Element {
                 },
             )
             .enabled(move || {
-                publication.with(|p| p.settings.connected() && !p.composer.controls.sending)
+                connection.settings.with(|p| p.connected())
+                    && !connection.composer.with(|c| c.controls.sending)
             }),
         )
         .child(
@@ -126,8 +125,9 @@ pub(crate) fn controls() -> impl Element {
                                         picker.query.clear();
                                     }
                                 });
-                                if let Some(model) = publication
-                                    .with_untracked(|p| p.settings.model_for_provider(provider))
+                                if let Some(model) = connection
+                                    .settings
+                                    .with_untracked(|p| p.model_for_provider(provider))
                                 {
                                     connection.dispatch(Intent::SelectModel {
                                         thread_id: current.draft,

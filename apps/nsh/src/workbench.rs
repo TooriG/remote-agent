@@ -15,12 +15,7 @@ impl Workbench {
     pub fn new() -> Self {
         let connection = use_context::<Connection>().unwrap();
         let panels = computed(move || connection.state.with(|state| Shared(state.panels.clone())));
-        let scope = computed(move || {
-            connection.publication.with(|p| {
-                p.snapshot
-                    .panel_scope(connection.host.get(), p.context.navigation().draft_key)
-            })
-        });
+        let scope = connection.scope;
         let state = computed(move || panels.with(|panels| panels.get(scope.get())));
         Self {
             application: connection.application,
@@ -130,9 +125,7 @@ pub(crate) fn open_tool(key: &str) {
             )
         });
         if tool.kind == PanelKind::SideChat {
-            let provider = connection
-                .publication
-                .with_untracked(|p| p.composer.controls.provider);
+            let provider = connection.composer.with_untracked(|p| p.controls.provider);
             workspace.application.with(|app| {
                 app.open_side_chat(
                     workspace.scope.get_untracked(),

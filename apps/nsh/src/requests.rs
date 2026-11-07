@@ -13,14 +13,9 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
         .gap_2()
         .child(each(
             move || {
-                connection.publication.with(|p| {
-                    p.composer
-                        .controls
-                        .request
-                        .clone()
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                })
+                connection
+                    .composer
+                    .with(|p| p.controls.request.clone().into_iter().collect::<Vec<_>>())
             },
             |request: &agent_core::presentation::conversation::Request| request.id.clone(),
             move |request, _| {
@@ -28,9 +23,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                 let response = signal(request_input_default(initial.request_body));
                 let error = signal(None::<String>);
                 let enabled = move || {
-                    connection
-                        .publication
-                        .with(|p| p.composer.controls.connected)
+                    connection.composer.with(|p| p.controls.connected)
                         && request.with(|request| request.can_respond)
                         && !connection.publication.with(|p| {
                             matches!(
@@ -183,9 +176,8 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                         move || text(move || error.get().unwrap_or_default()),
                     ))
                     .child(text(move || {
-                        connection.publication.with(|p| {
-                            p.composer
-                                .request_error(request.with(|request| request.id.clone()))
+                        connection.composer.with(|p| {
+                            p.request_error(request.with(|request| request.id.clone()))
                                 .map(|error| error.to_string())
                                 .unwrap_or_default()
                         })
@@ -194,23 +186,16 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
         ))
         .child(each(
             move || {
-                connection.publication.with(|p| {
-                    p.composer
-                        .controls
-                        .question
-                        .clone()
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                })
+                connection
+                    .composer
+                    .with(|p| p.controls.question.clone().into_iter().collect::<Vec<_>>())
             },
             |prompt: &agent_core::questions::QuestionPrompt| {
                 (prompt.request_id.clone(), prompt.question.id.clone())
             },
             move |prompt, _| {
                 let enabled = move || {
-                    connection
-                        .publication
-                        .with(|p| p.composer.controls.connected)
+                    connection.composer.with(|p| p.controls.connected)
                         && prompt.with(|p| p.can_respond)
                         && !connection.publication.with(|p| {
                             matches!(
@@ -291,9 +276,8 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                         .prop("enabled", move || json!(enabled())),
                     )
                     .child(text(move || {
-                        connection.publication.with(|p| {
-                            p.composer
-                                .request_error(prompt.with(|p| p.request_id.clone()))
+                        connection.composer.with(|p| {
+                            p.request_error(prompt.with(|p| p.request_id.clone()))
                                 .map(|error| error.to_string())
                                 .unwrap_or_default()
                         })

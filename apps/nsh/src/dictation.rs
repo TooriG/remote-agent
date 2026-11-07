@@ -196,8 +196,8 @@ impl Dictation {
                 (
                     connection.host.get(),
                     connection
-                        .publication
-                        .with(|p| p.composer.controls.navigation.draft_key.clone()),
+                        .composer
+                        .with(|p| p.controls.navigation.draft_key.clone()),
                 )
             }),
         };
@@ -207,9 +207,7 @@ impl Dictation {
         });
         effect(move || {
             if lifecycle() != Lifecycle::Active
-                || !connection
-                    .publication
-                    .with(|p| p.composer.controls.connected)
+                || !connection.composer.with(|p| p.controls.connected)
             {
                 this.cancel();
             }
@@ -298,11 +296,11 @@ impl Dictation {
                 .enabled(move || {
                     !self.requesting.get()
                         && !connection.uploading()
-                        && connection.publication.with(|p| {
-                            p.composer.controls.connected
-                                && !p.composer.controls.sending
-                                && !p.composer.controls.transferring
-                                && !p.composer.controls.transcribing
+                        && connection.composer.with(|p| {
+                            p.controls.connected
+                                && !p.controls.sending
+                                && !p.controls.transferring
+                                && !p.controls.transcribing
                         })
                 })
                 .style_when(
@@ -327,11 +325,7 @@ impl Dictation {
                 || text("マイクの許可を確認中…"),
             ))
             .child(when(
-                move || {
-                    connection
-                        .publication
-                        .with(|p| p.composer.controls.transcribing)
-                },
+                move || connection.composer.with(|p| p.controls.transcribing),
                 || text("文字起こし中…"),
             ))
     }

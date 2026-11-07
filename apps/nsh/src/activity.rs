@@ -31,9 +31,7 @@ pub(crate) fn details(
     let request = computed(move || {
         let item = item.get()?;
         Some(op::ReadItem {
-            thread_id: connection
-                .publication
-                .with(|p| p.context.navigation().thread_id)?,
+            thread_id: connection.context.with(|p| p.navigation().thread_id)?,
             turn_id: item.turn,
             item_id: item.source.data.native_id.clone()?,
         })

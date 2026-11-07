@@ -101,11 +101,7 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
                 .operation_running(op::OperationKey::WorkspaceReview)
         })
     });
-    let failed = computed(move || {
-        connection
-            .publication
-            .with(|p| p.context.workspace_error().is_some())
-    });
+    let failed = computed(move || connection.context.with(|p| p.workspace_error().is_some()));
     view()
         .flex_1()
         .min_h_0()
@@ -125,10 +121,7 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
                 .child(
                     native::button("arrow.clockwise", "差分を更新", load)
                         .prop("enabled", move || {
-                            json!(
-                                !pending.get()
-                                    && connection.publication.with(|p| p.settings.connected())
-                            )
+                            json!(!pending.get() && connection.settings.with(|p| p.connected()))
                         })
                         .w(px(44.0))
                         .h(px(44.0)),
@@ -158,8 +151,8 @@ pub(crate) fn agents(host: String) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let host = stored(host);
     let thread_id = connection
-        .publication
-        .with_untracked(|p| p.context.navigation().thread_id);
+        .context
+        .with_untracked(|p| p.navigation().thread_id);
     connection
         .client
         .with(|client| client.dispatch(&host.get(), None, Intent::WatchAgents { thread_id }));

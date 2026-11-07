@@ -2,10 +2,7 @@ use crate::application::{ListRequest, ListScope, ListSource};
 use crate::shared::Shared;
 use crate::{Connection, native};
 use agent_core::{
-    presentation::{
-        list::{ThreadList, ThreadSummary},
-        view::Presentation,
-    },
+    presentation::list::{ThreadList, ThreadSummary},
     state::{Intent, operations as op},
 };
 use nsh_core::prelude::*;
@@ -288,11 +285,7 @@ fn project_children(
     rows
 }
 
-pub(crate) fn list(
-    publication: Memo<Shared<Presentation>>,
-    query: Signal<String>,
-    open: impl Fn() + Copy + 'static,
-) -> AnyElement {
+pub(crate) fn list(query: Signal<String>, open: impl Fn() + Copy + 'static) -> AnyElement {
     let connection = use_context::<Connection>().unwrap();
     let sources = computed(move || connection.state.with(|state| state.list_sources()));
     let inputs = computed(move || connection.state.with(|state| state.list_inputs()));
@@ -376,14 +369,14 @@ pub(crate) fn list(
     };
     if is_desktop() {
         let selected = computed(move || {
-            publication.with(|p| {
-                let navigation = &p.composer.controls.navigation;
-                let scope = ListScope {
-                    host: connection.host.get(),
-                    storage: p.snapshot.connection.storage_scope.clone(),
-                };
-                entries.with(|rows| selected_rows(rows, &scope, navigation.thread_id.as_ref()))
-            })
+            let scope = ListScope {
+                host: connection.host.get(),
+                storage: connection.scope.with(|scope| scope.storage.clone()),
+            };
+            let thread = connection
+                .composer
+                .with(|c| c.controls.navigation.thread_id.clone());
+            entries.with(|rows| selected_rows(rows, &scope, thread.as_ref()))
         });
         return view()
             .flex_1()

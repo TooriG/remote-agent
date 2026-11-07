@@ -43,13 +43,22 @@ pub use native::ios::register as register_ios;
 #[cfg(target_os = "macos")]
 pub use native::macos::register as register_macos;
 
-use agent_core::{presentation::view::Presentation, state::Intent};
+use agent_core::{
+    presentation::{
+        composer::ComposerPresentation, context::ConversationContext,
+        conversation::RenderedConversation, settings::SettingsPresentation, view::Presentation,
+    },
+    state::Intent,
+};
 use application::Navigation;
 use nsh_core::{HeaderSystemItem, platform::Lifecycle, prelude::*};
 use serde_json::json;
 use shared::Shared;
 use std::sync::Arc;
 
+/// A view's connection: its Host's publication and, separately, the parts views read.
+/// Core keeps a part's Arc while it is unchanged, so a part's readers run again only
+/// when that part changes, not on every streamed delta of the conversation.
 #[derive(Clone, Copy)]
 pub(crate) struct Connection {
     application: Stored<Arc<application::Application>>,
@@ -57,20 +66,74 @@ pub(crate) struct Connection {
     client: Stored<Arc<client::Client>>,
     host: Memo<String>,
     publication: Memo<Shared<Presentation>>,
+    composer: Memo<Shared<ComposerPresentation>>,
+    context: Memo<Shared<ConversationContext>>,
+    settings: Memo<Shared<SettingsPresentation>>,
+    conversation: Memo<Option<Shared<RenderedConversation>>>,
+    scope: Memo<agent_core::panels::PanelScope>,
     pairing: Memo<bool>,
     pane: Option<u64>,
     composer_ref: ElementRef,
 }
 
+/// What every connection of one application shares.
+#[derive(Clone, Copy)]
+pub(crate) struct AppHandles {
+    application: Stored<Arc<application::Application>>,
+    state: ReadSignal<Shared<application::State>>,
+    client: Stored<Arc<client::Client>>,
+    pairing: Memo<bool>,
+}
+
 impl Connection {
+    /// A connection to `publication`, sharing `handles`.
+    fn new(
+        handles: AppHandles,
+        host: Memo<String>,
+        publication: Memo<Shared<Presentation>>,
+        pane: Option<u64>,
+    ) -> Self {
+        Self {
+            application: handles.application,
+            state: handles.state,
+            client: handles.client,
+            pairing: handles.pairing,
+            host,
+            publication,
+            composer: computed(move || publication.with(|p| Shared(p.composer.clone()))),
+            context: computed(move || publication.with(|p| Shared(p.context.clone()))),
+            settings: computed(move || publication.with(|p| Shared(p.settings.clone()))),
+            conversation: computed(move || {
+                publication.with(|p| p.conversation.clone().map(Shared))
+            }),
+            scope: computed(move || {
+                publication.with(|p| {
+                    p.snapshot
+                        .panel_scope(host.get(), p.context.navigation().draft_key)
+                })
+            }),
+            pane,
+            composer_ref: element_ref(),
+        }
+    }
+
+    fn handles(self) -> AppHandles {
+        AppHandles {
+            application: self.application,
+            state: self.state,
+            client: self.client,
+            pairing: self.pairing,
+        }
+    }
+
     fn uploading(self) -> bool {
         // Read the owner as well as tracking its publication, so a second input
         // event cannot submit while a newly staged batch is waiting to render.
         self.state.with(|_| ());
         let host = self.host.get();
         let draft = self
-            .publication
-            .with(|p| p.composer.controls.navigation.draft_key.clone());
+            .composer
+            .with(|c| c.controls.navigation.draft_key.clone());
         self.application
             .with(|application| application.snapshot().uploading(&host, &draft))
     }
@@ -116,16 +179,13 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
             .with(|state| state.publications.get(&host.get()).cloned())
             .unwrap_or_else(|| empty.get())
     });
-    let connection = Connection {
+    let handles = AppHandles {
         application,
         state: state.read_only(),
         client,
-        host,
-        publication,
-        pane: None,
-        composer_ref: element_ref(),
         pairing: computed(move || state.with(|state| state.pairing)),
     };
+    let connection = Connection::new(handles, host, publication, None);
     provide_context(connection);
     let preview = media::Preview::new();
     provide_context(preview);
@@ -157,12 +217,13 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         }
     });
     let title = computed(move || {
-        publication
-            .with(|p| p.context.title())
+        connection
+            .context
+            .with(|p| p.title())
             .unwrap_or_else(|| "新しいチャット".into())
     });
     let list = move || {
-        threads::list(publication, query, move || {
+        threads::list(query, move || {
             dismiss_keyboard();
             if !is_desktop() {
                 routes.set(vec![0, 1]);
@@ -216,14 +277,14 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
     let content = move || {
         let following = signal(true);
         let welcome =
-            computed(move || is_desktop() && publication.with(|p| p.conversation.is_none()));
+            computed(move || is_desktop() && connection.conversation.with(Option::is_none));
         view()
             .flex_1()
             .min_w_0()
             .pb_keyboard()
             .child(when(
                 move || !welcome.get(),
-                move || conversation::list(publication, following),
+                move || conversation::list(following),
             ))
             .child(when(
                 move || welcome.get(),
@@ -236,8 +297,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                         .child(text("何から始めましょうか？").text_size(px(24.0)))
                         .child(
                             text(move || {
-                                let directory =
-                                    publication.with(|p| p.context.selected_directory());
+                                let directory = connection.context.with(|p| p.selected_directory());
                                 if directory.is_empty() {
                                     "メッセージを入力して、作業を始めましょう。".to_owned()
                                 } else {
@@ -249,7 +309,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                         )
                 },
             ))
-            .child(composer::composer(publication, following))
+            .child(composer::composer(following))
     };
     let notices = move || {
         view()
@@ -354,7 +414,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                 .child(native("bex.browser.host").w(px(0.0)).h(px(0.0)))
                 .child(when(
                     move || sidebar.get(),
-                    move || sidebar::sidebar(publication, hosts, move || toolbar_action("compose")),
+                    move || sidebar::sidebar(hosts, move || toolbar_action("compose")),
                 ))
                 .child(
                     view()
@@ -403,7 +463,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                                 let mut entries = vec![json!({"id": "refresh", "title": "更新", "symbol": "arrow.clockwise"})];
                                 entries.extend(workbench::tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "symbol": workbench::symbol(tool.kind), "enabled": tool.enabled})));
                                 entries.push(json!({"id": "settings", "title": "環境", "symbol": "gearshape"}));
-                                entries.push(json!({"id": "worktrees", "title": "ワークツリー設定", "symbol": "arrow.triangle.branch", "enabled": publication.with(|p| p.settings.connected())}));
+                                entries.push(json!({"id": "worktrees", "title": "ワークツリー設定", "symbol": "arrow.triangle.branch", "enabled": connection.settings.with(|p| p.connected())}));
                                 json!(entries)
                             },
                             move |item| {
@@ -423,8 +483,8 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                     .child(environment::overview(hosts, close_settings)),
                 5 => nsh_base::nav_page()
                     .title(move || {
-                        publication.with(|p| {
-                            p.settings
+                        connection.settings.with(|p| {
+                            p
                                 .connection_setup()
                                 .agents
                                 .into_iter()

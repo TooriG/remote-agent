@@ -10,10 +10,10 @@ use serde_json::json;
 pub(crate) fn suggestions(focus: impl Fn() + Copy + 'static) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let suggestions = computed(move || {
-        connection.publication.with(|p| {
-            let text = p.composer.draft.text.clone();
+        connection.composer.with(|p| {
+            let text = p.draft.text.clone();
             let cursor = text.len() as u32;
-            p.composer.composer_suggestions(text, cursor)
+            p.composer_suggestions(text, cursor)
         })
     });
     when(

@@ -9,7 +9,7 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> im
     let ready = computed(move || {
         (
             connection.host.get(),
-            publication.with(|p| p.settings.connected()),
+            connection.settings.with(|p| p.connected()),
         )
     });
     effect(move || {
@@ -37,13 +37,13 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> im
                                 })
                             }))
                             .child(text(move || {
-                                publication.with(|p| p.settings.connection_status_label())
+                                connection.settings.with(|p| p.connection_status_label())
                             })),
                     )
                     .child(
                         native::switch(
                             json!("このPCへの接続"),
-                            move || json!(publication.with(|p| p.settings.connection_enabled())),
+                            move || json!(connection.settings.with(|p| p.connection_enabled())),
                             move |enabled| {
                                 connection.dispatch(Intent::SetConnectionEnabled { enabled });
                             },
@@ -76,7 +76,7 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> im
                     },
                 )
                 .prop("enabled", move || {
-                    json!(publication.with(|p| p.settings.connected()))
+                    json!(connection.settings.with(|p| p.connected()))
                 }),
             )
             .child(native::text_button(
@@ -91,7 +91,7 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> im
                 native::text_button(json!("ワークツリー設定"), crate::worktrees::open)
                     .prop("symbol", json!("arrow.triangle.branch"))
                     .prop("enabled", move || {
-                        json!(publication.with(|p| p.settings.connected()))
+                        json!(connection.settings.with(|p| p.connected()))
                     }),
             )
             .child(text("プロバイダー").text_size(px(20.0)))
@@ -108,7 +108,7 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> im
                 }),
             )
             .child(each(
-                move || publication.with(|p| p.settings.connection_setup().agents),
+                move || connection.settings.with(|p| p.connection_setup().agents),
                 |agent: &agent_core::presentation::connections::ConnectionAgent| agent.provider,
                 move |agent, _| {
                     view()
@@ -158,10 +158,10 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> im
                                 },
                             )
                             .prop("enabled", move || {
-                                json!(publication.with(|p| p.settings.connected()
-                                    && p.settings.provider_settings_loaded()
-                                    && !p.settings.provider_settings_busy()
-                                    && p.settings.account_login().is_none()))
+                                json!(connection.settings.with(|p| p.connected()
+                                    && p.provider_settings_loaded()
+                                    && !p.provider_settings_busy()
+                                    && p.account_login().is_none()))
                             }),
                         )
                 },

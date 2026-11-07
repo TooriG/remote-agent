@@ -111,7 +111,7 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                 .prop("enabled", move || {
                     json!(
                         size.get().is_some()
-                            && connection.publication.with(|p| p.settings.connected())
+                            && connection.settings.with(|p| p.connected())
                             && !loading.get()
                     )
                 })

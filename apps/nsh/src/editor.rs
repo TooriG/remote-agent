@@ -21,8 +21,8 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
     let host = stored(connection.host.get_untracked());
     let draft = stored(
         connection
-            .publication
-            .with_untracked(|p| p.composer.controls.navigation.draft_key.clone()),
+            .composer
+            .with_untracked(|p| p.controls.navigation.draft_key.clone()),
     );
     let controls = computed(move || {
         connection

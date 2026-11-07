@@ -43,22 +43,20 @@ pub(crate) fn content(
 ) -> nsh_core::element::View {
     let connection = use_context::<Connection>().unwrap();
     let target = computed(move || {
-        connection.publication.with(|p| {
-            let scope = p.snapshot.panel_scope(
-                connection.host.get(),
-                p.composer.controls.navigation.draft_key.clone(),
-            );
-            serde_json::to_string(&Target {
-                host: scope.host,
-                storage: scope.storage,
-                draft: scope.draft,
-                pane: connection.pane,
-                cwd: p.composer.controls.navigation.cwd.clone(),
-                home: p.context.home(),
-                provider: p.composer.controls.provider,
-            })
-            .expect("display targets contain only serializable values")
+        let scope = connection.scope.get();
+        let (cwd, provider) = connection
+            .composer
+            .with(|c| (c.controls.navigation.cwd.clone(), c.controls.provider));
+        serde_json::to_string(&Target {
+            host: scope.host,
+            storage: scope.storage,
+            draft: scope.draft,
+            pane: connection.pane,
+            cwd,
+            home: connection.context.with(|c| c.home()),
+            provider,
         })
+        .expect("display targets contain only serializable values")
     });
     let content = computed(move || parts(blocks()));
     view_parts(move || content.get(), target, secondary)

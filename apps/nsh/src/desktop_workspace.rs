@@ -12,11 +12,11 @@ pub(crate) fn card() -> impl IntoElement {
     let workspace = use_context::<Workbench>().unwrap();
     let files = use_context::<crate::files::Browser>().unwrap();
     let target = computed(move || {
-        connection.publication.with(|p| {
+        connection.composer.with(|p| {
             (
                 connection.host.get(),
-                p.composer.controls.connected,
-                p.composer.controls.navigation.cwd.clone(),
+                p.controls.connected,
+                p.controls.navigation.cwd.clone(),
             )
         })
     });
@@ -76,8 +76,8 @@ pub(crate) fn card() -> impl IntoElement {
                     connection.host.get_untracked(),
                     connection.pane,
                     connection
-                        .publication
-                        .with_untracked(|p| p.composer.controls.navigation.draft_key.clone()),
+                        .composer
+                        .with_untracked(|p| p.controls.navigation.draft_key.clone()),
                 ),
                 Some("source") => {
                     if let Some(path) = event.data["path"].as_str() {
