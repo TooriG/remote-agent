@@ -19,14 +19,15 @@ async fn codex_fixture_uses_its_own_directory_instead_of_inherited_user_configur
         let ambient = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(fixture.path()).unwrap();
         let expected = root.clone();
-        let program = Config {
+        let config = Config {
             trace: true,
             expected_cwd: Some(expected.clone()),
             stream_delay_ms: 0,
             ..Default::default()
-        }
-        .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root)
-        .unwrap();
+        };
+        let program = config
+            .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root)
+            .unwrap();
         let mut child = Command::new(program)
             .arg("app-server")
             .current_dir(ambient.path())
@@ -66,6 +67,22 @@ async fn codex_fixture_uses_its_own_directory_instead_of_inherited_user_configur
                 3 => assert_eq!(response["error"]["message"], "invalid cwd"),
                 _ => unreachable!(),
             }
+        }
+        #[cfg(unix)]
+        {
+            // Updating this fixture root must leave its existing executable
+            // image usable until the owning Host has closed that subprocess.
+            config
+                .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root)
+                .unwrap();
+            writer
+                .write_line(&json!({"id":5,"method":"model/list","params":{}}).to_string())
+                .await
+                .unwrap();
+            let response: Value =
+                serde_json::from_str(&reader.read_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(response["id"], 5);
+            assert_eq!(response["result"]["data"][0]["id"], "fixture-model");
         }
         child.kill().await.unwrap();
         assert!(root.join("rpc-trace.jsonl").exists());

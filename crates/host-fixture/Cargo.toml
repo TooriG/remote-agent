@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+tempfile = "3"
 agent-protocol = { path = "../agent-protocol" }
 agent-transport = { path = "../agent-transport" }
 agent-local-host = { path = "../agent-local-host" }
@@ -31,7 +32,6 @@ rustix = { version = "1", features = ["process"] }
 agent-core = { path = "../agent-core" }
 agent-protocol = { path = "../agent-protocol", features = ["test-support"] }
 rstest = { version = "0.28", default-features = false }
-tempfile = "3"
 iroh = { version = "=1.4.1", default-features = false, features = ["tls-ring", "portmapper"] }
 iroh-tickets = "=1.0.0"
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }

@@ -46,7 +46,11 @@ impl Config {
         // The launcher resolves symlinks, so use a private executable copy.
         // A hard link would share an inode with mutable Cargo outputs while
         // native UI and Rust tests build different feature combinations.
-        fs::copy(executable, &program)?;
+        // Replace the image atomically, including when an older fixture is
+        // still using it. Never overwrite a mapped executable in place.
+        let pending = tempfile::NamedTempFile::new_in(&directory)?;
+        fs::copy(executable, pending.path())?;
+        pending.persist(&program)?;
         fs::write(
             directory.join("fixture-config.json"),
             serde_json::to_vec(self)?,
