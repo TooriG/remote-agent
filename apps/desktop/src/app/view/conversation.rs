@@ -853,7 +853,7 @@ impl ConversationView {
         let row = &projected.rows[index];
         match &row.content {
             ConversationRowContent::User { item } => {
-                body = body.child(self.projected_item(item, turn, cx));
+                body = body.child(self.projected_item(item, Some(turn), cx));
             }
             ConversationRowContent::ActivityHeader { activity } => {
                 let id = &activity.id;
@@ -928,7 +928,7 @@ impl ConversationView {
                 );
             }
             ConversationRowContent::Activity { item, .. } => {
-                body = body.child(self.projected_item(item, turn, cx));
+                body = body.child(self.projected_item(item, Some(turn), cx));
             }
             // Timeline rows leave requests to the composer's docked cards.
             ConversationRowContent::PendingRequest { .. } => {}
@@ -1061,7 +1061,7 @@ impl ConversationView {
                 show_actions,
                 fork_turn_id,
             } => {
-                body = body.child(self.projected_item(item, turn, cx));
+                body = body.child(self.projected_item(item, Some(turn), cx));
                 if *show_actions {
                     let text = item.data.body.clone().expect("assistant message has text");
                     body = body.child(
@@ -1207,18 +1207,18 @@ impl ConversationView {
             .child(body)
             .into_any_element()
     }
-    pub(super) fn projected_item(
+    fn projected_item(
         &mut self,
         item: &agent_core::presentation::conversation::RenderedItem,
-        turn: &Arc<Turn>,
+        turn: Option<&Turn>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match &item.source {
             agent_core::presentation::conversation::ItemSource::Native(native) => {
-                self.item(item, native, Some(turn), cx)
+                self.item(item, native, turn, cx)
             }
             agent_core::presentation::conversation::ItemSource::Pending(_, pending) => {
-                self.pending_item(&item.data, &pending.draft, cx)
+                self.pending_item(&item.data, &pending.draft, item.unknown_submission_id(), cx)
             }
         }
     }
@@ -1261,10 +1261,11 @@ impl ConversationView {
         }
         body.into_any_element()
     }
-    pub(super) fn pending_item(
+    fn pending_item(
         &mut self,
         data: &agent_core::presentation::conversation::ItemPresentation,
         draft: &agent_core::state::Draft,
+        unknown_submission_id: Option<String>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let language = crate::localization::language(cx);
@@ -1319,6 +1320,43 @@ impl ConversationView {
                 row.child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
                     agent_core::localization::localized_ui_text(language, label.into()),
                 ))
+            })
+            .when_some(unknown_submission_id, |row, id| {
+                let restore = id.clone();
+                let restore_selector = format!("submission-restore-{id}");
+                let discard_selector = format!("submission-discard-{id}");
+                row.child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            icon_button(
+                                restore_selector.clone(),
+                                Icon::default().path("icons/pencil.svg"),
+                                language.text("入力欄へ戻す"),
+                                cx,
+                                move |view, _, _| {
+                                    view.dispatch(Intent::RestoreUnknownSubmission {
+                                        client_user_message_id: restore.clone().into(),
+                                    });
+                                },
+                            )
+                            .debug_selector(move || restore_selector.clone()),
+                        )
+                        .child(
+                            icon_button(
+                                discard_selector.clone(),
+                                Icon::default().path("icons/trash.svg"),
+                                language.text("破棄"),
+                                cx,
+                                move |view, _, _| {
+                                    view.dispatch(Intent::DiscardUnknownSubmission {
+                                        client_user_message_id: id.clone().into(),
+                                    });
+                                },
+                            )
+                            .debug_selector(move || discard_selector.clone()),
+                        ),
+                )
             })
             .into_any_element()
     }
@@ -1787,15 +1825,7 @@ impl ConversationView {
                             view.turn_row(session.as_ref(), &turn, index, last, window, cx)
                         }
                         Some(ConversationRow::Queued(item)) => {
-                            let row = match &item.source {
-                                agent_core::presentation::conversation::ItemSource::Native(
-                                    native,
-                                ) => view.item(&item, native, None, cx),
-                                agent_core::presentation::conversation::ItemSource::Pending(
-                                    _,
-                                    pending,
-                                ) => view.pending_item(&item.data, &pending.draft, cx),
-                            };
+                            let row = view.projected_item(&item, None, cx);
                             h_flex()
                                 .justify_center()
                                 .w_full()
@@ -3354,6 +3384,40 @@ mod rendering_tests {
             Arc::new(gpui_apple::AppleTextSystem::new()),
         );
         assert_user_list_bodies_visible(&mut cx);
+    }
+
+    #[gpui::test]
+    fn unknown_submission_controls_render_in_history_and_queue(cx: &mut TestAppContext) {
+        let _runtime = init(cx);
+        for history_loaded in [false, true] {
+            for delivery_unknown in [false, true] {
+                let (mut snapshot, mut source) = user_message_fixture("uncertain", None, true);
+                if !history_loaded {
+                    source.turns = None;
+                }
+                Arc::make_mut(
+                    Arc::make_mut(&mut snapshot.sessions.pending_submissions)
+                        .get_mut("pending")
+                        .unwrap(),
+                )
+                .delivery_unknown = delivery_unknown;
+                let (view, window) = cx.add_window_view(|window, cx| {
+                    ConversationView::new(snapshot, source, window, cx)
+                });
+                window.simulate_resize(size(px(360.), px(600.)));
+                window.run_until_parked();
+                view.update(window, |_, cx| cx.notify());
+                window.run_until_parked();
+                for selector in ["submission-restore-pending", "submission-discard-pending"] {
+                    let bounds = window.debug_bounds(selector);
+                    assert_eq!(bounds.is_some(), delivery_unknown, "{selector}");
+                    if let Some(bounds) = bounds {
+                        assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+                        assert!(bounds.left() >= px(0.) && bounds.right() <= px(360.));
+                    }
+                }
+            }
+        }
     }
 
     #[gpui::test]

@@ -73,6 +73,8 @@ mod tests {
             }
         }
         for path in [
+            "pencil.svg",
+            "trash.svg",
             "chevrons-down-up.svg",
             "file-icons/chevron-down.svg",
             "file-icons/chevron-right.svg",

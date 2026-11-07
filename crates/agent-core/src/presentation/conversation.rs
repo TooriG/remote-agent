@@ -225,6 +225,12 @@ pub struct RenderedItem {
 }
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl RenderedItem {
+    pub fn unknown_submission_id(&self) -> Option<String> {
+        match &self.source {
+            ItemSource::Pending(id, pending) if pending.delivery_unknown => Some(id.clone()),
+            _ => None,
+        }
+    }
     pub fn detail_blocks(&self) -> Vec<super::markdown::MarkdownBlock> {
         match &self.source {
             ItemSource::Native(item) => body::detail_blocks(item),
@@ -2779,6 +2785,19 @@ mod tests {
         assert_eq!(item.data.body.as_deref(), Some("waiting for echo"));
         assert_eq!(item.data.timestamp_ms, Some(12_000));
         assert!(item.data.native_id.is_none());
+        assert_eq!(
+            item.unknown_submission_id().as_deref(),
+            delivery_unknown.then_some("pending")
+        );
+        assert!(
+            rendered
+                .turns
+                .iter()
+                .flat_map(|turn| turn.items())
+                .all(|item| {
+                    item.data.native_id.is_none() || item.unknown_submission_id().is_none()
+                })
+        );
         if history_loaded {
             let row = rendered.turns.iter().flat_map(|turn| &turn.rows)
                 .find(|row| matches!(&row.content, ConversationRowContent::User { item } if item.data.id == "pending"))
