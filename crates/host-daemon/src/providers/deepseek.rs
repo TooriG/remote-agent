@@ -1649,6 +1649,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn opencode_key_enables_both_routes_and_removal_preserves_other_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        // Even a failed launch must leave a regenerable, secret-free profile.
+        let adapter = DeepSeek::load(dir.path().join("missing-dsh"), dir.path().into())
+            .await
+            .unwrap();
+        save_test_key(&adapter, KeyProvider::OpenRouter, Some("router-test-key")).await;
+        save_test_key(&adapter, KeyProvider::OpenCode, Some("opencode-test-key")).await;
+        assert!(adapter.rpc().await.is_err());
+        let patch = dir.path().join("acp.patch.json");
+        let profile: Value = serde_json::from_slice(&std::fs::read(&patch).unwrap()).unwrap();
+        assert_eq!(
+            profile[1]["config"]["providers"],
+            json!({
+                "opencode-go":{"apiKeyEnv":"OPENCODE_API_KEY"},
+                "opencode":{"apiKeyEnv":"OPENCODE_API_KEY"},
+                "openrouter":{"apiKeyEnv":"OPENROUTER_API_KEY"}
+            })
+        );
+        assert!(!profile.to_string().contains("test-key"));
+        let keys = ManagedKeys::load(dir.path()).await.unwrap();
+        assert_eq!(keys.get(KeyProvider::OpenCode), Some("opencode-test-key"));
+        save_test_key(&adapter, KeyProvider::OpenCode, None).await;
+        assert!(adapter.rpc().await.is_err());
+        let profile: Value = serde_json::from_slice(&std::fs::read(&patch).unwrap()).unwrap();
+        assert_eq!(
+            profile[1]["config"]["providers"],
+            json!({"openrouter":{"apiKeyEnv":"OPENROUTER_API_KEY"}})
+        );
+        let keys = ManagedKeys::load(dir.path()).await.unwrap();
+        assert!(keys.get(KeyProvider::OpenCode).is_none());
+        assert_eq!(keys.get(KeyProvider::OpenRouter), Some("router-test-key"));
+    }
+
+    #[tokio::test]
     async fn dsh_keys_rotate_independently_persist_and_never_appear_in_account_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let adapter = DeepSeek::load("dsh".into(), dir.path().into())
