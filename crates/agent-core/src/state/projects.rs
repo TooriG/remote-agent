@@ -21,45 +21,22 @@ pub struct ProjectPreferences {
     pub placed_chats: Vec<PlacedChat>,
 }
 
-pub(crate) enum ChatPlacements<'a> {
-    Linear(Option<&'a BTreeMap<String, ProjectPreferences>>),
-    Indexed(HashMap<&'a crate::session::SessionRef, &'a str>),
-}
+pub(crate) struct ChatPlacements<'a>(HashMap<&'a crate::session::SessionRef, &'a str>);
 
 impl<'a> ChatPlacements<'a> {
-    pub(crate) fn new(
-        preferences: Option<&'a BTreeMap<String, ProjectPreferences>>,
-        queries: usize,
-    ) -> Self {
-        if queries < 128 {
-            return Self::Linear(preferences);
-        }
-        let count: usize = preferences
-            .into_iter()
-            .flat_map(|preferences| preferences.values())
-            .map(|preferences| preferences.placed_chats.len())
-            .sum();
-        if count == 0 {
-            return Self::Linear(None);
-        }
-        if count < 128 || count > queries.saturating_mul(4) {
-            return Self::Linear(preferences);
-        }
-        let mut indexed = HashMap::with_capacity(count);
+    pub(crate) fn new(preferences: Option<&'a BTreeMap<String, ProjectPreferences>>) -> Self {
+        let mut indexed = HashMap::new();
         for (project, preferences) in preferences.into_iter().flat_map(|prefs| prefs.iter()) {
             for chat in &preferences.placed_chats {
                 // Duplicate shortcuts keep the first project in saved key order.
                 indexed.entry(&chat.id).or_insert(project.as_str());
             }
         }
-        Self::Indexed(indexed)
+        Self(indexed)
     }
 
     pub(crate) fn get(&self, id: &crate::session::SessionRef) -> Option<&'a str> {
-        match self {
-            Self::Linear(preferences) => chat_placement(*preferences, id),
-            Self::Indexed(indexed) => indexed.get(id).copied(),
-        }
+        self.0.get(id).copied()
     }
 }
 
@@ -709,24 +686,20 @@ mod placement_tests {
                     ..Default::default()
                 },
             );
-            for queries in [0, 16, 127, 128, 129, 512, 4000] {
-                let lookup = ChatPlacements::new(Some(&preferences), queries);
-                assert_eq!(
-                    lookup.get(&codex),
-                    Some(if size == 0 { "z-visible" } else { "a-hidden" })
-                );
-                assert_eq!(lookup.get(&claude), Some("b-dangling"));
-                assert_eq!(lookup.get(&id(ProviderKind::Codex, 1)), None);
-            }
+            let lookup = ChatPlacements::new(Some(&preferences));
+            assert_eq!(
+                lookup.get(&codex),
+                Some(if size == 0 { "z-visible" } else { "a-hidden" })
+            );
+            assert_eq!(lookup.get(&claude), Some("b-dangling"));
+            assert_eq!(lookup.get(&id(ProviderKind::Codex, 1)), None);
         }
         let empty = [("empty".into(), ProjectPreferences::default())].into();
         for preferences in [None, Some(&empty)] {
-            for queries in [0, 128, 1000] {
-                assert_eq!(
-                    ChatPlacements::new(preferences, queries).get(&id(ProviderKind::Codex, 0)),
-                    None
-                );
-            }
+            assert_eq!(
+                ChatPlacements::new(preferences).get(&id(ProviderKind::Codex, 0)),
+                None
+            );
         }
     }
 
@@ -742,14 +715,12 @@ mod placement_tests {
                 expected.entry(id.clone()).and_modify(|first| *first = (*first).min(project)).or_insert(project);
                 preferences.entry(format!("project-{project:02}")).or_default().placed_chats.push(PlacedChat { id, title: String::new() });
             }
-            for queries in [1, 128, 1024] {
-                let lookup = ChatPlacements::new(Some(&preferences), queries);
-                for (id, project) in &expected {
-                    let project = format!("project-{project:02}");
-                    proptest::prop_assert_eq!(lookup.get(id), Some(project.as_str()));
-                }
-                proptest::prop_assert_eq!(lookup.get(&id(ProviderKind::Codex, 64)), None);
+            let lookup = ChatPlacements::new(Some(&preferences));
+            for (id, project) in &expected {
+                let project = format!("project-{project:02}");
+                proptest::prop_assert_eq!(lookup.get(id), Some(project.as_str()));
             }
+            proptest::prop_assert_eq!(lookup.get(&id(ProviderKind::Codex, 64)), None);
         }
     }
 }

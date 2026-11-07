@@ -377,7 +377,6 @@ impl ListSource<'_> {
         &self,
         list: &crate::models::ThreadList,
         include_standalone: bool,
-        additional_queries: usize,
     ) -> (ThreadList, ChatPlacements<'_>) {
         let waiting = self.waiting_sessions();
         let search = self.lists.list_query.search_term.to_lowercase();
@@ -416,50 +415,16 @@ impl ListSource<'_> {
                 prefs.and_then(|p| p.order).unwrap_or(usize::MAX),
             )
         });
-        let (queries, shortcut_queries) = projects
-            .iter()
-            .filter(|(_, _, _, expanded)| *expanded)
-            .fold(
-                (
-                    (if include_standalone {
-                        list.data.len()
-                    } else {
-                        0
-                    })
-                    .saturating_add(additional_queries),
-                    0usize,
-                ),
-                |(queries, shortcuts), (_, prefs, page, _)| {
-                    (
-                        queries.saturating_add(page.map_or(0, |page| page.data.len())),
-                        shortcuts.saturating_add(prefs.map_or(0, |prefs| prefs.placed_chats.len())),
-                    )
-                },
-            );
-        let metadata = if shortcut_queries >= 128
-            && self.conversations.len().saturating_mul(2) < shortcut_queries
-            && self
-                .lists
-                .project_threads
-                .values()
-                .fold(list.data.len(), |count, page| {
-                    count.saturating_add(page.data.len())
-                })
-                >= 128
-        {
-            Some(crate::state::index_missing_metadata(
-                self.conversations,
-                self.listed_threads(),
-                projects
-                    .iter()
-                    .filter(|(_, _, _, expanded)| *expanded)
-                    .flat_map(|(_, prefs, ..)| prefs.iter().flat_map(|prefs| &prefs.placed_chats))
-                    .map(|chat| &chat.id),
-            ))
-        } else {
-            None
-        };
-        let placements = ChatPlacements::new(preferences, queries);
+        let metadata = crate::state::index_missing_metadata(
+            self.conversations,
+            self.listed_threads(),
+            projects
+                .iter()
+                .filter(|(_, _, _, expanded)| *expanded)
+                .flat_map(|(_, prefs, ..)| prefs.iter().flat_map(|prefs| &prefs.placed_chats))
+                .map(|chat| &chat.id),
+        );
+        let placements = ChatPlacements::new(preferences);
         let summaries = if include_standalone {
             thread_summaries(
                 list.data.iter().filter(|thread| {
@@ -591,26 +556,24 @@ impl ListSource<'_> {
                                 });
                             }
                         }
-                        let placed_ids = prefs
-                            .filter(|prefs| {
-                                prefs.archived_before.is_some() && prefs.placed_chats.len() >= 64
-                            })
-                            .map(|prefs| {
-                                prefs
-                                    .placed_chats
-                                    .iter()
-                                    .map(|chat| &chat.id)
-                                    .collect::<HashSet<_>>()
-                            });
+                        let placed_ids =
+                            prefs
+                                .filter(|prefs| prefs.archived_before.is_some())
+                                .map(|prefs| {
+                                    prefs
+                                        .placed_chats
+                                        .iter()
+                                        .map(|chat| &chat.id)
+                                        .collect::<HashSet<_>>()
+                                });
                         let placed = prefs
                             .into_iter()
                             .flat_map(|p| &p.placed_chats)
                             .map(|chat| {
-                                metadata
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.get(&chat.id))
-                                    .copied()
-                                    .unwrap_or_else(|| self.thread_metadata(&chat.id))
+                                self.conversations
+                                    .get(&chat.id)
+                                    .map(AsRef::as_ref)
+                                    .or_else(|| metadata.get(&chat.id).copied().flatten())
                                     .map(Cow::Borrowed)
                                     .unwrap_or_else(|| {
                                         Cow::Owned(crate::models::Thread {
@@ -634,17 +597,11 @@ impl ListSource<'_> {
                                         ),
                                         thread.updated_at,
                                         archived_before.is_some()
-                                            && thread.id.as_ref().is_some_and(
-                                                |id| match &placed_ids {
-                                                    Some(ids) => ids.contains(id),
-                                                    None => prefs.is_some_and(|prefs| {
-                                                        prefs
-                                                            .placed_chats
-                                                            .iter()
-                                                            .any(|chat| &chat.id == id)
-                                                    }),
-                                                },
-                                            ),
+                                            && thread.id.as_ref().is_some_and(|id| {
+                                                placed_ids
+                                                    .as_ref()
+                                                    .is_some_and(|ids| ids.contains(id))
+                                            }),
                                     )
                             })
                             .filter(|thread| {
@@ -680,14 +637,7 @@ impl ListSource<'_> {
     /// Recent top-level chats across standalone and project pages, regardless of expansion.
     pub fn recent_thread_list(&self) -> Option<ThreadList> {
         let source = self.lists.threads.as_deref()?;
-        let additional_queries = self
-            .lists
-            .project_threads
-            .values()
-            .fold(source.data.len(), |queries, page| {
-                queries.saturating_add(page.data.len())
-            });
-        let (mut list, placements) = self.list_projection(source, false, additional_queries);
+        let (mut list, placements) = self.list_projection(source, false);
         let waiting = self.waiting_sessions();
         let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
         let mut rows: BTreeMap<_, &crate::models::Thread> = BTreeMap::new();
@@ -760,7 +710,7 @@ impl ListSource<'_> {
 
     pub fn thread_list(&self) -> Option<ThreadList> {
         let list = self.lists.threads.as_deref()?;
-        Some(self.list_projection(list, true, 0).0)
+        Some(self.list_projection(list, true).0)
     }
 }
 
@@ -772,20 +722,13 @@ fn thread_summaries<'a>(
     project_ids: &HashSet<&str>,
     project_override: Option<&str>,
 ) -> Vec<ThreadSummary> {
-    let mut indexed = None;
+    let waiting: HashSet<_> = waiting.iter().collect();
     data.filter(|thread| thread.parent_id.is_none())
         .filter_map(|thread| Some((thread, thread.id.as_ref()?)))
-        .enumerate()
-        .map(|(index, (thread, id))| {
+        .map(|(thread, id)| {
             let active = task_active(active.get(id).copied(), thread.status);
             let unread = unread.contains(id);
-            let waiting = if waiting.len() >= 64 && index >= 64 {
-                indexed
-                    .get_or_insert_with(|| waiting.iter().collect::<HashSet<_>>())
-                    .contains(id)
-            } else {
-                waiting.contains(id)
-            };
+            let waiting = waiting.contains(id);
             let title = task_title(thread.name.as_deref(), thread.preview.as_deref());
             ThreadSummary {
                 host_id: String::new(),

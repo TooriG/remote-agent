@@ -530,7 +530,7 @@ fn convert(
     let mut turns: Vec<Arc<Turn>> = Vec::new();
     let mut model = None;
     let mut block_indices: HashMap<&str, usize> = HashMap::new();
-    let mut item_positions: Option<HashMap<ItemId, usize>> = None;
+    let mut item_positions = HashMap::new();
     for node in chain {
         let kind = node["type"].as_str().unwrap_or_default();
         let id = node["uuid"].as_str().unwrap_or_default();
@@ -624,7 +624,7 @@ fn convert(
             }))
             || turns.is_empty()
         {
-            item_positions = None;
+            item_positions.clear();
             turns.push(Arc::new(Turn {
                 id: initial_item
                     .as_ref()
@@ -647,9 +647,7 @@ fn convert(
         }
         let items = turn.items.as_mut().unwrap();
         if let Some(item) = initial_item {
-            if let Some(positions) = &mut item_positions {
-                positions.entry(item.id.clone()).or_insert(items.len());
-            }
+            item_positions.entry(item.id.clone()).or_insert(items.len());
             items.push(Arc::new(item));
         }
         let message_id = node["message"]["id"]
@@ -714,14 +712,14 @@ fn convert(
 
 struct AppendedBlocks {
     items: Vec<Arc<agent_protocol::items::Item>>,
-    item_positions: Option<HashMap<ItemId, usize>>,
+    item_positions: HashMap<ItemId, usize>,
     output_paths: BTreeMap<agent_protocol::ids::ItemId, String>,
     warnings: Vec<&'static str>,
 }
 
 fn append_blocks<'a>(
     mut items: Vec<Arc<agent_protocol::items::Item>>,
-    mut item_positions: Option<HashMap<ItemId, usize>>,
+    mut item_positions: HashMap<ItemId, usize>,
     blocks: impl Iterator<Item = (String, &'a Value)>,
     session: &SessionRef,
     cwd: Option<&str>,
@@ -733,22 +731,9 @@ fn append_blocks<'a>(
     for (id, block) in blocks {
         let item = match block["type"].as_str() {
             Some("tool_result") => {
-                let position = block["tool_use_id"].as_str().and_then(|id| {
-                    if let Some(positions) = &item_positions {
-                        return positions.get(id).copied();
-                    }
-                    let position = items.iter().position(|item| item.id.as_str() == id);
-                    // Keep cheap early matches linear. Reuse an index across
-                    // native rows once a large turn needs a longer scan.
-                    if items.len() >= 128 && position.is_none_or(|index| index >= 64) {
-                        let mut positions = HashMap::with_capacity(items.len());
-                        for (index, item) in items.iter().enumerate() {
-                            positions.entry(item.id.clone()).or_insert(index);
-                        }
-                        item_positions = Some(positions);
-                    }
-                    position
-                });
+                let position = block["tool_use_id"]
+                    .as_str()
+                    .and_then(|id| item_positions.get(id).copied());
                 if let Some(position) = position {
                     let item = &mut items[position];
                     *item = Arc::new(native::tool_result_item(
@@ -771,9 +756,7 @@ fn append_blocks<'a>(
             }
             _ => native::content_item(session, id, block, stop_reason, cwd, ItemStatus::Unknown)?,
         };
-        if let Some(positions) = &mut item_positions {
-            positions.entry(item.id.clone()).or_insert(items.len());
-        }
+        item_positions.entry(item.id.clone()).or_insert(items.len());
         items.push(Arc::new(item));
     }
     Ok(AppendedBlocks {
@@ -1118,7 +1101,7 @@ mod tests {
             calls.push(json!({"type":"tool_use","id":"tool0","name":"Bash","input":{"command":"duplicate"}}));
             let initial = append_blocks(
                 vec![],
-                None,
+                HashMap::new(),
                 calls
                     .iter()
                     .enumerate()

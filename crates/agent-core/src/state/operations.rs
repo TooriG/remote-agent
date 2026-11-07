@@ -528,31 +528,11 @@ pub(super) fn page_rows(
 ) -> (Vec<crate::models::Thread>, bool) {
     let limit = limit as usize;
     let more = rows.len() > limit;
-    let compare = |a: &crate::models::Thread, b: &crate::models::Thread| {
+    rows.sort_by(|a, b| {
         b.updated_at
             .unwrap_or_default()
             .total_cmp(&a.updated_at.unwrap_or_default())
-    };
-    if limit == 0 {
-        rows.clear();
-    } else if rows.len() >= 128 && limit.saturating_mul(4) < rows.len() {
-        if !rows.is_sorted_by(|a, b| compare(a, b).is_le()) {
-            let mut indices: Vec<_> = (0..rows.len()).collect();
-            // Original positions retain the stable order of equal timestamps.
-            // Selecting indices also avoids moving every full thread to sort it.
-            let compare_index =
-                |a: &usize, b: &usize| compare(&rows[*a], &rows[*b]).then_with(|| a.cmp(b));
-            indices.select_nth_unstable_by(limit, compare_index);
-            indices.truncate(limit);
-            indices.sort_unstable_by(compare_index);
-            rows = indices
-                .into_iter()
-                .map(|index| std::mem::take(&mut rows[index]))
-                .collect();
-        }
-    } else {
-        rows.sort_by(compare);
-    }
+    });
     rows.truncate(limit);
     (rows, more)
 }

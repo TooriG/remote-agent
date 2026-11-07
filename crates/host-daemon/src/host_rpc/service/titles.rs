@@ -7,26 +7,12 @@ fn append_named_titles(
     threads: Vec<Thread>,
 ) -> Vec<SessionSummary> {
     let original_len = summaries.len();
-    let large_batch = threads.len() >= 64;
-    let mut ids = None;
+    let mut ids: std::collections::HashSet<_> = summaries
+        .iter()
+        .map(|summary| summary.thread.id.clone())
+        .collect();
     for thread in threads {
-        // Small pages and batches need no index. Include earlier appends if
-        // the retained page grows large enough to benefit during this batch.
-        if large_batch && ids.is_none() && summaries.len() >= 128 {
-            ids = Some(
-                summaries
-                    .iter()
-                    .map(|summary| summary.thread.id.clone())
-                    .collect::<std::collections::HashSet<_>>(),
-            );
-        }
-        let unseen = match &mut ids {
-            Some(ids) => ids.insert(thread.id.clone()),
-            None => !summaries
-                .iter()
-                .any(|summary| summary.thread.id == thread.id),
-        };
-        if unseen {
+        if ids.insert(thread.id.clone()) {
             summaries.push(SessionSummary {
                 branch: thread.git_branch.clone(),
                 thread,

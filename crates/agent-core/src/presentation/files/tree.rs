@@ -368,15 +368,7 @@ impl FileTrees {
 
 impl Tree {
     fn request(&mut self, paths: impl IntoIterator<Item = String>, refresh: bool) {
-        let paths = paths.into_iter();
-        // Bulk expansion and refresh share one index; single-folder actions
-        // retain the allocation-free queue lookup.
-        let mut queued = (paths.size_hint().0 >= 64).then(|| {
-            self.queue
-                .iter()
-                .cloned()
-                .collect::<std::collections::HashSet<_>>()
-        });
+        let mut queued: std::collections::HashSet<_> = self.queue.iter().cloned().collect();
         for path in paths {
             if !refresh
                 && self.directories.get(&path).is_some_and(|directory| {
@@ -385,12 +377,7 @@ impl Tree {
             {
                 continue;
             }
-            if self.running.contains(&path)
-                || queued.as_mut().map_or_else(
-                    || self.queue.contains(&path),
-                    |queued| !queued.insert(path.clone()),
-                )
-            {
+            if self.running.contains(&path) || !queued.insert(path.clone()) {
                 continue;
             }
             self.directories.entry(path.clone()).or_default().error = None;
@@ -532,18 +519,8 @@ impl Tree {
                 self.focused = Some(path);
             }
             FileTreeAction::DragEnd { paths } => {
-                let removed = (paths.len() >= 64 && self.selected.len() >= 64).then(|| {
-                    paths
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<std::collections::HashSet<_>>()
-                });
-                self.selected.retain(|path| {
-                    !removed.as_ref().map_or_else(
-                        || paths.contains(path),
-                        |removed| removed.contains(path.as_str()),
-                    )
-                });
+                let removed: std::collections::HashSet<_> = paths.iter().collect();
+                self.selected.retain(|path| !removed.contains(path));
                 self.retain_discoveries();
             }
             _ => {}

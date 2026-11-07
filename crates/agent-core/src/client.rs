@@ -113,7 +113,7 @@ impl ClientExt for Client {
     async fn models(&self, provider: crate::session::ProviderKind) -> Result<ModelPage, PeerError> {
         let mut provider_errors = Map::<String, Value>::new();
         let mut models: Vec<crate::models::Model> = Vec::new();
-        let mut positions = None;
+        let mut positions = std::collections::HashMap::new();
         let mut cursor = None;
         let mut seen = std::collections::HashSet::new();
         loop {
@@ -141,22 +141,7 @@ impl ClientExt for Client {
                 provider_errors.extend(errors);
             }
             for model in page.data {
-                if positions.is_none() && models.len() >= 128 {
-                    positions = Some(
-                        models
-                            .iter()
-                            .enumerate()
-                            .map(|(index, model)| (model.id.clone(), index))
-                            .collect::<std::collections::HashMap<_, _>>(),
-                    );
-                }
-                let index = match &mut positions {
-                    Some(positions) => *positions.entry(model.id.clone()).or_insert(models.len()),
-                    None => models
-                        .iter()
-                        .position(|previous| previous.id == model.id)
-                        .unwrap_or(models.len()),
-                };
+                let index = *positions.entry(model.id.clone()).or_insert(models.len());
                 if index == models.len() {
                     models.push(model);
                 } else {

@@ -42,16 +42,12 @@ impl ClientStorage for SessionStorage {
     }
 }
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
+#[cfg(unix)]
+mod unix;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
-use linux as os;
-#[cfg(target_os = "macos")]
-use macos as os;
+#[cfg(unix)]
+use unix as os;
 #[cfg(target_os = "windows")]
 use windows as os;
 

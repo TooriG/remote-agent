@@ -1,6 +1,6 @@
 //! Conversation lists: recent chats, project pages, decorations and sub-agents.
 use super::*;
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::{HashMap, HashSet};
 
 pub use agent_protocol::operations::AddProject;
 
@@ -207,43 +207,18 @@ fn merge_newer_rows(
     cached: &[crate::models::Thread],
     revision: u64,
 ) -> Vec<crate::models::Thread> {
-    let newer: Vec<_> = cached
-        .iter()
-        .filter(|row| row.list_revision > revision)
-        .collect();
-    if newer.len() < 128 || received.len() > newer.len().saturating_mul(4) {
-        for cached in newer {
-            if let Some(row) = received.iter_mut().find(|row| row.id == cached.id) {
-                *row = cached.clone();
-            } else {
-                received.push(cached.clone());
-            }
-        }
-        return received;
-    }
-
     // The last qualifying notice wins, while a new ID is appended where its
     // first notice appeared. Only the first received occurrence is replaced.
-    let mut positions = HashMap::<_, usize>::with_capacity(newer.len());
-    let mut updates: Vec<(Option<usize>, &crate::models::Thread)> = Vec::with_capacity(newer.len());
-    for cached in newer {
-        match positions.entry(cached.id.as_ref()) {
-            Entry::Occupied(entry) => updates[*entry.get()].1 = cached,
-            Entry::Vacant(entry) => {
-                entry.insert(updates.len());
-                updates.push((None, cached));
-            }
-        }
-    }
+    let mut positions = HashMap::new();
     for (index, row) in received.iter().enumerate() {
-        if let Some(&position) = positions.get(&row.id.as_ref()) {
-            updates[position].0.get_or_insert(index);
-        }
+        positions.entry(row.id.clone()).or_insert(index);
     }
-    for (position, cached) in updates {
-        match position {
-            Some(index) => received[index] = cached.clone(),
-            None => received.push(cached.clone()),
+    for cached in cached.iter().filter(|row| row.list_revision > revision) {
+        let index = *positions.entry(cached.id.clone()).or_insert(received.len());
+        if index == received.len() {
+            received.push(cached.clone());
+        } else {
+            received[index] = cached.clone();
         }
     }
     received
@@ -254,39 +229,16 @@ fn missing_failed_provider_rows<'a>(
     cached: &'a [crate::models::Thread],
     errors: &serde_json::Map<String, serde_json::Value>,
 ) -> Vec<&'a crate::models::Thread> {
-    let candidates: Vec<_> = cached
+    let mut present: HashSet<_> = received.iter().filter_map(|row| row.id.as_ref()).collect();
+    cached
         .iter()
-        .filter_map(|row| {
-            let id = row.id.as_ref()?;
-            errors
-                .contains_key(row.active_provider.unwrap_or(id.provider).key())
-                .then_some((id, row))
+        .filter(|row| {
+            row.id.as_ref().is_some_and(|id| {
+                errors.contains_key(row.active_provider.unwrap_or(id.provider).key())
+                    && present.insert(id)
+            })
         })
-        .collect();
-    let mut missing: Vec<&crate::models::Thread> = Vec::new();
-    if candidates.len() < 128 || received.len() > candidates.len().saturating_mul(4) {
-        for (id, cached) in candidates {
-            if !received.iter().any(|row| row.id.as_ref() == Some(id))
-                && !missing.iter().any(|row| row.id.as_ref() == Some(id))
-            {
-                missing.push(cached);
-            }
-        }
-        return missing;
-    }
-
-    let mut present = HashSet::with_capacity(received.len().max(candidates.len()));
-    for row in received {
-        if let Some(id) = row.id.as_ref() {
-            present.insert(id);
-        }
-    }
-    for (id, cached) in candidates {
-        if present.insert(id) {
-            missing.push(cached);
-        }
-    }
-    missing
+        .collect()
 }
 
 fn missing_referenced_projects<'a>(
@@ -295,23 +247,6 @@ fn missing_referenced_projects<'a>(
     rows: &[crate::models::Thread],
 ) -> Vec<&'a crate::models::Project> {
     let mut missing: Vec<&crate::models::Project> = Vec::new();
-    if cached.is_empty() || rows.is_empty() {
-        return missing;
-    }
-    if cached.len() < 128 || received.len() > cached.len().saturating_mul(4) {
-        for project in cached {
-            if !received.iter().any(|current| current.id == project.id)
-                && !missing.iter().any(|current| current.id == project.id)
-                && rows
-                    .iter()
-                    .any(|row| row.project_id.as_ref() == Some(&project.id))
-            {
-                missing.push(project);
-            }
-        }
-        return missing;
-    }
-
     let used: HashSet<_> = rows
         .iter()
         .filter_map(|row| row.project_id.as_deref())
@@ -340,15 +275,8 @@ fn merge_newer_projects(
         .iter()
         .filter(|project| project.list_revision > revision)
         .collect();
-    if newer.is_empty() {
-        return received;
-    }
-    if newer.len() < 128 || received.len() < 128 || newer.len() > received.len().saturating_mul(4) {
-        received.retain(|project| !newer.iter().any(|newer| newer.id == project.id));
-    } else {
-        let ids: HashSet<_> = newer.iter().map(|project| project.id.as_str()).collect();
-        received.retain(|project| !ids.contains(project.id.as_str()));
-    }
+    let ids: HashSet<_> = newer.iter().map(|project| project.id.as_str()).collect();
+    received.retain(|project| !ids.contains(project.id.as_str()));
     // Keep every newer project, including duplicates, in cached order before
     // the surviving received projects.
     received.splice(0..0, newer.into_iter().cloned());
@@ -359,31 +287,20 @@ fn retained_project_icons(
     mut received: Vec<crate::models::Project>,
     cached: &[crate::models::Project],
 ) -> Vec<crate::models::Project> {
-    let icons = (cached.len() >= 128
-        && received.len() >= 128
-        && cached.len() <= received.len().saturating_mul(4))
-    .then(|| {
-        cached
-            .iter()
-            .rev()
-            .map(|project| {
-                (
-                    (project.id.as_str(), project.roots.as_slice()),
-                    &project.icon,
-                )
-            })
-            .collect::<HashMap<_, _>>()
-    });
+    let icons: HashMap<_, _> = cached
+        .iter()
+        .rev()
+        .map(|project| {
+            (
+                (project.id.as_str(), project.roots.as_slice()),
+                &project.icon,
+            )
+        })
+        .collect();
     for project in &mut received {
-        let icon = match &icons {
-            Some(icons) => icons
-                .get(&(project.id.as_str(), project.roots.as_slice()))
-                .copied(),
-            None => cached
-                .iter()
-                .find(|old| old.id == project.id && old.roots == project.roots)
-                .map(|old| &old.icon),
-        };
+        let icon = icons
+            .get(&(project.id.as_str(), project.roots.as_slice()))
+            .copied();
         if let Some(icon) = icon
             && &project.icon != icon
         {
@@ -404,49 +321,30 @@ fn merge_received(
         threads.projects =
             merge_newer_projects(threads.projects, &previous.projects, threads.revision);
         threads.projects = retained_project_icons(threads.projects, &previous.projects);
-        // Small or sharply reduced pages cost less to scan than to index the
-        // entire previous page.
-        let statuses = (previous.data.len() >= 128
-            && threads.data.len() >= 128
-            && previous.data.len() <= threads.data.len().saturating_mul(4))
-        .then(|| {
-            // A repeated source keeps the first cached decoration, as in a
-            // small page's linear lookup.
-            previous
-                .data
-                .iter()
-                .rev()
-                .map(|old| {
+        // Repeated sources keep the first cached decoration.
+        let statuses: HashMap<_, _> = previous
+            .data
+            .iter()
+            .rev()
+            .map(|old| {
+                (
                     (
-                        (
-                            old.id.as_ref(),
-                            old.cwd.as_deref(),
-                            old.git_branch.as_deref(),
-                        ),
-                        old.has_changes,
-                    )
-                })
-                .collect::<HashMap<_, _>>()
-        });
+                        old.id.as_ref(),
+                        old.cwd.as_deref(),
+                        old.git_branch.as_deref(),
+                    ),
+                    old.has_changes,
+                )
+            })
+            .collect();
         for thread in &mut threads.data {
-            let status = match &statuses {
-                Some(statuses) => statuses
-                    .get(&(
-                        thread.id.as_ref(),
-                        thread.cwd.as_deref(),
-                        thread.git_branch.as_deref(),
-                    ))
-                    .copied(),
-                None => previous
-                    .data
-                    .iter()
-                    .find(|old| {
-                        old.id == thread.id
-                            && old.cwd == thread.cwd
-                            && old.git_branch == thread.git_branch
-                    })
-                    .map(|old| old.has_changes),
-            };
+            let status = statuses
+                .get(&(
+                    thread.id.as_ref(),
+                    thread.cwd.as_deref(),
+                    thread.git_branch.as_deref(),
+                ))
+                .copied();
             if let Some(status) = status {
                 thread.has_changes = status;
             }

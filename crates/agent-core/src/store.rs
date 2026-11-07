@@ -25,7 +25,6 @@ const MAX_TERMINAL_JOBS: usize = 16;
 const MAX_TERMINAL_QUEUE: usize = 128;
 const MAX_ITEM_READS: usize = 132;
 const MAX_ITEM_TRANSFERS: usize = 4;
-const MAX_WAITERS: usize = 128;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
@@ -241,17 +240,7 @@ impl Receipt {
     }
     fn join(&self, other: Self) {
         if !Arc::ptr_eq(&self.0, &other.0) {
-            let mut waiters = self.0.lock().unwrap();
-            let remaining = MAX_WAITERS.saturating_sub(waiters.len());
-            for (index, sender) in other.0.lock().unwrap().drain(..).enumerate() {
-                if index < remaining {
-                    waiters.push(sender);
-                } else {
-                    let _ = sender.send(Err(PeerError::InvalidMessage(
-                        "too many waiters for operation".into(),
-                    )));
-                }
-            }
+            self.0.lock().unwrap().append(&mut other.0.lock().unwrap());
         }
     }
     fn send(self, result: Result<Outcome, PeerError>) {
@@ -1772,6 +1761,30 @@ impl Execution<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joined_receipts_deliver_the_result_to_every_waiter() {
+        let receipt = Receipt::default();
+        let mut waiters = Vec::new();
+        for _ in 0..256 {
+            let (sender, receive) = oneshot::channel();
+            receipt.join(Receipt::new(sender));
+            waiters.push(receive);
+        }
+        for waiter in &mut waiters {
+            assert!(matches!(
+                waiter.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+        }
+        receipt.join(receipt.clone());
+        // A caller cancelling its wait must not affect the other callers.
+        waiters.pop();
+        receipt.send(Ok(Outcome::Applied));
+        for mut waiter in waiters {
+            assert_eq!(waiter.try_recv().unwrap().unwrap(), Outcome::Applied);
+        }
+    }
 
     #[tokio::test]
     async fn rejected_downloads_return_errors_without_overwriting_application_notices() {

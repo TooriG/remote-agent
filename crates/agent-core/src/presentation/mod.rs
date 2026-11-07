@@ -332,33 +332,16 @@ fn source_order<'a>(
     if anchors.is_empty() {
         return (0..item_count).collect();
     }
-    // Small queues avoid hashing the whole history. A larger batch amortizes
-    // the index; unanchored inputs do not need a native lookup at all.
-    const INDEX_THRESHOLD: usize = 64;
-    let latest =
-        (anchors.iter().flatten().take(INDEX_THRESHOLD).count() == INDEX_THRESHOLD).then(|| {
-            (0..item_count)
-                .map(|index| (item_id(index), index + 1))
-                .collect::<std::collections::HashMap<_, _>>()
-        });
+    let latest: std::collections::HashMap<_, _> = (0..item_count)
+        .map(|index| (item_id(index), index + 1))
+        .collect();
     let mut positions: Vec<_> = anchors
         .into_iter()
         .enumerate()
         .map(|(pending, anchor)| {
             (
                 anchor.map_or(0, |anchor| {
-                    latest
-                        .as_ref()
-                        .map_or_else(
-                            || {
-                                (0..item_count)
-                                    .rev()
-                                    .find(|&index| item_id(index) == anchor)
-                                    .map(|index| index + 1)
-                            },
-                            |latest| latest.get(anchor).copied(),
-                        )
-                        .unwrap_or(item_count)
+                    latest.get(anchor).copied().unwrap_or(item_count)
                 }),
                 item_count + pending,
             )
