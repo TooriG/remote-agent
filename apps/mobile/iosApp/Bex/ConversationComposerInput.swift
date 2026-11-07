@@ -74,7 +74,7 @@ struct ComposerModelControls: View {
             .accessibilityIdentifier("model.fast")
             .disabled(!model.isConnected || model.sending)
         }
-        let modelName = model.currentModel?.displayName ?? "モデル"
+        let modelName = model.settings.selectedModelName() ?? "モデル"
         Button { composerFocused = false; showingModelSettings = true } label: {
             Text(modelName)
                 .foregroundStyle(.primary)

@@ -10,10 +10,6 @@ extension ConversationModel {
         settings.selectedModel()
     }
 
-    var currentModel: Model? {
-        settings.currentModel()
-    }
-
     func chooseModel(_ value: ModelRef) {
         perform(.selectModel(threadId: coreDraftKey, model: value))
     }

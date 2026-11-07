@@ -156,6 +156,12 @@ impl SettingsPresentation {
     pub fn current_model(&self) -> Option<Model> {
         super::model_settings::current_model(&self.models, self.model.as_ref()).cloned()
     }
+    pub fn selected_model_name(&self) -> Option<String> {
+        self.model.as_ref().map(|selected| {
+            super::model_settings::current_model(&self.models, Some(selected))
+                .map_or_else(|| selected.id.clone(), |model| model.display_name.clone())
+        })
+    }
     pub fn connected(&self) -> bool {
         self.connected
     }
@@ -263,6 +269,36 @@ mod tests {
             .unwrap(),
         );
         state
+    }
+
+    #[test]
+    fn selected_model_names_keep_custom_ids_when_the_catalog_has_no_display_name() {
+        let mut state = snapshot();
+        assert!(
+            Presentation::project(Arc::new(state.clone()), None)
+                .settings
+                .selected_model_name()
+                .is_none()
+        );
+        for (id, expected) in [("a", "Alpha"), ("custom-model", "custom-model")] {
+            Arc::make_mut(&mut state.input.drafts).insert(
+                state.pane.navigation.draft_key.clone(),
+                Arc::new(Draft {
+                    model: Some(ModelRef {
+                        provider: ProviderKind::Codex,
+                        id: id.into(),
+                    }),
+                    ..Default::default()
+                }),
+            );
+            assert_eq!(
+                Presentation::project(Arc::new(state.clone()), None)
+                    .settings
+                    .selected_model_name()
+                    .as_deref(),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
