@@ -101,8 +101,9 @@ mod tests {
                 .unwrap()
                 .into_iter()
                 .map(|title| title.thread.id.unwrap())
-                .collect::<Vec<_>>(),
-            [public.clone()]
+                .collect::<Vec<_>>()
+                .as_slice(),
+            std::slice::from_ref(&public)
         );
         assert!(database.imported().unwrap().is_empty());
         database

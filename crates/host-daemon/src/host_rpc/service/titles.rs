@@ -205,6 +205,11 @@ mod tests {
         .await
         .unwrap();
         let id = created.session;
+        service
+            .import_transcript(id.clone(), false)
+            .unwrap()
+            .await
+            .unwrap();
         let _: op::SubmissionReceipt = call(
             &service,
             connection.id(),

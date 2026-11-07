@@ -658,15 +658,6 @@ impl HostRpcService {
                 agent.create(&cwd, params.model.as_ref().map(|m| m.id.as_str()), browser)
             })
             .await;
-        let started = started.and_then(|response| {
-            if let Some(id) = &response.thread.id {
-                self.inner
-                    .database
-                    .import(id, response.clone())
-                    .map_err(transcripts::storage_failure)?;
-            }
-            Ok(response)
-        });
         if started.is_err() && created {
             self.discard_worktree(&cwd).await;
         }
