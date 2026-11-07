@@ -11,7 +11,7 @@ impl Global for NativeGlobal {}
 
 fn parent(window: &Window) -> Option<Retained<NSView>> {
     MainThreadMarker::new()?;
-    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+    let RawWindowHandle::AppKit(handle) = HasWindowHandle::window_handle(window).ok()?.as_raw() else {
         return None;
     };
     // SAFETY: GPUI's main-thread window retains its AppKit content view.
