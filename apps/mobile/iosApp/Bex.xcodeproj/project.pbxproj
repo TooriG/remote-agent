@@ -16,6 +16,7 @@
         C0DE00000000000000000701 /* BrowserScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000702 /* BrowserScreen.swift */; };
         C0DE00000000000000000703 /* BrowserCredentialsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000704 /* BrowserCredentialsSheet.swift */; };
 		C0DE00000000000000000601 /* ConversationTextLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000602 /* ConversationTextLayout.swift */; };
+		C0DE00000000000000000C01 /* ConversationTextDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000C02 /* ConversationTextDiagnostics.swift */; };
 		C0DE0000000000000000029A /* ModelSelectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0000000000000000039A /* ModelSelectionUITests.swift */; };
 		C0DE00000000000000000401 /* AgentSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000402; };
         D36E8C890D10474EB83C8D37 /* WorkspaceScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E85101D97E4E84A7B33C96 /* WorkspaceScreen.swift */; };
@@ -97,6 +98,7 @@
         C0DE00000000000000000702 /* BrowserScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserScreen.swift; sourceTree = "<group>"; };
         C0DE00000000000000000704 /* BrowserCredentialsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserCredentialsSheet.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000602 /* ConversationTextLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTextLayout.swift; sourceTree = "<group>"; };
+		C0DE00000000000000000C02 /* ConversationTextDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTextDiagnostics.swift; sourceTree = "<group>"; };
 		C0DE0000000000000000039A /* ModelSelectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSelectionUITests.swift; sourceTree = "<group>"; };
 		C0DE00000000000000000402 /* AgentSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSettings.swift; sourceTree = "<group>"; };
         F1E85101D97E4E84A7B33C96 /* WorkspaceScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceScreen.swift; sourceTree = "<group>"; };
@@ -261,6 +263,7 @@
 				C0DE00000000000000000005 /* ConversationTextSelection.swift */,
 				F11E00000000000000000004 /* FileIcon.swift */,
 				C0DE00000000000000000602 /* ConversationTextLayout.swift */,
+				C0DE00000000000000000C02 /* ConversationTextDiagnostics.swift */,
 				C0DE00000000000000000006 /* ConversationSideChat.swift */,
 				D074DC0F6B272156A6A39ED4 /* ConversationMarkdown.swift */,
 				123AEE37BEE0000000000002 /* ConversationVisualization.swift */,
@@ -453,6 +456,7 @@
 				C0DE00000000000000000105 /* ConversationTextSelection.swift in Sources */,
 				F11E00000000000000000003 /* FileIcon.swift in Sources */,
 				C0DE00000000000000000601 /* ConversationTextLayout.swift in Sources */,
+				C0DE00000000000000000C01 /* ConversationTextDiagnostics.swift in Sources */,
 				C0DE00000000000000000106 /* ConversationSideChat.swift in Sources */,
 				FCD15282ED580E15F2FE6024 /* ConversationMarkdown.swift in Sources */,
 				123AEE37BEE0000000000001 /* ConversationVisualization.swift in Sources */,

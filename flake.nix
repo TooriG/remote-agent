@@ -121,7 +121,7 @@
         in
         {
           repository = pkgs.mkShellNoCC {
-            packages = with pkgs; [ bash git just nodejs perl powershell workflowLinter cccc ];
+            packages = with pkgs; [ bash git jq just nodejs perl powershell workflowLinter cccc ];
           };
           kani = mkDevShell {
             packages = with pkgs; [
