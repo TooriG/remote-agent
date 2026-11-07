@@ -124,3 +124,10 @@ struct ComposerStopButton: View {
         .accessibilityIdentifier("turn.interrupt.\(turnId)")
     }
 }
+
+extension ConversationModel {
+    func interrupt(_ turnId: String) {
+        guard let threadId = selectedThreadId else { return }
+        perform(.interrupt(Interrupt(threadId: threadId, turnId: turnId)))
+    }
+}

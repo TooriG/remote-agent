@@ -50,6 +50,7 @@ class ConversationNavigationTest {
                         "navigation",
                         JSONObject()
                             .put("thread_id", identity)
+                            .put("cwd", "/fixture")
                             .put("draft_key", JSONObject().put("Session", JSONObject().put("session", identity))),
                     )
                     .put("conversations", JSONArray().put(JSONArray().put(identity).put(thread)))
