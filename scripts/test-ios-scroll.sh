@@ -58,8 +58,8 @@ PLIST
     "$executable"
     if [[ $name == text-view-tests ]]; then
         if [[ ${#swift_flags[@]} -gt 0 ]]; then
-            nm "$executable" | rg 'ConversationTextDiagnosticLog' >/dev/null
-        elif nm "$executable" | rg 'ConversationText(Diagnostic|Container)' >/dev/null; then
+            nm "$executable" | grep -E 'ConversationTextDiagnosticLog' >/dev/null
+        elif nm "$executable" | grep -E 'ConversationText(Diagnostic|Container)' >/dev/null; then
             echo 'Non-Dev text rendering must contain no diagnostic code.' >&2
             return 1
         fi
