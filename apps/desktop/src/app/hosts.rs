@@ -1,3 +1,4 @@
+use agent_core::presentation::error::ErrorSource;
 mod qr_text;
 
 use super::view::{section_heading, settings_group};
@@ -41,7 +42,7 @@ enum Update {
     WslHost(Result<RemoteHost, String>, Option<bool>),
     Connected(Result<StoreSession, String>),
     Snapshot,
-    Background(String, Result<StoreSession, String>),
+    Background(String, Result<StoreSession, ErrorSource>),
     List(
         String,
         Option<Arc<agent_core::presentation::list::ThreadList>>,
@@ -77,7 +78,7 @@ pub(super) struct Hosts {
     >,
     background: std::collections::BTreeMap<String, StoreSession>,
     opening: std::collections::BTreeSet<String>,
-    error: Option<String>,
+    error: Option<ErrorSource>,
     _language: Subscription,
 }
 impl EventEmitter<HostEvent> for Hosts {}
@@ -217,8 +218,13 @@ impl Hosts {
         self.runtime.handle.spawn(async move {
             match runtime.sessions.management(runtime.clone()).await {
                 Ok(session) => {
-                    StoreSession::observe(session, updates, Update::Connected, |_| Update::Snapshot)
-                        .await
+                    StoreSession::observe(
+                        session,
+                        updates,
+                        |session| Update::Connected(Ok(session)),
+                        |_| Update::Snapshot,
+                    )
+                    .await
                 }
                 Err(error) => {
                     let _ = updates.send(Update::Connected(Err(error))).await;
@@ -304,7 +310,7 @@ impl Hosts {
                         });
                     }
                     Err(error) => {
-                        self.error = Some(error.clone());
+                        self.error = Some(error.clone().into());
                         cx.emit(HostEvent::Failed(error));
                     }
                 }
@@ -313,7 +319,7 @@ impl Hosts {
                 self.busy = false;
                 match result {
                     Ok(invitation) => self.pair(invitation),
-                    Err(error) => self.error = Some(error),
+                    Err(error) => self.error = Some(error.into()),
                 }
             }
             Update::Connected(result) => {
@@ -327,7 +333,7 @@ impl Hosts {
                             Action::None,
                         );
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(error) => self.error = Some(error.into()),
                 }
             }
             Update::Snapshot => {
@@ -365,7 +371,7 @@ impl Hosts {
             self.snapshot = next;
         }
         match result {
-            Err(error) => self.error = Some(error),
+            Err(error) => self.error = Some(error.into()),
             Ok(outcome) => match action {
                 Action::Invite => {
                     if let Some(invitation) = &self.snapshot.connection.management.invitation {
@@ -393,7 +399,7 @@ impl Hosts {
                         })();
                         match result {
                             Ok(invitation) => self.invitation = Some(invitation),
-                            Err(error) => self.error = Some(error),
+                            Err(error) => self.error = Some(error.into()),
                         }
                     }
                 }
@@ -466,7 +472,7 @@ impl Hosts {
                         StoreSession::observe(
                             session,
                             updates,
-                            move |result| Update::Background(id.clone(), result),
+                            move |session| Update::Background(id.clone(), Ok(session)),
                             move |view| {
                                 Update::List(
                                     host.clone(),
@@ -801,7 +807,7 @@ impl Hosts {
                                     ) {
                                         Ok(invitation) => view.pair(invitation),
                                         Err(_) => view.error = Some(
-                                            language.text("接続先で発行したBexの接続情報を貼り付けてください。")
+                                            "接続先で発行したBexの接続情報を貼り付けてください。"
                                                 .into(),
                                         ),
                                     }
@@ -824,15 +830,23 @@ impl Hosts {
                 .child(div().flex_1().child(language.text("Bexの実行環境")))
                 .child(div().text_xs().child(language.text("今後対応"))),
         );
-        if let Some(error) = self.error.as_ref().or(self.snapshot.pane.error.as_ref()) {
+        if let Some(error) = self
+            .error
+            .as_ref()
+            .map(|error| error.text(language))
+            .or_else(|| {
+                self.snapshot
+                    .pane
+                    .error
+                    .as_ref()
+                    .map(|error| agent_core::presentation::error::error_text(language, error))
+            })
+        {
             choices = choices.child(
                 div()
                     .when(!cards, |view| view.p_4())
                     .text_color(rgb(0xff8e86))
-                    .child(super::view::error_view(
-                        &agent_core::presentation::error::error_text(error),
-                        language,
-                    )),
+                    .child(super::view::error_view(&error)),
             );
         }
         choices

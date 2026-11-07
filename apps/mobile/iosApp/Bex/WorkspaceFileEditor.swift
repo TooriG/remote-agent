@@ -180,7 +180,7 @@ struct WorkspaceFileSheet: View {
                     ProgressView().padding()
                 }
                 if let file, file.truncated {
-                    AppText(filePreviewTruncationNotice()).font(.caption).padding(.horizontal)
+                    AppText("file.preview.truncated").font(.caption).padding(.horizontal)
                     FileTextPreview(text: file.text, line: line)
                 } else {
                     BufferedTextInput(value: $text) { TextEditor(text: $0, selection: $selection) }

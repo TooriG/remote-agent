@@ -118,7 +118,7 @@ impl SidebarRow {
                 })
                 .when(collapsed, |header| header.hidden())
                 .into_any_element(),
-            Self::Error(error) => error_view(&error, language)
+            Self::Error(error) => error_view(&error)
                 .px_3()
                 .text_xs()
                 .when(collapsed, |row| row.hidden())

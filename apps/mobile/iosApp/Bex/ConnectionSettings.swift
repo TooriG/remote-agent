@@ -28,7 +28,11 @@ struct ConnectionSettingsRow: View {
             ))
             .labelsHidden()
             .tint(.blue)
-            .accessibilityLabel("\(profile.name)への接続")
+            .accessibilityLabel(localizedUiFormat(
+                language: locale.appLanguage,
+                source: "{0}への接続",
+                arguments: [profile.name]
+            ))
             .accessibilityIdentifier("connection.enabled.\(profile.id)")
         }
         .buttonStyle(.borderless)
@@ -118,6 +122,7 @@ struct ProviderSettingsScreen: View {
 }
 
 struct ProviderSettingsSection: View {
+    @Environment(\.locale) private var locale
     let model: AppViewModel
 
     var body: some View {
@@ -154,7 +159,11 @@ struct ProviderSettingsSection: View {
                         ))) }
                     ))
                     .labelsHidden()
-                    .accessibilityLabel("\(provider.name)を使用")
+                    .accessibilityLabel(localizedUiFormat(
+                        language: locale.appLanguage,
+                        source: "{0}を使用",
+                        arguments: [provider.name]
+                    ))
                     .accessibilityIdentifier("provider.enabled.\(provider.provider.bexKey)")
                     .disabled(!model.isConnected || !model.settings.providerSettingsLoaded() ||
                         model.settings.providerSettingsBusy())
@@ -203,7 +212,7 @@ struct ProviderRuntimeSection: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error = status?.error {
-                    ErrorTextView(text: errorText(error: error))
+                    ErrorTextView(source: error)
                 }
             } header: {
                 Text(verbatim: "Codex CLI")

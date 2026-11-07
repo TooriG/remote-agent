@@ -71,7 +71,7 @@ struct ThreadScreen: View {
         return VStack(spacing: 0) {
             ErrorNotices(notices: model.conversationContext.notices(), perform: { model.perform($0) })
                 .padding(.horizontal)
-            if let notice = model.notice, notice != history?.error?.plainText {
+            if let notice = model.notice, errorText(language: locale.appLanguage, error: notice) != history?.error {
                 AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
             if let thread = conversation {
@@ -217,7 +217,11 @@ extension ThreadScreen {
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .accessibilityLabel(
-                    "フォルダ: \(project?.name ?? (directory.isEmpty ? emptyFolderLabel : directory))"
+                    localizedUiFormat(
+                        language: locale.appLanguage,
+                        source: "フォルダ: {0}",
+                        arguments: [project?.name ?? (directory.isEmpty ? emptyFolderLabel : directory)]
+                    )
                 )
                 .accessibilityIdentifier("task.folder")
             }
@@ -244,7 +248,11 @@ extension ThreadScreen {
             .font(.subheadline)
             .foregroundColor(.secondary)
             .accessibilityLabel(
-                "環境: \(environment.hostName ?? localizedUiText(language: locale.appLanguage, source: "未選択"))"
+                localizedUiFormat(
+                    language: locale.appLanguage,
+                    source: "環境: {0}",
+                    arguments: [environment.hostName ?? localizedUiText(language: locale.appLanguage, source: "未選択")]
+                )
             )
             .accessibilityIdentifier("task.environment")
         }

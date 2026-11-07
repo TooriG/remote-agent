@@ -13,7 +13,7 @@ pub(in crate::app) struct MediaSource {
 
 pub(in crate::app) enum MediaEvent {
     Visibility,
-    Error(String),
+    Error(ErrorSource),
 }
 
 pub(in crate::app) struct Media {
@@ -39,7 +39,7 @@ pub(in crate::app) struct ImageGallery {
     loading: bool,
     saving: bool,
     saved: bool,
-    error: String,
+    error: Option<ErrorSource>,
     image: Option<(Entity<ImageAsset>, Subscription)>,
 }
 impl ImageGallery {
@@ -211,7 +211,7 @@ impl Media {
             loading: session.is_some(),
             saving: false,
             saved: false,
-            error: String::new(),
+            error: None,
             image: None,
         });
         if let Some(thread_id) = session
@@ -268,7 +268,7 @@ impl Media {
             }
             Err(error) => {
                 tracing::error!(target: "agent", operation = "gallery.load", message = %error);
-                gallery.error = error;
+                gallery.error = Some(error.into());
             }
             _ => unreachable!("session image outcome"),
         }
@@ -307,7 +307,7 @@ impl Media {
                     gallery.selected = Some(index);
                     gallery.zoom = 1.;
                     gallery.saved = false;
-                    gallery.error.clear();
+                    gallery.error = None;
                     cx.notify();
                 }
             }))
@@ -327,7 +327,10 @@ impl Media {
             .selected
             .map(|index| format!("{} / {}", index + 1, gallery.entries.len()))
             .unwrap_or_else(|| language.text("画像").into());
-        let error = gallery.error.clone();
+        let error = gallery
+            .error
+            .as_ref()
+            .map(|error| error.flat_text(language));
         let key = ImageKey {
             source,
             encoded,
@@ -403,7 +406,7 @@ impl Media {
                         .disabled(saving),
                     ),
             )
-            .when(!error.is_empty(), |view| {
+            .when_some(error, |view, error| {
                 view.child(div().text_color(rgb(0xff8e86)).child(error))
             })
             .child(
@@ -480,7 +483,6 @@ impl Media {
     }
 
     fn save_image(&mut self, key: &ImageKey, cx: &mut Context<Self>) {
-        let language = crate::localization::language(cx);
         let Some(ImageSource::Resource(resource)) = self
             .images
             .get(&key.id())
@@ -497,7 +499,7 @@ impl Media {
                 return;
             }
             gallery.saving = true;
-            gallery.error.clear();
+            gallery.error = None;
             Some(gallery.id)
         } else {
             None
@@ -522,7 +524,7 @@ impl Media {
                             .await
                             .map_err(|error| error.to_string())?;
                         if !response.status().is_success() {
-                            return Err(agent_core::localization::localized_ui_format(language, "画像の取得に失敗しました: {0}".into(), vec![response.status().to_string()]));
+                            return Err(ErrorSource::formatted("画像の取得に失敗しました: {0}", vec![response.status().to_string()]));
                         }
                         let mut bytes = Vec::new();
                         response
@@ -532,7 +534,7 @@ impl Media {
                             .map_err(|error| error.to_string())?;
                         Original::Bytes(bytes)
                     }
-                    _ => return Err(language.text("保存できない画像です").into()),
+                    _ => return Err(ErrorSource::from("保存できない画像です")),
                 };
                 cx.background_executor()
                     .spawn(async move {
@@ -541,7 +543,7 @@ impl Media {
                                 .and_then(|reader| reader.with_guessed_format())
                                 .map_err(|error| error.to_string())?
                                 .format()
-                                .ok_or(language.text("画像形式が不明です"))?,
+                                .ok_or("画像形式が不明です")?,
                             Original::Bytes(bytes) => {
                                 image::guess_format(bytes).map_err(|error| error.to_string())?
                             }
@@ -564,7 +566,7 @@ impl Media {
                             Original::Bytes(bytes) => std::fs::write(destination, bytes)
                                 .map_err(|error| error.to_string())?,
                         }
-                        Ok::<_, String>(true)
+                        Ok::<_, ErrorSource>(true)
                     })
                     .await
             }
@@ -576,7 +578,7 @@ impl Media {
                         Ok(saved) => gallery.saved = saved,
                         Err(error) => {
                             tracing::error!(target: "agent", operation = "gallery.save", message = %error);
-                            gallery.error = error;
+                            gallery.error = Some(error);
                         }
                     }
                 } else if let Err(error) = result {
@@ -733,7 +735,7 @@ mod ownership_tests {
             let old_gallery = media.gallery.as_ref().unwrap().id;
             media.open("next.png", false, cx);
             media.gallery_loaded(old_gallery, Err("stale".into()), cx);
-            assert!(media.gallery.as_ref().unwrap().error.is_empty());
+            assert!(media.gallery.as_ref().unwrap().error.is_none());
             assert_eq!(
                 media.gallery.as_ref().unwrap().current_image().0.as_str(),
                 "next.png"

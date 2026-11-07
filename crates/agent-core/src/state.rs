@@ -202,16 +202,6 @@ impl TerminalPhase {
     pub fn accepts_input(&self) -> bool {
         matches!(self, Self::Starting | Self::Running)
     }
-    pub fn label(&self) -> String {
-        match self {
-            Self::Starting => "起動中".into(),
-            Self::Running => "実行中".into(),
-            Self::Suspended => "再接続を待っています".into(),
-            Self::Detached => "切断済み".into(),
-            Self::Exited(code) => format!("終了 · {code}"),
-            Self::Failed(error) => crate::presentation::error::error_text(error).to_string(),
-        }
-    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -561,16 +551,11 @@ impl Snapshot {
         self.operations
             .get(&key)
             .and_then(|state| match &state.phase {
-                operations::OperationPhase::Failed { message } => {
-                    Some(crate::presentation::error::error_text(message))
-                }
+                operations::OperationPhase::Failed { message } => Some(
+                    crate::presentation::error::error_text(self.catalog.ui_language, message),
+                ),
                 _ => None,
             })
-    }
-    pub fn terminal_view(&self, handle: String) -> Option<TerminalView> {
-        self.terminals
-            .get(&handle)
-            .map(|terminal| crate::presentation::terminals::view(terminal))
     }
     pub fn terminal_accepts_input(&self, handle: String) -> bool {
         self.terminals

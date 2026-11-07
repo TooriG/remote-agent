@@ -4,6 +4,7 @@ import UIKit
 
 /// Owns native input, dictation and attachment presentation independently of history.
 struct ConversationComposer: View {
+    @Environment(\.locale) private var locale
     let model: ConversationModel
     let mediaPresentation: ConversationMediaPresentation
     let hasConversation: Bool
@@ -66,7 +67,11 @@ struct ConversationComposer: View {
             if !isSideChat, !model.isNewThread, let review = model.files.review(), review.fileCount() > 0 {
                 Button { openTools?(.diff) } label: {
                     HStack(spacing: 10) {
-                        Text("\(review.fileCount())件のファイル").foregroundStyle(.tint)
+                        Text(verbatim: localizedUiFormat(
+                            language: locale.appLanguage,
+                            source: "{0}件のファイル",
+                            arguments: [String(review.fileCount())]
+                        )).foregroundStyle(.tint)
                         Text("+\(review.additions())").foregroundColor(.green)
                         Text("−\(review.deletions())").foregroundColor(.red)
                     }

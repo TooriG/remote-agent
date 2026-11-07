@@ -418,7 +418,7 @@ impl Preferences {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_view(&error_text(error), language)),
+                            .child(error_view(&error_text(language, error))),
                     )
                 },
             )
@@ -430,7 +430,7 @@ impl Preferences {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_view(&error_text(&error), language))
+                            .child(error_view(&error_text(language, &error)))
                     }),
             );
         if let Some(error) = self.metadata.account_login_error(provider) {
@@ -438,7 +438,7 @@ impl Preferences {
                 div()
                     .text_sm()
                     .text_color(rgb(0xff8e86))
-                    .child(error_view(&error, language)),
+                    .child(error_view(&error)),
             );
         }
         if !in_settings {
@@ -646,7 +646,7 @@ impl Preferences {
                 div()
                     .text_sm()
                     .text_color(rgb(0xff7777))
-                    .child(error_view(&error, language)),
+                    .child(error_view(&error)),
             );
         }
         form.into_any_element()
@@ -820,7 +820,7 @@ fn account_usage_view(
         body = body.child(
             div()
                 .text_color(rgb(0xe9b56f))
-                .child(error_view(&error_text(error), language)),
+                .child(error_view(&error_text(language, error))),
         );
     }
     let mut windows = h_flex().w_full().flex_wrap().gap_5();
@@ -1194,7 +1194,7 @@ impl Preferences {
                         div()
                             .text_xs()
                             .text_color(rgb(0xff7777))
-                            .child(error_view(&error_text(&error), language))
+                            .child(error_view(&error_text(language, &error)))
                     }),
             )
             .when(

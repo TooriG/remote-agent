@@ -73,7 +73,7 @@ impl Preferences {
             body = body.child(
                 Button::new(format!("permission-choice-{index}"))
                     .debug_selector(move || format!("permission-choice-{index}"))
-                    .accessibility_label(label)
+                    .accessibility_label(language.text(label))
                     .ghost()
                     .w_full()
                     .h_auto()
@@ -84,18 +84,13 @@ impl Preferences {
                             .flex_1()
                             .min_w_0()
                             .items_start()
-                            .child(div().text_sm().child(
-                                agent_core::localization::localized_ui_text(
-                                    language,
-                                    label.to_string(),
-                                ),
-                            ))
+                            .child(div().text_sm().child(language.text(label)))
                             .child(
                                 div()
                                     .text_xs()
                                     .whitespace_normal()
                                     .text_color(rgb(appearance::MUTED))
-                                    .child(description),
+                                    .child(language.text(description)),
                             ),
                     )
                     .when(control.mode == Some(mode), |button| {

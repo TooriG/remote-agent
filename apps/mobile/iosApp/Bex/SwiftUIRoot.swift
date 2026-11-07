@@ -177,7 +177,11 @@ struct ConnectionsScreen: View {
                     invitation.aiRecipients.joined(separator: "、")))
                 .accessibilityIdentifier("pairing.recipients")
             if let recipient = invitation.transcriptionRecipient {
-                Text("音声入力：\(recipient)（文字起こし）")
+                Text(verbatim: localizedUiFormat(
+                    language: locale.appLanguage,
+                    source: "音声入力：{0}（文字起こし）",
+                    arguments: [recipient]
+                ))
             }
         } header: {
             Text("送信する内容")
@@ -193,18 +197,18 @@ struct ConnectionsScreen: View {
 }
 
 struct AppNotice: View {
-    let text: ErrorText
+    private let content: ErrorTextView
 
     init(text: String) {
-        self.text = errorText(error: text)
+        content = ErrorTextView(source: text)
     }
 
     init(text: ErrorText) {
-        self.text = text
+        content = ErrorTextView(text: text)
     }
 
     var body: some View {
-        ErrorTextView(text: text)
+        content
             .foregroundColor(.red)
             .accessibilityIdentifier("notice")
     }

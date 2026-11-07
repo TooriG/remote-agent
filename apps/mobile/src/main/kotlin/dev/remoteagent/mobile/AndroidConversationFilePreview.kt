@@ -93,7 +93,12 @@ internal fun ConversationFilePreview(
                     )
                 }
                 if (loading) CircularProgressIndicator()
-                error?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error) }
+                error?.let {
+                    Text(
+                        dev.remoteagent.core.localizedErrorMessage(language, it),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 content.image?.let { Image(it, label, Modifier.fillMaxWidth()) }
                 content.text?.let { PreviewText(it, content.markdown, content.cwd, perform) }
             }

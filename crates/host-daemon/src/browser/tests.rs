@@ -421,7 +421,14 @@ async fn empty_cookie_import_does_not_reload_or_create_a_browser() {
     )
     .await
     .unwrap();
-    assert!(result.value.contains("取り込めるCookieがありません"));
+    assert_eq!(
+        result.notice,
+        Some(agent_protocol::browser::BrowserNotice::CookiesImported {
+            count: 0,
+            skipped: 3
+        })
+    );
+    assert!(result.value.is_empty());
     assert!(state.chrome.is_none());
     assert!(state.pages.is_empty());
 }

@@ -246,7 +246,7 @@ impl WorkspaceView {
             Some(editor) => agent_core::localization::localized_ui_format(
                 language,
                 "{0}で開く".into(),
-                vec![language.text(editor_label(editor, file_manager)).into()],
+                vec![editor_label(language, editor, file_manager).into()],
             ),
             None => language.text("エディターで開く").into(),
         };
@@ -287,17 +287,15 @@ impl WorkspaceView {
                             let editor = *editor;
                             let owner = owner.clone();
                             menu = menu.item(
-                                PopupMenuItem::new(
-                                    language.text(editor_label(editor, file_manager)),
-                                )
-                                .on_click(move |_, _, cx| {
-                                    let _ = owner.update(cx, |view, cx| {
-                                        cx.emit(WorkspaceAction::OpenEditor {
-                                            path: view.model.as_ref().unwrap().cwd.clone(),
-                                            editor,
+                                PopupMenuItem::new(editor_label(language, editor, file_manager))
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |view, cx| {
+                                            cx.emit(WorkspaceAction::OpenEditor {
+                                                path: view.model.as_ref().unwrap().cwd.clone(),
+                                                editor,
+                                            });
                                         });
-                                    });
-                                }),
+                                    }),
                             );
                         }
                         menu

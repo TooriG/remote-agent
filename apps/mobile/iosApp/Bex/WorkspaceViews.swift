@@ -137,7 +137,7 @@ private struct WorkspaceDirectoryScreen: View {
             .accessibilityIdentifier("files.list")
             .overlay {
                 if tree.rows.isEmpty {
-                    emptyState(pending: tree.pending, error: tree.error, query: tree.query)
+                    emptyState(pending: tree.pending, hasError: tree.error != nil, query: tree.query)
                 }
             }
             .scrollDismissesKeyboard(.interactively)
@@ -191,10 +191,10 @@ private struct WorkspaceDirectoryScreen: View {
         }
     }
 
-    @ViewBuilder private func emptyState(pending: Bool, error: ErrorText?, query: String) -> some View {
+    @ViewBuilder private func emptyState(pending: Bool, hasError: Bool, query: String) -> some View {
         if pending {
             ProgressView()
-        } else if error != nil {
+        } else if hasError {
             ContentUnavailableView {
                 Label { AppText("ファイルを表示できません") } icon: { Image(systemName: "exclamationmark.triangle") }
             } actions: {

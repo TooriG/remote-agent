@@ -1,7 +1,9 @@
+import AgentCore
 import SwiftUI
 import WebKit
 
 struct ConversationVisualization: View {
+    @Environment(\.locale) private var locale
     let path: String
     let media: ConversationMediaAccess
     @State private var html: String?
@@ -16,7 +18,11 @@ struct ConversationVisualization: View {
                 .accessibilityIdentifier("visualize.expand")
                 VisualizationWebView(html: html).frame(height: 420)
             } else if let error {
-                Text("表示できません: \(error)").font(.caption)
+                Text(verbatim: localizedUiFormat(
+                    language: locale.appLanguage,
+                    source: "表示できません: {0}",
+                    arguments: [localizedErrorMessage(language: locale.appLanguage, error: error)]
+                )).font(.caption)
             } else {
                 ProgressView("インタラクティブ表示を読み込み中…")
             }

@@ -58,6 +58,7 @@ import dev.remoteagent.core.BrowserFrame
 import dev.remoteagent.core.BrowserInputKind
 import dev.remoteagent.core.BrowserKey
 import dev.remoteagent.core.BrowserRequest
+import dev.remoteagent.core.BrowserStatus
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.browserFitAction
 import dev.remoteagent.core.browserInputFocus
@@ -98,7 +99,7 @@ private class BrowserSession(private val thread: SessionRef) {
 
     var error by mutableStateOf<String?>(null)
     var connectionError by mutableStateOf<String?>(null)
-    var notice by mutableStateOf<String?>(null)
+    var notice by mutableStateOf<BrowserStatus?>(null)
     var credentials by mutableStateOf<BrowserCredentials?>(null)
     var keyboardRequest by mutableStateOf(0)
         private set
@@ -127,7 +128,7 @@ private class BrowserSession(private val thread: SessionRef) {
         credentials = null
         notice =
             if (action is BrowserAction.ImportCookies || action is BrowserAction.ImportPasswords)
-                "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。"
+                BrowserStatus.Importing(remote = true)
             else null
         if (commands.size < BROWSER_QUEUE_LIMIT) {
             commands.addLast(request(action))
@@ -154,7 +155,10 @@ private class BrowserSession(private val thread: SessionRef) {
             if (result.tabId.isEmpty() || result.imageId.isEmpty()) null else decodeBrowserImage(result.image) ?: image
         frame = result
         credentials = result.credentials ?: credentials
-        notice = result.value.takeIf(String::isNotEmpty) ?: notice
+        notice =
+            result.notice?.let { BrowserStatus.Notice(it) }
+                ?: result.value.takeIf(String::isNotEmpty)?.let { BrowserStatus.Value(it) }
+                ?: notice
         connectionError = null
         browserInputFocus(action, result.inputKind)?.let { focus ->
             keyboardRequest = if (focus) keyboardRequest + 1 else 0
@@ -236,11 +240,7 @@ private fun BrowserPane(
         ) {
             session.error = it
         }
-        val failure = session.error ?: session.connectionError
-        val messageColor = if (failure == null) colors.onSurfaceVariant else colors.error
-        (failure ?: session.notice)?.let {
-            Text(LocalUiLanguage.current.text(it), color = messageColor, modifier = Modifier.padding(12.dp))
-        }
+        BrowserNotice(session.error ?: session.connectionError, session.notice)
         frame?.dialog?.let { BrowserDialogView(it, enabled, session::send) }
         val blank = tab == null || tab.url == "about:blank"
         BrowserImage(

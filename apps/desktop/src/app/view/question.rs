@@ -218,7 +218,7 @@ impl super::composer::ComposerContent {
                     div()
                         .text_xs()
                         .text_color(rgb(0xff8e86))
-                        .child(error_view(error, language)),
+                        .child(error_view(error)),
                 )
             })
             .into_any_element()

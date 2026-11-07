@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 
 struct AccountUsageView: View {
+    @Environment(\.locale) private var locale
     let usage: AccountUsage?
 
     var body: some View {
@@ -10,7 +11,7 @@ struct AccountUsageView: View {
             if let usage {
                 if let error = usage.error {
                     Label {
-                        ErrorTextView(text: errorText(error: error))
+                        ErrorTextView(source: error)
                     } icon: {
                         Image(systemName: "exclamationmark.circle")
                     }
@@ -21,8 +22,12 @@ struct AccountUsageView: View {
                 }
                 if usage.error == nil {
                     let date = Date(timeIntervalSince1970: Double(usage.fetchedAt))
-                    Text("\(date.formatted(date: .omitted, time: .shortened)) 更新")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: localizedUiFormat(
+                        language: locale.appLanguage,
+                        source: "{0} 更新",
+                        arguments: [date.formatted(date: .omitted, time: .shortened)]
+                    ))
+                    .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
                 Text("使用量を取得中…").font(.caption).foregroundStyle(.secondary)
@@ -94,14 +99,22 @@ private struct UsageWindowView: View {
             HStack {
                 Text(verbatim: usageWindowLabel(language: locale.appLanguage, period: window.period, name: window.name))
                 Spacer()
-                Text("残り \(window.remainingPercent)%").monospacedDigit()
+                Text(verbatim: localizedUiFormat(
+                    language: locale.appLanguage,
+                    source: "残り {0}%",
+                    arguments: [String(window.remainingPercent)]
+                )).monospacedDigit()
             }.font(.caption)
             ProgressView(value: Double(window.remainingPercent), total: 100)
                 .tint(window.remainingPercent <= 20 ? .orange : .green)
             if let reset = window.resetsAt {
                 let date = Date(timeIntervalSince1970: Double(reset))
-                Text("リセット: \(date.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.caption2).foregroundStyle(.secondary)
+                Text(verbatim: localizedUiFormat(
+                    language: locale.appLanguage,
+                    source: "リセット: {0}",
+                    arguments: [date.formatted(date: .abbreviated, time: .shortened)]
+                ))
+                .font(.caption2).foregroundStyle(.secondary)
             }
         }
     }
@@ -129,6 +142,7 @@ struct AccountIdentityView: View {
 }
 
 struct AccountLoginSection: View {
+    @Environment(\.locale) private var locale
     let login: AccountLogin
     let providerName: String
     @Binding var loginCode: String
@@ -138,7 +152,7 @@ struct AccountLoginSection: View {
     let retry: () -> Void
 
     var body: some View {
-        Section("\(providerName) にサインイン") {
+        Section(localizedUiFormat(language: locale.appLanguage, source: "{0} にサインイン", arguments: [providerName])) {
             Text("1. ブラウザでサインイン")
                 .font(.headline)
             if !login.requiresCodeSubmission {
@@ -172,7 +186,7 @@ struct AccountLoginSection: View {
                 ProgressView(LocalizedStringKey(progressMessage))
             }
             if let error = loginError {
-                ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
+                ErrorTextView(source: error).font(.caption).foregroundStyle(.red)
                 Button("認証状態を再確認", action: retry)
             }
         }

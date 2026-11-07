@@ -57,7 +57,7 @@ impl Snapshot {
         self.pane
             .error
             .as_deref()
-            .map(crate::presentation::error::error_text)
+            .map(|error| crate::presentation::error::error_text(self.catalog.ui_language, error))
     }
     pub fn files(&self) -> Arc<Files> {
         self.files_view()

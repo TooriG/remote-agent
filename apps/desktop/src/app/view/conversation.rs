@@ -536,7 +536,7 @@ impl ConversationView {
                         s.timeline.remeasure_item(key.1.as_str());
                     },
                 ))
-                .when_some(error, |body, error| body.child(error_view(error, language)))
+                .when_some(error, |body, error| body.child(error_view(error)))
                 .into_any_element();
         }
         let turn_id = turn.cloned().unwrap_or_default();
@@ -1046,7 +1046,7 @@ impl ConversationView {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(0xff8e86))
-                                                    .child(error_view(&error, language)),
+                                                    .child(error_view(&error)),
                                             )
                                         })
                                         .child(
@@ -1397,7 +1397,7 @@ impl ConversationView {
                 div()
                     .text_sm()
                     .text_color(rgb(0xff8e86))
-                    .child(error_view(error, language)),
+                    .child(error_view(error)),
             );
         }
         if !request.details.is_empty() {
@@ -1756,7 +1756,7 @@ impl ConversationView {
                                 .text_xs()
                                 .text_center()
                                 .text_color(rgb(appearance::MUTED))
-                                .child(error_view(&error, language)),
+                                .child(error_view(&error)),
                         )
                     }),
             )

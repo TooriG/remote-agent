@@ -433,7 +433,8 @@ impl Receipt {
 mod tests {
     #[test]
     fn native_transfer_errors_show_localized_host_reasons_without_wrappers() {
-        use crate::localization::{UiLanguage, localized_ui_text};
+        use crate::localization::UiLanguage;
+        use crate::presentation::error::localized_error_message;
         for (code, japanese, english) in [
             (
                 "file_not_found",
@@ -462,11 +463,11 @@ mod tests {
             ));
             assert_eq!(error.to_string(), japanese);
             assert_eq!(
-                localized_ui_text(UiLanguage::Japanese, error.to_string()),
+                localized_error_message(UiLanguage::Japanese, &error.to_string()),
                 japanese
             );
             assert_eq!(
-                localized_ui_text(UiLanguage::English, error.to_string()),
+                localized_error_message(UiLanguage::English, &error.to_string()),
                 english
             );
         }

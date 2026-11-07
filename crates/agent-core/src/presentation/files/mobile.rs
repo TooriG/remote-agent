@@ -1,4 +1,5 @@
 //! T3 mobile's features/threads/fileChipMenu.ts. Apps supply native menus/share sheets.
+use crate::localization::UiLanguage;
 use crate::presentation::markdown::{
     MarkdownFileSurface, file_host_path, file_path_for_clipboard, file_position_target,
     file_workspace_relative_path, markdown_file_target,
@@ -24,6 +25,7 @@ pub struct MobileFileMenuItem {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn mobile_file_menu(
+    language: UiLanguage,
     source: String,
     cwd: String,
     home: Option<String>,
@@ -44,7 +46,7 @@ pub fn mobile_file_menu(
         items.push(MobileFileMenuItem {
             mime_type: None,
             action: MobileFileAction::CopyFullPath,
-            label: "フルパスをコピー".into(),
+            label: language.text("フルパスをコピー").into(),
             path: file_path_for_clipboard(&target, &path),
         });
     }
@@ -52,7 +54,7 @@ pub fn mobile_file_menu(
         items.push(MobileFileMenuItem {
             mime_type: None,
             action: MobileFileAction::CopyRelativePath,
-            label: "相対パスをコピー".into(),
+            label: language.text("相対パスをコピー").into(),
             path: file_path_for_clipboard(
                 &file_position_target(&relative, file.line, file.column),
                 &path,
@@ -62,7 +64,7 @@ pub fn mobile_file_menu(
     items.push(MobileFileMenuItem {
         mime_type: None,
         action: MobileFileAction::Open,
-        label: "ファイルビューアで開く".into(),
+        label: language.text("ファイルビューアで開く").into(),
         path: path.clone(),
     });
     // Source metadata uses the literal final extension, including a position suffix.
@@ -70,7 +72,7 @@ pub fn mobile_file_menu(
         items.push(MobileFileMenuItem {
             mime_type: Some(mime_type.into()),
             action: MobileFileAction::SaveOrShare,
-            label: "保存・共有".into(),
+            label: language.text("保存・共有").into(),
             path: target,
         });
     }
@@ -132,7 +134,12 @@ mod tests {
 
     #[test]
     fn menu_order_scope_positions_windows_and_explicit_sharing_follow_mobile() {
-        let menu = mobile_file_menu("src/a.rs:12:3".into(), "/repo".into(), None);
+        let menu = mobile_file_menu(
+            UiLanguage::Japanese,
+            "src/a.rs:12:3".into(),
+            "/repo".into(),
+            None,
+        );
         assert_eq!(
             menu.iter().map(|item| item.action).collect::<Vec<_>>(),
             [
@@ -143,7 +150,12 @@ mod tests {
         );
         assert_eq!(menu[0].path, "/repo/src/a.rs:12:3");
         assert_eq!(menu[1].path, "src/a.rs:12:3");
-        let menu = mobile_file_menu("C:/other/a.pdf".into(), "C:\\repo".into(), None);
+        let menu = mobile_file_menu(
+            UiLanguage::Japanese,
+            "C:/other/a.pdf".into(),
+            "C:\\repo".into(),
+            None,
+        );
         assert_eq!(menu[0].path, "C:\\other\\a.pdf");
         assert_eq!(
             menu.iter().map(|item| item.action).collect::<Vec<_>>(),
@@ -154,16 +166,46 @@ mod tests {
             ]
         );
         assert!(
-            !mobile_file_menu("a.pdf:12".into(), "/repo".into(), None)
-                .iter()
-                .any(|item| item.action == MobileFileAction::SaveOrShare)
+            !mobile_file_menu(
+                UiLanguage::Japanese,
+                "a.pdf:12".into(),
+                "/repo".into(),
+                None
+            )
+            .iter()
+            .any(|item| item.action == MobileFileAction::SaveOrShare)
         );
         let menu = mobile_file_menu(
+            UiLanguage::Japanese,
             "~/a.png".into(),
             "/repo".into(),
             Some("/actual/home".into()),
         );
         assert_eq!(menu[0].path, "/actual/home/a.png");
-        assert!(mobile_file_menu("a.rs".into(), "".into(), None).is_empty());
+        assert!(mobile_file_menu(UiLanguage::Japanese, "a.rs".into(), "".into(), None).is_empty());
+    }
+
+    #[test]
+    fn english_mobile_menu_formats_only_copy_and_keeps_file_names() {
+        let menu = mobile_file_menu(
+            UiLanguage::English,
+            "/repo/設定{0}.pdf".into(),
+            "/repo".into(),
+            None,
+        );
+        assert_eq!(
+            menu.iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Copy full path",
+                "Copy relative path",
+                "Open in file viewer",
+                "Save or share"
+            ]
+        );
+        assert_eq!(menu[0].path, "/repo/設定{0}.pdf");
+        assert_eq!(menu[1].path, "設定{0}.pdf");
+        assert!(menu.iter().all(|item| item.path.contains("設定{0}.pdf")));
     }
 }

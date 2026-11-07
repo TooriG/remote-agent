@@ -52,6 +52,7 @@ impl Desktop {
             capabilities.map_or(&[], |value| value.editors.as_slice()),
         );
         let items = file_reference_menu(
+            crate::localization::language(cx),
             self.local_shell,
             editor,
             capabilities.and_then(|value| value.reveal),

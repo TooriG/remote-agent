@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 
 struct WorkspaceBrowserScreen: View {
+    @Environment(\.locale) private var locale
     let store: AgentStore
     let thread: SessionRef
     @Environment(\.scenePhase) private var scenePhase
@@ -11,7 +12,7 @@ struct WorkspaceBrowserScreen: View {
     @State private var address = ""
     @State private var text = ""
     @State private var credentials: BrowserCredentials?
-    @State private var notice: String?
+    @State private var notice: BrowserStatus?
     @State private var error: String?
     @State private var connectionError: String?
     @State private var commands: [BrowserRequest] = []
@@ -40,8 +41,13 @@ struct WorkspaceBrowserScreen: View {
                 .accessibilityLabel("再読み込み")
             }.font(.body).padding(.horizontal, 8).padding(.vertical, 4).disabled(!acceptsInput)
             Divider().opacity(0.6)
-            if let message = error ?? connectionError ?? notice {
+            if let message = error ?? connectionError {
                 AppNotice(text: message).padding(.horizontal)
+            } else if let notice {
+                AppNotice(text: ErrorText(
+                    message: browserStatusLabel(language: locale.appLanguage, status: notice),
+                    details: nil
+                )).padding(.horizontal)
             }
             ZStack {
                 if let image, let currentTab = frame?.currentTab, currentTab.url != "about:blank" {
@@ -160,7 +166,7 @@ struct WorkspaceBrowserScreen: View {
         error = nil
         credentials = nil
         switch action {
-        case .importCookies, .importPasswords: notice = "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。"
+        case .importCookies, .importPasswords: notice = .importing(remote: true)
         case .dialog:
             answeringDialog = true
             dialogText = ""
@@ -191,8 +197,10 @@ struct WorkspaceBrowserScreen: View {
         if let metadata = result.credentials {
             credentials = metadata
         }
-        if !result.value.isEmpty {
-            notice = result.value
+        if let outcome = result.notice {
+            notice = .notice(notice: outcome)
+        } else if !result.value.isEmpty {
+            notice = .value(value: result.value)
         }
         if !result.image.isEmpty {
             image = UIImage(data: result.image)
@@ -232,6 +240,7 @@ struct WorkspaceBrowserScreen: View {
 
 /// Tabs, credentials and viewport sizes of the Host's browser.
 private struct BrowserMenu: View {
+    @Environment(\.locale) private var locale
     let frame: BrowserFrame?
     let viewportSize: CGSize
     let send: (BrowserAction) -> Void
@@ -245,10 +254,14 @@ private struct BrowserMenu: View {
                     send(.selectTab(id: $0))
                 })) {
                     ForEach(frame?.tabs ?? [], id: \.id) { tab in
-                        Label(tab.url == "about:blank" ? "新しいタブ" : (tab.title.isEmpty ? tab.url : tab.title),
-                              systemImage: "globe")
-                            .tag(tab.id)
-                            .accessibilityIdentifier(tab.id == frame?.tabId ? "browser.title" : "browser.tab.\(tab.id)")
+                        Label(
+                            tab
+                                .url == "about:blank" ? localizedUiText(language: locale.appLanguage, source: "新しいタブ") :
+                                (tab.title.isEmpty ? tab.url : tab.title),
+                            systemImage: "globe"
+                        )
+                        .tag(tab.id)
+                        .accessibilityIdentifier(tab.id == frame?.tabId ? "browser.title" : "browser.tab.\(tab.id)")
                     }
                 }
                 .pickerStyle(.inline)

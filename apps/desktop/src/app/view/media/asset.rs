@@ -39,7 +39,7 @@ impl ImageKey {
 pub(in crate::app) struct ImageAsset {
     pub(super) key: ImageKey,
     pub(in crate::app) path: Option<ImageSource>,
-    error: Option<String>,
+    error: Option<ErrorSource>,
     _loading: Task<()>,
     _directory: Arc<tempfile::TempDir>,
 }
@@ -72,7 +72,6 @@ impl ImageAsset {
         let source = key.source.clone();
         let cwd = key.cwd.clone();
         let encoded = key.encoded;
-        let language = crate::localization::language(cx);
         let directory_lifetime = directory.clone();
         let load = handle.spawn(async move {
             let _directory = directory_lifetime;
@@ -80,11 +79,9 @@ impl ImageAsset {
                 let data = if encoded {
                     source.as_str()
                 } else {
-                    let (header, data) = source
-                        .split_once(',')
-                        .ok_or(language.text("画像データが不正です"))?;
+                    let (header, data) = source.split_once(',').ok_or("画像データが不正です")?;
                     if !header.ends_with(";base64") {
-                        return Err(language.text("未対応の画像データです").into());
+                        return Err("未対応の画像データです".into());
                     }
                     data
                 };
@@ -103,7 +100,7 @@ impl ImageAsset {
             if !remote && path.is_absolute() {
                 return Ok(path.to_string_lossy().into_owned());
             }
-            let store = store.ok_or(language.text("ホストに接続していません"))?;
+            let store = store.ok_or("ホストに接続していません")?;
             if !remote {
                 let result = store
                     .dispatch(Intent::ResolveFile(op::ResolveFile {
@@ -132,13 +129,15 @@ impl ImageAsset {
             error: None,
             _directory: directory,
             _loading: cx.spawn(async move |asset, cx| {
-                let result = load.await.unwrap_or_else(|error| Err(error.to_string()));
+                let result = load
+                    .await
+                    .unwrap_or_else(|error| Err(ErrorSource::from(error.to_string())));
                 let _ = asset.update(cx, |asset, cx| asset.complete(result, cx));
             }),
         }
     }
 
-    pub(super) fn complete(&mut self, result: Result<String, String>, cx: &mut Context<Self>) {
+    pub(super) fn complete(&mut self, result: Result<String, ErrorSource>, cx: &mut Context<Self>) {
         match result {
             Ok(path) => {
                 self.path = Some(if Path::new(&path).is_absolute() {
@@ -238,7 +237,7 @@ impl Render for ImageView {
                 Some(error) => div()
                     .text_sm()
                     .text_color(rgb(appearance::MUTED))
-                    .child(error.clone())
+                    .child(error.flat_text(language))
                     .into_any_element(),
                 None => image_skeleton(self.height, cx.theme().secondary).into_any_element(),
             };

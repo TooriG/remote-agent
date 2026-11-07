@@ -572,7 +572,11 @@ fn directory_failures_keep_previous_data_and_reopening_retries() {
         trees
             .view(&key(ROOT))
             .error
-            .and_then(|error| error.details)
+            .and_then(|error| crate::presentation::error::error_text(
+                crate::localization::UiLanguage::Japanese,
+                &error
+            )
+            .details)
             .as_deref(),
         Some("Disconnected")
     );
@@ -701,13 +705,19 @@ fn desktop_search_preserves_normal_expansion_and_defers_expand_all_until_search_
     assert!(trees.view(&key(ROOT)).rows[0].expanded);
     assert!(!trees.view(&key(ROOT)).all_expanded);
     assert_eq!(
-        trees.view(&key(ROOT)).toggle_all_label,
+        file_tree_toggle_all_label(
+            crate::localization::UiLanguage::Japanese,
+            trees.view(&key(ROOT)).collapse_all
+        ),
         "すべてのフォルダを展開"
     );
     assert!(toggle(&mut trees, "a").is_empty());
     assert!(action(&mut trees, FileTreeAction::ToggleAll).is_empty());
     assert_eq!(
-        trees.view(&key(ROOT)).toggle_all_label,
+        file_tree_toggle_all_label(
+            crate::localization::UiLanguage::Japanese,
+            trees.view(&key(ROOT)).collapse_all
+        ),
         "すべてのフォルダを折りたたむ"
     );
     assert!(!trees.view(&key(ROOT)).all_expanded);
@@ -1465,5 +1475,22 @@ fn mobile_file_taps_reopen_the_same_selection_with_a_fresh_request() {
         let second = trees.view(&key(ROOT)).open_file.unwrap();
         assert_eq!(first.path, second.path);
         assert_eq!(first.id != second.id, surface == FileTreeSurface::Mobile);
+    }
+}
+
+#[test]
+fn toggle_copy_formats_the_same_tree_action_in_both_languages() {
+    for (collapse, japanese, english) in [
+        (false, "すべてのフォルダを展開", "Expand all folders"),
+        (true, "すべてのフォルダを折りたたむ", "Collapse all folders"),
+    ] {
+        assert_eq!(
+            file_tree_toggle_all_label(crate::localization::UiLanguage::Japanese, collapse),
+            japanese
+        );
+        assert_eq!(
+            file_tree_toggle_all_label(crate::localization::UiLanguage::English, collapse),
+            english
+        );
     }
 }

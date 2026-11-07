@@ -10,7 +10,7 @@ mod sort;
 #[cfg(test)]
 mod tests;
 mod view;
-pub use view::{FileTreeRow, FileTreeView};
+pub use view::{FileTreeRow, FileTreeView, file_tree_toggle_all_label};
 
 /// One mounted browser can visit several roots. Independent browsers (including
 /// a side chat) must never share expansion, search, selection or request lifetimes.

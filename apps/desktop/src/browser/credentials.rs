@@ -1,5 +1,5 @@
 use super::*;
-use agent_core::localization::localized_ui_text;
+use agent_core::presentation::error::localized_error_message;
 use agent_protocol::browser::BrowserImportProfile;
 
 impl Browser {
@@ -59,7 +59,7 @@ impl Browser {
                         .text_xs()
                         .text_color(rgb(appearance::MUTED))
                         .child(div().font_weight(FontWeight::MEDIUM).child(error.browser))
-                        .child(localized_ui_text(language, error.message)),
+                        .child(localized_error_message(language, &error.message)),
                 );
             }
         }
@@ -202,9 +202,9 @@ impl Browser {
             );
         if accounts.is_empty() {
             section = section.child(div().text_sm().text_color(rgb(appearance::MUTED)).child(
-                localized_ui_text(
+                localized_error_message(
                     language,
-                    error.unwrap_or_else(|| "このサイトの保存パスワードはありません。".into()),
+                    &error.unwrap_or_else(|| "このサイトの保存パスワードはありません。".into()),
                 ),
             ));
         }

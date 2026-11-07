@@ -99,7 +99,7 @@ struct WorktreeSettingsScreen: View {
             }
             if let error {
                 Section {
-                    AppText(error).foregroundColor(.red).accessibilityIdentifier("worktree.error")
+                    ErrorMessage(source: error).foregroundColor(.red).accessibilityIdentifier("worktree.error")
                     if !loaded {
                         Button("再読み込み", action: load).disabled(busy || !model.isConnected)
                     }

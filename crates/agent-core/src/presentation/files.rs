@@ -10,7 +10,7 @@ mod preview;
 pub use mobile::{
     MobileFileAction, MobileFileMenuItem, mobile_file_menu, mobile_file_open_request,
 };
-pub use preview::{file_preview_mime_type, file_preview_truncation_notice};
+pub use preview::file_preview_mime_type;
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn mobile_file_icon(path: String) -> String {
@@ -42,7 +42,7 @@ pub fn file_reference_tooltip(path: &str, byte_length: Option<u64>) -> String {
 }
 pub use tree::{
     FileTreeAction, FileTreeKey, FileTreeRequest, FileTreeRow, FileTreeSurface, FileTreeView,
-    FileTrees, file_tree_path,
+    FileTrees, file_tree_path, file_tree_toggle_all_label,
 };
 
 /// T3's explorer follows the workspace, except when displaying a Host folder.

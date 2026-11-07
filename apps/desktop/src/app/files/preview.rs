@@ -48,7 +48,7 @@ async fn download_preview(
     store: &Store,
     source: String,
     root: PathBuf,
-) -> Result<DownloadedPreview, String> {
+) -> Result<DownloadedPreview, ErrorSource> {
     let directory =
         tokio::task::spawn_blocking(move || preview_directory(&root, SystemTime::now()))
             .await
@@ -75,7 +75,7 @@ impl Desktop {
             .as_ref()
             .map(|session| session.host.store.clone())
         else {
-            self.set_error("ホストに接続していません".into());
+            self.set_error("ホストに接続していません");
             cx.notify();
             return;
         };
@@ -99,14 +99,14 @@ impl Desktop {
         &mut self,
         generation: u64,
         scope: ErrorScope,
-        result: Result<DownloadedPreview, String>,
+        result: Result<DownloadedPreview, ErrorSource>,
         cx: &mut Context<Self>,
     ) {
         self.local_busy = self.local_busy.saturating_sub(1);
         if generation != self.file_open_generation || scope != self.local_error_scope() {
             return;
         }
-        match result.and_then(DownloadedPreview::into_url) {
+        match result.and_then(|preview| preview.into_url().map_err(ErrorSource::from)) {
             Ok(url) => cx.open_url(&url),
             Err(error) => {
                 self.raise_notice(scope, error);

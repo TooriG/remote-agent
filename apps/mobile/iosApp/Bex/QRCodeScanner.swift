@@ -49,7 +49,7 @@ struct QrScannerSheet: View {
         ContentUnavailableView {
             Image(systemName: "camera")
         } description: {
-            AppText(message).accessibilityIdentifier("scanner.error")
+            ErrorMessage(source: message).accessibilityIdentifier("scanner.error")
         } actions: {
             if offersSettings, let url = URL(string: UIApplication.openSettingsURLString) {
                 Button { UIApplication.shared.open(url) } label: { AppText("設定を開く") }

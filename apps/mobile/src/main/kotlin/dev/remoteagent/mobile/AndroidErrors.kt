@@ -2,7 +2,7 @@ package dev.remoteagent.mobile
 
 import dev.remoteagent.core.AgentException
 
-/** Native reasons are already prepared for display by core. */
+/** Core supplies safe error sources; views format them in the current language. */
 internal fun Throwable.displayMessage(): String? =
     when (this) {
         is AgentException.Failed -> reason

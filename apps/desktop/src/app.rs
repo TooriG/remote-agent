@@ -14,7 +14,10 @@ mod view;
 use crate::{Runtime, appearance, diff::DiffView, platform, store_session::StoreSession};
 use agent_core::{
     panels::{PanelKind as Panel, PanelLayout, PanelScope, Panels},
-    presentation::{conversation::ConversationRowContent, error::ErrorScope},
+    presentation::{
+        conversation::ConversationRowContent,
+        error::{ErrorScope, ErrorSource},
+    },
     state::{Attachment, Draft, DraftKey, Intent, Snapshot},
     store::Outcome,
 };
@@ -78,7 +81,7 @@ enum Update {
             String,
         >,
     ),
-    Connected(Result<(StoreSession, bool), String>),
+    Connected(Result<(StoreSession, bool), ErrorSource>),
     Snapshot,
     Completed(OperationCompletion, Result<Outcome, String>),
     Folder(Result<Option<platform::ProjectSelection>, String>),
@@ -86,12 +89,12 @@ enum Update {
     PersistenceError(String),
     LocalCompleted {
         scope: ErrorScope,
-        result: Result<(), String>,
+        result: Result<(), ErrorSource>,
     },
     FilePreview {
         generation: u64,
         scope: ErrorScope,
-        result: Result<files::DownloadedPreview, String>,
+        result: Result<files::DownloadedPreview, ErrorSource>,
     },
     OnboardingCompleted(Result<(), String>),
 }
@@ -206,7 +209,8 @@ impl Desktop {
     fn busy(&self) -> bool {
         self.local_busy > 0 || self.publication.composer.controls.sending
     }
-    fn set_error(&mut self, error: String) {
+    fn set_error(&mut self, error: impl Into<ErrorSource>) {
+        let error = error.into();
         tracing::error!(target: "agent", operation = "desktop", message = %error);
         self.raise_notice(self.local_error_scope(), error);
     }
@@ -553,7 +557,7 @@ impl Desktop {
                             let removed = view.runtime.sessions.remove(id);
                             view.effect(removed, |result| Update::LocalCompleted {
                                 scope: ErrorScope::Settings,
-                                result,
+                                result: result.map_err(ErrorSource::from),
                             });
                             if view.remote.as_ref().is_some_and(|remote| &remote.id == id) {
                                 view.switch_host(None, window, cx);
@@ -688,7 +692,7 @@ impl Desktop {
             view.runtime.handle.spawn(StoreSession::observe(
                 session,
                 updates,
-                move |result| (0, Update::Connected(result.map(|session| (session, local)))),
+                move |session| (0, Update::Connected(Ok((session, local)))),
                 |_| (0, Update::Snapshot),
             ));
         } else if !side_chat_mode {
@@ -742,7 +746,7 @@ impl Desktop {
                 let local_shell = connections
                     .host_is_local(remote.as_ref().map(|remote| remote.ticket.as_str()))
                     .await;
-                Ok::<_, String>((session, local_shell))
+                Ok::<_, ErrorSource>((session, local_shell))
             }
             .await;
             match result {
@@ -750,12 +754,7 @@ impl Desktop {
                     StoreSession::observe(
                         session,
                         updates,
-                        move |session| {
-                            (
-                                epoch,
-                                Update::Connected(session.map(|session| (session, local_shell))),
-                            )
-                        },
+                        move |session| (epoch, Update::Connected(Ok((session, local_shell)))),
                         move |_| (epoch, Update::Snapshot),
                     )
                     .await;
@@ -783,10 +782,10 @@ impl Desktop {
             self.dispatch(Intent::ListWorktrees(op::ListWorktrees {}));
         }
     }
-    fn effect<T: Send + 'static>(
+    fn effect<T: Send + 'static, E: Send + 'static>(
         &self,
-        future: impl Future<Output = Result<T, String>> + Send + 'static,
-        complete: impl FnOnce(Result<T, String>) -> Update + Send + 'static,
+        future: impl Future<Output = Result<T, E>> + Send + 'static,
+        complete: impl FnOnce(Result<T, E>) -> Update + Send + 'static,
     ) {
         let epoch = self.epoch;
         let updates = self.updates.clone();
@@ -1338,11 +1337,7 @@ impl Desktop {
             .snapshot
             .model_provider_for_draft(self.draft_key().clone())
         else {
-            self.set_error(
-                language
-                    .text("利用可能なエージェントを選択してください。")
-                    .into(),
-            );
+            self.set_error("利用可能なエージェントを選択してください。");
             return;
         };
         let prompt = agent_core::localization::localized_ui_format(

@@ -740,9 +740,13 @@ impl WorkbenchView {
         }
         if path.is_some() {
             editor = editor
-                .when(truncated, |editor| editor.child(div().text_xs().child(
-                    language.text(&agent_core::presentation::files::file_preview_truncation_notice()).to_owned()
-                )))
+                .when(truncated, |editor| {
+                    editor.child(
+                        div()
+                            .text_xs()
+                            .child(language.text("file.preview.truncated").to_owned()),
+                    )
+                })
                 .child(
                     div().flex_1().min_h_0().child(
                         Editor::new(input)
@@ -756,7 +760,9 @@ impl WorkbenchView {
                         .gap_2()
                         .flex_wrap()
                         .child(
-                            button("save-file", language.text("保存"), cx, |_, _, cx| cx.emit(WorkbenchAction::Save))
+                            button("save-file", language.text("保存"), cx, |_, _, cx| {
+                                cx.emit(WorkbenchAction::Save)
+                            })
                             .primary()
                             .disabled(saving || truncated),
                         )
@@ -765,14 +771,25 @@ impl WorkbenchView {
                             IconName::RotateCw,
                             language.text("再読み込み・下書きを破棄"),
                             cx,
-                            move |_, _, cx| { if let Some(path) = &reload { cx.emit(WorkbenchAction::Reload(path.clone())); } },
+                            move |_, _, cx| {
+                                if let Some(path) = &reload {
+                                    cx.emit(WorkbenchAction::Reload(path.clone()));
+                                }
+                            },
                         ))
                         .child(
                             button(
                                 "ai-edit",
                                 language.text("AI に編集を依頼"),
                                 cx,
-                                move |view, _, _| { if let Some(text) = &edit { view.dispatch(Intent::SetDraftText { thread_id: draft.clone(), text: text.clone() }); } },
+                                move |view, _, _| {
+                                    if let Some(text) = &edit {
+                                        view.dispatch(Intent::SetDraftText {
+                                            thread_id: draft.clone(),
+                                            text: text.clone(),
+                                        });
+                                    }
+                                },
                             )
                             .icon(IconName::Bot),
                         ),

@@ -75,11 +75,15 @@ struct AssistantSelectableText: UIViewRepresentable {
         func textView(_: UITextView, menuConfigurationFor textItem: UITextItem,
                       defaultMenu _: UIMenu) -> UITextItem.MenuConfiguration? {
             guard case let .link(url) = textItem.content else { return nil }
-            let items = mobileFileMenu(source: url.absoluteString, cwd: parent.cwd, home: parent.home)
+            let items = mobileFileMenu(
+                language: parent.locale.appLanguage,
+                source: url.absoluteString,
+                cwd: parent.cwd,
+                home: parent.home
+            )
             guard !items.isEmpty else { return nil }
             let actions = items.map { item in
-                let title = localizedUiText(language: parent.locale.appLanguage, source: item.label)
-                return UIAction(title: title) { [weak self] _ in
+                UIAction(title: item.label) { [weak self] _ in
                     switch item.action {
                     case .copyFullPath, .copyRelativePath:
                         UIPasteboard.general.string = item.path

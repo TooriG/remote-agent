@@ -1,5 +1,6 @@
 use crate::Runtime;
 use agent_core::client::persistence::Persistence;
+use agent_core::presentation::error::ErrorSource;
 use agent_core::store::{Pane, Store};
 use gpui_kit::Context;
 use std::sync::{Arc, Mutex};
@@ -153,7 +154,7 @@ impl Sessions {
         remote: Option<&str>,
         runtime: Runtime,
         enabled: Option<bool>,
-    ) -> Result<StoreSession, String> {
+    ) -> Result<StoreSession, ErrorSource> {
         if self.local_node.get().is_none()
             && let Ok(agent_local_host::LocalHost {
                 state: agent_local_host::LocalHostState::Ready(local),
@@ -199,10 +200,10 @@ impl Sessions {
             .await
             .map_err(|error| match error {
                 agent_core::client::persistence::RestoreError::InvalidState(reason) => {
-                    format!("保存した入力状態を読み込めません: {reason}")
+                    ErrorSource::diagnostic("保存した入力状態を読み込めません", reason.to_string())
                 }
                 agent_core::client::persistence::RestoreError::Storage(reason) => {
-                    reason.to_string()
+                    ErrorSource::from(reason.to_string())
                 }
             })?;
         if let Some(enabled) = enabled {
@@ -328,15 +329,23 @@ impl StoreSession {
         result: anyhow::Result<Arc<Store>>,
         runtime: Runtime,
         updates: async_channel::Sender<E>,
-        connected: impl FnOnce(Result<Self, String>) -> E,
+        connected: impl FnOnce(Result<Self, ErrorSource>) -> E,
         snapshot: impl Fn(Arc<agent_core::presentation::view::Presentation>) -> E,
     ) {
         match result {
             Ok(store) => {
-                Self::observe(Self::new(store, runtime), updates, connected, snapshot).await
+                Self::observe(
+                    Self::new(store, runtime),
+                    updates,
+                    move |session| connected(Ok(session)),
+                    snapshot,
+                )
+                .await
             }
             Err(error) => {
-                let _ = updates.send(connected(Err(format!("{error:#}")))).await;
+                let _ = updates
+                    .send(connected(Err(ErrorSource::from(format!("{error:#}")))))
+                    .await;
             }
         }
     }
@@ -344,12 +353,12 @@ impl StoreSession {
     pub(crate) async fn observe<E: Send>(
         session: Self,
         updates: async_channel::Sender<E>,
-        connected: impl FnOnce(Result<Self, String>) -> E,
+        connected: impl FnOnce(Self) -> E,
         snapshot: impl Fn(Arc<agent_core::presentation::view::Presentation>) -> E,
     ) {
         let mut snapshots = session.pane.subscribe();
         let stop = session.stop.clone();
-        if updates.send(connected(Ok(session))).await.is_err() {
+        if updates.send(connected(session)).await.is_err() {
             return;
         }
         loop {
@@ -457,7 +466,7 @@ mod tests {
     };
 
     enum Update {
-        Connected(Result<StoreSession, String>),
+        Connected(Result<StoreSession, ErrorSource>),
         Snapshot,
         Error,
     }
@@ -853,7 +862,7 @@ mod tests {
                 Err(anyhow::anyhow!("connection failed").context("cannot open session")), runtime.clone(), updates.clone(),
                 Update::Connected, |_| Update::Snapshot,
             ).await;
-            assert!(matches!(incoming.recv().await.unwrap(), Update::Connected(Err(error)) if error == "cannot open session: connection failed"));
+            assert!(matches!(incoming.recv().await.unwrap(), Update::Connected(Err(error)) if error.text(agent_core::localization::UiLanguage::Japanese).details.as_deref() == Some("cannot open session: connection failed")));
             assert!(incoming.try_recv().is_err());
             drop(incoming);
             StoreSession::publish(

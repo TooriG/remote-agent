@@ -53,7 +53,7 @@ internal fun TerminalDialog(
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize().imePadding()) {
             Column {
-                val terminal = terminals.view(handle)
+                val terminal = terminals.view(language, handle)
                 if (terminal?.loading != false) {
                     CircularProgressIndicator()
                 } else {

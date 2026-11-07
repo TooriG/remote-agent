@@ -196,7 +196,9 @@ impl ComposerPresentation {
     }
     pub fn request_error(&self, id: agent_protocol::ids::RequestId) -> Option<ErrorText> {
         match self.request_phase(id) {
-            Some(OperationPhase::Failed { message }) => Some(super::error::error_text(&message)),
+            Some(OperationPhase::Failed { message }) => {
+                Some(super::error::error_text(self.language, &message))
+            }
             _ => None,
         }
     }

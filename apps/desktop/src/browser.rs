@@ -1,4 +1,5 @@
 use crate::{Runtime, appearance};
+use agent_core::browser_view::{BrowserStatus, browser_status_label};
 use agent_core::localization::UiLanguage;
 use agent_core::store::Store;
 use agent_protocol::{
@@ -38,7 +39,7 @@ pub(crate) struct Browser {
     dialog_input: Entity<InputState>,
     error: Option<String>,
     connection_error: Option<String>,
-    notice: Option<String>,
+    notice: Option<BrowserStatus>,
     credentials: Option<BrowserCredentials>,
     pending: VecDeque<BrowserRequest>,
     visible: bool,
@@ -222,8 +223,16 @@ impl Browser {
                     changed |= self.credentials.as_ref() != Some(&metadata);
                     self.credentials = Some(metadata);
                 }
-                if !frame.value.is_empty() {
-                    let notice = std::mem::take(&mut frame.value);
+                let notice = frame
+                    .notice
+                    .take()
+                    .map(|notice| BrowserStatus::Notice { notice })
+                    .or_else(|| {
+                        (!frame.value.is_empty()).then(|| BrowserStatus::Value {
+                            value: std::mem::take(&mut frame.value),
+                        })
+                    });
+                if let Some(notice) = notice {
                     changed |= self.notice.as_ref() != Some(&notice);
                     self.notice = Some(notice);
                 }
@@ -280,9 +289,7 @@ impl Browser {
             action,
             BrowserAction::ImportCookies { .. } | BrowserAction::ImportPasswords { .. }
         ) {
-            self.notice = Some(
-                "ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。".into(),
-            );
+            self.notice = Some(BrowserStatus::Importing { remote: false });
         }
         self.credentials = None;
         if self.pending.len() < 64 {
@@ -658,9 +665,9 @@ impl Render for Browser {
                         )
                         .child(self.actions_menu(cx)),
                 )
-                .when_some(self.notice.clone(), |body, notice| body.child(div().px_3().py_2().text_sm().child(agent_core::localization::localized_ui_text(language, notice))))
+                .when_some(self.notice.clone(), |body, notice| body.child(div().px_3().py_2().text_sm().child(browser_status_label(language, notice))))
                 .when_some(self.error.clone().or(self.connection_error.clone()), |body, error| {
-                    body.child(div().px_3().py_2().text_sm().child(agent_core::localization::localized_ui_text(language, error)))
+                    body.child(div().px_3().py_2().text_sm().child(agent_core::presentation::error::localized_error_message(language, &error)))
                 })
                 .when_some(self.frame.dialog.clone(), |body, dialog| {
                     body.child(

@@ -37,10 +37,7 @@ impl Preferences {
                         .child(if pending {
                             language.text("接続中…").into()
                         } else {
-                            agent_core::localization::localized_ui_text(
-                                language,
-                                agent.label.clone(),
-                            )
+                            agent.label.clone()
                         }),
                 );
             if !agent.enabled {
@@ -91,7 +88,7 @@ impl Preferences {
                                 .flex_1()
                                 .text_xs()
                                 .text_color(rgb(0xffc773))
-                                .child(error_view(error, language)),
+                                .child(error_view(error)),
                         )
                         .child(
                             button(

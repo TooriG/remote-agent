@@ -152,7 +152,7 @@ struct ModelSettingsScreen: View {
         .labelsHidden()
         .disabled(disabled)
         ForEach(model.settings.modelErrorMessages(provider: provider), id: \.self) { error in
-            ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
+            ErrorTextView(source: error).font(.caption).foregroundStyle(.red)
                 .accessibilityIdentifier("model.error")
         }
     }

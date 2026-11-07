@@ -2,24 +2,18 @@ use super::*;
 use agent_core::presentation::error::{ErrorNotice, ErrorText};
 
 /// Error copy in the UI language above its verbatim cause.
-pub(in crate::app) fn error_view(
-    text: &ErrorText,
-    language: agent_core::localization::UiLanguage,
-) -> Div {
-    v_flex()
-        .min_w_0()
-        .child(agent_core::localization::localized_ui_text(
-            language,
-            text.message.clone(),
-        ))
-        .when_some(text.details.clone(), |body, details| {
+pub(in crate::app) fn error_view(text: &ErrorText) -> Div {
+    v_flex().min_w_0().child(text.message.clone()).when_some(
+        text.details.clone(),
+        |body, details| {
             body.child(
                 div()
                     .text_xs()
                     .text_color(rgb(appearance::MUTED))
                     .child(details),
             )
-        })
+        },
+    )
 }
 
 /// An error notice as the error list shows it.
@@ -32,7 +26,7 @@ pub(in crate::app) struct ErrorRow {
 
 pub(in crate::app) struct LocalNotice {
     id: uuid::Uuid,
-    message: String,
+    message: ErrorSource,
     pub(in crate::app) lifetime: NoticeLifetime,
 }
 
@@ -43,10 +37,10 @@ pub(in crate::app) enum NoticeLifetime {
 }
 
 impl LocalNotice {
-    pub(in crate::app) fn new(message: String, lifetime: NoticeLifetime) -> Self {
+    pub(in crate::app) fn new(message: impl Into<ErrorSource>, lifetime: NoticeLifetime) -> Self {
         Self {
             id: uuid::Uuid::new_v4(),
-            message,
+            message: message.into(),
             lifetime,
         }
     }
@@ -76,12 +70,20 @@ impl Desktop {
             })
             .collect();
         if let Some(notice) = self.local_errors.get(scope) {
-            rows.push(local_error_row(scope, notice));
+            rows.push(local_error_row(
+                self.snapshot.catalog.ui_language,
+                scope,
+                notice,
+            ));
         }
         rows
     }
 
-    pub(in crate::app) fn raise_notice(&mut self, scope: ErrorScope, message: String) {
+    pub(in crate::app) fn raise_notice(
+        &mut self,
+        scope: ErrorScope,
+        message: impl Into<ErrorSource>,
+    ) {
         self.local_errors
             .insert(scope, LocalNotice::new(message, NoticeLifetime::Connection));
     }
@@ -194,12 +196,13 @@ pub(in crate::app) fn error_list<V: 'static>(
                         .flex_1()
                         .min_w_0()
                         .gap_1()
-                        .child(div().text_xs().text_color(rgb(appearance::MUTED)).child(
-                            agent_core::localization::localized_ui_text(language, notice.context),
-                        ))
-                        .child(div().text_sm().font_semibold().child(
-                            agent_core::localization::localized_ui_text(language, notice.title),
-                        ))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(appearance::MUTED))
+                                .child(notice.context),
+                        )
+                        .child(div().text_sm().font_semibold().child(notice.title))
                         .child(
                             div()
                                 .id(format!("error-details-{}-{index}", scope.label()))
@@ -209,12 +212,12 @@ pub(in crate::app) fn error_list<V: 'static>(
                                 .tooltip(move |window, cx| {
                                     tooltip::Tooltip::new(detail.clone()).build(window, cx)
                                 })
-                                .child(error_view(&notice.text, language)),
+                                .child(error_view(&notice.text)),
                         )
                         .when_some(row.notice.recovery_label.clone(), |body, label| {
                             body.child(button(
                                 format!("recover-error-{index}"),
-                                agent_core::localization::localized_ui_text(language, label),
+                                label,
                                 cx,
                                 move |view, window, cx| {
                                     action(
@@ -276,16 +279,20 @@ pub(in crate::app) fn error_list<V: 'static>(
         }))
 }
 
-fn local_error_row(scope: &ErrorScope, notice: &LocalNotice) -> ErrorRow {
+fn local_error_row(
+    language: agent_core::localization::UiLanguage,
+    scope: &ErrorScope,
+    notice: &LocalNotice,
+) -> ErrorRow {
     let message = &notice.message;
     ErrorRow {
         notice: ErrorNotice {
             id: op::ErrorId::Application {
-                message: message.clone(),
+                message: message.to_string(),
             },
-            context: scope.label().into(),
-            title: "操作に失敗しました".into(),
-            text: agent_core::presentation::error::error_text(message),
+            context: language.text(scope.label()).into(),
+            title: language.text("操作に失敗しました").into(),
+            text: message.text(language),
             recovery_label: None,
         },
         local: Some(notice.id),
@@ -336,9 +343,9 @@ mod tests {
         let desktop = handle.unwrap();
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
-                view.raise_notice(ErrorScope::Settings, "repeated".into());
+                view.raise_notice(ErrorScope::Settings, "repeated");
                 let old_id = view.error_rows(&ErrorScope::Settings)[0].local.unwrap();
-                view.raise_notice(ErrorScope::Settings, "repeated".into());
+                view.raise_notice(ErrorScope::Settings, "repeated");
                 let latest = view.error_rows(&ErrorScope::Settings)[0].local.unwrap();
                 assert_ne!(old_id, latest);
                 view.dismiss_notice(&ErrorScope::Settings, old_id);
@@ -351,11 +358,11 @@ mod tests {
                 view.dismiss_notice(&ErrorScope::Settings, latest);
                 assert!(view.error_rows(&ErrorScope::Settings).is_empty());
                 let device_notice =
-                    LocalNotice::new("language save failed".into(), NoticeLifetime::Window);
+                    LocalNotice::new("language save failed", NoticeLifetime::Window);
                 let device_id = device_notice.id;
                 view.local_errors
                     .insert(ErrorScope::Settings, device_notice);
-                view.raise_notice(ErrorScope::Projects, "pairing failed".into());
+                view.raise_notice(ErrorScope::Projects, "pairing failed");
                 view.connect(None, None);
                 assert_eq!(
                     view.error_rows(&ErrorScope::Settings)[0].local,
@@ -367,12 +374,12 @@ mod tests {
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
                     first.clone();
-                view.raise_notice(ErrorScope::Application, "draft persistence failed".into());
+                view.raise_notice(ErrorScope::Application, "draft persistence failed");
                 view.raise_notice(
                     ErrorScope::Conversation {
                         draft_key: first.clone(),
                     },
-                    "attachment failed".into(),
+                    "attachment failed",
                 );
                 view.project_fixture();
                 cx.notify();

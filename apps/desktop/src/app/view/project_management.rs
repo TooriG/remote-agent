@@ -240,13 +240,13 @@ impl Desktop {
                         None => editor.host.is_empty() && editor.scope == s.snapshot.connection.storage_scope,
                     };
                     if !same_scope {
-                        s.set_error(language.text("接続先が変わりました。プロジェクトを開き直してください").into());
+                        s.set_error("接続先が変わりました。プロジェクトを開き直してください");
                         s.project_editor = None; cx.notify(); return;
                     }
                     let name = editor.name.read(cx).value().to_string();
                     let section = editor.section.read(cx).value().to_string();
                     if name.trim().is_empty() || name.trim().chars().count()>100 || section.trim().chars().count()>60 {
-                        s.set_error(language.text("表示名は1〜100文字、セクションは60文字以内で入力してください").into());
+                        s.set_error("表示名は1〜100文字、セクションは60文字以内で入力してください");
                     } else {
                         s.dispatch_host(&editor.host, Intent::EditProject { project_id: editor.id.clone(), name, section }, cx);
                         s.project_editor = None;
@@ -261,12 +261,12 @@ impl Desktop {
     }
     fn open_project_folder(&mut self, host: &str, path: &str) {
         if host != "local" && (!host.is_empty() || self.remote.is_some()) {
-            self.set_error("接続先のフォルダはこの端末では開けません".into());
+            self.set_error("接続先のフォルダはこの端末では開けません");
             return;
         }
         let path = Path::new(path);
         if !path.is_absolute() || !path.is_dir() {
-            self.set_error("プロジェクトのフォルダが見つかりません".into());
+            self.set_error("プロジェクトのフォルダが見つかりません");
             return;
         }
         #[cfg(target_os = "windows")]
@@ -283,7 +283,10 @@ impl Desktop {
             command.creation_flags(0x08000000);
         }
         if let Err(error) = command.spawn() {
-            self.set_error(format!("フォルダを開けません: {error}"));
+            self.set_error(ErrorSource::diagnostic(
+                "フォルダを開けません",
+                error.to_string(),
+            ));
         }
     }
 }

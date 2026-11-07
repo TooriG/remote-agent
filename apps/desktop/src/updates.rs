@@ -1,6 +1,9 @@
 mod install;
 
-use agent_core::updates::{Channel, Download, select_download};
+use agent_core::{
+    presentation::error::ErrorSource,
+    updates::{Channel, Download, select_download},
+};
 use futures_util::AsyncReadExt;
 use gpui_kit::http_client::{AsyncBody, HttpClient, HttpRequestExt, Request};
 use gpui_kit::{
@@ -24,7 +27,14 @@ enum State {
     Downloading(u8),
     Ready(install::Plan),
     Installing,
-    Failed(String),
+    Failed(ErrorSource),
+}
+
+// Preserve deferred UI facts through the HTTP worker's erased I/O errors.
+fn failure(error: anyhow::Error) -> ErrorSource {
+    error
+        .downcast::<ErrorSource>()
+        .unwrap_or_else(|error| ErrorSource::from(format!("{error:#}")))
 }
 
 pub struct Updates {
@@ -91,7 +101,7 @@ impl Updates {
             Some(install::UpdateResult {
                 build,
                 error: Some(error),
-            }) if build >= build_number() => State::Failed(error),
+            }) if build >= build_number() => State::Failed(error.into()),
             Some(result) if result.build > build_number() => State::Failed(
                 "更新が適用されず、以前のバージョンで起動しました。もう一度お試しください。".into(),
             ),
@@ -181,7 +191,7 @@ impl Updates {
                 self.state = State::Current;
                 self.check(cx);
             }
-            Err(error) => self.state = State::Failed(error.to_string()),
+            Err(error) => self.state = State::Failed(error.to_string().into()),
         }
         cx.notify();
     }
@@ -197,38 +207,11 @@ impl Updates {
         self.state = State::Checking;
         cx.notify();
         let http = cx.http_client();
-        let work = cx.global::<crate::Runtime>().handle.spawn(async move {
-            let mut response = http
-                .send(
-                    Request::builder()
-                        .uri(channel.releases_url())
-                        .header("User-Agent", "Bex-Updater")
-                        .header("Accept", "application/vnd.github+json")
-                        .timeout(Duration::from_secs(30))
-                        .body(AsyncBody::empty())?,
-                )
-                .await?;
-            anyhow::ensure!(
-                response.status().is_success(),
-                "更新の確認に失敗しました (HTTP {})。もう一度お試しください。",
-                response.status()
-            );
-            let mut bytes = Vec::new();
-            response
-                .body_mut()
-                .take(4 * 1024 * 1024 + 1)
-                .read_to_end(&mut bytes)
-                .await?;
-            anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "更新情報が大きすぎます。");
-            select_download(
-                &bytes,
-                build_number(),
-                std::env::consts::OS,
-                std::env::consts::ARCH,
-                channel,
-            )
-            .map_err(anyhow::Error::msg)
-        });
+        let work = cx.global::<crate::Runtime>().handle.spawn(check_release(
+            http,
+            channel,
+            build_number(),
+        ));
         cx.spawn(async move |view, cx| {
             let result = work.await.map_err(anyhow::Error::from).and_then(|r| r);
             let _ = view.update(cx, |view, cx| {
@@ -238,7 +221,7 @@ impl Updates {
                 view.state = match result {
                     Ok(Some(download)) => State::Available(download),
                     Ok(None) => State::Current,
-                    Err(error) => State::Failed(format!("{error:#}")),
+                    Err(error) => State::Failed(failure(error)),
                 };
                 cx.notify();
             });
@@ -285,7 +268,7 @@ impl Updates {
             let _ = view.update(cx, |view, cx| {
                 view.state = match result {
                     Ok(plan) => State::Ready(plan),
-                    Err(error) => State::Failed(format!("{error:#}")),
+                    Err(error) => State::Failed(failure(error)),
                 };
                 cx.notify();
             });
@@ -315,7 +298,7 @@ impl Updates {
                             cx.quit();
                         }
                         Err(error) => {
-                            view.state = State::Failed(format!("{error:#}"));
+                            view.state = State::Failed(failure(error));
                             cx.notify();
                         }
                     });
@@ -382,10 +365,7 @@ impl Render for Updates {
                 agent_core::localization::localized_ui_format(
                     language,
                     "更新を再試行: {0}".into(),
-                    vec![agent_core::localization::localized_ui_text(
-                        language,
-                        error.to_string(),
-                    )],
+                    vec![error.flat_text(language)],
                 ),
                 false,
             ),
@@ -458,6 +438,45 @@ impl Render for Updates {
     }
 }
 
+async fn check_release(
+    http: Arc<dyn HttpClient>,
+    channel: Channel,
+    current_build: u64,
+) -> anyhow::Result<Option<Download>> {
+    let mut response = http
+        .send(
+            Request::builder()
+                .uri(channel.releases_url())
+                .header("User-Agent", "Bex-Updater")
+                .header("Accept", "application/vnd.github+json")
+                .timeout(Duration::from_secs(30))
+                .body(AsyncBody::empty())?,
+        )
+        .await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        ErrorSource::formatted(
+            "更新の確認に失敗しました (HTTP {0})。もう一度お試しください。",
+            vec![response.status().to_string()]
+        )
+    );
+    let mut bytes = Vec::new();
+    response
+        .body_mut()
+        .take(4 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .await?;
+    anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "更新情報が大きすぎます。");
+    select_download(
+        &bytes,
+        current_build,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        channel,
+    )
+    .map_err(anyhow::Error::msg)
+}
+
 async fn download(
     http: Arc<dyn HttpClient>,
     release: &Download,
@@ -476,8 +495,10 @@ async fn download(
         .await?;
     anyhow::ensure!(
         response.status().is_success(),
-        "更新ファイルをダウンロードできません (HTTP {})。",
-        response.status()
+        ErrorSource::formatted(
+            "更新ファイルをダウンロードできません (HTTP {0})。",
+            vec![response.status().to_string()]
+        )
     );
     let mut file = tokio::fs::File::create(path).await?;
     let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
@@ -514,7 +535,8 @@ async fn download(
 #[cfg(test)]
 mod tests {
     use super::{
-        Channel, Download, RefreshThreads, State, Updates, build_number, download, install,
+        Channel, Download, RefreshThreads, State, Updates, build_number, check_release, download,
+        failure, install,
     };
     use gpui_kit as gpui;
     use gpui_kit::{
@@ -573,6 +595,57 @@ mod tests {
             );
         }
         assert_eq!(std::fs::read(path).unwrap(), b"abc");
+    }
+
+    #[tokio::test]
+    async fn http_failures_keep_status_facts_until_the_display_language_is_known() {
+        use agent_core::localization::UiLanguage;
+        let http = FakeHttpClient::create(|_| async {
+            Ok(Response::builder()
+                .status(404)
+                .body(AsyncBody::empty())
+                .unwrap())
+        });
+        let error = failure(
+            check_release(http, Channel::Production, 94)
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(
+            error.flat_text(UiLanguage::Japanese),
+            "更新の確認に失敗しました (HTTP 404 Not Found)。もう一度お試しください。"
+        );
+        assert_eq!(
+            error.flat_text(UiLanguage::English),
+            "Could not check for updates (HTTP 404 Not Found). Try again."
+        );
+        let http = FakeHttpClient::create(|_| async {
+            Ok(Response::builder()
+                .status(503)
+                .body(AsyncBody::empty())
+                .unwrap())
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("update.zip");
+        let (progress, _) = async_channel::bounded(1);
+        let error = failure(
+            download(http, &release(), &path, progress)
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(
+            error.flat_text(UiLanguage::Japanese),
+            "更新ファイルをダウンロードできません (HTTP 503 Service Unavailable)。"
+        );
+        assert_eq!(
+            error.flat_text(UiLanguage::English),
+            "Could not download the update (HTTP 503 Service Unavailable)."
+        );
+        assert!(!path.exists());
+        assert_eq!(
+            failure(anyhow::anyhow!("opaque I/O cause")).flat_text(UiLanguage::English),
+            "opaque I/O cause"
+        );
     }
 
     #[gpui::test]

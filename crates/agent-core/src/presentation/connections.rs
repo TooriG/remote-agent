@@ -134,7 +134,7 @@ impl Snapshot {
                             .get(provider.key())
                             .and_then(|error| error.get("message"))
                             .and_then(Value::as_str)
-                            .map(super::error::error_text)
+                            .map(|error| super::error::error_text(self.catalog.ui_language, error))
                             .or_else(|| {
                                 self.catalog
                                     .account
@@ -142,7 +142,9 @@ impl Snapshot {
                                     .as_ref()?
                                     .errors
                                     .get(&provider)
-                                    .map(|error| super::error::error_text(error))
+                                    .map(|error| {
+                                        super::error::error_text(self.catalog.ui_language, error)
+                                    })
                             })
                             .or_else(|| self.operation_error(OperationKey::Models { provider }))
                             .or_else(|| self.operation_error(OperationKey::Accounts))

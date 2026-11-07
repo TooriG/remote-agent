@@ -1,3 +1,4 @@
+use crate::localization::{UiLanguage, localized_ui_format};
 use crate::state::{
     DraftKey, Snapshot,
     operations::{ErrorId, OperationKey, OperationPhase},
@@ -24,9 +25,8 @@ pub struct ErrorNotice {
     pub recovery_label: Option<String>,
 }
 
-/// UI copy is written in the source language, Japanese. Host, transport and
-/// provider diagnostics are not, so they stay verbatim in `details` instead
-/// of mixing into translated copy.
+/// UI copy is formatted in the requested language. Host, transport and provider
+/// diagnostics stay verbatim in `details`, separate from translated copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ErrorText {
@@ -192,6 +192,7 @@ impl Snapshot {
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     pub fn error_notices(&self, scope: ErrorScope) -> Vec<ErrorNotice> {
+        let language = self.catalog.ui_language;
         let mut notices = Vec::new();
         if scope == ErrorScope::Application {
             let application = [
@@ -208,9 +209,9 @@ impl Snapshot {
                         id: ErrorId::Application {
                             message: error.clone(),
                         },
-                        context: context.into(),
-                        title: title.into(),
-                        text: error_text(error),
+                        context: language.text(context).into(),
+                        title: language.text(title).into(),
+                        text: error_text(language, error),
                         recovery_label: None,
                     });
                 }
@@ -229,15 +230,15 @@ impl Snapshot {
                         key: key.clone(),
                         generation: state.generation,
                     },
-                    context: scope.label().into(),
-                    title: title.into(),
-                    text: error_text(message),
+                    context: language.text(scope.label()).into(),
+                    title: language.text(title).into(),
+                    text: error_text(language, message),
                     recovery_label: self
                         .error_recovery(ErrorId::Operation {
                             key: key.clone(),
                             generation: state.generation,
                         })
-                        .map(|recovery| recovery.label),
+                        .map(|recovery| language.text(&recovery.label).into()),
                 });
             }
         }
@@ -255,10 +256,135 @@ const FAILED: &str = "エラーが発生しました。";
 const HOST_FAILED: &str = "ホストで操作に失敗しました。";
 const NO_DETAILS: &str = "ホストで操作に失敗しました。エラーの詳細を取得できませんでした。";
 
+/// An asynchronous native operation keeps its cause and optional UI context
+/// until the display language is known. It never captures a preference owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ErrorSource {
+    cause: ErrorCause,
+    context: Option<&'static str>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ErrorCause {
+    Error(String),
+    Formatted {
+        template: &'static str,
+        arguments: Vec<String>,
+    },
+    Diagnostic {
+        message: &'static str,
+        details: String,
+    },
+}
+impl ErrorSource {
+    pub fn formatted(template: &'static str, arguments: Vec<String>) -> Self {
+        Self {
+            cause: ErrorCause::Formatted {
+                template,
+                arguments,
+            },
+            context: None,
+        }
+    }
+    pub fn diagnostic(message: &'static str, details: String) -> Self {
+        Self {
+            cause: ErrorCause::Diagnostic { message, details },
+            context: None,
+        }
+    }
+    pub fn with_context(mut self, template: &'static str) -> Self {
+        self.context = Some(template);
+        self
+    }
+    pub fn text(&self, language: UiLanguage) -> ErrorText {
+        let mut text = match &self.cause {
+            ErrorCause::Error(source) => error_text(language, source),
+            ErrorCause::Formatted {
+                template,
+                arguments,
+            } => ErrorText {
+                message: localized_ui_format(language, (*template).into(), arguments.clone()),
+                details: None,
+            },
+            ErrorCause::Diagnostic { message, details } => ErrorText {
+                message: language.text(message).into(),
+                details: Some(details.clone()),
+            },
+        };
+        if let Some(template) = self.context {
+            text.message = localized_ui_format(language, template.into(), vec![text.message]);
+        }
+        text
+    }
+    /// Flat native surfaces keep opaque I/O failures in their original layout.
+    pub fn flat_text(&self, language: UiLanguage) -> String {
+        match &self.cause {
+            ErrorCause::Error(source) if self.context.is_none() => {
+                localized_error_message(language, source)
+            }
+            _ => self.text(language).to_string(),
+        }
+    }
+}
+impl std::error::Error for ErrorSource {}
+impl From<String> for ErrorSource {
+    fn from(error: String) -> Self {
+        Self {
+            // Wire envelopes must be reduced before storage or logging. Other
+            // sources are classified only once, when their display style is known.
+            cause: ErrorCause::Error(if error.starts_with("remote RPC error: ") {
+                error_source(&error)
+            } else {
+                error
+            }),
+            context: None,
+        }
+    }
+}
+impl From<&str> for ErrorSource {
+    fn from(error: &str) -> Self {
+        Self::from(error.to_owned())
+    }
+}
+impl std::fmt::Display for ErrorSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.text(UiLanguage::Japanese).fmt(f)
+    }
+}
+
+/// Flat native error surfaces retain their existing copy and verbatim diagnostic
+/// layout. Structured deferred reasons are formatted without exposing the envelope.
 #[cfg_attr(feature = "bindings", uniffi::export)]
-pub fn error_text(error: &str) -> ErrorText {
+pub fn localized_error_message(language: UiLanguage, error: &str) -> String {
+    if error.starts_with("remote RPC error: ") {
+        error_text(language, error).to_string()
+    } else {
+        error_copy(language, error)
+    }
+}
+
+/// Keep native exception strings safe for storage and logging. Dictation is the
+/// one error whose copy includes an inserted reason: retain only that code and
+/// its sanitized message so presentation can choose the language later.
+pub fn error_source(error: &str) -> String {
+    if let Some(raw) = error.strip_prefix("remote RPC error: ")
+        && let Ok(value) = serde_json::from_str::<Value>(raw)
+        && value["code"] == "dictation_failed"
+    {
+        return format!(
+            "remote RPC error: {}",
+            serde_json::json!({
+                "code": "dictation_failed",
+                "message": value["message"].as_str().map(crate::diagnostics::sanitize).unwrap_or_default()
+            })
+        );
+    }
+    error_text(UiLanguage::Japanese, error).to_string()
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn error_text(language: UiLanguage, error: &str) -> ErrorText {
     if let Some(raw) = error.strip_prefix("remote RPC error: ") {
-        return host_failure(raw);
+        return host_failure(language, raw);
     }
     // Local failures arrive as `PeerError` and `TransportError` text.
     let (fallback, text) = if let Some(text) = error.strip_prefix("invalid RPC message: ") {
@@ -280,16 +406,18 @@ pub fn error_text(error: &str) -> ErrorText {
     let mut text = split(text);
     if text.message.is_empty() {
         text = ErrorText {
-            message: fallback.into(),
+            message: language.text(fallback).into(),
             details: (!error.trim().is_empty()).then(|| error.into()),
         };
+    } else {
+        text.message = error_copy(language, &text.message);
     }
     text
 }
 
-fn host_failure(raw: &str) -> ErrorText {
+fn host_failure(language: UiLanguage, raw: &str) -> ErrorText {
     let copy = |message: &str| ErrorText {
-        message: message.into(),
+        message: language.text(message).into(),
         details: None,
     };
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
@@ -314,14 +442,30 @@ fn host_failure(raw: &str) -> ErrorText {
     };
     if dictation {
         let reason = match text.message.as_str() {
-            "" => "もう一度録音してください。",
+            "" => language.text("もう一度録音してください。"),
             reason => reason,
         };
-        text.message = format!("音声を文字起こしできませんでした。{reason}");
+        text.message = localized_ui_format(
+            language,
+            "音声を文字起こしできませんでした。{0}".into(),
+            vec![reason.into()],
+        );
     } else if text.message.is_empty() {
-        text.message = HOST_FAILED.into();
+        text.message = language.text(HOST_FAILED).into();
+    } else {
+        text.message = error_copy(language, &text.message);
     }
     text
+}
+
+// These are copy lines already separated from diagnostics, not arbitrary text
+// or formatted templates. In particular, inserted dictation reasons bypass this.
+fn error_copy(language: UiLanguage, source: &str) -> String {
+    source
+        .split('\n')
+        .map(|line| language.text(line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Host failures join context and cause as `context: cause`, so a Japanese
@@ -367,8 +511,157 @@ mod error_tests {
     }
 
     #[test]
+    fn deferred_copy_keeps_arguments_and_flat_io_details_verbatim() {
+        use crate::localization::UiLanguage;
+        let source = super::ErrorSource::formatted(
+            "ファイルを取得・保存できません: {0}",
+            vec!["設定 {0}\nraw cause".into()],
+        );
+        assert_eq!(
+            source.flat_text(UiLanguage::Japanese),
+            "ファイルを取得・保存できません: 設定 {0}\nraw cause"
+        );
+        assert_eq!(
+            source.flat_text(UiLanguage::English),
+            "Could not download or save file: 設定 {0}\nraw cause"
+        );
+        let raw = "opaque I/O\r\nraw diagnostic\n";
+        assert_eq!(
+            super::ErrorSource::from(raw).flat_text(UiLanguage::English),
+            raw
+        );
+        assert_eq!(
+            super::ErrorSource::from(raw).flat_text(UiLanguage::Japanese),
+            raw
+        );
+        let source = super::ErrorSource::from("opaque I/O cause");
+        assert_eq!(source.flat_text(UiLanguage::English), "opaque I/O cause");
+        assert_eq!(
+            source.text(UiLanguage::English).details.as_deref(),
+            Some("opaque I/O cause")
+        );
+        let source = super::ErrorSource::from(
+            r#"remote RPC error: {"code":"dictation_failed","message":"設定","data":{"secret":"private-audio"}}"#,
+        );
+        assert!(!format!("{source:?}").contains("private-audio"));
+        assert_eq!(
+            source.flat_text(UiLanguage::English),
+            "Could not transcribe audio. 設定"
+        );
+    }
+
+    #[test]
+    fn language_formats_error_copy_without_reinterpreting_causes_or_dictation_reasons() {
+        use crate::localization::UiLanguage;
+        let timeout = error_text(UiLanguage::English, "request 42 timed out");
+        assert_eq!(timeout.message, "The Host did not respond.");
+        assert_eq!(timeout.details.as_deref(), Some("request 42 timed out"));
+        // Diagnostics keep their existing payload redaction before formatting.
+        for (reason, visible) in [
+            ("設定", "設定"),
+            ("設定{0}", "設定[payload omitted]"),
+            (
+                "Codexにログインしてください。",
+                "Codexにログインしてください。",
+            ),
+        ] {
+            let raw = format!(
+                "remote RPC error: {}",
+                serde_json::json!({
+                    "code":"dictation_failed", "message":reason, "data":{"audio":"private-audio"}
+                })
+            );
+            let source = super::error_source(&raw);
+            assert!(!source.contains("private-audio"));
+            let english = error_text(UiLanguage::English, &source);
+            assert_eq!(
+                english.message,
+                format!("Could not transcribe audio. {visible}")
+            );
+            assert_eq!(english.details, None);
+            assert_eq!(
+                error_text(UiLanguage::Japanese, &source).message,
+                format!("音声を文字起こしできませんでした。{visible}")
+            );
+        }
+        let raw = r#"remote RPC error: {"code":"dictation_failed","message":"provider failed","data":{"audio":"private-audio"}}"#;
+        let text = error_text(UiLanguage::English, &super::error_source(raw));
+        assert_eq!(
+            text.message,
+            "Could not transcribe audio. Please record again."
+        );
+        assert_eq!(text.details.as_deref(), Some("provider failed"));
+        assert_eq!(
+            error_text(
+                UiLanguage::English,
+                "設定アプリでBexのマイクへのアクセスを許可してください。"
+            )
+            .message,
+            "Allow Bex microphone access in the Settings app."
+        );
+        let raw = r#"remote RPC error: {"code":"file_not_found","message":"private-path","data":{"key":"private-key"}}"#;
+        let source = super::error_source(raw);
+        assert!(!source.contains("private-"));
+        assert_eq!(
+            error_text(UiLanguage::English, &source).message,
+            "The file or folder could not be found."
+        );
+    }
+
+    #[test]
+    fn asynchronous_contexts_choose_language_at_display_and_keep_diagnostics_verbatim() {
+        use crate::localization::UiLanguage;
+        let source = super::ErrorSource::from("request 42 timed out")
+            .with_context("ファイルを取得・保存できません: {0}");
+        let japanese = source.text(UiLanguage::Japanese);
+        assert_eq!(
+            japanese.message,
+            "ファイルを取得・保存できません: ホストから応答がありませんでした。"
+        );
+        let english = source.text(UiLanguage::English);
+        assert_eq!(
+            english.message,
+            "Could not download or save file: The Host did not respond."
+        );
+        assert_eq!(english.details.as_deref(), Some("request 42 timed out"));
+        assert_eq!(
+            source.flat_text(UiLanguage::English),
+            "Could not download or save file: The Host did not respond.\nrequest 42 timed out"
+        );
+        assert_eq!(japanese.details, english.details);
+        assert_eq!(
+            source.to_string(),
+            "ファイルを取得・保存できません: ホストから応答がありませんでした。\nrequest 42 timed out"
+        );
+        let diagnostic =
+            super::ErrorSource::diagnostic("保存先を選択できません", "設定 {0}\nraw cause".into());
+        let english = diagnostic.text(UiLanguage::English);
+        assert_eq!(english.message, "Could not choose a save destination");
+        assert_eq!(english.details.as_deref(), Some("設定 {0}\nraw cause"));
+        assert_eq!(
+            super::localized_error_message(UiLanguage::English, "opaque provider output"),
+            "opaque provider output"
+        );
+        assert_eq!(
+            super::localized_error_message(
+                UiLanguage::English,
+                "ホストから応答がありませんでした。\nrequest 42 timed out"
+            ),
+            "The Host did not respond.\nrequest 42 timed out"
+        );
+        let source = super::error_source(
+            r#"remote RPC error: {"code":"dictation_failed","message":"設定"}"#,
+        );
+        assert_eq!(
+            super::localized_error_message(UiLanguage::English, &source),
+            "Could not transcribe audio. 設定"
+        );
+    }
+
+    #[test]
     fn writer_conflicts_explain_explicit_fork_recovery() {
         let text = error_text(
+            crate::localization::UiLanguage::Japanese,
             r#"remote RPC error: {"code":"thread_in_use","message":"thread private-id already has an active writer","delivery":"notSent"}"#,
         );
         assert!(text.message.contains("分岐") && text.message.contains("未送信"));
@@ -390,7 +683,7 @@ mod error_tests {
                 serde_json::json!({"code": code, "message": "host file failure", "data": {"path": "private"}})
             );
             assert_eq!(
-                error_text(&raw),
+                error_text(crate::localization::UiLanguage::Japanese, &raw),
                 ErrorText {
                     message: message.into(),
                     details: None
@@ -402,7 +695,7 @@ mod error_tests {
     #[test]
     fn provider_cause_stays_in_details_without_exposing_payloads() {
         let raw = r#"remote RPC error: {"delivery":"unknown","code":"provider_failed","message":"thread example already has an active writer","execution":{"providerCode":"-32600"}}"#;
-        let text = error_text(raw);
+        let text = error_text(crate::localization::UiLanguage::Japanese, raw);
         assert_eq!(text.message, "ホストで操作に失敗しました。");
         assert_eq!(
             text.details.as_deref(),
@@ -413,7 +706,7 @@ mod error_tests {
             "remote RPC error: invalid",
             r#"remote RPC error: {"message":" "}"#,
         ] {
-            let text = error_text(raw);
+            let text = error_text(crate::localization::UiLanguage::Japanese, raw);
             assert!(text.message.contains("詳細を取得できませんでした"));
             assert!(!text.message.contains("もう一度"));
             assert_eq!(text.details, None);
@@ -423,10 +716,13 @@ mod error_tests {
     #[test]
     fn host_copy_keeps_its_language_and_moves_the_cause_to_details() {
         let host = |message: &str| {
-            error_text(&format!(
-                "remote RPC error: {}",
-                serde_json::json!({"code": "workspace_review_failed", "message": message})
-            ))
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                &format!(
+                    "remote RPC error: {}",
+                    serde_json::json!({"code": "workspace_review_failed", "message": message})
+                ),
+            )
         };
         assert_eq!(
             host("ワークツリーを確認できません: fatal: not a git repository"),
@@ -449,7 +745,10 @@ mod error_tests {
         assert_eq!(host(warning).message, warning);
         assert_eq!(host(warning).details, None);
         assert_eq!(
-            error_text(r#"remote RPC error: {"code":-1,"message":"permission denied"}"#),
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                r#"remote RPC error: {"code":-1,"message":"permission denied"}"#
+            ),
             ErrorText {
                 message: "ホストで操作に失敗しました。".into(),
                 details: Some("permission denied".into()),
@@ -460,6 +759,7 @@ mod error_tests {
     #[test]
     fn dictation_errors_explain_recovery_without_rendering_rpc_payloads() {
         let text = error_text(
+            crate::localization::UiLanguage::Japanese,
             r#"remote RPC error: {"code":"dictation_failed","message":"provider failed","data":{"audio":"private"}}"#,
         );
         assert_eq!(
@@ -468,20 +768,26 @@ mod error_tests {
         );
         assert_eq!(text.details.as_deref(), Some("provider failed"));
         assert_eq!(
-            error_text(r#"remote RPC error: {"code":"dictation_failed","message":" "}"#),
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                r#"remote RPC error: {"code":"dictation_failed","message":" "}"#
+            ),
             ErrorText {
                 message: "音声を文字起こしできませんでした。もう一度録音してください。".into(),
                 details: None,
             }
         );
         assert_eq!(
-            error_text(r#"remote RPC error: {"code":"dictation_failed","message":"Codexにログインしてください。"}"#).message,
+            error_text(crate::localization::UiLanguage::Japanese, r#"remote RPC error: {"code":"dictation_failed","message":"Codexにログインしてください。"}"#).message,
             "音声を文字起こしできませんでした。Codexにログインしてください。"
         );
         assert_eq!(
-            error_text("マイクへのアクセスを許可してください"),
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                "設定アプリでBexのマイクへのアクセスを許可してください。"
+            ),
             ErrorText {
-                message: "マイクへのアクセスを許可してください".into(),
+                message: "設定アプリでBexのマイクへのアクセスを許可してください。".into(),
                 details: None,
             }
         );
@@ -491,7 +797,10 @@ mod error_tests {
     fn local_transport_failures_explain_the_failure_and_keep_the_cause() {
         let busy = "操作が混み合っています。少し待って再試行してください。";
         assert_eq!(
-            error_text(&PeerError::InvalidMessage(busy.into()).to_string()),
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                &PeerError::InvalidMessage(busy.into()).to_string()
+            ),
             ErrorText {
                 message: busy.into(),
                 details: None,
@@ -541,7 +850,7 @@ mod error_tests {
         ];
         for (raw, message) in cases {
             assert_eq!(
-                error_text(&raw),
+                error_text(crate::localization::UiLanguage::Japanese, &raw),
                 ErrorText {
                     message: message.into(),
                     details: Some(raw.clone()),
@@ -549,7 +858,7 @@ mod error_tests {
             );
         }
         assert_eq!(
-            error_text(""),
+            error_text(crate::localization::UiLanguage::Japanese, ""),
             ErrorText {
                 message: "エラーが発生しました。".into(),
                 details: None
@@ -572,7 +881,7 @@ mod error_tests {
             ]),
         ) {
             let raw = format!("{prefix}{}", lines.join("\n"));
-            let text = error_text(&raw);
+            let text = error_text(crate::localization::UiLanguage::Japanese, &raw);
             prop_assert!(japanese(&text.message));
             prop_assert!(!text.details.as_deref().is_some_and(japanese));
             let details = text.details.clone().unwrap_or_default();
@@ -610,6 +919,39 @@ mod notice_tests {
         ErrorScope::Conversation {
             draft_key: key.clone(),
         }
+    }
+
+    #[test]
+    fn notices_change_language_without_changing_error_identity_or_recovery() {
+        let mut snapshot = Snapshot::default();
+        failed(
+            &mut snapshot,
+            OperationKey::HostSoftware,
+            7,
+            "request 42 timed out",
+        );
+        let japanese = snapshot.error_notices(ErrorScope::Settings).pop().unwrap();
+        snapshot.catalog.ui_language = UiLanguage::English;
+        let english = snapshot.error_notices(ErrorScope::Settings).pop().unwrap();
+        assert_eq!(english.id, japanese.id);
+        assert_eq!(english.context, "Settings");
+        assert_eq!(english.title, "Could not read the Host version");
+        assert_eq!(english.text.message, "The Host did not respond.");
+        assert_eq!(
+            english.text.details.as_deref(),
+            Some("request 42 timed out")
+        );
+        assert_eq!(english.text.details, japanese.text.details);
+        assert_eq!(english.recovery_label.as_deref(), Some("Reload"));
+        assert_eq!(
+            japanese.title,
+            "ホストのバージョン情報を取得できませんでした"
+        );
+        assert_eq!(japanese.recovery_label.as_deref(), Some("再読み込み"));
+        assert!(matches!(
+            snapshot.error_recovery(english.id).unwrap().intent,
+            Intent::ReadHostSoftware(_)
+        ));
     }
 
     #[test]

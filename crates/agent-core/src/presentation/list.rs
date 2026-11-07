@@ -512,7 +512,8 @@ impl ListSource<'_> {
                                     summary.loading = true
                                 }
                                 crate::state::operations::OperationPhase::Failed { message } => {
-                                    summary.error = Some(super::error::error_text(message))
+                                    summary.error =
+                                        Some(super::error::error_text(self.language, message))
                                 }
                             }
                         }

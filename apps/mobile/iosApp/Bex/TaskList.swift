@@ -2,6 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct ThreadsScreen: View {
+    @Environment(\.locale) private var locale
     let model: AppViewModel
     @State private var search = ""
     @Environment(\.colorScheme) private var colorScheme
@@ -102,7 +103,11 @@ struct ThreadsScreen: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.borderless)
-                                .accessibilityLabel("\(project.name)で新しいタスク")
+                                .accessibilityLabel(localizedUiFormat(
+                                    language: locale.appLanguage,
+                                    source: "{0}で新しいタスク",
+                                    arguments: [project.name]
+                                ))
                                 .accessibilityIdentifier("tasks.new.project.\(project.id)")
                             }
                         }

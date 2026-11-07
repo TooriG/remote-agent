@@ -207,8 +207,12 @@ extension ProviderAccountScreen {
                 }
             }
             if accounts.isEmpty, !loadingAccounts, agent?.error == nil {
-                Text("\(provider.bexName) にサインインして利用を開始できます。")
-                    .foregroundStyle(.secondary)
+                Text(verbatim: localizedUiFormat(
+                    language: locale.appLanguage,
+                    source: "{0} にサインインして利用を開始できます。",
+                    arguments: [provider.bexName]
+                ))
+                .foregroundStyle(.secondary)
             }
             if loadingAccounts {
                 ProgressView("アカウントを更新中…")
@@ -217,7 +221,7 @@ extension ProviderAccountScreen {
                 ProgressView(loginProgressMessage)
             }
             if let error = loginError {
-                ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
+                ErrorTextView(source: error).font(.caption).foregroundStyle(.red)
             }
         } header: {
             HStack {
@@ -231,7 +235,11 @@ extension ProviderAccountScreen {
                     .disabled(loadingAccounts || busy)
             }
         } footer: {
-            Text("この環境の\(provider.bexName)で使用します。同じ環境を使う端末にも反映されます。")
+            Text(verbatim: localizedUiFormat(
+                language: locale.appLanguage,
+                source: "この環境の{0}で使用します。同じ環境を使う端末にも反映されます。",
+                arguments: [provider.bexName]
+            ))
         }
         .buttonStyle(.borderless)
     }

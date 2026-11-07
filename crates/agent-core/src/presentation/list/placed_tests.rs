@@ -781,7 +781,10 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
                 assert!(!project.loading);
                 assert!(
                     project.error
-                        == expanded.then(|| crate::presentation::error::error_text("read failed"))
+                        == expanded.then(|| crate::presentation::error::error_text(
+                            crate::localization::UiLanguage::Japanese,
+                            "read failed"
+                        ))
                 );
             }
         }

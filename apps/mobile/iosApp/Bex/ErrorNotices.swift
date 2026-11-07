@@ -4,15 +4,46 @@ import UIKit
 
 /// Error copy in the UI language above its verbatim cause.
 struct ErrorTextView: View {
-    let text: ErrorText
+    @Environment(\.locale) private var locale
+    private enum Input {
+        case formatted(ErrorText)
+        case source(String)
+    }
+
+    private let input: Input
+
+    init(text: ErrorText) {
+        input = .formatted(text)
+    }
+
+    init(source: String) {
+        input = .source(source)
+    }
+
+    private var resolved: ErrorText {
+        switch input {
+        case let .formatted(text): text
+        case let .source(source): errorText(language: locale.appLanguage, error: source)
+        }
+    }
 
     var body: some View {
+        let text = resolved
         VStack(alignment: .leading, spacing: 2) {
-            AppText(text.message)
+            Text(verbatim: text.message)
             if let details = text.details {
                 Text(verbatim: details).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }
+    }
+}
+
+/// Flat error labels keep their existing native typography and layout.
+struct ErrorMessage: View {
+    @Environment(\.locale) private var locale
+    let source: String
+    var body: some View {
+        Text(verbatim: localizedErrorMessage(language: locale.appLanguage, error: source))
     }
 }
 
@@ -38,9 +69,9 @@ struct ErrorNotices: View {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "exclamationmark.circle").foregroundStyle(.red)
                         VStack(alignment: .leading, spacing: 4) {
-                            AppText(notice.context).font(.caption).foregroundStyle(.secondary)
-                            AppText(notice.title).font(.subheadline.weight(.semibold))
-                            AppText(notice.text.message).font(.subheadline).foregroundStyle(.secondary)
+                            Text(verbatim: notice.context).font(.caption).foregroundStyle(.secondary)
+                            Text(verbatim: notice.title).font(.subheadline.weight(.semibold))
+                            Text(verbatim: notice.text.message).font(.subheadline).foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                             if !details.isEmpty {
                                 Text(verbatim: details).font(.caption).foregroundStyle(.secondary)
@@ -52,7 +83,7 @@ struct ErrorNotices: View {
                                 }.font(.caption)
                             }
                             if let label = notice.recoveryLabel {
-                                Button { perform(.recoverError(id: notice.id)) } label: { AppText(label) }
+                                Button { perform(.recoverError(id: notice.id)) } label: { Text(verbatim: label) }
                             }
                             if let reconnect {
                                 Button("再接続", action: reconnect).disabled(reconnecting)

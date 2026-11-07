@@ -86,7 +86,7 @@ class NativeTerminalTest {
             val device = UiDevice.getInstance(instrumentation)
             fun awaitTerminalReady() {
                 compose.waitUntil(10_000) {
-                    model.snapshot.terminalView(handle)?.let { it.acceptsInput && !it.loading } == true
+                    model.terminals.view(model.language, handle)?.let { it.acceptsInput && !it.loading } == true
                 }
                 assertFalse(device.hasObject(By.text("実行中")))
                 assertFalse(device.hasObject(By.text("起動中")))

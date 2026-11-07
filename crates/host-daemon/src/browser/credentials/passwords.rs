@@ -135,15 +135,16 @@ fn read_passwords(
 pub(super) fn import(
     profile: &std::path::Path,
     password: StoragePassword,
-) -> Result<String, String> {
+) -> Result<agent_protocol::browser::BrowserNotice, String> {
     let (origins, skipped) = read_passwords(profile, password)?;
     let mut saved = 0;
     for (origin, logins) in origins {
         saved += save(&origin,logins).map_err(|_|format!("{saved}件を保存した後、Keychainへの保存に失敗しました。アクセスを確認して再試行してください。"))?;
     }
-    Ok(format!(
-        "パスワードを{saved}件Keychainに保存しました（HTTPS以外など{skipped}件を除外）。入力はサイトごとに選択してください。"
-    ))
+    Ok(agent_protocol::browser::BrowserNotice::PasswordsImported {
+        count: saved as u64,
+        skipped: skipped as u64,
+    })
 }
 pub(super) fn accounts(origin: &str) -> Result<Vec<String>, String> {
     load(origin).map(|logins| logins.into_iter().map(|login| login.username).collect())
@@ -163,13 +164,13 @@ pub(super) fn script(origin: &str, username: &str) -> Result<Zeroizing<String>, 
         password.as_str()
     )))
 }
-pub(super) fn delete(origin: &str) -> Result<String, String> {
+pub(super) fn delete(origin: &str) -> Result<agent_protocol::browser::BrowserNotice, String> {
     let _write = VAULT_WRITES
         .lock()
         .map_err(|_| "パスワードの削除を再試行してください。")?;
     security_framework::passwords::delete_generic_password_options(options(origin))
         .map_err(|_| "Keychainのパスワードを削除できません。")?;
-    Ok("このサイトの保存パスワードを削除しました。".into())
+    Ok(agent_protocol::browser::BrowserNotice::PasswordsDeleted)
 }
 
 #[cfg(test)]

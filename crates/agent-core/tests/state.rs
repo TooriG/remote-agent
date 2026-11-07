@@ -1093,7 +1093,13 @@ fn terminal_presentation_only_shows_loading_or_exceptional_status() {
                 sequence: 0,
             }),
         );
-        let view = snapshot.terminal_view("test".into()).unwrap();
+        let view = snapshot
+            .terminals()
+            .view(
+                agent_core::localization::UiLanguage::Japanese,
+                "test".into(),
+            )
+            .unwrap();
         assert_eq!(view.loading, loading);
         assert_eq!(view.status.as_deref(), status);
     }
@@ -1118,11 +1124,24 @@ fn terminal_disconnect_keeps_resumption_and_host_switch_drops_old_handles() {
             size: agent_protocol::operations::TerminalSize { cols: 80, rows: 24 },
         })),
     );
-    assert!(starting.terminal_view("test".into()).unwrap().accepts_input);
+    assert!(
+        starting
+            .terminals()
+            .view(
+                agent_core::localization::UiLanguage::Japanese,
+                "test".into()
+            )
+            .unwrap()
+            .accepts_input
+    );
     let (disconnected, _) = reduce(&starting, Event::Disconnected);
     assert!(
         !disconnected
-            .terminal_view("test".into())
+            .terminals()
+            .view(
+                agent_core::localization::UiLanguage::Japanese,
+                "test".into()
+            )
             .unwrap()
             .accepts_input
     );

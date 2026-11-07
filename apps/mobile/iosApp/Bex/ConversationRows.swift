@@ -247,7 +247,7 @@ struct ThreadItemRow: View, Equatable {
                         if item.data.deferred {
                             VStack(alignment: .leading, spacing: 10) {
                                 if let detailError {
-                                    AppText(detailError).font(.caption).foregroundColor(.red)
+                                    ErrorMessage(source: detailError).font(.caption).foregroundColor(.red)
                                     Button("再読み込み") { retry += 1 }
                                 } else {
                                     ProgressView("詳細を読み込み中…")

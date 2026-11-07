@@ -103,7 +103,12 @@ internal fun ConversationBlocks(
             }
         }
     }
-    shareError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    shareError?.let {
+        Text(
+            dev.remoteagent.core.localizedErrorMessage(LocalUiLanguage.current, it),
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
     file?.let { source ->
         dev.remoteagent.core.markdownFileTarget(source, cwd, dev.remoteagent.core.MarkdownFileSurface.MOBILE)?.let {
             target ->
@@ -316,9 +321,10 @@ private fun MarkdownText(
     } else {
         BoxWithConstraints {
             val home = LocalFileLocation.current.home
+            val language = LocalUiLanguage.current
             val inline = chips.mapValues { (index, file) ->
                 val link = runs[index.toInt()].link!!
-                val menu = dev.remoteagent.core.mobileFileMenu(link, cwd, home)
+                val menu = dev.remoteagent.core.mobileFileMenu(language, link, cwd, home)
                 fileChipContent(file, style, maxWidth, menu) { item -> openFile(link, item) }
             }
             Text(text, style = style, textAlign = style.textAlign, inlineContent = inline)
@@ -388,7 +394,6 @@ private fun FileChip(
     val density = LocalDensity.current
     val fontPixels = with(density) { fontSize.toPx() }
     val token = dev.remoteagent.core.mobileFileIcon(file.path)
-    val language = LocalUiLanguage.current
     val bitmap =
         remember(token) {
             context.assets.open("pierre_$token.png").use { android.graphics.BitmapFactory.decodeStream(it) }
@@ -422,7 +427,7 @@ private fun FileChip(
             view.setOnCreateContextMenuListener { native, _, _ ->
                 native.setHeaderTitle(menu.firstOrNull()?.path ?: file.path)
                 menu.forEachIndexed { index, item ->
-                    native.add(0, index, index, language.text(item.label)).setOnMenuItemClickListener {
+                    native.add(0, index, index, item.label).setOnMenuItemClickListener {
                         action(item)
                         true
                     }

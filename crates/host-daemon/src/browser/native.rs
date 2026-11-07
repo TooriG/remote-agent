@@ -106,31 +106,28 @@ impl Browser {
         let notice = match prepared {
             credentials::Prepared::Metadata(value) => {
                 metadata = Some(value);
-                String::new()
+                None
             }
-            credentials::Prepared::Notice(notice) => notice,
+            credentials::Prepared::Notice(notice) => Some(notice),
             credentials::Prepared::Cookies { cookies, skipped } => {
                 let count = cookies.len();
                 if count != 0 {
                     command.action = NativeAction::ImportCookies(cookies);
                 }
-                if count == 0 {
-                    format!("取り込めるCookieがありません（期限切れなど{skipped}件を除外）。")
-                } else {
-                    format!(
-                        "Cookieを{count}件取り込みました（期限切れなど{skipped}件を除外）。ログイン状態をサイトで確認してください。"
-                    )
-                }
+                Some(agent_protocol::browser::BrowserNotice::CookiesImported {
+                    count: count as u64,
+                    skipped: skipped as u64,
+                })
             }
             credentials::Prepared::Fill { origin, script } => {
                 command.action = NativeAction::FillPassword { origin, script };
-                "パスワードを入力しました。内容を確認してからログインしてください。".into()
+                Some(agent_protocol::browser::BrowserNotice::PasswordFilled)
             }
         };
         command.capture = Capture::Viewer;
         let mut frame = self.send(&command).await?;
         frame.credentials = metadata;
-        frame.value = notice;
+        frame.notice = notice;
         Ok(frame)
     }
 

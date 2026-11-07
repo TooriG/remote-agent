@@ -10,12 +10,15 @@ use serde_json::{Map, Value};
 #[cfg_attr(feature = "bindings", derive(uniffi::Error))]
 pub enum AgentError {
     #[error("{reason}")]
-    Failed { reason: String },
+    Failed {
+        /// Safe error source, formatted by the UI in its current language.
+        reason: String,
+    },
 }
 
 pub(crate) fn error(reason: impl std::fmt::Display) -> AgentError {
     AgentError::Failed {
-        reason: crate::presentation::error::error_text(&reason.to_string()).to_string(),
+        reason: crate::presentation::error::error_source(&reason.to_string()),
     }
 }
 

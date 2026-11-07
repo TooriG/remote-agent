@@ -24,7 +24,7 @@ pub(crate) struct Runtime {
     pub(crate) connections: std::sync::Arc<platform::Connections>,
     pub(crate) sessions: std::sync::Arc<store_session::Sessions>,
     pub(crate) closing: tokio_util::task::TaskTracker,
-    pub(crate) logging_error: Option<String>,
+    pub(crate) logging_error: Option<agent_core::presentation::error::ErrorSource>,
 }
 impl Global for Runtime {}
 
@@ -89,7 +89,12 @@ fn main() {
             .map_err(|error| error.to_string())
         })
         .err()
-        .map(|error| format!("エラーログを保存できません: {error}"));
+        .map(|error| {
+            agent_core::presentation::error::ErrorSource::diagnostic(
+                "エラーログを保存できません",
+                error,
+            )
+        });
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

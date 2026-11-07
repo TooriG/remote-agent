@@ -16,52 +16,8 @@ pub enum UiLanguage {
 #[derive(Deserialize)]
 struct Catalog {
     strings: BTreeMap<String, Entry>,
-    #[serde(skip)]
-    templates: Vec<UiTemplate>,
 }
 
-struct UiTemplate {
-    source: String,
-    parts: Vec<String>,
-}
-
-impl UiTemplate {
-    fn parse(source: &str) -> Option<Self> {
-        let mut parts = Vec::new();
-        let mut tail = source;
-        while let Some((prefix, rest)) = tail.split_once('{') {
-            let (slot, rest) = rest.split_once('}')?;
-            if slot.parse::<usize>().ok()? != parts.len() {
-                return None;
-            }
-            parts.push(prefix.to_owned());
-            tail = rest;
-        }
-        if parts.is_empty() {
-            return None;
-        }
-        parts.push(tail.to_owned());
-        Some(Self {
-            source: source.into(),
-            parts,
-        })
-    }
-
-    fn arguments(&self, value: &str) -> Option<Vec<String>> {
-        let mut tail = value.strip_prefix(&self.parts[0])?;
-        let mut arguments = Vec::new();
-        for (index, suffix) in self.parts.iter().enumerate().skip(1) {
-            if index == self.parts.len() - 1 {
-                arguments.push(tail.strip_suffix(suffix)?.to_owned());
-                return Some(arguments);
-            }
-            let (argument, rest) = tail.split_once(suffix.as_str())?;
-            arguments.push(argument.to_owned());
-            tail = rest;
-        }
-        None
-    }
-}
 #[derive(Deserialize)]
 struct Entry {
     localizations: BTreeMap<String, Translation>,
@@ -79,19 +35,8 @@ struct StringUnit {
 fn catalog() -> &'static Catalog {
     static CATALOG: OnceLock<Catalog> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        let mut catalog: Catalog =
-            serde_json::from_str(include_str!("localization/Localizable.xcstrings"))
-                .expect("validated UI translation catalog");
-        catalog.templates = catalog
-            .strings
-            .keys()
-            .filter_map(|source| UiTemplate::parse(source))
-            .collect();
-        // Prefer the most specific copy when templates share a suffix.
-        catalog.templates.sort_by_cached_key(|template| {
-            std::cmp::Reverse(template.parts.iter().map(String::len).sum::<usize>())
-        });
-        catalog
+        serde_json::from_str(include_str!("localization/Localizable.xcstrings"))
+            .expect("validated UI translation catalog")
     })
 }
 
@@ -114,25 +59,7 @@ impl UiLanguage {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn localized_ui_text(language: UiLanguage, source: String) -> String {
-    if language == UiLanguage::Japanese || catalog().strings.contains_key(&source) {
-        return language.text(&source).to_owned();
-    }
-    // Core presentation values can arrive already formatted. Resolve only
-    // cataloged UI templates; inserted paths, commands and names stay verbatim.
-    for template in &catalog().templates {
-        if let Some(arguments) = template.arguments(&source) {
-            return localized_ui_format(language, template.source.clone(), arguments);
-        }
-    }
-    // Error copy is followed by verbatim diagnostics on separate lines.
-    if source.contains('\n') {
-        return source
-            .split('\n')
-            .map(|line| localized_ui_text(language, line.into()))
-            .collect::<Vec<_>>()
-            .join("\n");
-    }
-    source
+    language.text(&source).to_owned()
 }
 
 /// Numbered slots let translations change word order. Inserted values are
@@ -211,6 +138,22 @@ mod tests {
     #[test]
     fn formatting_reorders_copy_and_keeps_values_verbatim() {
         assert_eq!(
+            localized_ui_format(
+                UiLanguage::English,
+                "▤ {0}\nタップしてプレビュー".into(),
+                vec!["設定/{0}".into()]
+            ),
+            "▤ 設定/{0}\nTap to preview"
+        );
+        assert_eq!(
+            localized_ui_format(
+                UiLanguage::English,
+                "対応するブラウザーやアプリを確認してください。\n{0}".into(),
+                vec!["scheme://設定/{0}".into()]
+            ),
+            "Check for a compatible browser or app.\nscheme://設定/{0}"
+        );
+        assert_eq!(
             localized_ui_format(UiLanguage::English, "残り {0}%".into(), vec!["42".into()]),
             "42% remaining"
         );
@@ -233,34 +176,18 @@ mod tests {
     }
 
     #[test]
-    fn formatted_presentation_labels_preserve_inserted_values() {
-        assert_eq!(
-            localized_ui_text(UiLanguage::English, "残り 42%".into()),
-            "42% remaining"
-        );
-        assert_eq!(
-            localized_ui_text(UiLanguage::English, "フォルダ: 設定/{0}".into()),
-            "Folder: 設定/{0}"
-        );
-        assert_eq!(
-            localized_ui_text(UiLanguage::Japanese, "残り 42%".into()),
-            "残り 42%"
-        );
-        assert_eq!(
-            localized_ui_text(UiLanguage::English, "This is unchanged".into()),
-            "This is unchanged"
-        );
-        assert_eq!(
-            localized_ui_text(UiLanguage::English, "残り 42% extra".into()),
-            "残り 42% extra"
-        );
-        assert_eq!(
-            localized_ui_text(
-                UiLanguage::English,
-                "設定\nconnection closed\n未登録".into()
-            ),
-            "Settings\nconnection closed\n未登録"
-        );
+    fn lookup_does_not_interpret_formatted_copy_or_multiline_data() {
+        for source in [
+            "残り 42%",
+            "フォルダ: 設定/{0}",
+            "設定\nconnection closed\n未登録",
+            "Cookieを2件取り込みました",
+            "This is unchanged",
+        ] {
+            for language in [UiLanguage::English, UiLanguage::Japanese] {
+                assert_eq!(localized_ui_text(language, source.into()), source);
+            }
+        }
     }
 
     #[test]

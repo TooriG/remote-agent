@@ -34,7 +34,7 @@ struct RequestPanel: View {
             }
             answerControls
             if let inputError {
-                AppText(inputError).font(.caption).foregroundColor(.red)
+                ErrorMessage(source: inputError).font(.caption).foregroundColor(.red)
             } else if let error {
                 ErrorTextView(text: error).font(.caption).foregroundColor(.red)
             }
@@ -59,7 +59,7 @@ struct RequestPanel: View {
             } else {
                 if case let .form(fields) = input {
                     ForEach(fields, id: \.name) { field in
-                        Text("\(field.title) (\(field.name))\(field.required ? " *" : "")")
+                        Text(verbatim: "\(field.title) (\(field.name))\(field.required ? " *" : "")")
                         if !field.description.isEmpty {
                             Text(field.description).font(.caption)
                         }

@@ -4,6 +4,7 @@ import UIKit
 import UniformTypeIdentifiers
 
 struct ComposerAttachmentStrip: View {
+    @Environment(\.locale) private var locale
     let attachments: [Attachment]
     let media: ConversationMediaAccess
     let remove: (Int) -> Void
@@ -38,7 +39,11 @@ struct ComposerAttachmentStrip: View {
                         }
                         .buttonStyle(.plain)
                         .offset(x: 4, y: -4)
-                        .accessibilityLabel("\(attachment.name)を外す")
+                        .accessibilityLabel(localizedUiFormat(
+                            language: locale.appLanguage,
+                            source: "{0}を外す",
+                            arguments: [attachment.name]
+                        ))
                     }
                 }
             }.padding(8)

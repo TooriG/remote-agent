@@ -45,15 +45,11 @@ fn native_menu(
     owner: &WeakEntity<Desktop>,
     epoch: u64,
     target: &FileMenuTarget,
-    language: agent_core::localization::UiLanguage,
 ) -> NativeMenu {
     items.into_iter().fold(NativeMenu::new(), |menu, item| {
-        let label = agent_core::localization::localized_ui_text(language, item.label);
+        let label = item.label;
         if !item.children.is_empty() {
-            return menu.submenu(
-                label,
-                native_menu(item.children, owner, epoch, target, language),
-            );
+            return menu.submenu(label, native_menu(item.children, owner, epoch, target));
         }
         let Some(action) = item.action else {
             return menu;
@@ -83,7 +79,6 @@ impl Desktop {
             &cx.entity().downgrade(),
             self.snapshot.connection.epoch,
             &target,
-            crate::localization::language(cx),
         )
         .show(position, window, cx);
     }
@@ -105,6 +100,7 @@ impl Desktop {
         let path = agent_core::presentation::files::file_tree_path(&key.root, path);
         let capabilities = self.snapshot.files.file_open_capabilities.as_deref();
         let items = file_tree_menu(
+            crate::localization::language(cx),
             true,
             self.local_shell,
             capabilities.map_or(&[], |value| value.editors.as_slice()),

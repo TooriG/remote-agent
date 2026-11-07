@@ -1,5 +1,6 @@
 //! Shared menu content from T3's MarkdownFileLink and fileContextMenu.
 //! Native clients render the result and the Host owns editor/reveal operations.
+use crate::localization::UiLanguage;
 use crate::presentation::editors::{open_editor_label, reveal_label};
 use agent_protocol::editors::{EditorId, FileManagerRevealKind};
 
@@ -66,6 +67,7 @@ impl FileMenuItem {
 }
 
 pub fn file_reference_menu(
+    language: UiLanguage,
     local_shell: bool,
     preferred_editor: Option<EditorId>,
     reveal: Option<FileManagerRevealKind>,
@@ -77,26 +79,30 @@ pub fn file_reference_menu(
             FileAction::OpenEditor {
                 editor: preferred_editor,
             },
-            open_editor_label(preferred_editor),
+            open_editor_label(language, preferred_editor),
         ));
         if let Some(kind) = reveal {
-            items.push(FileMenuItem::action(FileAction::Reveal, reveal_label(kind)));
+            items.push(FileMenuItem::action(
+                FileAction::Reveal,
+                reveal_label(language, kind),
+            ));
         }
     }
     if workspace_relative {
         items.push(FileMenuItem::action(
             FileAction::CopyRelativePath,
-            "相対パスをコピー",
+            language.text("相対パスをコピー"),
         ));
     }
     items.push(FileMenuItem::action(
         FileAction::CopyFullPath,
-        "フルパスをコピー",
+        language.text("フルパスをコピー"),
     ));
     items
 }
 
 pub fn file_tree_menu(
+    language: UiLanguage,
     has_absolute_path: bool,
     local_shell: bool,
     editors: &[EditorId],
@@ -109,10 +115,13 @@ pub fn file_tree_menu(
                 FileAction::OpenEditor {
                     editor: Some(EditorId::FileManager),
                 },
-                "開く",
+                language.text("開く"),
             ));
             if let Some(kind) = reveal {
-                items.push(FileMenuItem::action(FileAction::Reveal, reveal_label(kind)));
+                items.push(FileMenuItem::action(
+                    FileAction::Reveal,
+                    reveal_label(language, kind),
+                ));
             }
         }
         let children = editors
@@ -131,16 +140,19 @@ pub fn file_tree_menu(
         if !children.is_empty() {
             items.push(FileMenuItem {
                 action: None,
-                label: "このアプリで開く".into(),
+                label: language.text("このアプリで開く").into(),
                 children,
             });
         }
     }
     items.push(FileMenuItem::action(
         FileAction::CopyMention,
-        "メンションをコピー",
+        language.text("メンションをコピー"),
     ));
-    items.push(FileMenuItem::action(FileAction::AddToChat, "会話に追加"));
+    items.push(FileMenuItem::action(
+        FileAction::AddToChat,
+        language.text("会話に追加"),
+    ));
     items
 }
 
@@ -249,6 +261,7 @@ mod tests {
     #[test]
     fn conversation_menu_has_t3_order_and_omits_unavailable_shell_actions() {
         let menu = file_reference_menu(
+            UiLanguage::Japanese,
             true,
             Some(EditorId::VsCode),
             Some(FileManagerRevealKind::Finder),
@@ -266,6 +279,7 @@ mod tests {
             ]
         );
         let remote = file_reference_menu(
+            UiLanguage::Japanese,
             false,
             Some(EditorId::VsCode),
             Some(FileManagerRevealKind::Finder),
@@ -279,13 +293,14 @@ mod tests {
             )]
         );
         assert_eq!(
-            file_reference_menu(true, None, None, true)[0].label,
+            file_reference_menu(UiLanguage::Japanese, true, None, None, true)[0].label,
             "エディターで開く"
         );
     }
     #[test]
     fn tree_menu_uses_file_manager_for_open_and_excludes_it_from_the_submenu() {
         let menu = file_tree_menu(
+            UiLanguage::Japanese,
             true,
             true,
             &[EditorId::FileManager, EditorId::Zed, EditorId::VsCode],
@@ -320,6 +335,7 @@ mod tests {
         for (absolute, local) in [(false, true), (true, false), (false, false)] {
             assert_eq!(
                 file_tree_menu(
+                    UiLanguage::Japanese,
                     absolute,
                     local,
                     &[EditorId::FileManager, EditorId::Zed],
@@ -330,12 +346,64 @@ mod tests {
             );
         }
         let no_manager = file_tree_menu(
+            UiLanguage::Japanese,
             true,
             true,
             &[EditorId::Zed],
             Some(FileManagerRevealKind::Finder),
         );
         assert_eq!(no_manager[0].label, "このアプリで開く");
-        assert_eq!(file_tree_menu(true, true, &[], None).len(), 2);
+        assert_eq!(
+            file_tree_menu(UiLanguage::Japanese, true, true, &[], None).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn english_file_menus_keep_actions_and_editor_names() {
+        let menu = file_reference_menu(
+            UiLanguage::English,
+            true,
+            Some(EditorId::VsCode),
+            Some(FileManagerRevealKind::Finder),
+            true,
+        );
+        assert_eq!(
+            menu.iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Open in VS Code",
+                "Reveal in Finder",
+                "Copy relative path",
+                "Copy full path"
+            ]
+        );
+        let menu = file_tree_menu(
+            UiLanguage::English,
+            true,
+            true,
+            &[EditorId::FileManager, EditorId::VsCode],
+            Some(FileManagerRevealKind::Finder),
+        );
+        assert_eq!(
+            menu.iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Open",
+                "Reveal in Finder",
+                "Open with",
+                "Copy mention",
+                "Add to chat"
+            ]
+        );
+        assert_eq!(menu[2].children[0].label, "VS Code");
+        assert_eq!(
+            menu[2].children[0].action,
+            Some(FileAction::OpenEditor {
+                editor: Some(EditorId::VsCode)
+            })
+        );
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use agent_core::{presentation::error::error_text, store::Store};
+use agent_core::{presentation::error::ErrorSource, store::Store};
 mod browser;
 mod explorer;
 pub(super) use browser::{FileBrowser, FileBrowserModel};
@@ -25,7 +25,7 @@ impl Desktop {
             return;
         }
         if !self.snapshot.connection.connected {
-            self.set_error("ホストに接続していません".into());
+            self.set_error("ホストに接続していません");
             cx.notify();
             return;
         }
@@ -48,7 +48,7 @@ impl Desktop {
             .as_ref()
             .map(|session| session.host.store.clone())
         else {
-            self.set_error("ホストに接続していません".into());
+            self.set_error("ホストに接続していません");
             return;
         };
         self.local_busy += 1;
@@ -63,7 +63,9 @@ impl Desktop {
                 let destination =
                     tokio::task::spawn_blocking(move || platform::choose_destination(&name))
                         .await
-                        .map_err(|error| format!("保存先を選択できません: {error}"))?;
+                        .map_err(|error| {
+                            ErrorSource::diagnostic("保存先を選択できません", error.to_string())
+                        })?;
                 if let Some(destination) = destination {
                     download_to(&store, source, destination).await?;
                 }
@@ -78,7 +80,7 @@ pub(super) async fn download_to(
     store: &Store,
     source: String,
     destination: PathBuf,
-) -> Result<(), String> {
+) -> Result<(), ErrorSource> {
     store
         .dispatch(Intent::DownloadFile(op::DownloadFile {
             source,
@@ -89,10 +91,7 @@ pub(super) async fn download_to(
         }))
         .await
         .map_err(|error| {
-            format!(
-                "ファイルを取得・保存できません: {}",
-                error_text(&error.to_string())
-            )
+            ErrorSource::from(error.to_string()).with_context("ファイルを取得・保存できません: {0}")
         })?;
     Ok(())
 }
@@ -109,8 +108,12 @@ mod tests {
         let error = download_to(&store, "/bundle.zip".into(), destination.clone())
             .await
             .unwrap_err();
-        assert!(error.starts_with("ファイルを取得・保存できません: "));
-        assert!(error.len() > "ファイルを取得・保存できません: ".len());
+        assert!(
+            error
+                .to_string()
+                .starts_with("ファイルを取得・保存できません: ")
+        );
+        assert!(error.to_string().len() > "ファイルを取得・保存できません: ".len());
         assert_eq!(std::fs::read(destination).unwrap(), b"existing file");
     }
 }

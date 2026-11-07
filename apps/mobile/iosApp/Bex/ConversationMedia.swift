@@ -64,6 +64,7 @@ struct ConversationImageSkeleton: View {
 }
 
 struct ConversationImage: View {
+    @Environment(\.locale) private var locale
     let source: SessionImage
     let label: String
     let identifier: String
@@ -93,8 +94,15 @@ struct ConversationImage: View {
                     }
                     .accessibilityHint("タップして拡大")
             } else if let error {
-                Label("画像を表示できません: \(error)", systemImage: "photo")
-                    .font(.caption).foregroundColor(.secondary)
+                Label(
+                    localizedUiFormat(language: locale.appLanguage, source: "画像を表示できません: {0}",
+                                      arguments: [localizedErrorMessage(
+                                          language: locale.appLanguage,
+                                          error: error
+                                      )]),
+                    systemImage: "photo"
+                )
+                .font(.caption).foregroundColor(.secondary)
             } else {
                 ConversationImageSkeleton()
             }
@@ -215,7 +223,7 @@ struct ConversationPreview: View {
                     }
                 })) {
                     Button("OK") { saveError = nil }
-                } message: { AppText(saveError ?? "") }
+                } message: { ErrorMessage(source: saveError ?? "") }
         }
         .interactiveDismissDisabled(saving)
     }

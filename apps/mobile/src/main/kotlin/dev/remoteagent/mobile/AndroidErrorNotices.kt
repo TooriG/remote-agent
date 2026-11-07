@@ -42,7 +42,7 @@ internal fun ErrorTextView(
     color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.error,
 ) {
     Column(modifier) {
-        Text(LocalUiLanguage.current.text(text.message), color = color)
+        Text(text.message, color = color)
         text.details?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -73,15 +73,15 @@ internal fun ErrorNotices(
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        LocalUiLanguage.current.text(notice.context),
+                        notice.context,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(LocalUiLanguage.current.text(notice.title), style = MaterialTheme.typography.titleSmall)
+                    Text(notice.title, style = MaterialTheme.typography.titleSmall)
                     SelectionContainer {
                         Column {
                             Text(
-                                LocalUiLanguage.current.text(notice.text.message),
+                                notice.text.message,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -102,9 +102,7 @@ internal fun ErrorNotices(
                         }
                     }
                     notice.recoveryLabel?.let { label ->
-                        TextButton(onClick = { perform(Intent.RecoverError(notice.id)) {} }) {
-                            Text(LocalUiLanguage.current.text(label))
-                        }
+                        TextButton(onClick = { perform(Intent.RecoverError(notice.id)) {} }) { Text(label) }
                     }
                     if (reconnect != null) {
                         TextButton(onClick = reconnect) { Text(language.text("再接続")) }

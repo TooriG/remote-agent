@@ -2,6 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct BrowserCredentialsSheet: View {
+    @Environment(\.locale) private var locale
     let credentials: BrowserCredentials
     let send: (BrowserAction) -> Void
     let close: () -> Void
@@ -26,20 +27,26 @@ struct BrowserCredentialsSheet: View {
                         ForEach(credentials.importErrors, id: \.browser) { error in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(error.browser)
-                                AppText(error.message).font(.caption).foregroundStyle(.secondary)
+                                ErrorMessage(source: error.message).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
                 }
                 if let origin = credentials.origin {
-                    Section("保存パスワード · \(origin)") {
+                    Section(localizedUiFormat(
+                        language: locale.appLanguage,
+                        source: "保存パスワード · {0}",
+                        arguments: [origin]
+                    )) {
                         if credentials.accounts.isEmpty {
-                            AppText(credentials.passwordError ?? "このサイトの保存パスワードはありません。")
+                            ErrorMessage(source: credentials.passwordError ?? "このサイトの保存パスワードはありません。")
                         }
                         ForEach(credentials.accounts, id: \.self) { username in
-                            Button(username.isEmpty ? "ユーザー名なし" : username) {
-                                send(.fillPassword(origin: origin, username: username))
-                            }
+                            Button(username
+                                .isEmpty ? localizedUiText(language: locale.appLanguage, source: "ユーザー名なし") :
+                                username) {
+                                    send(.fillPassword(origin: origin, username: username))
+                                }
                         }
                         Button("このサイトの保存パスワードを削除", role: .destructive) {
                             send(.deletePasswords(origin: origin))

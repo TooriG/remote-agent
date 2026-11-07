@@ -102,7 +102,10 @@ pub(super) fn render_tree(
             } else {
                 Icon::new(IconName::ChevronsUpDown)
             },
-            agent_core::localization::localized_ui_text(language, tree.toggle_all_label.clone()),
+            agent_core::presentation::files::file_tree_toggle_all_label(
+                language,
+                tree.collapse_all,
+            ),
             cx,
             move |_, _, cx| {
                 cx.emit(WorkbenchAction::Tree(
@@ -139,21 +142,25 @@ pub(super) fn render_tree(
         .child(header)
         .when_some(tree.error.as_ref(), |body, error| {
             body.child(
-                v_flex().child(error_view(error, language)).child(
-                    button(
-                        "file-tree-error",
-                        language.text("再試行"),
-                        cx,
-                        move |_, _, cx| {
-                            cx.emit(WorkbenchAction::Tree(
-                                retry.clone(),
-                                FileTreeAction::Refresh,
-                            ))
-                        },
-                    )
-                    .text_xs()
-                    .w_full(),
-                ),
+                v_flex()
+                    .child(error_view(&agent_core::presentation::error::error_text(
+                        language, error,
+                    )))
+                    .child(
+                        button(
+                            "file-tree-error",
+                            language.text("再試行"),
+                            cx,
+                            move |_, _, cx| {
+                                cx.emit(WorkbenchAction::Tree(
+                                    retry.clone(),
+                                    FileTreeAction::Refresh,
+                                ))
+                            },
+                        )
+                        .text_xs()
+                        .w_full(),
+                    ),
             )
         })
         .when(

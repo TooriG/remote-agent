@@ -123,7 +123,13 @@ internal fun ProfilesScreen(
 @Composable
 internal fun ConnectionStatus(notice: String?, busy: Boolean, reconnect: Boolean, connect: () -> Unit) {
     val language = LocalUiLanguage.current
-    notice?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
+    notice?.let {
+        Text(
+            dev.remoteagent.core.localizedErrorMessage(language, it),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(12.dp),
+        )
+    }
     if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     if (reconnect) Button(onClick = connect, enabled = !busy) { Text(language.text("再接続")) }
 }

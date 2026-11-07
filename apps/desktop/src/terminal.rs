@@ -166,8 +166,8 @@ impl Terminal {
         let events = self.events.clone();
         self.runtime.spawn(async move {
             if let Err(error) = receipt.await {
-                let error = agent_core::presentation::error::error_text(&error.to_string());
-                let _ = events.send(Event::Error(source, error.to_string())).await;
+                let error = agent_core::presentation::error::error_source(&error.to_string());
+                let _ = events.send(Event::Error(source, error)).await;
             }
         });
     }
@@ -421,12 +421,21 @@ impl Terminal {
 impl Render for Terminal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let language = crate::localization::language(cx);
-        let status = self.error.clone().unwrap_or_else(|| {
-            self.snapshot
-                .terminals
-                .get(&self.handle)
-                .map_or("接続中…".into(), |terminal| terminal.phase.label())
-        });
+        let status = self
+            .error
+            .as_ref()
+            .map(|error| agent_core::presentation::error::error_text(language, error).to_string())
+            .unwrap_or_else(|| {
+                self.snapshot.terminals.get(&self.handle).map_or_else(
+                    || language.text("接続中…").into(),
+                    |terminal| {
+                        agent_core::presentation::terminals::terminal_status(
+                            language,
+                            &terminal.phase,
+                        )
+                    },
+                )
+            });
         v_flex()
             .size_full()
             .min_h_0()
@@ -438,9 +447,7 @@ impl Render for Terminal {
                     .text_xs()
                     .text_color(rgb(crate::appearance::MUTED))
                     .child(div().flex_1().child(self.cwd.clone()))
-                    .child(agent_core::localization::localized_ui_text(
-                        language, status,
-                    ))
+                    .child(status)
                     .child(
                         div()
                             .id("terminal-stop")
