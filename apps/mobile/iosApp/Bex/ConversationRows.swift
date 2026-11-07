@@ -12,22 +12,22 @@ struct ThreadActivityHeader: View {
 
     var body: some View {
         let label = AppText(summary)
-            .font(.system(size: 16)).foregroundStyle(.secondary)
+            .font(.system(size: 16))
             .lineLimit(1).truncationMode(.tail)
         HStack(spacing: 5) {
-            label.overlay {
+            label.foregroundStyle(.secondary).overlay {
                 if isInProgress, !reduceMotion, scenePhase == .active {
                     TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
                         // Share a clock across summary updates without restarting the sweep.
                         let phase = context.date.timeIntervalSinceReferenceDate
                             .truncatingRemainder(dividingBy: 2.8) / 2.8
                         LinearGradient(
-                            colors: [.clear, .primary.opacity(0.55), .clear],
+                            colors: [.clear, .primary, .clear],
                             startPoint: UnitPoint(x: phase * 2 - 0.7, y: 0.5),
                             endPoint: UnitPoint(x: phase * 2, y: 0.5)
                         )
                     }
-                    .mask(label)
+                    .mask(label.foregroundStyle(.white))
                     .accessibilityHidden(true)
                     .allowsHitTesting(false)
                 }
