@@ -3,6 +3,27 @@
 use nsh_core::{element::NativeView, prelude::*};
 use serde_json::{Value, json};
 
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RowIndicators {
+    pub activity: Option<agent_core::presentation::thread_status::ThreadActivity>,
+    pub worktree: Option<agent_protocol::models::WorktreeStatus>,
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+impl RowIndicators {
+    fn label(&self) -> String {
+        use agent_core::presentation::thread_status::{
+            thread_activity_label, worktree_status_label,
+        };
+        self.activity
+            .map(thread_activity_label)
+            .into_iter()
+            .chain(self.worktree.map(worktree_status_label))
+            .collect::<Vec<_>>()
+            .join("、")
+    }
+}
+
 #[derive(PartialEq, serde::Deserialize)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(super) struct ListRow {
@@ -14,6 +35,7 @@ pub(super) struct ListRow {
     pub level: u32,
     pub disclosure: bool,
     pub menu: Option<Value>,
+    pub indicators: Option<RowIndicators>,
     #[cfg(target_os = "macos")]
     pub group: bool,
     #[cfg(target_os = "macos")]

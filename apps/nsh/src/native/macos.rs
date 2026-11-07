@@ -50,6 +50,9 @@ impl ActionTarget {
     }
 }
 pub(super) fn symbol(name: &str) -> Option<Retained<NSImage>> {
+    if name.is_empty() {
+        return None;
+    }
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
 }
 

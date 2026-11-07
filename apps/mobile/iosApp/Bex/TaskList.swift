@@ -298,22 +298,28 @@ private struct ThreadListRow: View {
     }
 
     var body: some View {
+        let activity = threadActivity(waiting: thread.waiting, active: thread.active, unread: thread.unread)
         Button(action: open) {
             HStack(spacing: 10) {
                 Text(thread.title).font(.title3).foregroundColor(.primary).lineLimit(1)
                 Spacer()
-                if thread.waiting {
-                    Image(systemName: TaskActivityAttributes.IconKind.waiting.symbol)
-                        .foregroundStyle(.orange)
-                        .accessibilityLabel("確認待ち")
-                        .accessibilityIdentifier("tasks.waiting.\(accessibilityID)")
-                } else if thread.active {
-                    RunningIndicator().controlSize(.small)
-                        .accessibilityIdentifier("tasks.running.\(accessibilityID)")
-                } else if thread.unread {
-                    Circle().fill(Color.primary).frame(width: 8, height: 8)
-                        .accessibilityLabel("完了・未確認")
-                        .accessibilityIdentifier("tasks.completed.\(accessibilityID)")
+                if let activity {
+                    let label = LocalizedStringKey(threadActivityLabel(activity: activity))
+                    switch activity {
+                    case .waiting:
+                        Image(systemName: TaskActivityAttributes.IconKind.waiting.symbol)
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel(label)
+                            .accessibilityIdentifier("tasks.waiting.\(accessibilityID)")
+                    case .running:
+                        RunningIndicator().controlSize(.small)
+                            .accessibilityLabel(label)
+                            .accessibilityIdentifier("tasks.running.\(accessibilityID)")
+                    case .unread:
+                        Circle().fill(Color.primary).frame(width: 8, height: 8)
+                            .accessibilityLabel(label)
+                            .accessibilityIdentifier("tasks.completed.\(accessibilityID)")
+                    }
                 }
                 if let status = thread.worktreeStatus {
                     let unmerged = status == .unmerged
@@ -321,7 +327,7 @@ private struct ThreadListRow: View {
                         .resizable()
                         .frame(width: 18, height: 18)
                         .foregroundStyle(unmerged ? .orange : .purple)
-                        .accessibilityLabel(LocalizedStringKey(unmerged ? "main に未反映の変更あり" : "main にマージ済み"))
+                        .accessibilityLabel(LocalizedStringKey(worktreeStatusLabel(status: status)))
                         .accessibilityIdentifier(
                             "tasks.\(unmerged ? "unmerged" : "merged").\(accessibilityID)"
                         )
@@ -331,7 +337,7 @@ private struct ThreadListRow: View {
         }
         .accessibilityIdentifier("tasks.row.\(accessibilityID)")
         .accessibilityValue(LocalizedStringKey(
-            thread.waiting ? "確認待ち" : thread.active ? "実行中" : thread.unread ? "完了・未確認" : ""
+            activity.map { threadActivityLabel(activity: $0) } ?? ""
         ))
         .taskListRowStyle()
     }

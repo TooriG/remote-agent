@@ -23,7 +23,7 @@ enum Action {
     },
     More(Option<String>),
     Projects,
-    Heading(String),
+    Heading(Option<String>),
 }
 #[derive(Clone, PartialEq)]
 struct Row {
@@ -35,19 +35,12 @@ struct Row {
     expanded: bool,
     action: Action,
     menu: serde_json::Value,
+    indicators: Option<native::RowIndicators>,
 }
 fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>) -> Row {
     Row {
         title: thread.title.clone(),
-        symbol: if thread.waiting {
-            "hand.raised"
-        } else if thread.active {
-            "ellipsis.bubble"
-        } else if thread.unread {
-            "bubble.left.fill"
-        } else {
-            "bubble.left"
-        },
+        symbol: "",
         png: None,
         level,
         disclosure: false,
@@ -57,6 +50,19 @@ fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>) -> Row 
             project: project.map(str::to_owned),
         },
         menu: serde_json::Value::Null,
+        indicators: {
+            let activity = agent_core::presentation::thread_status::thread_activity(
+                thread.waiting,
+                thread.active,
+                thread.unread,
+            );
+            (activity.is_some() || thread.worktree_status.is_some()).then_some(
+                native::RowIndicators {
+                    activity,
+                    worktree: thread.worktree_status,
+                },
+            )
+        },
     }
 }
 fn rows(
@@ -91,8 +97,9 @@ fn rows(
                 level: 0,
                 disclosure: false,
                 expanded: false,
-                action: Action::Heading(project.id.clone()),
+                action: Action::Heading(Some(project.id.clone())),
                 menu: serde_json::Value::Null,
+                indicators: None,
             });
         }
         rows.push(Row {
@@ -117,6 +124,7 @@ fn rows(
                 storage,
                 desktop && host == "local",
             ),
+            indicators: None,
         });
         if project.expanded {
             for thread in &project.threads {
@@ -132,6 +140,7 @@ fn rows(
                     expanded: false,
                     action: Action::More(Some(project.id.clone())),
                     menu: serde_json::Value::Null,
+                    indicators: None,
                 });
             }
             for root in &project.roots {
@@ -147,9 +156,23 @@ fn rows(
                         cwd: root.path.clone(),
                     },
                     menu: serde_json::Value::Null,
+                    indicators: None,
                 });
             }
         }
+    }
+    if desktop && !list.threads.is_empty() {
+        rows.push(Row {
+            title: "チャット".into(),
+            symbol: "",
+            png: None,
+            level: 0,
+            disclosure: false,
+            expanded: false,
+            action: Action::Heading(None),
+            menu: serde_json::Value::Null,
+            indicators: None,
+        });
     }
     for thread in &list.threads {
         rows.push(thread_row(thread, 0, None));
@@ -164,6 +187,7 @@ fn rows(
             expanded: false,
             action: Action::More(None),
             menu: serde_json::Value::Null,
+            indicators: None,
         });
     }
     if list.has_more_projects {
@@ -176,6 +200,7 @@ fn rows(
             expanded: false,
             action: Action::Projects,
             menu: serde_json::Value::Null,
+            indicators: None,
         });
     }
     rows
@@ -213,7 +238,7 @@ pub(crate) fn list(
             )
         })
     });
-    let table = native("bex.list").prop("items", move || entries.with(|entries| json!(entries.iter().map(|row| json!({"id": row_id(&row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "level": row.level, "disclosure": row.disclosure, "group": matches!(&row.action, Action::Heading(_)), "expanded": row.expanded, "menu": row.menu})).collect::<Vec<_>>())));
+    let table = native("bex.list").prop("items", move || entries.with(|entries| json!(entries.iter().map(|row| json!({"id": row_id(&row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "level": row.level, "disclosure": row.disclosure, "group": matches!(&row.action, Action::Heading(_)), "expanded": row.expanded, "menu": row.menu, "indicators": row.indicators})).collect::<Vec<_>>())));
     let table = if is_desktop() {
         table
             .prop("sidebar", json!(true))
@@ -382,7 +407,33 @@ mod tests {
         let candidates = selected_rows(&placed, Some(&list.threads[0].id), "/project");
         assert_eq!(candidates.len(), 2);
         assert_ne!(candidates[0], candidates[1]);
+
+        let desktop = rows(Some(&list), false, "host", "scope", true);
+        let recent_heading = desktop
+            .iter()
+            .position(|row| row.action == Action::Heading(None))
+            .unwrap();
+        assert_eq!(desktop[recent_heading].title, "チャット");
+        assert_eq!(desktop[recent_heading + 1].title, list.threads[0].title);
+        assert_eq!(
+            desktop
+                .iter()
+                .map(|row| row_id(&row.action))
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            desktop.len()
+        );
+        assert!(
+            !placed
+                .iter()
+                .any(|row| matches!(row.action, Action::Heading(_)))
+        );
         list.threads.clear();
+        assert!(
+            !rows(Some(&list), false, "host", "scope", true)
+                .iter()
+                .any(|row| row.action == Action::Heading(None))
+        );
 
         // Two provider projects can refer to the same Host folder. They must
         // remain distinct native items even though both start a chat there.
@@ -404,5 +455,40 @@ mod tests {
             ids.iter().collect::<std::collections::HashSet<_>>().len(),
             4
         );
+    }
+
+    #[test]
+    fn conversation_row_preserves_activity_and_worktree_independently() {
+        use agent_core::presentation::thread_status::ThreadActivity;
+        use agent_protocol::models::WorktreeStatus;
+        let mut thread = ThreadSummary {
+            host_id: "host".into(),
+            id: serde_json::from_value(json!({"provider": "codex", "id": "chat"})).unwrap(),
+            title: "会話".into(),
+            project_id: None,
+            active: true,
+            waiting: true,
+            unread: true,
+            worktree_status: Some(WorktreeStatus::Unmerged),
+        };
+        let row = thread_row(&thread, 1, Some("project"));
+        assert!(row.symbol.is_empty());
+        let indicators = row.indicators.unwrap();
+        assert_eq!(indicators.activity, Some(ThreadActivity::Waiting));
+        assert_eq!(indicators.worktree, Some(WorktreeStatus::Unmerged));
+        let encoded = serde_json::to_value(&indicators).unwrap();
+        assert_eq!(
+            encoded,
+            json!({"activity": "waiting", "worktree": "unmerged"})
+        );
+        thread.active = false;
+        thread.waiting = false;
+        thread.unread = false;
+        assert_eq!(
+            thread_row(&thread, 0, None).indicators.unwrap().worktree,
+            Some(WorktreeStatus::Unmerged)
+        );
+        thread.worktree_status = None;
+        assert!(thread_row(&thread, 0, None).indicators.is_none());
     }
 }

@@ -34,6 +34,7 @@ pub mod list;
 pub mod markdown;
 pub mod task_activity;
 pub mod terminals;
+pub mod thread_status;
 pub mod worktrees;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]

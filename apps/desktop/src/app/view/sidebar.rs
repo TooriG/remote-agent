@@ -904,19 +904,21 @@ impl SidebarView {
         let host = thread.host_id.clone();
         let active = thread.active;
         let unread = thread.unread;
-        let worktree = thread.worktree_status.map(|status| match status {
-            agent_protocol::models::WorktreeStatus::Unmerged => (
-                "icons/diff.svg",
-                0xfb923c,
-                language.text("main に未反映の変更あり"),
-                format!("thread-unmerged-{}", thread.id),
-            ),
-            agent_protocol::models::WorktreeStatus::Merged => (
-                "icons/merge.svg",
-                0xa78bfa,
-                language.text("main にマージ済み"),
-                format!("thread-merged-{}", thread.id),
-            ),
+        let worktree = thread.worktree_status.map(|status| {
+            let (path, color, id) = match status {
+                agent_protocol::models::WorktreeStatus::Unmerged => (
+                    "icons/diff.svg",
+                    0xfb923c,
+                    format!("thread-unmerged-{}", thread.id),
+                ),
+                agent_protocol::models::WorktreeStatus::Merged => (
+                    "icons/merge.svg",
+                    0xa78bfa,
+                    format!("thread-merged-{}", thread.id),
+                ),
+            };
+            let label = agent_core::presentation::thread_status::worktree_status_label(status);
+            (path, color, language.text(&label).to_owned(), id)
         });
         SidebarMenuItem::new(thread.title.clone())
             .active(selected)
@@ -937,9 +939,9 @@ impl SidebarView {
                                 .role(Role::Image)
                                 .child(Icon::default().path(path).size_4())
                                 .text_color(rgb(color))
-                                .aria_label(label)
+                                .aria_label(label.clone())
                                 .tooltip(move |window, cx| {
-                                    tooltip::Tooltip::new(label).build(window, cx)
+                                    tooltip::Tooltip::new(label.clone()).build(window, cx)
                                 }),
                         )
                     })

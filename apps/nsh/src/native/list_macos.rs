@@ -146,21 +146,28 @@ define_class!(
                     .and_then(|view| view.downcast::<NSTableCellView>().ok())
                     .unwrap_or_else(|| cell_view(self.mtm(), &identifier, row.group, row.menu.is_some()));
                 cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
-                if let Some(entries) = &row.menu {
-                    for view in cell.subviews().iter() {
-                        if let Some(button) = view.downcast_ref::<NSPopUpButton>() {
+                for stack in cell.subviews().iter().filter_map(|view| view.downcast::<NSStackView>().ok()) {
+                    // Hidden stacks detach from subviews, but remain owned views.
+                    for view in stack.views().iter() {
+                        if let Some(button) = view.downcast_ref::<NSPopUpButton>() && let Some(entries) = &row.menu {
                             super::macos::set_menu_items(button, Some(entries), self);
                             button.setAccessibilityIdentifier(Some(&NSString::from_str(&format!("{}.menu", row.id))));
                         }
+                        if let Some(indicators) = view.downcast_ref::<NSStackView>() {
+                            set_indicators(indicators, row.indicators.as_ref());
+                        }
                     }
                 }
-                // The cell's subviews retain both outlets for the cell's entire lifetime.
+                unsafe {
+                    cell.setAccessibilityValue(row.indicators.as_ref().map(|indicators| NSString::from_str(&indicators.label())).as_deref().map(|value| &***value));
+                }
+                // The stack owns both outlets, including detached hidden images.
                 unsafe {
                     if let Some(field) = cell.textField() {
                         field.setStringValue(&NSString::from_str(&row.title));
                         if self.ivars().sidebar.get() {
                             let weight = if row.group || row.disclosure { NSFontWeightSemibold } else { NSFontWeightRegular };
-                            field.setFont(Some(&NSFont::systemFontOfSize_weight(if row.group { 12.0 } else { 13.0 }, weight)));
+                            field.setFont(Some(&NSFont::systemFontOfSize_weight(if row.group { 12.0 } else { 14.0 }, weight)));
                             let color = if row.group { NSColor::secondaryLabelColor() } else { NSColor::labelColor() };
                             field.setTextColor(Some(&color));
                         }
@@ -182,6 +189,7 @@ define_class!(
                         } else {
                             None
                         }.or_else(|| symbol(&row.symbol));
+                        view.setHidden(image.is_none());
                         view.setImage(image.as_deref());
                     }
                 }
@@ -229,44 +237,39 @@ fn cell_view(
 ) -> Retained<NSTableCellView> {
     let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), CGRect::ZERO);
     cell.setIdentifier(Some(identifier));
+    let stack = NSStackView::initWithFrame(NSStackView::alloc(mtm), CGRect::ZERO);
+    stack.setDistribution(NSStackViewDistribution::Fill);
+    stack.setAlignment(NSLayoutAttribute::CenterY);
+    stack.setSpacing(6.0);
+    stack.setTranslatesAutoresizingMaskIntoConstraints(false);
+    cell.addSubview(&stack);
+    if !heading {
+        let image = NSImageView::initWithFrame(NSImageView::alloc(mtm), CGRect::ZERO);
+        image.setAccessibilityElement(false);
+        stack.addArrangedSubview(&image);
+        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+            image.widthAnchor().constraintEqualToConstant(18.0),
+            image.heightAnchor().constraintEqualToConstant(18.0),
+        ]));
+        unsafe {
+            cell.setImageView(Some(&image));
+        }
+    }
     let field = NSTextField::labelWithString(&NSString::new(), mtm);
     field.setMaximumNumberOfLines(1);
     if let Some(control_cell) = field.cell() {
         control_cell.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     }
-    field.setTranslatesAutoresizingMaskIntoConstraints(false);
-    cell.addSubview(&field);
-    // This unretained outlet points at a subview owned by the standard cell.
+    field.setContentHuggingPriority_forOrientation(1.0, NSLayoutConstraintOrientation::Horizontal);
+    field.setContentCompressionResistancePriority_forOrientation(
+        1.0,
+        NSLayoutConstraintOrientation::Horizontal,
+    );
+    stack.addArrangedSubview(&field);
     unsafe {
         cell.setTextField(Some(&field));
     }
-    let leading = if heading {
-        field
-            .leadingAnchor()
-            .constraintEqualToAnchor(&cell.leadingAnchor())
-    } else {
-        let image = NSImageView::initWithFrame(NSImageView::alloc(mtm), CGRect::ZERO);
-        image.setAccessibilityElement(false);
-        image.setTranslatesAutoresizingMaskIntoConstraints(false);
-        cell.addSubview(&image);
-        unsafe {
-            cell.setImageView(Some(&image));
-        }
-        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
-            image
-                .leadingAnchor()
-                .constraintEqualToAnchor(&cell.leadingAnchor()),
-            image
-                .centerYAnchor()
-                .constraintEqualToAnchor(&cell.centerYAnchor()),
-            image.widthAnchor().constraintEqualToConstant(18.0),
-            image.heightAnchor().constraintEqualToConstant(18.0),
-        ]));
-        field
-            .leadingAnchor()
-            .constraintEqualToAnchor_constant(&image.trailingAnchor(), 6.0)
-    };
-    let trailing = if has_menu {
+    if has_menu {
         let menu = super::macos::menu_button(mtm);
         menu.setBordered(false);
         menu.setAccessibilityLabel(Some(&NSString::from_str("プロジェクトの操作")));
@@ -279,32 +282,116 @@ fn cell_view(
         {
             control_cell.setArrowPosition(NSPopUpArrowPosition::NoArrow);
         }
-        menu.setTranslatesAutoresizingMaskIntoConstraints(false);
-        cell.addSubview(&menu);
+        stack.addArrangedSubview(&menu);
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
-            menu.trailingAnchor()
-                .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
-            menu.centerYAnchor()
-                .constraintEqualToAnchor(&cell.centerYAnchor()),
             menu.widthAnchor().constraintEqualToConstant(24.0),
             menu.heightAnchor().constraintEqualToConstant(24.0),
         ]));
-        field
-            .trailingAnchor()
-            .constraintEqualToAnchor_constant(&menu.leadingAnchor(), -4.0)
-    } else {
-        field
-            .trailingAnchor()
-            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0)
-    };
+    } else if !heading {
+        let indicators = NSStackView::initWithFrame(NSStackView::alloc(mtm), CGRect::ZERO);
+        indicators.setDistribution(NSStackViewDistribution::Fill);
+        indicators.setAlignment(NSLayoutAttribute::CenterY);
+        indicators.setSpacing(6.0);
+        indicators
+            .setHuggingPriority_forOrientation(1000.0, NSLayoutConstraintOrientation::Horizontal);
+        stack.addArrangedSubview(&indicators);
+    }
     NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
-        leading,
-        trailing,
-        field
+        stack
+            .leadingAnchor()
+            .constraintEqualToAnchor(&cell.leadingAnchor()),
+        stack
+            .trailingAnchor()
+            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -4.0),
+        stack
             .centerYAnchor()
             .constraintEqualToAnchor(&cell.centerYAnchor()),
     ]));
     cell
+}
+
+fn set_indicators(stack: &NSStackView, data: Option<&super::RowIndicators>) {
+    for view in stack.arrangedSubviews().iter() {
+        if let Some(progress) = view.downcast_ref::<NSProgressIndicator>() {
+            unsafe {
+                progress.stopAnimation(None);
+            }
+        }
+        stack.removeArrangedSubview(&view);
+        view.removeFromSuperview();
+    }
+    stack.setHidden(data.is_none());
+    let Some(data) = data else { return };
+    let mtm = stack.mtm();
+    if let Some(activity) = data.activity {
+        use agent_core::presentation::thread_status::ThreadActivity;
+        let view: Retained<NSView> = match activity {
+            ThreadActivity::Running => {
+                let progress = NSProgressIndicator::new(mtm);
+                progress.setStyle(NSProgressIndicatorStyle::Spinning);
+                progress.setControlSize(NSControlSize::Small);
+                progress.setIndeterminate(true);
+                unsafe {
+                    progress.startAnimation(None);
+                }
+                progress.into_super()
+            }
+            ThreadActivity::Waiting | ThreadActivity::Unread => {
+                let image = NSImageView::initWithFrame(NSImageView::alloc(mtm), CGRect::ZERO);
+                let glyph = symbol(if activity == ThreadActivity::Waiting {
+                    "person.crop.circle.badge.questionmark"
+                } else {
+                    "circle.fill"
+                });
+
+                image.setImage(glyph.as_deref());
+                let color = if activity == ThreadActivity::Waiting {
+                    NSColor::systemOrangeColor()
+                } else {
+                    NSColor::labelColor()
+                };
+                image.setContentTintColor(Some(&color));
+                image.into_super().into_super()
+            }
+        };
+        add_indicator(
+            stack,
+            &view,
+            if activity == ThreadActivity::Unread {
+                8.0
+            } else {
+                16.0
+            },
+        );
+    }
+    if let Some(status) = data.worktree {
+        let unmerged = status == agent_protocol::models::WorktreeStatus::Unmerged;
+        let image = NSImageView::initWithFrame(NSImageView::alloc(mtm), CGRect::ZERO);
+        image.setImage(
+            NSImage::imageNamed(&NSString::from_str(if unmerged {
+                "GitDiff"
+            } else {
+                "GitMerge"
+            }))
+            .as_deref(),
+        );
+        let color = if unmerged {
+            NSColor::systemOrangeColor()
+        } else {
+            NSColor::systemPurpleColor()
+        };
+        image.setContentTintColor(Some(&color));
+        add_indicator(stack, &image, 16.0);
+    }
+}
+
+fn add_indicator(stack: &NSStackView, view: &NSView, size: f64) {
+    view.setAccessibilityElement(false);
+    stack.addArrangedSubview(view);
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+        view.widthAnchor().constraintEqualToConstant(size),
+        view.heightAnchor().constraintEqualToConstant(size),
+    ]));
 }
 
 pub(super) struct List {
@@ -432,6 +519,16 @@ impl NativeComponent for List {
         if name == "sidebar" {
             let sidebar = value.and_then(JsonValue::as_bool).unwrap_or(false);
             self.delegate.ivars().sidebar.set(sidebar);
+            self.outline.setStyle(if sidebar {
+                NSTableViewStyle::Plain
+            } else {
+                NSTableViewStyle::SourceList
+            });
+            if sidebar {
+                self.outline.setBackgroundColor(&NSColor::clearColor());
+                self.view.setDrawsBackground(false);
+                self.outline.setIndentationPerLevel(24.0);
+            }
             self.outline.setRowHeight(if sidebar { 32.0 } else { 24.0 });
             self.outline.reloadData();
             return;

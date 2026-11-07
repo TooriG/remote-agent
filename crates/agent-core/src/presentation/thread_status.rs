@@ -1,0 +1,78 @@
+//! Status priority and accessible descriptions shared by the conversation lists.
+use agent_protocol::models::WorktreeStatus;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
+pub enum ThreadActivity {
+    Waiting,
+    Running,
+    Unread,
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn thread_activity(waiting: bool, active: bool, unread: bool) -> Option<ThreadActivity> {
+    if waiting {
+        Some(ThreadActivity::Waiting)
+    } else if active {
+        Some(ThreadActivity::Running)
+    } else if unread {
+        Some(ThreadActivity::Unread)
+    } else {
+        None
+    }
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn thread_activity_label(activity: ThreadActivity) -> String {
+    match activity {
+        ThreadActivity::Waiting => "確認待ち",
+        ThreadActivity::Running => "実行中",
+        ThreadActivity::Unread => "完了・未確認",
+    }
+    .into()
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn worktree_status_label(status: WorktreeStatus) -> String {
+    match status {
+        WorktreeStatus::Unmerged => "main に未反映の変更あり",
+        WorktreeStatus::Merged => "main にマージ済み",
+    }
+    .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waiting_precedes_running_and_running_precedes_unread() {
+        for (waiting, active, unread, expected) in [
+            (false, false, false, None),
+            (false, false, true, Some(ThreadActivity::Unread)),
+            (false, true, false, Some(ThreadActivity::Running)),
+            (false, true, true, Some(ThreadActivity::Running)),
+            (true, false, false, Some(ThreadActivity::Waiting)),
+            (true, false, true, Some(ThreadActivity::Waiting)),
+            (true, true, false, Some(ThreadActivity::Waiting)),
+            (true, true, true, Some(ThreadActivity::Waiting)),
+        ] {
+            assert_eq!(thread_activity(waiting, active, unread), expected);
+        }
+        assert_eq!(thread_activity_label(ThreadActivity::Waiting), "確認待ち");
+        assert_eq!(thread_activity_label(ThreadActivity::Running), "実行中");
+        assert_eq!(
+            thread_activity_label(ThreadActivity::Unread),
+            "完了・未確認"
+        );
+        assert_eq!(
+            worktree_status_label(WorktreeStatus::Unmerged),
+            "main に未反映の変更あり"
+        );
+        assert_eq!(
+            worktree_status_label(WorktreeStatus::Merged),
+            "main にマージ済み"
+        );
+    }
+}
