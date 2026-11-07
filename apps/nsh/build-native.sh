@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the native SwiftTerm view separately from Rust's static checks.
+# Build native Apple views and check their shared display contract on Mac.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 platform=${1:?usage: build-native.sh macos|ios-simulator}
@@ -11,9 +11,12 @@ esac
 build_root="${CARGO_TARGET_DIR:-$PWD/target}/nsh-apple/$platform"
 sdk_path=$(xcrun --sdk "$sdk" --show-sdk-path)
 swift_arguments=(--package-path apps/nsh/apple --scratch-path "$build_root" --cache-path "${CARGO_TARGET_DIR:-$PWD/target}/tool-cache/swiftpm"
-    --configuration debug --jobs 2 --triple "$triple" --sdk "$sdk_path" --product BexNshNative --force-resolved-versions)
-xcrun swift build "${swift_arguments[@]}"
-product=$(xcrun swift build "${swift_arguments[@]}" --show-bin-path)
+    --configuration debug --jobs 2 --triple "$triple" --sdk "$sdk_path" --force-resolved-versions)
+xcrun swift build "${swift_arguments[@]}" --product BexNshNative
+if [[ $platform == macos ]]; then
+    xcrun swift test "${swift_arguments[@]}"
+fi
+product=$(xcrun swift build "${swift_arguments[@]}" --product BexNshNative --show-bin-path)
 framework="${CARGO_TARGET_DIR:-$PWD/target}/nsh-preview-native/$platform/BexNshNative.framework"
 mkdir -p "$framework"
 cp "$product/libBexNshNative.dylib" "$framework/BexNshNative"

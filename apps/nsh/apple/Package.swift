@@ -6,6 +6,9 @@ let package = Package(
     platforms: [.macOS("26.0"), .iOS("26.0")],
     products: [.library(name: "BexNshNative", type: .dynamic, targets: ["BexNshNative"])],
     dependencies: [.package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.99.1")],
-    targets: [.target(name: "BexNshNative", dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")])],
+    targets: [
+        .target(name: "BexNshNative", dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")]),
+        .testTarget(name: "BexNshNativeTests", dependencies: ["BexNshNative"], resources: [.process("Fixtures")])
+    ],
     swiftLanguageModes: [.v6]
 )

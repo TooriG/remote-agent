@@ -1,7 +1,7 @@
 use crate::models::WorkspaceReview;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct DiffRow {
     pub text: String,
@@ -163,7 +163,7 @@ fn quoted_path(path: &str) -> Option<(String, &str)> {
     None
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct WorkspaceDiffFile {
     pub path: String,

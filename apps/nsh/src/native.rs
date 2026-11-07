@@ -39,6 +39,10 @@ pub mod ios;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod apple;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod details;
 #[cfg(target_os = "macos")]
 mod list_macos;
 #[cfg(target_os = "ios")]

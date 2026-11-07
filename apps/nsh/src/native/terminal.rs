@@ -1,10 +1,8 @@
 //! SwiftTerm owns rendering and native input; the native component only moves bytes.
-use libloading::Library;
 use nsh_core::JsonValue;
-use objc2::{MainThreadMarker, rc::Retained};
-use objc2_foundation::{NSBundle, NSString};
+use objc2::rc::Retained;
 use serde_json::json;
-use std::{ffi::c_void, mem::ManuallyDrop, path::PathBuf, ptr::NonNull, rc::Rc, sync::OnceLock};
+use std::{ffi::c_void, ptr::NonNull, rc::Rc, sync::OnceLock};
 
 #[cfg(target_os = "ios")]
 use nsh_platform_ios::{ComponentContext, Components, NativeComponent};
@@ -18,7 +16,6 @@ use objc2_ui_kit::UIView as PlatformView;
 type Callback = unsafe extern "C" fn(*mut c_void, i32, *const u8, isize, i32, i32);
 
 struct Bridge {
-    _library: ManuallyDrop<Library>,
     create: unsafe extern "C" fn(*mut c_void, Callback) -> *mut c_void,
     view: unsafe extern "C" fn(*mut c_void) -> *mut PlatformView,
     input: unsafe extern "C" fn(*mut c_void, bool),
@@ -26,40 +23,18 @@ struct Bridge {
     release: unsafe extern "C" fn(*mut c_void),
 }
 
-// Swift/Objective-C metadata stays registered for the lifetime of the process.
-// Keep its library loaded after the last terminal view has gone away.
 static BRIDGE: OnceLock<Result<Bridge, String>> = OnceLock::new();
 
 impl Bridge {
     fn load() -> Result<Self, String> {
-        let directory = NSBundle::mainBundle()
-            .privateFrameworksPath()
-            .ok_or_else(|| "アプリ内のターミナル部品が見つかりません。".to_owned())?;
-        let path = PathBuf::from(directory.to_string()).join("BexNshNative.framework/BexNshNative");
-        // This is the application's own bundled, signed framework. Each symbol's
-        // C ABI is declared beside its Swift implementation in apple/Sources.
+        // The declarations match the framework's C exports.
         unsafe {
-            // Even an incompatible framework has registered Swift/Objective-C metadata.
-            // Do not unload it on an early symbol-lookup error either.
-            let library =
-                ManuallyDrop::new(Library::new(path).map_err(|reason| reason.to_string())?);
             Ok(Self {
-                create: *library
-                    .get(b"bex_nsh_terminal_create\0")
-                    .map_err(|e| e.to_string())?,
-                view: *library
-                    .get(b"bex_nsh_terminal_view\0")
-                    .map_err(|e| e.to_string())?,
-                input: *library
-                    .get(b"bex_nsh_terminal_input\0")
-                    .map_err(|e| e.to_string())?,
-                feed: *library
-                    .get(b"bex_nsh_terminal_feed\0")
-                    .map_err(|e| e.to_string())?,
-                release: *library
-                    .get(b"bex_nsh_terminal_release\0")
-                    .map_err(|e| e.to_string())?,
-                _library: library,
+                create: super::apple::symbol(b"bex_nsh_terminal_create\0")?,
+                view: super::apple::symbol(b"bex_nsh_terminal_view\0")?,
+                input: super::apple::symbol(b"bex_nsh_terminal_input\0")?,
+                feed: super::apple::symbol(b"bex_nsh_terminal_feed\0")?,
+                release: super::apple::symbol(b"bex_nsh_terminal_release\0")?,
             })
         }
     }
@@ -163,7 +138,7 @@ impl Terminal {
                 }
             }
             Err(reason) => Self {
-                view: failure(&reason),
+                view: super::apple::failure(&reason),
                 native: None,
             },
         }
@@ -201,24 +176,6 @@ impl NativeComponent for Terminal {
             }
             _ => {}
         }
-    }
-}
-
-fn failure(reason: &str) -> Retained<PlatformView> {
-    let message = NSString::from_str(&format!("ターミナルを読み込めませんでした。\n{reason}"));
-    #[cfg(target_os = "macos")]
-    {
-        let label =
-            objc2_app_kit::NSTextField::labelWithString(&message, MainThreadMarker::new().unwrap());
-        label.setSelectable(true);
-        label.into_super().into_super()
-    }
-    #[cfg(target_os = "ios")]
-    {
-        let label = objc2_ui_kit::UILabel::new(MainThreadMarker::new().unwrap());
-        label.setText(Some(&message));
-        label.setNumberOfLines(0);
-        label.into_super()
     }
 }
 

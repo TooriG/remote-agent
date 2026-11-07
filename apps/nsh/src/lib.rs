@@ -5,6 +5,7 @@ mod client;
 mod composer;
 mod connections;
 mod conversation;
+mod details;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod dictation;
 mod editor;
@@ -213,7 +214,7 @@ pub fn App() -> impl IntoElement {
         match action {
             "sidebar" => sidebar.update(|open| *open = !*open),
             "search" => searching.update(|open| *open = !*open),
-            "files" | "terminal" => workbench::open_tool(action),
+            "files" | "terminal" | "diff" | "agents" => workbench::open_tool(action),
             "compose" => {
                 connection.dispatch(Intent::NewChat {
                     cwd: publication.with(|p| p.snapshot.pane.navigation.cwd.clone()),
@@ -304,6 +305,9 @@ pub fn App() -> impl IntoElement {
                                             toolbar_action(&tool.with_untracked(|t| t.key.clone()))
                                         },
                                     )
+                                    .prop("symbol", move || {
+                                        json!(tool.with(|t| workbench::symbol(t.kind)))
+                                    })
                                     .prop(
                                         "enabled",
                                         move || {
@@ -361,9 +365,9 @@ pub fn App() -> impl IntoElement {
                             "ellipsis",
                             "その他",
                             move || {
-                                let mut entries = vec![json!({"id": "refresh", "title": "更新"})];
-                                entries.extend(workbench::tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "enabled": tool.enabled})));
-                                entries.push(json!({"id": "settings", "title": "環境"}));
+                                let mut entries = vec![json!({"id": "refresh", "title": "更新", "symbol": "arrow.clockwise"})];
+                                entries.extend(workbench::tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "symbol": workbench::symbol(tool.kind), "enabled": tool.enabled})));
+                                entries.push(json!({"id": "settings", "title": "環境", "symbol": "gearshape"}));
                                 json!(entries)
                             },
                             move |item| {

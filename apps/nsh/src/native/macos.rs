@@ -191,6 +191,12 @@ impl NativeComponent for Button {
                     .map(NSString::from_str)
                     .as_deref(),
             ),
+            "identifier" => self.view.setAccessibilityIdentifier(
+                value
+                    .and_then(JsonValue::as_str)
+                    .map(NSString::from_str)
+                    .as_deref(),
+            ),
             "enabled" => self
                 .view
                 .setEnabled(value.and_then(JsonValue::as_bool).unwrap_or(true)),
@@ -278,6 +284,7 @@ fn menu_items(menu: &NSMenu, entries: &JsonValue, target: &ActionTarget) {
                 NSControlStateValueOff
             });
         }
+        item.setImage(entry["symbol"].as_str().and_then(symbol).as_deref());
         item.setEnabled(entry["enabled"].as_bool().unwrap_or(true));
         menu.addItem(&item);
     }
@@ -488,6 +495,7 @@ impl NativeComponent for Toolbar {
 }
 
 pub fn register(components: &Components) {
+    super::details::register(components);
     super::terminal::register(components);
     components.register(
         "bex.preview",

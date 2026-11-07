@@ -49,6 +49,11 @@ pub(crate) fn notices(
                                 });
                             },
                         )
+                        .prop("identifier", move || json!(notice.with(|notice| {
+                            matches!(&notice.id, agent_core::state::operations::ErrorId::Operation {
+                                key: agent_core::state::operations::OperationKey::WorkspaceReview, ..
+                            }).then_some("files.diff.retry")
+                        })))
                     },
                 ))
                 .child(native::text_button(json!("閉じる"), move || {

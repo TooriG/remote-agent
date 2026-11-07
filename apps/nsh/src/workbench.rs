@@ -112,6 +112,18 @@ fn surface_title(kind: PanelKind, path: Option<&str>) -> String {
     }
 }
 
+pub(crate) fn symbol(kind: PanelKind) -> &'static str {
+    match kind {
+        PanelKind::Browser => "globe",
+        PanelKind::Terminal => "terminal",
+        PanelKind::Files | PanelKind::File => "folder",
+        PanelKind::Diff => "arrow.left.arrow.right",
+        PanelKind::SideChat => "bubble.left.and.bubble.right",
+        PanelKind::Agents => "network",
+        PanelKind::Home => "plus",
+    }
+}
+
 pub(crate) fn tools() -> Vec<agent_core::panels::PanelTool> {
     let connection = use_context::<Connection>().unwrap();
     connection
@@ -123,7 +135,12 @@ pub(crate) fn tools() -> Vec<agent_core::panels::PanelTool> {
             )
         })
         .into_iter()
-        .filter(|tool| matches!(tool.kind, PanelKind::Files | PanelKind::Terminal))
+        .filter(|tool| {
+            matches!(
+                tool.kind,
+                PanelKind::Files | PanelKind::Terminal | PanelKind::Diff | PanelKind::Agents
+            )
+        })
         .collect()
 }
 
@@ -151,10 +168,11 @@ pub(crate) fn screen() -> impl IntoElement {
         .child(view().flex_row().gap_2().items_center().p_2()
             .child(when(is_desktop, move || native::button("xmark", "ツールを閉じる", move || browser.close()).w(px(44.0)).h(px(44.0))))
             .child(native::menu("rectangle.stack", "タブ", move || workspace.state.with(|state| json!(state.surfaces.iter().map(|surface| json!({
-                "id": surface.id.to_string(), "title": surface_title(surface.kind, surface.path.as_deref()), "selected": state.active == Some(surface.id)
+                "id": surface.id.to_string(), "title": surface_title(surface.kind, surface.path.as_deref()), "symbol": symbol(surface.kind), "selected": state.active == Some(surface.id)
             })).collect::<Vec<_>>())), move |id| { if let Ok(id) = id.parse() { workspace.activate(id); } })
+                .prop("symbol", move || json!(workspace.state.with(|state| symbol(state.kind()))))
                 .prop("title", move || json!(title())).min_h(px(44.0)).flex_1())
-            .child(native::menu("plus", "ツールを追加", move || json!(tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "enabled": tool.enabled})).collect::<Vec<_>>()), open_tool).w(px(44.0)).h(px(44.0)))
+            .child(native::menu("plus", "ツールを追加", move || json!(tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "symbol": symbol(tool.kind), "enabled": tool.enabled})).collect::<Vec<_>>()), open_tool).w(px(44.0)).h(px(44.0)))
             .child(native::button("xmark.square", "タブを閉じる", move || workspace.close_selected()).prop("enabled", move || json!(workspace.state.with(|s| s.active.is_some()))).w(px(44.0)).h(px(44.0))))
         .child(each(move || workspace.state.with(|s| s.selected().cloned().into_iter().collect::<Vec<_>>()),
             |surface: &agent_core::panels::PanelSurface| surface.id,
@@ -163,12 +181,15 @@ pub(crate) fn screen() -> impl IntoElement {
                     PanelKind::Files => crate::files::screen(surface.with_untracked(|s| s.id)).into_element(),
                     PanelKind::File => crate::editor::editors().into_element(),
                     PanelKind::Terminal => crate::terminal::screen(surface.get_untracked(), workspace.scope.get_untracked().host).into_element(),
+                    PanelKind::Diff => crate::details::diff(surface.with_untracked(|s| s.path.clone().unwrap_or_default()), workspace.scope.get_untracked().host).into_element(),
+                    PanelKind::Agents => crate::details::agents(workspace.scope.get_untracked().host).into_element(),
                     _ => view().into_element(),
                 }
             }))
         .child(when(move || workspace.state.with(|s| s.selected().is_none()), move || {
             view().p_4().gap_3().child(each(tools, |tool: &agent_core::panels::PanelTool| tool.key.clone(), move |tool, _| {
                 native::text_button(move || json!(tool.with(|t| t.label.clone())), move || open_tool(&tool.with_untracked(|t| t.key.clone())))
+                    .prop("symbol", move || json!(tool.with(|t| symbol(t.kind))))
                     .prop("enabled", move || json!(tool.with(|t| t.enabled)))
             }))
         }))

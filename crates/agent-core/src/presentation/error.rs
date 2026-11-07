@@ -180,6 +180,12 @@ impl Snapshot {
             OperationKey::SaveFile { path } => {
                 ("保存を再試行", Intent::SaveFile(op::SaveFile { path }))
             }
+            OperationKey::WorkspaceReview => (
+                "再試行",
+                Intent::ReviewWorkspace(op::ReviewWorkspace {
+                    cwd: self.pane.workspace.review_cwd.clone()?,
+                }),
+            ),
             _ => return None,
         };
         Some(ErrorRecovery {
@@ -738,6 +744,9 @@ mod notice_tests {
         };
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.lists.list_query).search_term = "keep filter".into();
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd = "/selected".into();
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).review_cwd =
+            Some("/reviewed".into());
         let cases = [
             (
                 OperationKey::Models {
@@ -781,6 +790,12 @@ mod notice_tests {
                     path: "/file".into(),
                 }),
             ),
+            (
+                OperationKey::WorkspaceReview,
+                Intent::ReviewWorkspace(op::ReviewWorkspace {
+                    cwd: "/reviewed".into(),
+                }),
+            ),
         ];
         for (key, expected) in cases {
             failed(&mut snapshot, key.clone(), 1, "unavailable");
@@ -818,6 +833,39 @@ mod notice_tests {
                     .is_none()
             );
         }
+    }
+
+    #[test]
+    fn review_recovery_requires_its_source_before_dispatching() {
+        let mut snapshot = Snapshot::default();
+        snapshot.connection.connected = true;
+        failed(
+            &mut snapshot,
+            OperationKey::WorkspaceReview,
+            7,
+            "review unavailable",
+        );
+        let notice = snapshot.error_notices(ErrorScope::Workspace).pop().unwrap();
+        assert_eq!(notice.recovery_label, None);
+        let (unchanged, effects) = reduce(
+            &snapshot,
+            Event::Intent(Intent::RecoverError {
+                id: notice.id.clone(),
+            }),
+        );
+        assert!(effects.is_empty());
+        assert_eq!(unchanged.operations, snapshot.operations);
+
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).review_cwd =
+            Some("/reviewed".into());
+        let notice = snapshot.error_notices(ErrorScope::Workspace).pop().unwrap();
+        assert_eq!(notice.recovery_label.as_deref(), Some("再試行"));
+        let (next, effects) = reduce(
+            &snapshot,
+            Event::Intent(Intent::RecoverError { id: notice.id }),
+        );
+        assert_eq!(effects.len(), 1);
+        assert_eq!(next.pane.workspace.review_cwd.as_deref(), Some("/reviewed"));
     }
 
     #[test]

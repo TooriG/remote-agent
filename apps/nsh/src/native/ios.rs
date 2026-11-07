@@ -131,6 +131,12 @@ fn menu_items(context: &ComponentContext, entries: &JsonValue) -> Vec<Retained<U
             } else {
                 let action = action(context, "select", entry["id"].as_str()?);
                 action.setTitle(&title);
+                action.setImage(
+                    entry["symbol"]
+                        .as_str()
+                        .and_then(|name| UIImage::systemImageNamed(&NSString::from_str(name)))
+                        .as_deref(),
+                );
                 action.setAttributes(if entry["enabled"].as_bool().unwrap_or(true) {
                     UIMenuElementAttributes::empty()
                 } else {
@@ -156,6 +162,7 @@ impl Button {
     fn new(context: ComponentContext) -> Self {
         let mtm = MainThreadMarker::new().unwrap();
         let config = UIButtonConfiguration::plainButtonConfiguration(mtm);
+        config.setImagePadding(8.0);
         let view = UIButton::buttonWithConfiguration_primaryAction(
             &config,
             Some(&action(&context, "press", "")),
@@ -218,6 +225,12 @@ impl NativeComponent for Button {
                     .map(NSString::from_str)
                     .as_deref(),
                 mtm,
+            ),
+            "identifier" => self.view.setAccessibilityIdentifier(
+                value
+                    .and_then(JsonValue::as_str)
+                    .map(NSString::from_str)
+                    .as_deref(),
             ),
             "enabled" => self
                 .view
@@ -483,6 +496,7 @@ impl NativeComponent for Toolbar {
 }
 
 pub fn register(components: &Components) {
+    super::details::register(components);
     super::terminal::register(components);
     components.register(
         "bex.preview",

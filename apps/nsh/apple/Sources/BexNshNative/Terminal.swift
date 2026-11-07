@@ -10,22 +10,24 @@ public typealias TerminalCallback = @convention(c) (
     UnsafeMutableRawPointer?, Int32, UnsafePointer<UInt8>?, Int, Int32, Int32
 ) -> Void
 
+private enum HostPaste {
+    @TaskLocal static var active = false
+}
+
 /// Host owns terminal protocol responses. Only native typing and pasting go upstream.
 private final class HostTerminalView: SwiftTerm.TerminalView {
-    @TaskLocal private nonisolated static var isPasting = false
-
     #if os(macOS)
         override func paste(_ sender: Any) {
-            Self.$isPasting.withValue(true) { super.paste(sender) }
+            HostPaste.$active.withValue(true) { super.paste(sender) }
         }
     #else
         override func paste(_ sender: Any?) {
-            Self.$isPasting.withValue(true) { super.paste(sender) }
+            HostPaste.$active.withValue(true) { super.paste(sender) }
         }
     #endif
 
     override nonisolated func send(source: SwiftTerm.Terminal, data: ArraySlice<UInt8>) {
-        guard Self.isPasting else { return }
+        guard HostPaste.active else { return }
         super.send(source: source, data: data)
     }
 }
