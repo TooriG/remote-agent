@@ -40,7 +40,7 @@ async function gh(args: string[]) {
       // Metadata reads are safe to repeat after transport failures. Keep
       // authentication errors and downloads with partial files fail-fast.
       if (args[0] !== 'api' || controller.signal.aborted ||
-          !/TLS handshake timeout|i\/o timeout|connection reset by peer|unexpected EOF/.test((error as Error & { stderr?: string }).stderr ?? '')) {
+          !/TLS handshake timeout|i\/o timeout|connection reset by peer|unexpected EOF|^error connecting to api\.github\.com$/m.test((error as Error & { stderr?: string }).stderr ?? '')) {
         throw error;
       }
       console.error('Temporary GitHub API connection failure; retrying in 5 seconds');
