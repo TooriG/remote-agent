@@ -207,12 +207,13 @@ final class ConversationListController: UIViewController {
     }
 
     /// SwiftUI lays out the composer; only the collection extends beneath its safe-area inset.
+    /// Content insets keep the composer out of the safe area this calculation reads.
     private func updateViewportInsets() {
         guard let viewportHeight else { return }
-        let inherited = view.safeAreaInsets.bottom - additionalSafeAreaInsets.bottom
-        let bottom = max(0, view.bounds.height - viewportHeight - inherited)
-        if additionalSafeAreaInsets.bottom != bottom {
-            additionalSafeAreaInsets.bottom = bottom
+        let bottom = max(0, collectionView.bounds.height - viewportHeight - collectionView.safeAreaInsets.bottom)
+        if collectionView.contentInset.bottom != bottom {
+            collectionView.contentInset.bottom = bottom
+            collectionView.verticalScrollIndicatorInsets.bottom = bottom
         }
     }
 
