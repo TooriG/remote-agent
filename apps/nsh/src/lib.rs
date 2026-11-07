@@ -31,6 +31,7 @@ mod storage;
 mod terminal;
 mod threads;
 mod workbench;
+mod worktrees;
 
 #[cfg(target_os = "macos")]
 pub use desktop::run as run_macos;
@@ -177,6 +178,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         match action {
             "sidebar" => navigate(Navigation::ToggleSidebar),
             "search" => searching.update(|open| *open = !*open),
+            "worktrees" => worktrees::open(),
             "browser" | "files" | "terminal" | "diff" | "agents" | "sideChat" => {
                 workbench::open_tool(action)
             }
@@ -252,6 +254,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
             return view()
                 .flex_1()
                 .child(native::toolbar(title, toolbar_action).h(px(0.0)))
+                .child(worktrees::presenter(|| {}))
                 .child(notices())
                 .child(
                     native("bex.split")
@@ -366,6 +369,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                                 let mut entries = vec![json!({"id": "refresh", "title": "更新", "symbol": "arrow.clockwise"})];
                                 entries.extend(workbench::tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "symbol": workbench::symbol(tool.kind), "enabled": tool.enabled})));
                                 entries.push(json!({"id": "settings", "title": "環境", "symbol": "gearshape"}));
+                                entries.push(json!({"id": "worktrees", "title": "ワークツリー設定", "symbol": "arrow.triangle.branch", "enabled": publication.with(|p| p.settings.connected())}));
                                 json!(entries)
                             },
                             move |item| {
@@ -449,6 +453,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
     view()
         .flex_1()
         .child(media::preview())
+        .child(worktrees::presenter(move || routes.set(vec![0, 1])))
         .child(navigation)
         .into_element()
 }

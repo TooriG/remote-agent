@@ -50,8 +50,12 @@ struct ProviderAccountScreen: View {
         List {
             Section("適用範囲") {
                 if let selectProfile {
-                    SettingsScopeFields(profiles: profiles, selectedProfileId: model.host,
-                                        disabled: changingAccount || loginInProgress, select: selectProfile)
+                    SettingsScopeFields(
+                        profiles: profiles.map { SettingsScopeItem(id: $0.id, name: $0.name) },
+                        selectedProfileId: model.host,
+                        disabled: changingAccount || loginInProgress,
+                        select: selectProfile
+                    )
                 } else {
                     Text(model.settings.hostName() ?? model.host)
                 }

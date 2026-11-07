@@ -231,19 +231,17 @@ impl WorktreeForm {
 
     /// The saved settings with the typed directory and copy paths applied.
     pub(super) fn edited(&self, saved: &WorktreeSettings, cx: &App) -> WorktreeSettings {
-        WorktreeSettings {
-            worktree_directory: self.directory.read(cx).value().trim().into(),
+        agent_core::presentation::worktrees::normalize_worktree_settings(WorktreeSettings {
+            worktree_directory: self.directory.read(cx).value().to_string(),
             copy_paths: self
                 .copy_paths
                 .read(cx)
                 .value()
                 .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
                 .map(str::to_owned)
                 .collect(),
             ..saved.clone()
-        }
+        })
     }
 
     pub(super) fn matches(&self, saved: Option<&WorktreeSettings>, cx: &App) -> bool {

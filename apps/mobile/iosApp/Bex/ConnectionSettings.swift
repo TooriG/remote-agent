@@ -94,8 +94,12 @@ struct ProviderSettingsScreen: View {
     var body: some View {
         Form {
             Section("適用範囲") {
-                SettingsScopeFields(profiles: model.profiles, selectedProfileId: model.selectedProfileId,
-                                    disabled: model.settings.accountLogin() != nil, select: model.activateProfile)
+                SettingsScopeFields(
+                    profiles: model.profiles.map { SettingsScopeItem(id: $0.id, name: $0.name) },
+                    selectedProfileId: model.selectedProfileId,
+                    disabled: model.settings.accountLogin() != nil,
+                    select: model.activateProfile
+                )
             }
             ErrorNotices(notices: model.notices[.settings] ?? [], perform: { model.perform($0) })
             ProviderSettingsSection(model: model)

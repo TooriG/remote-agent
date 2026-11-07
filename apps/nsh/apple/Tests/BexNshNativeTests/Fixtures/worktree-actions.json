@@ -1,0 +1,50 @@
+[
+  {
+    "save": {
+      "id": "submission",
+      "settings": {
+        "createOnNewSession": true,
+        "copyOnCreate": true,
+        "copyPaths": [
+          "  .env ",
+          "",
+          "config/日本語"
+        ],
+        "worktreeDirectory": "  /fixture/work trees  ",
+        "deleteUnchanged": false,
+        "projectDeleteUnchanged": {
+          "project": true
+        }
+      }
+    }
+  },
+  {
+    "open": {
+      "thread": {
+        "provider": "codex",
+        "id": "chat"
+      }
+    }
+  },
+  {
+    "remove": {
+      "path": "/fixture/work trees/作業"
+    }
+  },
+  {
+    "load": {}
+  },
+  {
+    "close": {}
+  },
+  {
+    "host": {
+      "id": "remote"
+    }
+  },
+  {
+    "review": {
+      "path": "/fixture/work trees/作業"
+    }
+  }
+]

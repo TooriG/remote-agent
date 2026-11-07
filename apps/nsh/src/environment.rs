@@ -86,6 +86,14 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> im
                 },
             ))
             .child(text("更新はこのPCでBexを開いて適用できます。"))
+            .child(text("プロジェクトと会話").text_size(px(20.0)))
+            .child(
+                native::text_button(json!("ワークツリー設定"), crate::worktrees::open)
+                    .prop("symbol", json!("arrow.triangle.branch"))
+                    .prop("enabled", move || {
+                        json!(publication.with(|p| p.settings.connected()))
+                    }),
+            )
             .child(text("プロバイダー").text_size(px(20.0)))
             .child(
                 native::text_button(json!("プロバイダーを再読み込み"), move || {

@@ -13,6 +13,9 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+mod worktrees;
+pub(crate) use worktrees::{WorktreeAction, WorktreeEditor};
+
 #[derive(Clone, PartialEq)]
 pub(crate) struct Host {
     pub id: String,
@@ -49,6 +52,7 @@ pub(crate) struct State {
     pub file_line: Option<(u64, Option<u32>)>,
     pub side_chats: BTreeMap<u64, SideChat>,
     pub browser_renderer: String,
+    pub worktrees: Option<WorktreeEditor>,
     uploads: BTreeMap<uuid::Uuid, (String, DraftKey)>,
 }
 
@@ -68,6 +72,7 @@ impl Default for State {
             file_line: None,
             side_chats: BTreeMap::new(),
             browser_renderer: String::new(),
+            worktrees: None,
             uploads: BTreeMap::new(),
         }
     }
@@ -159,6 +164,13 @@ impl State {
                 }
             },
         }
+        if self
+            .worktrees
+            .as_ref()
+            .is_some_and(|editor| editor.host != self.host)
+        {
+            self.worktrees = None;
+        }
     }
 
     pub fn uploading(&self, host: &str, draft: &DraftKey) -> bool {
@@ -222,7 +234,9 @@ impl Application {
             if state.account_locked() || !state.hosts.iter().any(|candidate| candidate.id == host) {
                 return false;
             }
-            Arc::make_mut(state).host = host.clone();
+            let state = Arc::make_mut(state);
+            state.host = host.clone();
+            state.worktrees = None;
             true
         });
         if selected {

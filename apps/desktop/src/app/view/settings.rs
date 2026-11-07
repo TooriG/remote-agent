@@ -677,13 +677,11 @@ impl Preferences {
         }
         for (index, worktree) in worktrees.iter().enumerate() {
             let path = worktree.path.clone();
-            let current = Path::new(&self.snapshot.pane.navigation.cwd).starts_with(&worktree.path);
-            let reason = worktree
-                .blocked_reason
-                .as_deref()
-                .or(current.then_some(language.text(
-                    "現在開いている会話の作業場所です。別の会話に移動してから削除してください。",
-                )));
+            let reason = agent_core::presentation::worktrees::worktree_removal_reason(
+                worktree.blocked_reason.clone(),
+                self.snapshot.pane.navigation.cwd.clone(),
+                worktree.path.clone(),
+            );
             let confirming = self.worktrees.removal.as_deref() == Some(path.as_str());
             let mut entry = settings_group()
                 .p_5()
@@ -746,12 +744,12 @@ impl Preferences {
                     .disabled(!self.snapshot.connection.connected || self.worktrees.removing),
                 );
             }
-            if let Some(reason) = reason {
+            if let Some(reason) = reason.as_deref() {
                 entry = entry.child(
                     div()
                         .text_sm()
                         .text_color(rgb(appearance::MUTED))
-                        .child(reason.to_owned()),
+                        .child(language.text(reason).to_string()),
                 );
             }
             if confirming {

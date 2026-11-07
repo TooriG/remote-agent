@@ -6,6 +6,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        B805E2000000000000000003 /* SettingsScopeFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = B805E2000000000000000004; };
+        B805E2000000000000000001 /* WorktreeSettingsFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = B805E2000000000000000002; };
         B805E1000000000000000003 /* BrowserCredentialsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B805E1000000000000000004; };
         B805E1000000000000000001 /* RemoteBrowserCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = B805E1000000000000000002; };
 		EB35FB642FBD2BAAE63C4417 /* ConversationMediaPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB82712EB6C081752DD49DF7 /* ConversationMediaPresentation.swift */; };
@@ -87,6 +89,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        B805E2000000000000000004 /* SettingsScopeFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../native-settings/Sources/NativeSettingsViews/SettingsScopeFields.swift; sourceTree = SOURCE_ROOT; };
+        B805E2000000000000000002 /* WorktreeSettingsFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../native-settings/Sources/NativeSettingsViews/WorktreeSettingsFields.swift; sourceTree = SOURCE_ROOT; };
         B805E1000000000000000004 /* BrowserCredentialsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../native-browser/apple-views/Sources/NativeBrowserViews/BrowserCredentialsView.swift; sourceTree = SOURCE_ROOT; };
         B805E1000000000000000002 /* RemoteBrowserCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../native-browser/apple-views/Sources/NativeBrowserViews/RemoteBrowserCanvas.swift; sourceTree = SOURCE_ROOT; };
 		AB82712EB6C081752DD49DF7 /* ConversationMediaPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMediaPresentation.swift; sourceTree = "<group>"; };
@@ -252,6 +256,8 @@
                 C30000000000000000000004 /* TerminalScreen.swift */,
                 F1E85101D97E4E84A7B33C96 /* WorkspaceScreen.swift */,
                 C0DE00000000000000000702 /* BrowserScreen.swift */,
+                B805E2000000000000000002 /* WorktreeSettingsFields.swift */,
+                B805E2000000000000000004 /* SettingsScopeFields.swift */,
                 B805E1000000000000000002 /* RemoteBrowserCanvas.swift */,
                 B805E1000000000000000004 /* BrowserCredentialsView.swift */,
                 C0DE00000000000000000704 /* BrowserCredentialsSheet.swift */,
@@ -444,6 +450,8 @@
                 C30000000000000000000003 /* TerminalScreen.swift in Sources */,
                 D36E8C890D10474EB83C8D37 /* WorkspaceScreen.swift in Sources */,
                 C0DE00000000000000000701 /* BrowserScreen.swift in Sources */,
+                B805E2000000000000000001 /* WorktreeSettingsFields.swift in Sources */,
+                B805E2000000000000000003 /* SettingsScopeFields.swift in Sources */,
                 B805E1000000000000000001 /* RemoteBrowserCanvas.swift in Sources */,
                 B805E1000000000000000003 /* BrowserCredentialsView.swift in Sources */,
                 C0DE00000000000000000703 /* BrowserCredentialsSheet.swift in Sources */,

@@ -233,6 +233,20 @@ impl Client {
         receive
     }
 
+    pub fn worktree_settings(
+        &self,
+        host: &str,
+    ) -> Option<agent_protocol::models::WorktreeSettings> {
+        self.sessions
+            .session(host.into())?
+            .snapshot()
+            .files
+            .workspace
+            .settings
+            .as_deref()
+            .cloned()
+    }
+
     pub fn reconnect(self: &Arc<Self>, host: String) {
         let owner = self.clone();
         self.spawn(async move {

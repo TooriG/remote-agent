@@ -1,7 +1,41 @@
 @testable import BexNshNative
+import NativeSettingsViews
 import XCTest
 
 final class DisplayTests: XCTestCase {
+    func testWorktreeSettingsPreserveHostScopeOverridesAndCoreRemovalReason() throws {
+        guard case let .worktreeEditor(data) = try content("worktree-editor")
+        else { return XCTFail("Expected worktree editor") }
+        let value = try XCTUnwrap(data)
+        XCTAssertEqual(value.editor.host, "remote")
+        XCTAssertEqual(value.hosts[0].name, "検証環境 👋")
+        XCTAssertEqual(value.projects[0].id, "project")
+        let settings = try XCTUnwrap(value.editor.settings)
+        XCTAssertTrue(settings.createOnNewSession)
+        XCTAssertEqual(settings.copyPathsText, ".env\nconfig/日本語")
+        XCTAssertEqual(settings.projectDeleteUnchanged, ["project": true])
+        let row = try XCTUnwrap(value.rows?.first)
+        XCTAssertEqual(row.threads[0].id.provider, "codex")
+        XCTAssertTrue(row.threads[0].active)
+        XCTAssertEqual(row.reason, "現在開いている会話の作業場所です。別の会話に移動してから削除してください。")
+    }
+
+    func testNativeWorktreeActionsPreserveRawTextUntilCoreValidatesIt() throws {
+        let settings = WorktreeSettingsInputs(
+            createOnNewSession: true, copyOnCreate: true, copyPaths: ["  .env ", "", "config/日本語"],
+            worktreeDirectory: "  /fixture/work trees  ", projectDeleteUnchanged: ["project": true]
+        )
+        let actions: [WorktreeAction] = [
+            .save(id: "submission", settings: settings), .open(thread: WorktreeSession(provider: "codex", id: "chat")),
+            .remove(path: "/fixture/work trees/作業"), .load, .close, .host(id: "remote"),
+            .review(path: "/fixture/work trees/作業")
+        ]
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "worktree-actions", withExtension: "json"))
+        let expected = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? NSArray
+        let encoded = try JSONEncoder().encode(actions)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: encoded) as? NSArray, expected)
+    }
+
     func testProjectEditorPreservesNativeInputAndCoreValidation() throws {
         guard case let .projectEditor(editor) = try content("project-editor")
         else { return XCTFail("Expected project editor") }

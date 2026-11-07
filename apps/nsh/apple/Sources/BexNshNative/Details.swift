@@ -41,6 +41,7 @@ enum DetailsContent: Decodable {
     case welcome(directory: String)
     case workspace(summary: WorkspaceSummary)
     case projectEditor(editor: ProjectEditorData?)
+    case worktreeEditor(data: WorktreeEditorData?)
 }
 
 private struct DetailsView: View {
@@ -52,6 +53,8 @@ private struct DetailsView: View {
             switch content {
             case let .projectEditor(editor):
                 ProjectEditorPresenter(editor: editor, send: send)
+            case let .worktreeEditor(data):
+                WorktreeEditorPresenter(data: data, send: send)
             case .separator: Divider()
             case let .workspace(summary):
                 WorkspaceCard(summary: summary, send: send)
