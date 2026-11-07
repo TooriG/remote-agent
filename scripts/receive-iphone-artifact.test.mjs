@@ -130,6 +130,7 @@ test('artifact lookup reads all pages and ignores unrelated artifacts', async t 
 test('transient jobs and artifact metadata connection failures recover within one reception', async t => {
   for (const error of [
     'net/http: TLS handshake timeout',
+    'Get "https://api.github.com/repos/fixture/repo/actions/runs/123/jobs": EOF',
     'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com',
   ]) {
     await t.test(error, async t => {

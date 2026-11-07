@@ -189,13 +189,19 @@ fn has_commit(cwd: &Path, reference: &str) -> bool {
 
 fn working_index(cwd: &Path) -> Result<tempfile::NamedTempFile> {
     let git_dir = crate::git::text(cwd, &["rev-parse", "--absolute-git-dir"])?;
-    let index = tempfile::Builder::new()
+    let mut index = tempfile::Builder::new()
         .prefix("bex-review-index-")
         .tempfile_in(git_dir.trim_end())?;
     let original = crate::git::text(cwd, &["rev-parse", "--git-path", "index"])?;
     let original = cwd.join(original.trim_end());
-    match std::fs::copy(original, index.path()) {
-        Ok(_) => {}
+    match std::fs::File::open(original) {
+        Ok(mut source) => {
+            // Git uses the index timestamp to detect same-stat edits. A newer
+            // copy would make a racy entry appear clean and hide changed bytes.
+            let modified = source.metadata()?.modified()?;
+            std::io::copy(&mut source, index.as_file_mut())?;
+            index.as_file().set_modified(modified)?;
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             index_output(cwd, index.path(), &["read-tree", "--empty"])?;
         }

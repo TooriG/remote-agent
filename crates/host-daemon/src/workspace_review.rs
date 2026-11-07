@@ -366,6 +366,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn same_size_edits_with_racy_index_timestamps_remain_visible() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        git(cwd, &["init", "--initial-branch=main"]);
+        git(cwd, &["config", "core.trustctime", "false"]);
+        let path = cwd.join("own.txt");
+        let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let set_modified = |path: &Path| {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(timestamp)
+                .unwrap();
+        };
+        std::fs::write(&path, "local commit\n").unwrap();
+        set_modified(&path);
+        git(cwd, &["add", "."]);
+        git(cwd, &["commit", "-m", "base"]);
+        let index_path = cwd.join(".git/index");
+        set_modified(&index_path);
+        let index = std::fs::read(&index_path).unwrap();
+        std::fs::write(&path, "pending edit\n").unwrap();
+        set_modified(&path);
+        assert_changes(cwd, &["own.txt"], (1, 1)).await;
+        assert_eq!(std::fs::read(&index_path).unwrap(), index);
+        assert_eq!(
+            std::fs::metadata(index_path).unwrap().modified().unwrap(),
+            timestamp
+        );
+    }
+
+    #[tokio::test]
     async fn repositories_without_a_comparison_branch_only_show_pending_changes() {
         let directory = tempfile::tempdir().unwrap();
         let cwd = directory.path();

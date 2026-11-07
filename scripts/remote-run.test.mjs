@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -49,6 +49,7 @@ async function main() {
   if (name === 'git') {
     if (args[0] === 'push') {
       if (!args.some(argument => argument.startsWith('builder:'))) throw new Error('wrong push destination');
+      fs.writeFileSync(path.join(root, task + '.snapshot'), args.find(argument => argument.includes(':refs/snapshots/')).split(':')[0]);
       record('push'); return;
     }
     const result = cp.spawnSync(process.env.REMOTE_FIXTURE_GIT, args, { stdio: 'inherit' });
@@ -127,6 +128,27 @@ test('one worktree owns the snapshot and returned outputs until the download com
   assert.equal(await second.done, 0, second.stderr());
   assert.ok(build.events().indexOf('first:download') < build.events().indexOf('second:connect'));
   for (const name of ['first', 'second']) assert.equal(readFileSync(join(build.work, 'target', name), 'utf8'), name);
+});
+
+test('snapshots include same-size edits with racy index timestamps without modifying staging', async t => {
+  const build = fixture(t);
+  const git = args => execFileSync('git', args, { cwd: build.work, encoding: 'utf8' });
+  git(['config', 'core.trustctime', 'false']);
+  const path = join(build.work, 'tracked.txt');
+  const index = join(build.work, '.git/index');
+  const timestamp = new Date('2023-11-14T22:13:20Z');
+  writeFileSync(path, 'local commit\n');
+  utimesSync(path, timestamp, timestamp);
+  git(['add', 'tracked.txt']);
+  utimesSync(index, timestamp, timestamp);
+  const staged = readFileSync(index);
+  writeFileSync(path, 'pending edit\n');
+  utimesSync(path, timestamp, timestamp);
+  const task = build.start('racy');
+  assert.equal(await task.done, 0, task.stderr());
+  const snapshot = readFileSync(join(build.work, '../racy.snapshot'), 'utf8');
+  assert.equal(git(['show', `${snapshot}:tracked.txt`]), 'pending edit\n');
+  assert.deepEqual(readFileSync(index), staged);
 });
 
 test('remote failures return their outputs and release the worktree for another command', async (t) => {
