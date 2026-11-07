@@ -1,10 +1,10 @@
 //! The list owns its native project editor; Core owns project decisions and persistence.
-use crate::{client::Client, native, shared::Shared};
+use crate::application::{Application, ListScope, ListSource};
+use crate::{native, shared::Shared};
 use agent_core::{
     presentation::{
-        list::ProjectSummary,
+        list::{ProjectSummary, ThreadList},
         project_menu::{ProjectAction, ProjectMenuItem},
-        view::Presentation,
     },
     state::{Intent, operations as op},
 };
@@ -14,66 +14,72 @@ use std::sync::Arc;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Command {
-    host: String,
-    storage: String,
+    #[serde(flatten)]
+    scope: ListScope,
     action: ProjectAction,
 }
 
 pub(crate) fn menu(
     project: &ProjectSummary,
     sections: &[String],
-    host: &str,
-    storage: &str,
+    scope: &ListScope,
     local: bool,
 ) -> Value {
-    encode(
+    json!(encode(
         agent_core::presentation::project_menu::project_menu(
             project,
             sections,
             local,
             "フォルダを開く",
         ),
-        host,
-        storage,
-    )
+        scope,
+    ))
 }
 
-fn encode(items: Vec<ProjectMenuItem>, host: &str, storage: &str) -> Value {
-    json!(items.into_iter().map(|item| match item {
+fn encode(items: Vec<ProjectMenuItem>, scope: &ListScope) -> Vec<Value> {
+    items.into_iter().map(|item| match item {
             ProjectMenuItem::Separator => json!({"separator": true}),
-            ProjectMenuItem::Submenu { title, items } => json!({"title": title, "children": encode(items, host, storage)}),
+            ProjectMenuItem::Submenu { title, items } => json!({"title": title, "children": encode(items, scope)}),
             ProjectMenuItem::Action { title, action, checked, enabled } => json!({
                 "title": title, "selected": checked, "enabled": enabled,
-                "id": serde_json::to_string(&Command { host: host.into(), storage: storage.into(), action }).expect("project menu commands serialize"),
+                "id": serde_json::to_string(&Command { scope: scope.clone(), action }).expect("project menu commands serialize"),
             }),
-        }).collect::<Vec<_>>())
+        }).collect()
 }
 
 pub(crate) fn header_menu(
     hidden: &[ProjectSummary],
     desktop: bool,
-    host: &str,
-    storage: &str,
-    connected: bool,
+    selected_host: &str,
+    sources: &[ListSource],
 ) -> Value {
     let mut items = Vec::new();
     if desktop {
-        items.push(json!({"id": "add", "title": "フォルダをプロジェクトに追加…", "enabled": host == "local" && connected}));
+        items.push(json!({"id": "add", "title": "フォルダをプロジェクトに追加…", "enabled": sources.iter().any(|source| source.scope.host == selected_host && source.scope.host == "local" && source.connected)}));
     }
     if !hidden.is_empty() {
-        let hidden = hidden
+        let hidden: Vec<_> = sources
             .iter()
-            .map(|project| ProjectMenuItem::Action {
-                title: project.name.clone(),
-                checked: false,
-                enabled: true,
-                action: ProjectAction::Dispatch(Box::new(Intent::SetProjectHidden {
-                    project_id: project.id.clone(),
-                    hidden: false,
-                })),
+            .flat_map(|source| {
+                encode(
+                    hidden
+                        .iter()
+                        .filter(|project| project.host_id == source.scope.host)
+                        .map(|project| ProjectMenuItem::Action {
+                            title: project.name.clone(),
+                            checked: false,
+                            enabled: true,
+                            action: ProjectAction::Dispatch(Box::new(Intent::SetProjectHidden {
+                                project_id: project.id.clone(),
+                                hidden: false,
+                            })),
+                        })
+                        .collect(),
+                    &source.scope,
+                )
             })
             .collect();
-        items.push(json!({"title": "非表示のプロジェクトを戻す", "children": encode(hidden, host, storage)}));
+        items.push(json!({"title": "非表示のプロジェクトを戻す", "children": hidden}));
     }
     json!(items)
 }
@@ -81,8 +87,7 @@ pub(crate) fn header_menu(
 #[derive(Clone, PartialEq)]
 struct Editor {
     id: String,
-    host: String,
-    storage: String,
+    scope: ListScope,
     project: String,
     name: String,
     section: String,
@@ -92,30 +97,31 @@ struct Editor {
 #[derive(Clone, Copy)]
 pub(crate) struct Projects {
     editor: Signal<Option<Editor>>,
-    client: Stored<Arc<Client>>,
+    application: Stored<Arc<Application>>,
     host: Memo<String>,
-    publication: Memo<Shared<Presentation>>,
+    sources: Memo<Vec<ListSource>>,
+    list: Memo<Option<Shared<ThreadList>>>,
 }
 
 impl Projects {
     pub fn new(
-        client: Stored<Arc<Client>>,
+        application: Stored<Arc<Application>>,
         host: Memo<String>,
-        publication: Memo<Shared<Presentation>>,
+        sources: Memo<Vec<ListSource>>,
+        list: Memo<Option<Shared<ThreadList>>>,
     ) -> Self {
         Self {
             editor: signal(None),
-            client,
+            application,
             host,
-            publication,
+            sources,
+            list,
         }
     }
 
-    fn same_scope(self, host: &str, storage: &str) -> bool {
-        self.host.get_untracked() == host
-            && self
-                .publication
-                .with_untracked(|p| p.snapshot.connection.storage_scope == storage)
+    fn same_scope(self, scope: &ListScope) -> bool {
+        self.application
+            .with(|application| application.snapshot().list_scope_matches(scope))
     }
 
     pub fn select(self, command: &str) {
@@ -126,31 +132,34 @@ impl Projects {
         let Ok(command) = serde_json::from_str::<Command>(command) else {
             return;
         };
-        if !self.same_scope(&command.host, &command.storage) {
-            return;
-        }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        match command.action.into_intent(now) {
-            Ok(intent) => self
-                .client
-                .with(|client| client.dispatch(&command.host, None, intent)),
-            Err(ProjectAction::Edit(id)) => {
-                let project = self.publication.with_untracked(|p| {
-                    p.list
-                        .as_ref()?
+        let action = match command.action.into_intent(now) {
+            Ok(intent) => {
+                self.application
+                    .with(|application| application.list_action(&command.scope, intent, false));
+                return;
+            }
+            Err(action) => action,
+        };
+        if !self.same_scope(&command.scope) {
+            return;
+        }
+        match action {
+            ProjectAction::Edit(id) => {
+                let project = self.list.with_untracked(|list| {
+                    list.as_ref()?
                         .projects
                         .iter()
-                        .find(|project| project.id == id)
+                        .find(|project| project.id == id && project.host_id == command.scope.host)
                         .map(|project| (project.name.clone(), project.section.clone()))
                 });
                 if let Some((name, section)) = project {
                     self.editor.set(Some(Editor {
                         id: uuid::Uuid::new_v4().to_string(),
-                        host: command.host,
-                        storage: command.storage,
+                        scope: command.scope,
                         project: id,
                         name,
                         section: section.unwrap_or_default(),
@@ -158,16 +167,16 @@ impl Projects {
                     }));
                 }
             }
-            Err(ProjectAction::OpenFolder(path)) if command.host == "local" => {
+            ProjectAction::OpenFolder(path) if command.scope.host == "local" => {
                 #[cfg(target_os = "macos")]
                 native::macos::open_directory(&path);
                 #[cfg(not(target_os = "macos"))]
                 let _ = path;
             }
-            Err(ProjectAction::OpenFolder(_)) => {
+            ProjectAction::OpenFolder(_) => {
                 native::message("フォルダを開く", "接続先のフォルダはこの端末では開けません")
             }
-            Err(_) => unreachable!("project operations resolve in Core"),
+            _ => unreachable!("project operations resolve in Core"),
         }
     }
 
@@ -175,22 +184,26 @@ impl Projects {
         if !is_desktop() || self.host.get_untracked() != "local" {
             return;
         }
-        let host = self.host.get_untracked();
-        let storage = self
-            .publication
-            .with_untracked(|p| p.snapshot.connection.storage_scope.clone());
+        let Some(scope) = self.sources.with_untracked(|sources| {
+            sources
+                .iter()
+                .find(|source| source.scope.host == self.host.get_untracked())
+                .map(|source| source.scope.clone())
+        }) else {
+            return;
+        };
         let choice = pick_paths(nsh_core::file_dialog::OpenDialog::folders());
         spawn(async move {
             match choice.await {
-                Ok(Some(paths)) if self.same_scope(&host, &storage) => {
+                Ok(Some(paths)) if self.same_scope(&scope) => {
                     if let Some(path) = paths.into_iter().next() {
-                        self.client.with(|client| {
-                            client.dispatch(
-                                &host,
-                                None,
+                        self.application.with(|application| {
+                            application.list_action(
+                                &scope,
                                 Intent::AddProject(op::AddProject {
                                     cwd: path.to_string_lossy().into_owned(),
                                 }),
+                                false,
                             )
                         });
                     }
@@ -214,9 +227,8 @@ impl Projects {
             )
             .child(when(
                 move || {
-                    self.publication.with(|p| {
-                        p.list
-                            .as_ref()
+                    self.list.with(|list| {
+                        list.as_ref()
                             .is_some_and(|list| !list.hidden_projects.is_empty())
                     })
                 },
@@ -226,15 +238,13 @@ impl Projects {
                         "プロジェクトを管理",
                         move || {
                             let host = self.host.get();
-                            self.publication.with(|p| {
+                            self.list.with(|list| {
                                 header_menu(
-                                    p.list
-                                        .as_ref()
+                                    list.as_ref()
                                         .map_or(&[], |list| list.hidden_projects.as_slice()),
                                     false,
                                     &host,
-                                    &p.snapshot.connection.storage_scope,
-                                    p.composer.controls.connected,
+                                    &self.sources.get(),
                                 )
                             })
                         },
@@ -267,7 +277,7 @@ impl Projects {
                 if event.data["action"] != "save" {
                     return;
                 }
-                if !self.same_scope(&editor.host, &editor.storage) {
+                if !self.same_scope(&editor.scope) {
                     self.editor.set(None);
                     native::message(
                         "プロジェクトを編集",
@@ -290,15 +300,15 @@ impl Projects {
                     });
                     return;
                 }
-                self.client.with(|client| {
-                    client.dispatch(
-                        &editor.host,
-                        None,
+                self.application.with(|application| {
+                    application.list_action(
+                        &editor.scope,
                         Intent::EditProject {
                             project_id: editor.project,
                             name: name.into(),
                             section: section.into(),
                         },
+                        false,
                     )
                 });
                 self.editor.set(None);
@@ -322,8 +332,10 @@ mod tests {
     fn native_editor_contract_preserves_input_and_validation_without_exposing_routing_state() {
         let editor = Editor {
             id: "fixture-editor".into(),
-            host: "local".into(),
-            storage: "account".into(),
+            scope: ListScope {
+                host: "local".into(),
+                storage: "account".into(),
+            },
             project: "project".into(),
             name: "日本語のプロジェクト 👋".into(),
             section: "個人".into(),

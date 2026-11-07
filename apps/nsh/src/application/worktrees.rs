@@ -99,7 +99,7 @@ impl Application {
             }
             WorktreeAction::Host { id } => {
                 if state.hosts.iter().any(|host| host.id == id) {
-                    self.select_host(id);
+                    self.select_host(id, false);
                     self.open_worktrees();
                 }
             }
@@ -275,7 +275,8 @@ mod tests {
         root: std::path::PathBuf,
     ) -> (tokio::runtime::Runtime, Arc<Application>) {
         // These tests publish explicit Host facts. Discovery must not race those facts.
-        let (runtime, client, _) = crate::client::Client::new(root).unwrap();
+        let selection_path = root.join("connection-selection.json");
+        let (runtime, client, _) = crate::client::Client::new(root, None).unwrap();
         let (state, _) = tokio::sync::watch::channel(Arc::new(State::default()));
         let app = Arc::new(Application {
             client,
@@ -284,6 +285,7 @@ mod tests {
             stop: tokio_util::sync::CancellationToken::new(),
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
+            selection_path,
         });
         (runtime, app)
     }

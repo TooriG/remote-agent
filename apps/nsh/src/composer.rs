@@ -496,7 +496,7 @@ pub(crate) fn composer(
                     .min_h(px(28.0)),
                 )
                 .child(
-                    crate::connections::selector(hosts, connection.host)
+                    crate::connections::selector(hosts, connection.host, false)
                         .prop("appearance", json!("plain")),
                 )
         }))

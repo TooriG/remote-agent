@@ -5,27 +5,31 @@ use serde_json::json;
 pub(crate) fn selector(
     hosts: Memo<Vec<Host>>,
     selected: Memo<String>,
+    list_scope: bool,
 ) -> nsh_core::element::NativeView {
     let connection = use_context::<Connection>().unwrap();
     native::menu(
         "desktopcomputer",
         "接続先",
         move || {
-            hosts.with(|hosts| {
-                native::items(
-                    hosts
-                        .iter()
-                        .map(|host| (host.id.clone(), host.name.clone())),
-                )
-            })
+            let all = list_scope && connection.state.with(|state| state.all_hosts);
+            let mut entries = Vec::new();
+            if list_scope {
+                entries.push(json!({"id":"", "title":"すべての接続先", "symbol":"square.stack", "selected":all}));
+                entries.push(json!({"separator":true}));
+            }
+            entries.extend(hosts.with(|hosts| hosts.iter().map(|host| json!({"id":host.id,"title":host.name,"selected":!all && host.id == selected.get()})).collect::<Vec<_>>()));
+            json!(entries)
         },
         move |name| {
-            connection
-                .application
-                .with(|application| application.select_host(name.to_owned()));
+            connection.application.with(|application| {
+                if list_scope && name.is_empty() { application.select_all_hosts(); }
+                else { application.select_host(name.to_owned(), !list_scope); }
+            });
         },
     )
     .prop("title", move || {
+        if list_scope && connection.state.with(|state| state.all_hosts) { return json!("すべての接続先"); }
         json!(hosts.with(|hosts| {
             hosts
                 .iter()
@@ -40,6 +44,7 @@ pub(crate) fn selector(
                 .unwrap_or_else(|| "接続先".into())
         }))
     })
+    .prop("identifier", json!(if list_scope { "connections.list" } else { "connections.destination" }))
     .min_h(px(if is_desktop() { 28.0 } else { 44.0 }))
 }
 
@@ -66,7 +71,7 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl
                     .child(native::text_button(json!("接続"), move || {
                         connection
                             .application
-                            .with(|application| application.select_host(id.clone()));
+                            .with(|application| application.select_host(id.clone(), false));
                     }))
             },
         ))

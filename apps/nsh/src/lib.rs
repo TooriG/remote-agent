@@ -80,7 +80,8 @@ impl Connection {
 
 #[component]
 pub fn App() -> impl IntoElement {
-    let service = storage::directory().and_then(application::Application::new);
+    let service = storage::directory()
+        .and_then(|root| application::Application::new(root, storage::local_host()?));
     let (runtime, service) = match service {
         Ok(service) => service,
         Err(reason) => return view().p_4().child(text(reason.to_string())).into_element(),
@@ -279,6 +280,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                 .flex_1()
                 .pt_5().pb_3()
                 .gap_1()
+                .child(when(move || hosts.with(|hosts| hosts.len() > 1) || state.with(|state| state.all_hosts), move || connections::selector(hosts, host, true).w_full()))
                 .child(
                     view().flex_row().items_center().gap_1().px_3()
                         .child(native::search(query).prop("appearance", json!("plain")).flex_1())
@@ -294,7 +296,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                         "id": tool.key, "title": tool.label, "symbol": workbench::symbol(tool.kind), "enabled": tool.enabled
                     })).collect::<Vec<_>>()), toolbar_action).prop("appearance", json!("plain"))
                         .prop("enabled", move || json!(!account_locked.get())).w(px(32.0)).h(px(32.0)))
-                    .child(native::button("arrow.clockwise", "会話を更新", move || connection.dispatch(Intent::ShowThreadList))
+                    .child(native::button("arrow.clockwise", "会話を更新", move || connection.application.with(|application| { application.request_list(application::ListRequest::Refresh); }))
                         .prop("appearance", json!("plain")).w(px(32.0)).h(px(32.0))))
                 .into_element();
         }
@@ -374,7 +376,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                             },
                             move |item| {
                                 if item == "refresh" {
-                                    connection.dispatch(Intent::ShowThreadList);
+                                    connection.application.with(|application| { application.request_list(application::ListRequest::Refresh); });
                                 } else {
                                     toolbar_action(item);
                                 }
@@ -426,7 +428,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                         move || {
                             view()
                                 .flex_1()
-                                .child(connections::selector(hosts, host))
+                                .child(connections::selector(hosts, host, true))
                                 .child(when(
                                     move || searching.get(),
                                     move || native::search(query).w_full(),

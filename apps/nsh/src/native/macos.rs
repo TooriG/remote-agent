@@ -334,6 +334,12 @@ impl NativeComponent for Menu {
     }
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
         match name {
+            "identifier" => self.view.setAccessibilityIdentifier(
+                value
+                    .and_then(JsonValue::as_str)
+                    .map(NSString::from_str)
+                    .as_deref(),
+            ),
             "appearance" => self
                 .view
                 .setBordered(value.and_then(JsonValue::as_str) != Some("plain")),

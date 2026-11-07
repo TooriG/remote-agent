@@ -53,6 +53,7 @@ pub(crate) struct Client {
 impl Client {
     pub fn new(
         root: PathBuf,
+        local: Option<Host>,
     ) -> Result<
         (
             tokio::runtime::Runtime,
@@ -84,7 +85,7 @@ impl Client {
         });
         let owner = client.clone();
         client.spawn(async move {
-            if let Err(reason) = owner.restore().await {
+            if let Err(reason) = owner.restore(local).await {
                 owner.report(reason);
             }
         });
@@ -99,13 +100,11 @@ impl Client {
         let _ = self.updates.try_send(Update::Error(reason.to_string()));
     }
 
-    async fn restore(self: &Arc<Self>) -> Result<(), AgentError> {
+    async fn restore(self: &Arc<Self>, local: Option<Host>) -> Result<(), AgentError> {
         let path = self.root.join("hosts.json");
-        let (bytes, local) = tokio::task::spawn_blocking(move || {
-            Ok::<_, AgentError>((storage::read(&path)?, storage::local_host()?))
-        })
-        .await
-        .map_err(error)??;
+        let bytes = tokio::task::spawn_blocking(move || storage::read(&path))
+            .await
+            .map_err(error)??;
         let mut hosts: Vec<Host> = if bytes.is_empty() {
             Vec::new()
         } else {
@@ -477,10 +476,62 @@ mod tests {
     }
 
     #[test]
+    fn local_host_facts_are_explicit_and_saved_profiles_cannot_replace_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let remote = saved_host(directory.path());
+        let local = Host {
+            id: "local".into(),
+            name: "Current local fixture".into(),
+            ticket: "offline".into(),
+            local_directory: None,
+        };
+        let mut snapshot = Snapshot::default();
+        snapshot.connection.connection_disabled = true;
+        Storage {
+            root: directory.path().into(),
+            host: local.clone(),
+        }
+        .save(
+            StorageKey::LocalState,
+            agent_core::persistence::encode(&snapshot).unwrap(),
+        )
+        .unwrap();
+        let mut stale = local.clone();
+        stale.name = "Old derived local".into();
+        agent_local_host::save_private_json(
+            &directory.path().join("hosts.json"),
+            &vec![stale, remote.clone()],
+        )
+        .unwrap();
+        let (runtime, client, incoming) =
+            Client::new(directory.path().into(), Some(local.clone())).unwrap();
+        runtime.block_on(async {
+            let Update::Hosts(hosts) = incoming.recv().await.unwrap() else {
+                panic!("profiles must be published first");
+            };
+            assert_eq!(hosts.len(), 2);
+            assert!(hosts[0] == local);
+            assert!(hosts[1] == remote);
+            client.shutdown().await.unwrap();
+        });
+        drop(client);
+        drop(runtime);
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
+        runtime.block_on(async {
+            let Update::Hosts(hosts) = incoming.recv().await.unwrap() else {
+                panic!("profiles must be published first");
+            };
+            assert_eq!(hosts.len(), 1);
+            assert!(hosts[0] == remote);
+            client.shutdown().await.unwrap();
+        });
+    }
+
+    #[test]
     fn an_unavailable_request_reports_once_and_a_valid_host_can_recover() {
         let directory = tempfile::tempdir().unwrap();
         let host = saved_host(directory.path());
-        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let initial = runtime.block_on(publication(&incoming, ""));
         let draft = initial.composer.controls.navigation.draft_key.clone();
         let edit = |text: &str| Intent::SetDraftText {
@@ -523,7 +574,7 @@ mod tests {
         saved_host(directory.path());
         let selected = directory.path().join("selected.txt");
         std::fs::write(&selected, "保持する日本語 👋").unwrap();
-        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let initial = runtime.block_on(publication(&incoming, ""));
         let id = uuid::Uuid::new_v4();
         client.attach_batch(
@@ -622,7 +673,7 @@ mod tests {
         let host = saved_host(directory.path());
         let selected = directory.path().join("selected.txt");
         std::fs::write(&selected, "keep").unwrap();
-        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let initial = runtime.block_on(publication(&incoming, ""));
         let draft_key = initial.composer.controls.navigation.draft_key.clone();
         let id = uuid::Uuid::new_v4();
@@ -678,7 +729,7 @@ mod tests {
     fn shutdown_flushes_accepted_input_and_a_new_client_restores_it() {
         let directory = tempfile::tempdir().unwrap();
         let host = saved_host(directory.path());
-        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let initial = runtime.block_on(publication(&incoming, ""));
         let key = initial.snapshot.pane.navigation.draft_key.clone();
         client.dispatch(
@@ -698,7 +749,7 @@ mod tests {
         });
         drop(client);
         drop(runtime);
-        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let restored = runtime.block_on(publication(&incoming, "終了直前の日本語 👋"));
         assert_eq!(restored.snapshot.pane.navigation.draft_key, key);
         runtime.block_on(client.shutdown()).unwrap();
@@ -708,7 +759,7 @@ mod tests {
     fn failed_pairing_preserves_existing_connections_and_drafts() {
         let directory = tempfile::tempdir().unwrap();
         let host = saved_host(directory.path());
-        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let initial = runtime.block_on(publication(&incoming, ""));
         client.dispatch(
             &host.id,
@@ -758,7 +809,7 @@ mod tests {
     fn closing_during_restore_cannot_open_a_late_session() {
         let directory = tempfile::tempdir().unwrap();
         saved_host(directory.path());
-        let (runtime, client, _) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, _) = Client::new(directory.path().into(), None).unwrap();
         runtime.block_on(async {
             tokio::time::timeout(Duration::from_secs(10), client.shutdown())
                 .await
@@ -775,7 +826,7 @@ mod tests {
         use agent_core::{presentation::error::ErrorScope, state::operations as op};
         let directory = tempfile::tempdir().unwrap();
         let host = saved_host(directory.path());
-        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         runtime.block_on(publication(&incoming, ""));
         client.dispatch(
             &host.id,
@@ -840,7 +891,7 @@ mod tests {
     fn a_preview_retains_its_file_until_its_last_owner_closes() {
         let directory = tempfile::tempdir().unwrap();
         saved_host(directory.path());
-        let (runtime, client, _) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, _) = Client::new(directory.path().into(), None).unwrap();
         let file = runtime
             .block_on(client.cache_image(vec![1, 2, 3], "png".into()).recv())
             .unwrap()
@@ -861,7 +912,7 @@ mod tests {
     fn closing_an_image_view_before_transfer_finishes_leaves_no_file() {
         let directory = tempfile::tempdir().unwrap();
         saved_host(directory.path());
-        let (runtime, client, _) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, _) = Client::new(directory.path().into(), None).unwrap();
         drop(client.cache_image(vec![1, 2, 3], "png".into()));
         runtime.block_on(client.shutdown()).unwrap();
         assert_eq!(

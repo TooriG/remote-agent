@@ -15,6 +15,8 @@ use tokio_util::sync::CancellationToken;
 
 mod worktrees;
 pub(crate) use worktrees::{WorktreeAction, WorktreeEditor};
+mod connections;
+pub(crate) use connections::{ListRequest, ListScope, ListSource};
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct Host {
@@ -41,6 +43,7 @@ pub(crate) struct SideChat {
 pub(crate) struct State {
     pub hosts: Vec<Host>,
     pub host: String,
+    pub all_hosts: bool,
     pub publications: BTreeMap<String, Shared<Presentation>>,
     pub panels: Arc<Panels>,
     pub failure: Option<String>,
@@ -61,6 +64,7 @@ impl Default for State {
         Self {
             hosts: Vec::new(),
             host: String::new(),
+            all_hosts: false,
             publications: BTreeMap::new(),
             panels: Panels::new(),
             failure: None,
@@ -104,13 +108,7 @@ impl State {
                         name: host.name,
                     })
                     .collect();
-                if !self.hosts.iter().any(|host| host.id == self.host) {
-                    self.host = self
-                        .hosts
-                        .first()
-                        .map(|host| host.id.clone())
-                        .unwrap_or_default();
-                }
+                self.resolve_selection();
             }
             Update::Presentation { host, value } => {
                 let before = self.publications.get(&host).map(|p| {
@@ -154,6 +152,7 @@ impl State {
             Update::Paired(result) => match result {
                 Ok(host) => {
                     self.host = host;
+                    self.all_hosts = false;
                     self.pairing = false;
                     self.settings = false;
                     self.provider = None;
@@ -187,6 +186,7 @@ pub(crate) struct Application {
     stop: CancellationToken,
     runtime: tokio::runtime::Handle,
     jobs: tokio_util::task::TaskTracker,
+    selection_path: PathBuf,
 }
 
 impl Application {
@@ -196,9 +196,18 @@ impl Application {
             .send_modify(|state| Arc::make_mut(state).browser_renderer = id);
     }
 
-    pub fn new(root: PathBuf) -> Result<(tokio::runtime::Runtime, Arc<Self>), AgentError> {
-        let (runtime, client, incoming) = Client::new(root)?;
-        let (state, _) = watch::channel(Arc::new(State::default()));
+    pub fn new(
+        root: PathBuf,
+        local: Option<crate::storage::Host>,
+    ) -> Result<(tokio::runtime::Runtime, Arc<Self>), AgentError> {
+        let selection_path = root.join("connection-selection.json");
+        let selection = connections::load_selection(&selection_path)?;
+        let (runtime, client, incoming) = Client::new(root, local)?;
+        let (state, _) = watch::channel(Arc::new(State {
+            host: selection.host_id.clone().unwrap_or_default(),
+            all_hosts: selection.all,
+            ..State::default()
+        }));
         let application = Arc::new(Self {
             client,
             instance: uuid::Uuid::new_v4(),
@@ -206,7 +215,9 @@ impl Application {
             stop: CancellationToken::new(),
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
+            selection_path,
         });
+        application.persist_selection(selection);
         let owner = Arc::downgrade(&application);
         let stop = application.stop.clone();
         application.jobs.spawn_on(async move {
@@ -227,21 +238,6 @@ impl Application {
     }
     pub fn subscribe(&self) -> watch::Receiver<Arc<State>> {
         self.state.subscribe()
-    }
-
-    pub fn select_host(&self, host: String) {
-        let selected = self.state.send_if_modified(|state| {
-            if state.account_locked() || !state.hosts.iter().any(|candidate| candidate.id == host) {
-                return false;
-            }
-            let state = Arc::make_mut(state);
-            state.host = host.clone();
-            state.worktrees = None;
-            true
-        });
-        if selected {
-            self.client.reconnect(host);
-        }
     }
 
     pub fn pair(&self, invitation: agent_protocol::models::Invitation) {
@@ -471,7 +467,12 @@ impl Application {
         self.stop.cancel();
         self.jobs.close();
         self.jobs.wait().await;
-        self.client.shutdown().await
+        // Producer jobs have stopped; include changes accepted during a save.
+        let saved =
+            connections::save_selection(self.selection_path.clone(), self.snapshot().selection())
+                .await;
+        let closed = self.client.shutdown().await;
+        closed.and(saved)
     }
 }
 
@@ -484,7 +485,7 @@ mod tests {
     #[test]
     fn hiding_a_side_chat_keeps_its_resource_and_late_updates_cannot_reopen_a_closed_tab() {
         let directory = tempfile::tempdir().unwrap();
-        let (runtime, application) = Application::new(directory.path().into()).unwrap();
+        let (runtime, application) = Application::new(directory.path().into(), None).unwrap();
         let scope =
             Snapshot::default().panel_scope("missing-host".into(), DraftKey::from("parent"));
         application.open_side_chat(
@@ -592,7 +593,7 @@ mod tests {
     #[test]
     fn native_views_observe_the_same_tabs_layout_navigation_and_file_target() {
         let directory = tempfile::tempdir().unwrap();
-        let (runtime, application) = Application::new(directory.path().into()).unwrap();
+        let (runtime, application) = Application::new(directory.path().into(), None).unwrap();
         let mut sidebar = application.subscribe();
         let mut tools = application.subscribe();
         let scope = Snapshot::default().panel_scope("host".into(), DraftKey::from("draft"));
@@ -676,7 +677,7 @@ mod tests {
     #[test]
     fn an_account_request_for_an_old_host_is_ignored_and_failure_unlocks_navigation() {
         let directory = tempfile::tempdir().unwrap();
-        let (runtime, application) = Application::new(directory.path().into()).unwrap();
+        let (runtime, application) = Application::new(directory.path().into(), None).unwrap();
         let mut updates = application.subscribe();
         application.account_request(
             "old-host".into(),

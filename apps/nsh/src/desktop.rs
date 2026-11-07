@@ -56,13 +56,18 @@ pub(super) fn root(application: Arc<Application>, area: Area) -> Root {
 }
 
 pub fn run() -> std::process::ExitCode {
-    let (runtime, application) = match crate::storage::directory().and_then(Application::new) {
-        Ok(service) => service,
-        Err(reason) => {
-            eprintln!("{reason}");
-            return std::process::ExitCode::FAILURE;
-        }
-    };
+    let (runtime, application, local_directory) =
+        match crate::storage::directory().and_then(|root| {
+            let local = crate::storage::local_host()?;
+            let directory = local.as_ref().and_then(|host| host.local_directory.clone());
+            Application::new(root, local).map(|(runtime, app)| (runtime, app, directory))
+        }) {
+            Ok(service) => service,
+            Err(reason) => {
+                eprintln!("{reason}");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
     nsh_platform_macos::set_components(crate::register_macos);
     let options = AppOptions {
         app_id: "com.bex.nsh-preview".into(),
@@ -71,8 +76,11 @@ pub fn run() -> std::process::ExitCode {
         ..Default::default()
     };
     let owner = application.clone();
-    let browser =
-        crate::native::browser_macos::Service::new(application.clone(), runtime.handle().clone());
+    let browser = crate::native::browser_macos::Service::new(
+        application.clone(),
+        runtime.handle().clone(),
+        local_directory,
+    );
     let native_browser = browser.clone();
     options.components.register(
         "bex.split",

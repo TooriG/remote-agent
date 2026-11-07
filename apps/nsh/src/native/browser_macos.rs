@@ -8,6 +8,7 @@ use objc2_app_kit::NSView;
 use objc2_foundation::NSObjectProtocol;
 use std::{
     cell::{Cell, RefCell},
+    path::PathBuf,
     rc::Rc,
     sync::Arc,
 };
@@ -16,16 +17,22 @@ use tokio_util::task::TaskTracker;
 pub(crate) struct Service {
     application: Arc<Application>,
     runtime: tokio::runtime::Handle,
+    directory: Option<PathBuf>,
     closing: TaskTracker,
     startup: RefCell<Option<Startup>>,
     browser: RefCell<Option<Browser>>,
 }
 
 impl Service {
-    pub fn new(application: Arc<Application>, runtime: tokio::runtime::Handle) -> Rc<Self> {
+    pub fn new(
+        application: Arc<Application>,
+        runtime: tokio::runtime::Handle,
+        directory: Option<PathBuf>,
+    ) -> Rc<Self> {
         Rc::new(Self {
             application,
             runtime,
+            directory,
             closing: TaskTracker::new(),
             startup: RefCell::new(None),
             browser: RefCell::new(None),
@@ -36,15 +43,7 @@ impl Service {
         if self.startup.borrow().is_some() || self.closing.is_closed() {
             return;
         }
-        let directory = match crate::storage::local_host() {
-            Ok(Some(host)) => host.local_directory,
-            Ok(None) => None,
-            Err(reason) => {
-                eprintln!("{reason}");
-                None
-            }
-        };
-        let Some(directory) = directory else {
+        let Some(directory) = self.directory.clone() else {
             return;
         };
         let weak = Rc::downgrade(self);

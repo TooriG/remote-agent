@@ -1,3 +1,4 @@
+use crate::application::{ListRequest, ListScope, ListSource};
 use crate::shared::Shared;
 use crate::{Connection, native};
 use agent_core::{
@@ -28,6 +29,7 @@ enum Action {
 }
 #[derive(Clone, PartialEq)]
 struct Row {
+    scope: Option<ListScope>,
     title: String,
     symbol: &'static str,
     png: Option<Vec<u8>>,
@@ -40,8 +42,14 @@ struct Row {
     indicators: Option<native::RowIndicators>,
 }
 impl Row {
-    fn heading(title: String, action: Action, menu: serde_json::Value) -> Self {
+    fn heading(
+        title: String,
+        action: Action,
+        menu: serde_json::Value,
+        scope: Option<ListScope>,
+    ) -> Self {
         Self {
+            scope,
             title,
             action,
             compose: None,
@@ -55,8 +63,9 @@ impl Row {
         }
     }
 }
-fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>) -> Row {
+fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>, scope: &ListScope) -> Row {
     Row {
+        scope: Some(scope.clone()),
         title: thread.title.clone(),
         symbol: "",
         png: None,
@@ -87,10 +96,9 @@ fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>) -> Row 
 fn rows(
     list: Option<&ThreadList>,
     dark: bool,
-    host: &str,
-    storage: &str,
+    sources: &[ListSource],
+    selected_host: &str,
     desktop: bool,
-    connected: bool,
 ) -> Vec<Row> {
     let mut rows = Vec::new();
     if desktop {
@@ -100,10 +108,10 @@ fn rows(
             crate::projects::header_menu(
                 list.map_or(&[], |list| list.hidden_projects.as_slice()),
                 desktop,
-                host,
-                storage,
-                connected,
+                selected_host,
+                sources,
             ),
+            None,
         ));
     }
     let Some(list) = list else {
@@ -127,14 +135,22 @@ fn rows(
         "ピン留め",
     );
     for (project, heading) in list.projects.iter().zip(headings) {
+        let Some(source) = sources
+            .iter()
+            .find(|source| source.scope.host == project.host_id)
+        else {
+            continue;
+        };
         if let Some(heading) = heading.filter(|_| desktop) {
             rows.push(Row::heading(
                 heading.into(),
                 Action::Heading(Some(project.id.clone())),
                 serde_json::Value::Null,
+                Some(source.scope.clone()),
             ));
         }
         rows.push(Row {
+            scope: Some(source.scope.clone()),
             title: project.name.clone(),
             symbol: "folder",
             png: project.icon.as_ref().map(|icon| {
@@ -160,18 +176,18 @@ fn rows(
             menu: crate::projects::menu(
                 project,
                 &sections,
-                host,
-                storage,
-                desktop && host == "local",
+                &source.scope,
+                desktop && source.scope.host == "local",
             ),
             indicators: None,
         });
         if project.expanded {
             for thread in &project.threads {
-                rows.push(thread_row(thread, 1, Some(&project.id)));
+                rows.push(thread_row(thread, 1, Some(&project.id), &source.scope));
             }
             if project.has_more {
                 rows.push(Row {
+                    scope: Some(source.scope.clone()),
                     title: more_title.into(),
                     symbol: if desktop { "" } else { "ellipsis" },
                     png: None,
@@ -186,6 +202,7 @@ fn rows(
             }
             for root in project.roots.iter().filter(|_| !desktop) {
                 rows.push(Row {
+                    scope: Some(source.scope.clone()),
                     title: "新しいチャット".into(),
                     symbol: "plus",
                     png: None,
@@ -205,6 +222,7 @@ fn rows(
     }
     if list.has_more_projects {
         rows.push(Row {
+            scope: None,
             title: if desktop {
                 "もっとプロジェクトを表示"
             } else {
@@ -227,13 +245,20 @@ fn rows(
             "チャット".into(),
             Action::Heading(None),
             serde_json::Value::Null,
+            None,
         ));
     }
     for thread in &list.threads {
-        rows.push(thread_row(thread, 0, None));
+        if let Some(source) = sources
+            .iter()
+            .find(|source| source.scope.host == thread.host_id)
+        {
+            rows.push(thread_row(thread, 0, None, &source.scope));
+        }
     }
     if list.has_more {
         rows.push(Row {
+            scope: None,
             title: more_title.into(),
             symbol: if desktop { "" } else { "ellipsis" },
             png: None,
@@ -255,41 +280,49 @@ pub(crate) fn list(
     open: impl Fn() + Copy + 'static,
 ) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
-    let projects = crate::projects::Projects::new(connection.client, connection.host, publication);
-    let connected = computed(move || publication.with(|p| p.composer.controls.connected));
+    let sources = computed(move || connection.state.with(|state| state.list_sources()));
+    let inputs = computed(move || connection.state.with(|state| state.list_inputs()));
+    let list = computed(move || {
+        inputs.with(|inputs| {
+            agent_core::presentation::connection_list::combine_connection_lists(
+                inputs
+                    .iter()
+                    .map(|(host, value)| (host.clone(), (**value).clone())),
+            )
+            .map(|list| Shared(std::sync::Arc::new(list)))
+        })
+    });
+    let projects =
+        crate::projects::Projects::new(connection.application, connection.host, sources, list);
     effect(move || {
         let search_term = query.get();
-        connection.host.get();
-        if connected.get() {
-            let mut current =
-                publication.with_untracked(|p| (*p.snapshot.lists.list_query).clone());
-            if current.search_term != search_term {
-                current.search_term = search_term;
-                connection.dispatch(Intent::ListSessions(op::ListSessions::new(current)));
-            }
-        }
+        sources.with(|_| ());
+        connection
+            .application
+            .with(|application| application.search_list(&search_term));
     });
     let entries = computed(move || {
         let host = connection.host.get();
-        publication.with(|p| {
-            rows(
-                p.list.as_deref(),
-                dark(),
-                &host,
-                &p.snapshot.connection.storage_scope,
-                is_desktop(),
-                p.composer.controls.connected,
-            )
-        })
+        list.with(|list| rows(list.as_deref(), dark(), &sources.get(), &host, is_desktop()))
     });
-    let table = native("bex.list").prop("items", move || entries.with(|entries| json!(entries.iter().map(|row| json!({"id": row_id(&row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "level": row.level, "disclosure": row.disclosure, "group": matches!(&row.action, Action::Heading(_) | Action::ProjectHeader), "expanded": row.expanded, "menu": row.menu, "indicators": row.indicators, "compose": row.compose.as_ref().map(|action| json!({"id": row_id(action), "enabled": connected.get()}))})).collect::<Vec<_>>())));
+    let table = native("bex.list").prop("items", move || {
+        entries.with(|entries| native_rows(entries, &sources.get()))
+    });
     let table = if is_desktop() {
         table
             .prop("sidebar", json!(true))
             .prop("selected", move || {
                 publication.with(|p| {
                     let navigation = &p.composer.controls.navigation;
-                    json!(entries.with(|rows| selected_rows(rows, navigation.thread_id.as_ref(),)))
+                    let scope = ListScope {
+                        host: connection.host.get(),
+                        storage: p.snapshot.connection.storage_scope.clone(),
+                    };
+                    json!(entries.with(|rows| selected_rows(
+                        rows,
+                        &scope,
+                        navigation.thread_id.as_ref()
+                    )))
                 })
             })
     } else {
@@ -316,15 +349,28 @@ pub(crate) fn list(
                         } else {
                             Some(&row.action)
                         }?;
-                        (row_id(action) == id).then(|| (action.clone(), row.expanded))
+                        (row_id(row.scope.as_ref(), action) == id)
+                            .then(|| (action.clone(), row.expanded, row.scope.clone()))
                     })
                 })
             {
+                let global = match &action.0 {
+                    Action::Projects => Some(ListRequest::MoreProjects),
+                    Action::More(None) => Some(ListRequest::MoreChats),
+                    _ => None,
+                };
+                if let Some(request) = global {
+                    connection
+                        .application
+                        .with(|application| application.request_list(request));
+                    return;
+                }
+                let Some(scope) = action.2.as_ref() else {
+                    return;
+                };
+                let navigate = matches!(&action.0, Action::Open { .. } | Action::New { .. });
                 let intent = match action.0 {
-                    Action::Open { thread, .. } => {
-                        open();
-                        Intent::ReadThread(op::ReadThread::open(thread))
-                    }
+                    Action::Open { thread, .. } => Intent::ReadThread(op::ReadThread::open(thread)),
                     Action::Expand(id) => Intent::SetProjectExpanded {
                         project_id: id,
                         expanded: event
@@ -333,15 +379,17 @@ pub(crate) fn list(
                             .and_then(serde_json::Value::as_bool)
                             .unwrap_or(!action.1),
                     },
-                    Action::New { cwd, .. } => {
-                        open();
-                        Intent::NewChat { cwd }
-                    }
+                    Action::New { cwd, .. } => Intent::NewChat { cwd },
                     Action::More(project_id) => Intent::ExpandThreadList { project_id },
-                    Action::Projects => Intent::ExpandProjects,
+                    Action::Projects => return,
                     Action::Heading(_) | Action::ProjectHeader => return,
                 };
-                connection.dispatch(intent);
+                let accepted = connection
+                    .application
+                    .with(|application| application.list_action(scope, intent, navigate));
+                if navigate && accepted {
+                    open();
+                }
             }
         })
         .flex_1();
@@ -352,28 +400,63 @@ pub(crate) fn list(
         .child(projects.view())
 }
 
+fn native_rows(entries: &[Row], sources: &[ListSource]) -> serde_json::Value {
+    json!(entries.iter().map(|row| json!({"id": row_id(row.scope.as_ref(), &row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "level": row.level, "disclosure": row.disclosure, "group": matches!(&row.action, Action::Heading(_) | Action::ProjectHeader), "expanded": row.expanded, "menu": row.menu, "indicators": row.indicators, "compose": row.compose.as_ref().map(|action| json!({"id": row_id(row.scope.as_ref(), action), "enabled": sources.iter().any(|source| Some(&source.scope) == row.scope.as_ref() && source.connected)}))})).collect::<Vec<_>>())
+}
+
 fn selected_rows(
     rows: &[Row],
+    scope: &ListScope,
     thread: Option<&agent_protocol::session::SessionRef>,
 ) -> Vec<String> {
     rows.iter()
         .filter(|row| match &row.action {
             Action::Open {
                 thread: candidate, ..
-            } => thread == Some(candidate),
+            } => row.scope.as_ref() == Some(scope) && thread == Some(candidate),
             _ => false,
         })
-        .map(|row| row_id(&row.action))
+        .map(|row| row_id(row.scope.as_ref(), &row.action))
         .collect()
 }
 
-fn row_id(action: &Action) -> String {
-    serde_json::to_string(action).expect("native row actions serialize")
+fn row_id(scope: Option<&ListScope>, action: &Action) -> String {
+    serde_json::to_string(&(scope, action)).expect("native row actions serialize")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scope(host: &str, storage: &str) -> ListScope {
+        ListScope {
+            host: host.into(),
+            storage: storage.into(),
+        }
+    }
+
+    fn fixture_rows(
+        list: Option<&ThreadList>,
+        dark: bool,
+        host: &str,
+        storage: &str,
+        desktop: bool,
+        connected: bool,
+    ) -> Vec<Row> {
+        let list = agent_core::presentation::connection_list::combine_connection_lists(
+            list.into_iter().map(|list| (host.into(), list.clone())),
+        );
+        super::rows(
+            list.as_ref(),
+            dark,
+            &[ListSource {
+                scope: scope(host, storage),
+                connected,
+            }],
+            host,
+            desktop,
+        )
+    }
 
     #[test]
     fn desktop_header_keeps_folder_addition_local_and_available_without_a_loaded_list() {
@@ -382,17 +465,16 @@ mod tests {
             ("local", true, true),
             ("remote", true, false),
         ] {
-            let rows = rows(None, false, host, "scope", true, connected);
+            let rows = fixture_rows(None, false, host, "scope", true, connected);
             assert_eq!(rows.len(), 1);
             assert!(matches!(rows[0].action, Action::ProjectHeader));
             assert_eq!(rows[0].menu[0]["id"], "add");
             assert_eq!(rows[0].menu[0]["enabled"], enabled);
         }
-        assert!(rows(None, false, "local", "scope", false, true).is_empty());
+        assert!(fixture_rows(None, false, "local", "scope", false, true).is_empty());
     }
 
-    #[test]
-    fn native_item_identity_is_stable_and_unique_across_projects() {
+    fn fixture_list() -> ThreadList {
         let thread = ThreadSummary {
             host_id: "host".into(),
             id: serde_json::from_value(json!({"provider": "codex", "id": "chat"})).unwrap(),
@@ -403,7 +485,7 @@ mod tests {
             unread: false,
             worktree_status: None,
         };
-        let mut list = ThreadList {
+        ThreadList {
             loading_projects: false,
             loading_chats: false,
             notice: None,
@@ -432,40 +514,58 @@ mod tests {
             hidden_projects: Vec::new(),
             has_more: false,
             has_more_projects: false,
-        };
-        let collapsed = rows(Some(&list), false, "host", "scope", false, true);
+        }
+    }
+
+    #[test]
+    fn native_item_identity_is_stable_and_unique_across_projects() {
+        let mut list = fixture_list();
+        let thread = list.projects[0].threads[0].clone();
+        let collapsed = fixture_rows(Some(&list), false, "host", "scope", false, true);
         assert_eq!(collapsed.len(), 1);
         assert_eq!(collapsed[0].png, Some(vec![1, 2]));
-        let dark = rows(Some(&list), true, "host", "scope", false, true);
+        let dark = fixture_rows(Some(&list), true, "host", "scope", false, true);
         assert_eq!(dark[0].png, Some(vec![3, 4]));
-        assert_eq!(row_id(&collapsed[0].action), row_id(&dark[0].action));
+        assert_eq!(
+            row_id(collapsed[0].scope.as_ref(), &collapsed[0].action),
+            row_id(dark[0].scope.as_ref(), &dark[0].action)
+        );
         list.projects[0].expanded = true;
-        let expanded = rows(Some(&list), false, "host", "scope", false, true);
-        assert_eq!(row_id(&collapsed[0].action), row_id(&expanded[0].action));
+        let expanded = fixture_rows(Some(&list), false, "host", "scope", false, true);
+        assert_eq!(
+            row_id(collapsed[0].scope.as_ref(), &collapsed[0].action),
+            row_id(expanded[0].scope.as_ref(), &expanded[0].action)
+        );
         assert!(expanded[0].expanded);
-        let selected = row_id(&expanded[1].action);
+        let selected = row_id(expanded[1].scope.as_ref(), &expanded[1].action);
         let mut new_thread = thread;
         new_thread.id = serde_json::from_value(json!({"provider": "codex", "id": "new"})).unwrap();
         list.projects[0].threads.insert(0, new_thread);
-        let inserted = rows(Some(&list), false, "host", "scope", false, true);
-        assert_eq!(selected, row_id(&inserted[2].action));
-        assert_ne!(selected, row_id(&inserted[1].action));
+        let inserted = fixture_rows(Some(&list), false, "host", "scope", false, true);
+        assert_eq!(
+            selected,
+            row_id(inserted[2].scope.as_ref(), &inserted[2].action)
+        );
+        assert_ne!(
+            selected,
+            row_id(inserted[1].scope.as_ref(), &inserted[1].action)
+        );
 
         list.threads.push(list.projects[0].threads[1].clone());
-        let placed = rows(Some(&list), false, "host", "scope", false, true);
+        let placed = fixture_rows(Some(&list), false, "host", "scope", false, true);
         let ids = placed
             .iter()
-            .map(|row| row_id(&row.action))
+            .map(|row| row_id(row.scope.as_ref(), &row.action))
             .collect::<Vec<_>>();
         assert_eq!(
             ids.len(),
             ids.iter().collect::<std::collections::HashSet<_>>().len()
         );
-        let candidates = selected_rows(&placed, Some(&list.threads[0].id));
+        let candidates = selected_rows(&placed, &scope("host", "scope"), Some(&list.threads[0].id));
         assert_eq!(candidates.len(), 2);
         assert_ne!(candidates[0], candidates[1]);
 
-        let desktop = rows(Some(&list), false, "host", "scope", true, true);
+        let desktop = fixture_rows(Some(&list), false, "host", "scope", true, true);
         assert!(matches!(desktop[0].action, Action::ProjectHeader));
         assert!(!desktop[0].disclosure);
         assert_eq!(desktop[0].level, 0);
@@ -483,7 +583,7 @@ mod tests {
         assert_eq!(
             desktop
                 .iter()
-                .map(|row| row_id(&row.action))
+                .map(|row| row_id(row.scope.as_ref(), &row.action))
                 .collect::<std::collections::HashSet<_>>()
                 .len(),
             desktop.len()
@@ -494,7 +594,7 @@ mod tests {
                 .any(|row| matches!(row.action, Action::Heading(_)))
         );
         list.has_more_projects = true;
-        let paged = rows(Some(&list), false, "host", "scope", true, true);
+        let paged = fixture_rows(Some(&list), false, "host", "scope", true, true);
         assert!(
             paged
                 .iter()
@@ -508,7 +608,7 @@ mod tests {
         list.has_more_projects = false;
         list.threads.clear();
         assert!(
-            !rows(Some(&list), false, "host", "scope", true, true)
+            !fixture_rows(Some(&list), false, "host", "scope", true, true)
                 .iter()
                 .any(|row| row.action == Action::Heading(None))
         );
@@ -524,9 +624,9 @@ mod tests {
         let mut other = list.projects[0].clone();
         other.id = "other-provider-project".into();
         list.projects.push(other);
-        let ids = rows(Some(&list), false, "host", "scope", false, true)
+        let ids = fixture_rows(Some(&list), false, "host", "scope", false, true)
             .iter()
-            .map(|row| row_id(&row.action))
+            .map(|row| row_id(row.scope.as_ref(), &row.action))
             .collect::<Vec<_>>();
         assert_eq!(ids.len(), 4);
         assert_eq!(
@@ -545,7 +645,7 @@ mod tests {
             ("local", false, false),
             ("remote", false, false),
         ] {
-            let rendered = rows(Some(&list), false, host, "scope", desktop, true);
+            let rendered = fixture_rows(Some(&list), false, host, "scope", desktop, true);
             let project = rendered
                 .iter()
                 .find(|row| row.action == Action::Expand("project".into()))
@@ -566,8 +666,11 @@ mod tests {
             if desktop {
                 let identities = rendered
                     .iter()
-                    .filter_map(|row| row.compose.as_ref())
-                    .map(row_id)
+                    .filter_map(|row| {
+                        row.compose
+                            .as_ref()
+                            .map(|action| row_id(row.scope.as_ref(), action))
+                    })
                     .collect::<Vec<_>>();
                 assert_eq!(identities.len(), 2);
                 assert_eq!(
@@ -590,8 +693,8 @@ mod tests {
                 assert_eq!(compose.level, 1);
                 assert!(project.compose.is_none());
             }
-            assert!(selected_rows(&rendered, None).is_empty());
-            assert!(selected_rows(&rendered, Some(&open_thread)).is_empty());
+            assert!(selected_rows(&rendered, &scope(host, "scope"), None).is_empty());
+            assert!(selected_rows(&rendered, &scope(host, "scope"), Some(&open_thread)).is_empty());
         }
     }
 
@@ -609,7 +712,7 @@ mod tests {
             unread: true,
             worktree_status: Some(WorktreeStatus::Unmerged),
         };
-        let row = thread_row(&thread, 1, Some("project"));
+        let row = thread_row(&thread, 1, Some("project"), &scope("host", "scope"));
         assert!(row.symbol.is_empty());
         let indicators = row.indicators.unwrap();
         assert_eq!(indicators.activity, Some(ThreadActivity::Waiting));
@@ -623,10 +726,114 @@ mod tests {
         thread.waiting = false;
         thread.unread = false;
         assert_eq!(
-            thread_row(&thread, 0, None).indicators.unwrap().worktree,
+            thread_row(&thread, 0, None, &scope("host", "scope"))
+                .indicators
+                .unwrap()
+                .worktree,
             Some(WorktreeStatus::Unmerged)
         );
         thread.worktree_status = None;
-        assert!(thread_row(&thread, 0, None).indicators.is_none());
+        assert!(
+            thread_row(&thread, 0, None, &scope("host", "scope"))
+                .indicators
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn identical_host_rows_and_menus_keep_their_owner_and_account_scope() {
+        let mut list = fixture_list();
+        list.projects[0].expanded = true;
+        list.projects[0]
+            .roots
+            .push(agent_protocol::models::ProjectRoot {
+                path: "/same".into(),
+            });
+        list.threads = list.projects[0].threads.clone();
+        let mut hidden = list.projects[0].clone();
+        hidden.id = "hidden".into();
+        list.hidden_projects.push(hidden);
+        let combined = agent_core::presentation::connection_list::combine_connection_lists([
+            ("one".into(), list.clone()),
+            ("two".into(), list),
+        ])
+        .unwrap();
+        let sources = vec![
+            ListSource {
+                scope: scope("one", "first-account"),
+                connected: true,
+            },
+            ListSource {
+                scope: scope("two", "second-account"),
+                connected: false,
+            },
+        ];
+        let rendered = rows(Some(&combined), false, &sources, "one", true);
+        let native = native_rows(&rendered, &sources);
+        let ids: std::collections::HashSet<_> = rendered
+            .iter()
+            .map(|row| row_id(row.scope.as_ref(), &row.action))
+            .collect();
+        assert_eq!(ids.len(), rendered.len());
+        let mut compose = std::collections::HashSet::new();
+        for row in rendered.iter().filter(|row| row.disclosure) {
+            let source = row.scope.as_ref().unwrap();
+            compose.insert(row_id(Some(source), row.compose.as_ref().unwrap()));
+            let item = native
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == row_id(Some(source), &row.action))
+                .unwrap();
+            assert_eq!(item["compose"]["enabled"], source.host == "one");
+            for item in row
+                .menu
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|item| item["id"].as_str())
+            {
+                let command: serde_json::Value = serde_json::from_str(item).unwrap();
+                assert_eq!(command["host"], source.host);
+                assert_eq!(command["storage"], source.storage);
+            }
+        }
+        assert_eq!(compose.len(), 2);
+        let selected_one =
+            selected_rows(&rendered, &sources[0].scope, Some(&combined.threads[0].id));
+        let selected_two =
+            selected_rows(&rendered, &sources[1].scope, Some(&combined.threads[1].id));
+        assert_eq!(selected_one.len(), 2);
+        assert_eq!(selected_two.len(), 2);
+        assert!(selected_one.iter().all(|id| !selected_two.contains(id)));
+        let hidden = rendered[0].menu[1]["children"].as_array().unwrap();
+        let owners: Vec<_> = hidden
+            .iter()
+            .map(|item| {
+                let command: serde_json::Value =
+                    serde_json::from_str(item["id"].as_str().unwrap()).unwrap();
+                (
+                    command["host"].as_str().unwrap().to_owned(),
+                    command["storage"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            owners,
+            [
+                ("one".into(), "first-account".into()),
+                ("two".into(), "second-account".into())
+            ]
+        );
+        let mut replaced = sources.clone();
+        replaced[0].scope.storage = "new-account".into();
+        let new_rows = rows(Some(&combined), false, &replaced, "one", true);
+        let new_selection =
+            selected_rows(&new_rows, &replaced[0].scope, Some(&combined.threads[0].id));
+        assert!(selected_one.iter().all(|id| !new_selection.contains(id)));
+        assert_eq!(
+            selected_rows(&new_rows, &sources[1].scope, Some(&combined.threads[1].id)),
+            selected_two
+        );
     }
 }

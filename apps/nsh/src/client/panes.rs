@@ -114,7 +114,7 @@ mod tests {
     fn pane_input_uploads_and_closure_never_replace_another_conversations_state() {
         let directory = tempfile::tempdir().unwrap();
         let host = saved_host(directory.path());
-        let (runtime, client, incoming) = Client::new(directory.path().into()).unwrap();
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let primary = runtime.block_on(publication(&incoming, ""));
         let root_key = primary.composer.controls.navigation.draft_key.clone();
         runtime.block_on(async {
