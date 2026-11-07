@@ -39,7 +39,6 @@ enum DetailsContent: Decodable {
     case agents(rows: [Agent])
     case error(message: String)
     case welcome(directory: String)
-    case workspace(summary: WorkspaceSummary)
     case projectEditor(editor: ProjectEditorData?)
     case worktreeEditor(data: WorktreeEditorData?)
     case modelPicker(data: ModelPickerData?)
@@ -62,8 +61,6 @@ private struct DetailsView: View {
             case let .taskList(data):
                 TaskListView(data: data, send: send)
             case .separator: Divider()
-            case let .workspace(summary):
-                WorkspaceCard(summary: summary, send: send)
             case let .welcome(directory):
                 VStack(spacing: 16) {
                     Text("何から始めましょうか？").font(.system(size: 24, weight: .semibold))

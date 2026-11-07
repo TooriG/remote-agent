@@ -18,12 +18,30 @@ fn agent_data(rows: &[AgentSummary]) -> Value {
     json!({"agents": {"rows": rows}})
 }
 
+/// The desktop workspace card's content: the folder, its editors, review and sources.
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn workspace_data(
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct WorkspaceSummary {
+    pub directory: String,
+    pub enabled: bool,
+    pub has_directory: bool,
+    pub branch: String,
+    pub additions: u64,
+    pub deletions: u64,
+    /// The Host's editors and their labels; only the local Host's open here.
+    pub editors: Vec<(agent_protocol::editors::EditorId, String)>,
+    pub editor: Option<agent_protocol::editors::EditorId>,
+    pub editor_label: String,
+    /// Each source's path and file name.
+    pub sources: Vec<(String, String)>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn workspace_summary(
     p: &agent_core::presentation::view::Presentation,
     local: bool,
-) -> Value {
-    use agent_core::presentation::editors;
+) -> WorkspaceSummary {
+    use agent_core::presentation::{editors, markdown::file_basename};
     use agent_protocol::editors::FileManagerRevealKind;
     let cwd = &p.composer.controls.navigation.cwd;
     let review = p.snapshot.pane.workspace.review.as_ref();
@@ -31,7 +49,7 @@ pub(crate) fn workspace_data(
     let available = capabilities
         .map(|c| c.editors.as_slice())
         .unwrap_or_default();
-    let selected = editors::preferred_editor(p.snapshot.files.preferred_editor, available);
+    let editor = editors::preferred_editor(p.snapshot.files.preferred_editor, available);
     let manager = capabilities
         .and_then(|c| c.reveal)
         .unwrap_or(FileManagerRevealKind::Finder);
@@ -42,17 +60,34 @@ pub(crate) fn workspace_data(
         .flat_map(|c| c.source_paths.iter())
         .chain(p.composer.draft.attachments.iter().map(|a| &a.path))
         .collect::<std::collections::BTreeSet<_>>();
-    json!({"workspace": {"summary": {
-        "directory": if cwd.is_empty() { "フォルダを選択" } else { agent_core::presentation::markdown::file_basename(cwd) },
-        "enabled": p.composer.controls.connected,
-        "hasDirectory": !cwd.is_empty() && !p.context.selected_directory().is_empty(),
-        "branch": review.map(|r| r.branch.as_str()).unwrap_or_default(),
-        "additions": review.map_or(0, |r| r.additions), "deletions": review.map_or(0, |r| r.deletions),
-        "editors": if local { available.iter().map(|id| json!({"id":id, "title":editors::editor_label(*id,manager), "selected":Some(*id)==selected})).collect::<Vec<_>>() } else { Vec::new() },
-        "editor": selected,
-        "editorLabel": selected.map(|id| format!("{}で開く", editors::editor_label(id,manager))).unwrap_or_else(|| "エディターで開く".into()),
-        "sources": sources.into_iter().map(|path| json!({"path":path,"title":agent_core::presentation::markdown::file_basename(path)})).collect::<Vec<_>>()
-    }}})
+    WorkspaceSummary {
+        directory: if cwd.is_empty() {
+            "フォルダを選択".into()
+        } else {
+            file_basename(cwd).into()
+        },
+        enabled: p.composer.controls.connected,
+        has_directory: !cwd.is_empty() && !p.context.selected_directory().is_empty(),
+        branch: review.map(|r| r.branch.clone()).unwrap_or_default(),
+        additions: review.map_or(0, |r| r.additions),
+        deletions: review.map_or(0, |r| r.deletions),
+        editors: if local {
+            available
+                .iter()
+                .map(|id| (*id, editors::editor_label(*id, manager).into()))
+                .collect()
+        } else {
+            Vec::new()
+        },
+        editor,
+        editor_label: editor
+            .map(|id| format!("{}で開く", editors::editor_label(id, manager)))
+            .unwrap_or_else(|| "エディターで開く".into()),
+        sources: sources
+            .into_iter()
+            .map(|path| (path.clone(), file_basename(path).into()))
+            .collect(),
+    }
 }
 
 pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
@@ -211,15 +246,25 @@ mod tests {
             }),
         );
         let p = Presentation::project(Arc::new(snapshot), None);
-        let expected: Value = serde_json::from_str(include_str!(
-            "../apple/Tests/BexNshNativeTests/Fixtures/workspace.json"
-        ))
-        .unwrap();
-        assert_eq!(workspace_data(&p, true), expected);
         assert_eq!(
-            workspace_data(&p, false)["workspace"]["summary"]["editors"],
-            json!([])
+            workspace_summary(&p, true),
+            WorkspaceSummary {
+                directory: "日本語 👋".into(),
+                enabled: true,
+                has_directory: true,
+                branch: "feature/native".into(),
+                additions: 7,
+                deletions: 2,
+                editors: vec![
+                    (EditorId::Cursor, "Cursor".into()),
+                    (EditorId::FileManager, "Finder".into()),
+                ],
+                editor: Some(EditorId::Cursor),
+                editor_label: "Cursorで開く".into(),
+                sources: vec![("/fixture/日本語.txt".into(), "日本語.txt".into())],
+            }
         );
+        assert!(workspace_summary(&p, false).editors.is_empty());
     }
 
     #[test]

@@ -340,6 +340,8 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                 !settings.get() && !hosts.with(Vec::is_empty) && workspace.state.with(|s| s.open)
             };
             let layout = move || workspace.state.with(|s| s.layout);
+            let details = signal(true);
+            let details_inline = move || window().width.0 >= 1080.0 && !tools();
             let main = move || {
                 view()
                     .flex_1()
@@ -360,6 +362,8 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                                     title,
                                     sidebar,
                                     tools,
+                                    details,
+                                    details_inline,
                                     move || navigate(Navigation::ToggleSidebar),
                                     move || {
                                         application.with(|application| {
@@ -372,7 +376,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                                 ))
                                 .child(view().flex_1().min_h_0().flex_row().child(content()).child(
                                     when(
-                                        move || window().width.0 >= 1080.0 && !tools(),
+                                        move || details.get() && details_inline(),
                                         desktop_workspace::card,
                                     ),
                                 ))

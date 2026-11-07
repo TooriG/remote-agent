@@ -126,6 +126,8 @@ pub(crate) fn conversation_header(
     title: Memo<String>,
     sidebar: Memo<bool>,
     panel_open: impl Fn() -> bool + Copy + 'static,
+    details: Signal<bool>,
+    details_inline: impl Fn() -> bool + Copy + 'static,
     toggle_sidebar: impl Fn() + Copy + 'static,
     toggle_panel: impl Fn() + Copy + 'static,
 ) -> impl IntoElement {
@@ -149,6 +151,16 @@ pub(crate) fn conversation_header(
                 .text_size(px(14.0))
                 .number_of_lines(1),
         )
+        .child(when(details_inline, move || {
+            view().window_drag(false).child(
+                ui::icon_button(
+                    Icon::Details,
+                    "スレッド詳細を切り替え",
+                    move || details.update(|open| *open = !*open),
+                )
+                .prop("selected", move || json!(details.get())),
+            )
+        }))
         .child(when(
             move || !panel_open(),
             move || {

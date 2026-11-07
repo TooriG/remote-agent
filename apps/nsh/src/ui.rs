@@ -41,8 +41,18 @@ pub(crate) enum Icon {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     Close,
     Copy,
+    #[cfg(target_os = "macos")]
+    Details,
     Diff,
     Ellipsis,
+    #[cfg(target_os = "macos")]
+    Replace,
+    #[cfg(target_os = "macos")]
+    FolderOpen,
+    #[cfg(target_os = "macos")]
+    FileText,
+    #[cfg(target_os = "macos")]
+    ExternalLink,
     Folder,
     FolderPlus,
     Loader,
@@ -79,8 +89,13 @@ impl Icon {
             Self::ChevronRight => "chevron.right",
             Self::Close => "xmark",
             Self::Copy => "doc.on.doc",
+            Self::Details => "list.bullet.rectangle",
             Self::Diff => "plusminus",
             Self::Ellipsis => "ellipsis",
+            Self::Replace => "arrow.left.arrow.right",
+            Self::FolderOpen => "folder",
+            Self::FileText => "doc",
+            Self::ExternalLink => "arrow.up.right.square",
             Self::Folder => "folder",
             Self::FolderPlus => "folder.badge.plus",
             Self::Loader => "progress.indicator",
@@ -109,8 +124,18 @@ impl Icon {
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             Self::Close => include_str!("../assets/icons/x.svg"),
             Self::Copy => include_str!("../assets/icons/copy.svg"),
+            #[cfg(target_os = "macos")]
+            Self::Details => include_str!("../../desktop/assets/square-menu.svg"),
             Self::Diff => include_str!("../../desktop/assets/diff.svg"),
             Self::Ellipsis => include_str!("../assets/icons/ellipsis.svg"),
+            #[cfg(target_os = "macos")]
+            Self::Replace => include_str!("../assets/icons/replace.svg"),
+            #[cfg(target_os = "macos")]
+            Self::FolderOpen => include_str!("../assets/icons/folder-open.svg"),
+            #[cfg(target_os = "macos")]
+            Self::FileText => include_str!("../assets/icons/file-text.svg"),
+            #[cfg(target_os = "macos")]
+            Self::ExternalLink => include_str!("../assets/icons/external-link.svg"),
             Self::Folder => include_str!("../assets/icons/folder.svg"),
             Self::FolderPlus => include_str!("../../desktop/assets/folder-plus.svg"),
             Self::Loader => include_str!("../assets/icons/loader.svg"),
