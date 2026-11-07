@@ -19,6 +19,7 @@ function fixture(t) {
     'apps/mobile/iosApp/Bex/ConversationList.swift',
     'apps/mobile/iosApp/Bex/ConversationListLayout.swift',
     'apps/mobile/iosApp/Bex/ConversationTextLayout.swift',
+    'apps/mobile/iosApp/Bex/ConversationTextDiagnostics.swift',
     'apps/mobile/iosApp/UITests/Fixtures/navigation-tests.swift',
     'apps/mobile/iosApp/UITests/Fixtures/scroll-tests.swift',
     'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift',
@@ -31,6 +32,7 @@ function fixture(t) {
     cargo: 'printf \'{"target_directory":"%s"}\\n\' "$SWIFT_FIXTURE_TARGET"',
     uname: 'echo "${SWIFT_FIXTURE_ARCH:-arm64}"',
     codesign: 'echo sign >> "$SWIFT_FIXTURE_LOG"\nexit "${SWIFT_FIXTURE_SIGN_STATUS:-0}"',
+    nm: 'if [[ -f $1.dev ]]; then [[ ${SWIFT_FIXTURE_MISSING_DEV_SYMBOLS:-0} == 1 ]] || echo ConversationTextDiagnosticLog; elif [[ ${SWIFT_FIXTURE_NON_DEV_SYMBOLS:-0} == 1 ]]; then echo ConversationTextDiagnosticLog; fi; exit 0',
     xcrun: [
       'case "$*" in',
       '  "--sdk macosx --show-sdk-path") echo "$SWIFT_FIXTURE_SDK" ;;',
@@ -39,7 +41,9 @@ function fixture(t) {
       '  *)',
       '    echo compile >> "$SWIFT_FIXTURE_LOG"',
       '    if [[ ${SWIFT_FIXTURE_COMPILE_STATUS:-0} != 0 ]]; then exit "$SWIFT_FIXTURE_COMPILE_STATUS"; fi',
-      '    while [[ $1 != -o ]]; do shift; done',
+      '    dev=0',
+      '    while [[ $1 != -o ]]; do [[ $1 == AGENT_DEV_DIAGNOSTICS ]] && dev=1; shift; done',
+      '    if [[ $dev == 1 ]]; then touch "$2.dev"; fi',
       '    printf \'#!/bin/bash\\necho run >> "$SWIFT_FIXTURE_LOG"\\nexit "${SWIFT_FIXTURE_TEST_STATUS:-0}"\\n\' > "$2"',
       '    chmod +x "$2"',
       '    ;;',
@@ -70,26 +74,28 @@ function successfulRun(build, compileCount, overrides) {
   const result = build.run(overrides);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.commands.filter(command => command === 'compile').length, compileCount);
-  assert.equal(result.commands.filter(command => command === 'run').length, 3);
+  assert.equal(result.commands.filter(command => command === 'run').length, 4);
 }
 
 test('unchanged Swift tests reuse compilation and always execute all fixtures', (t) => {
   const build = fixture(t);
   const directory = join(build.target, 'qa/ios-scroll/builds/scroll-tests');
-  successfulRun(build, 3);
+  successfulRun(build, 4);
   const firstBuild = readdirSync(directory)[0];
   successfulRun(build, 0);
   writeFileSync(join(build.root, 'apps/mobile/iosApp/Bex/ConversationList.swift'), '// changed source\n');
   successfulRun(build, 1);
   const currentBuild = readdirSync(directory).find(name => name !== firstBuild);
   writeFileSync(join(build.root, 'apps/mobile/iosApp/UITests/Fixtures/text-view-tests.swift'), '// changed test\n');
-  successfulRun(build, 1);
+  successfulRun(build, 2);
+  writeFileSync(join(build.root, 'apps/mobile/iosApp/Bex/ConversationTextDiagnostics.swift'), '// changed diagnostics\n');
+  successfulRun(build, 2);
   for (const overrides of [
     { SWIFT_FIXTURE_COMPILER: 'Swift 7' },
     { SWIFT_FIXTURE_SDK_BUILD: '26B' },
     { SWIFT_FIXTURE_SDK: join(build.root, 'Other SDK') },
     { SWIFT_FIXTURE_ARCH: 'x86_64' },
-  ]) successfulRun(build, 3, overrides);
+  ]) successfulRun(build, 4, overrides);
   const app = join(directory, currentBuild, 'Contents');
   assert.match(readFileSync(join(app, 'Info.plist'), 'utf8'), /<key>CFBundleIdentifier<\/key><string>app\.bex\.tests\.scroll-tests<\/string>/);
   chmodSync(join(app, 'MacOS/scroll-tests'), 0o644);
@@ -107,9 +113,17 @@ test('failed compilations are retried and cached test failures still fail verifi
   const signing = build.run({ SWIFT_FIXTURE_SIGN_STATUS: '1' });
   assert.equal(signing.status, 1);
   assert.deepEqual(signing.commands, ['compile', 'sign']);
-  successfulRun(build, 3);
+  successfulRun(build, 4);
   const failure = build.run({ SWIFT_FIXTURE_TEST_STATUS: '7' });
   assert.equal(failure.status, 7);
   assert.deepEqual(failure.commands, ['run']);
+  successfulRun(build, 0);
+});
+
+test('Dev and non-Dev diagnostic symbol boundaries are checked even for cached executables', (t) => {
+  const build = fixture(t);
+  successfulRun(build, 4);
+  assert.equal(build.run({ SWIFT_FIXTURE_NON_DEV_SYMBOLS: '1' }).status, 1);
+  assert.equal(build.run({ SWIFT_FIXTURE_MISSING_DEV_SYMBOLS: '1' }).status, 1);
   successfulRun(build, 0);
 });

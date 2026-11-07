@@ -20,7 +20,7 @@ run_test() {
     local fixture="apps/mobile/iosApp/UITests/Fixtures/$name.swift" key app executable pending_dir pending
     key=$({
         printf '%s\n' "$sdk" "$sdk_build" "$compiler" "$swift_target"
-        printf '%s\n' "${swift_flags[@]}"
+        printf '%s\n' "${swift_flags[*]-}"
         shasum -a 256 "$0" "$@" "$fixture"
     } | shasum -a 256 | cut -d ' ' -f 1)
     app="$output/$name/$key.app"
@@ -44,7 +44,7 @@ PLIST
         if ! xcrun swiftc -sdk "$sdk" -target "$swift_target" \
             -F "$sdk/System/iOSSupport/System/Library/Frameworks" \
             -L "$sdk/System/iOSSupport/usr/lib" \
-            "${swift_flags[@]}" "$@" "$fixture" -o "$pending/Contents/MacOS/$name" \
+            ${swift_flags[@]+"${swift_flags[@]}"} "$@" "$fixture" -o "$pending/Contents/MacOS/$name" \
             || ! codesign --force --sign - "$pending"; then
             rm -rf "$pending_dir"
             return 1
