@@ -274,41 +274,25 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                 },
             ))
     };
+    #[cfg(target_os = "macos")]
+    let hero = desktop_workspace::draft_hero;
+    #[cfg(not(target_os = "macos"))]
+    let hero = view;
     let content = move || {
         let following = signal(true);
         let welcome =
             computed(move || is_desktop() && connection.conversation.with(Option::is_none));
+        // As T3 Code's draft hero, a new conversation centers its composer.
         view()
             .flex_1()
             .min_w_0()
             .pb_keyboard()
+            .style_when(move || welcome.get(), |s| s.justify_center())
             .child(when(
                 move || !welcome.get(),
                 move || conversation::list(following),
             ))
-            .child(when(
-                move || welcome.get(),
-                move || {
-                    view()
-                        .flex_1()
-                        .items_center()
-                        .justify_center()
-                        .gap_4()
-                        .child(text("何から始めましょうか？").text_size(px(24.0)))
-                        .child(
-                            text(move || {
-                                let directory = connection.context.with(|p| p.selected_directory());
-                                if directory.is_empty() {
-                                    "メッセージを入力して、作業を始めましょう。".to_owned()
-                                } else {
-                                    agent_core::presentation::markdown::file_basename(&directory)
-                                        .to_owned()
-                                }
-                            })
-                            .text_size(px(14.0)),
-                        )
-                },
-            ))
+            .child(when(move || welcome.get(), hero))
             .child(composer::composer(following))
     };
     let notices = move || {
