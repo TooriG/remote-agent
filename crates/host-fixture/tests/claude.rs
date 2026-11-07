@@ -90,12 +90,20 @@ async fn send(store: &Store, text: &str, client_id: &str) -> agent_protocol::ses
         })
         .await
         .unwrap();
-    assert!(if thread_id.is_some() {
-        matches!(outcome, Outcome::Submitted { .. })
-    } else {
-        matches!(outcome, Outcome::StartedThread { .. })
-    });
-    store.snapshot().pane.navigation.thread_id.clone().unwrap()
+    let snapshot = store.snapshot();
+    assert!(
+        if thread_id.is_some() {
+            matches!(outcome, Outcome::Submitted { .. })
+        } else {
+            matches!(outcome, Outcome::StartedThread { .. })
+        },
+        "submission {client_id} returned {outcome:?}; phase: {:?}; error: {:?}",
+        snapshot.operations.get(&op::OperationKey::Submission {
+            draft_key: snapshot.pane.navigation.draft_key.clone(),
+        }),
+        snapshot.pane.error
+    );
+    snapshot.pane.navigation.thread_id.clone().unwrap()
 }
 
 /// Read the inputs the Claude fixture appended to its workspace trace.
@@ -854,6 +862,14 @@ async fn provider_switch_preserves_conversation_identity_history_and_workspace()
                     })
                     .await
                     .unwrap();
+                // Turn completion can arrive before the Host's idle status.
+                // Switch only when the composer would allow this provider.
+                until(&store, |snapshot| {
+                    snapshot
+                        .input_unavailable_reason(id.clone(), Some(model.provider))
+                        .is_none()
+                })
+                .await;
                 assert_eq!(
                     send(&store, text, &format!("{}-{step}", original.id)).await,
                     id
