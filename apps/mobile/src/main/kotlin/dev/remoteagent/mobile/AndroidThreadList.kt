@@ -68,7 +68,6 @@ import dev.remoteagent.core.ReadThread
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.ThreadSummary
-import dev.remoteagent.core.WorktreeStatus
 import dev.remoteagent.core.localizedUiFormat
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
@@ -269,13 +268,12 @@ private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit
         }
         if (thread.active) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         else if (thread.unread) Text(language.text("● 完了・未確認"))
-        thread.worktreeStatus?.let { status ->
-            val unmerged = status == WorktreeStatus.UNMERGED
+        if (thread.hasChanges == true) {
             Icon(
-                painterResource(if (unmerged) R.drawable.ic_diff else R.drawable.ic_merge),
-                if (unmerged) language.text("main に未反映の変更あり") else language.text("main にマージ済み"),
+                painterResource(R.drawable.ic_diff),
+                language.text("作成元からの変更あり"),
                 Modifier.padding(start = 8.dp).size(18.dp),
-                tint = if (unmerged) Color(UNMERGED_COLOR_ARGB) else MaterialTheme.colorScheme.tertiary,
+                tint = Color(CHANGES_COLOR_ARGB),
             )
         }
         Icon(
@@ -290,7 +288,7 @@ private fun SummaryRow(thread: ThreadSummary, openConversation: (Intent) -> Unit
 
 private const val DRAG_PLACEHOLDER_ALPHA = 0.2f
 private const val SEARCH_DEBOUNCE_MILLIS = 200L
-private const val UNMERGED_COLOR_ARGB = 0xFFFB923C
+private const val CHANGES_COLOR_ARGB = 0xFFFB923C
 
 private val SessionRef.listKey: String
     get() = "session:$provider:$id"

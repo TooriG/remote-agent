@@ -404,43 +404,24 @@ impl HostRpcService {
                 })
                 .collect()
         });
-        let worktrees = if params.threads.is_empty() {
-            Default::default()
-        } else {
-            crate::worktrees::workspace_roots(self.inner.projects.path())
-                .await
-                .map_err(|error| Failure::new("worktree_status_failed", error))?
-        };
-        let sources: Vec<_> = params
-            .threads
-            .iter()
-            .map(|(id, cwd, branch)| {
-                let mapping =
-                    crate::projects::state::worktree_mapping(&worktrees, std::path::Path::new(cwd));
-                (
-                    id.clone(),
-                    crate::worktrees::StatusSource {
-                        cwd: cwd.clone(),
-                        checkout: mapping.map(|(checkout, _)| checkout.to_owned()),
-                        repository: mapping.map(|(_, repository)| repository.to_owned()),
-                        branch: branch.clone(),
-                    },
-                )
-            })
-            .collect();
-        let (icons, statuses) = tokio::join!(
+        let (icons, changes) = tokio::join!(
             icons,
-            crate::worktrees::directory_statuses(
-                sources.iter().map(|(_, source)| source.clone()).collect()
+            crate::workspace_review::directory_changes(
+                params
+                    .threads
+                    .iter()
+                    .map(|(_, cwd, _)| cwd.clone())
+                    .collect()
             )
         );
         let icons = icons.map_err(|error| Failure::new("project_icons_unavailable", error))?;
-        let statuses = statuses.map_err(|error| Failure::new("worktree_status_failed", error))?;
+        let changes = changes.map_err(|error| Failure::new("workspace_review_failed", error))?;
         Ok(op::ListDecorations {
             icons,
-            statuses: sources
-                .into_iter()
-                .map(|(id, source)| (id, statuses.get(&source).copied()))
+            statuses: params
+                .threads
+                .iter()
+                .map(|(id, cwd, _)| (id.clone(), changes.get(cwd).copied()))
                 .collect(),
         })
     }

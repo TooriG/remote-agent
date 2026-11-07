@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    models::{ListQuery, ProjectMembership, SessionStatus, Thread, WorktreeStatus},
+    models::{ListQuery, ProjectMembership, SessionStatus, Thread},
     session::{ProviderKind, SessionRef},
     state::{ProjectPreferences, projects::PlacedChat},
 };
@@ -45,7 +45,7 @@ fn fixture() -> Snapshot {
         match key {
             "live" => {
                 thread.list_stale = Some(true);
-                thread.worktree_status = Some(WorktreeStatus::Merged);
+                thread.has_changes = Some(false);
             }
             "anonymous" => thread.id = None,
             "child" => thread.parent_id = Some(session("parent")),
@@ -145,7 +145,7 @@ fn placed_rows_keep_live_metadata_saved_fallbacks_and_activity_in_the_destinatio
     );
     assert_eq!(rows[0].title, "Live latest（保存済み・未確認）");
     assert!(rows[0].active && rows[0].waiting && !rows[0].unread);
-    assert_eq!(rows[0].worktree_status, Some(WorktreeStatus::Merged));
+    assert_eq!(rows[0].has_changes, Some(false));
     assert_eq!(rows[1].title, "Missing saved");
     assert!(!rows[1].active && !rows[1].waiting && rows[1].unread);
     assert_eq!(rows[2].title, "Inactive latest");

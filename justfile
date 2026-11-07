@@ -102,7 +102,7 @@ android-e2e:
 # Native journeys cover navigation, rendering and OS integration; agent-core owns state contracts.
 conversation-ui *options:
     scripts/ios-e2e.sh "$@" \
-        testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus \
+        testSimulatorShowsChangesMarkToTheRightOfRunningStatus \
         testSimulatorNativeTerminalRetainsShellAfterReopening \
         testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText \
         testSimulatorCopiesSelectedOrWholeUserMessageText \

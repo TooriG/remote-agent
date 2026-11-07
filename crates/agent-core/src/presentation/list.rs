@@ -110,7 +110,7 @@ pub struct ThreadSummary {
     pub active: bool,
     pub waiting: bool,
     pub unread: bool,
-    pub worktree_status: Option<crate::models::WorktreeStatus>,
+    pub has_changes: Option<bool>,
 }
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -274,7 +274,7 @@ fn list_metadata(thread: &crate::models::Thread) -> impl PartialEq + '_ {
         thread.updated_at,
         &thread.parent_id,
         &thread.project_id,
-        thread.worktree_status,
+        thread.has_changes,
         thread.list_stale,
     )
 }
@@ -773,7 +773,7 @@ fn thread_summaries<'a>(
                 active,
                 waiting,
                 unread,
-                worktree_status: thread.worktree_status,
+                has_changes: thread.has_changes,
             }
         })
         .collect()
@@ -1236,15 +1236,10 @@ mod tests {
         assert!(snapshot.pane.error.is_none());
     }
     #[rstest::rstest]
-    fn list_preserves_worktree_status_alongside_activity_after_serialization_and_refresh(
+    fn list_preserves_has_changes_alongside_activity_after_serialization_and_refresh(
         #[values(false, true)] active: bool,
         #[values(false, true)] unread: bool,
-        #[values(
-            None,
-            Some(models::WorktreeStatus::Unmerged),
-            Some(models::WorktreeStatus::Merged)
-        )]
-        status: Option<models::WorktreeStatus>,
+        #[values(None, Some(true), Some(false))] status: Option<bool>,
     ) {
         let mut snapshot = Snapshot::default();
         std::sync::Arc::make_mut(&mut snapshot.lists.activity)
@@ -1267,7 +1262,7 @@ mod tests {
         let mut thread = json!({"id":{"provider":"codex","id":"task"},"name":"Worktree task",
             "status":if active {"running"} else {"idle"}});
         if let Some(status) = status {
-            thread["worktreeStatus"] = json!(status);
+            thread["hasChanges"] = json!(status);
         }
         let page: models::ThreadList = serde_json::from_value(json!({
             "data":[thread], "projects":[],
@@ -1277,7 +1272,7 @@ mod tests {
         let restored: Snapshot =
             serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
         let rows = restored.thread_list().unwrap();
-        assert_eq!(rows.threads[0].worktree_status, status);
+        assert_eq!(rows.threads[0].has_changes, status);
         assert_eq!(rows.threads[0].active, active);
         assert_eq!(rows.threads[0].unread, unread);
     }

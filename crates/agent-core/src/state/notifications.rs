@@ -280,7 +280,7 @@ fn updated_row(
             .or(thread.name);
         if old.cwd == thread.cwd {
             thread.git_branch = old.git_branch.clone().or(thread.git_branch);
-            thread.worktree_status = old.worktree_status;
+            thread.has_changes = old.has_changes;
         }
     }
     if index.is_some_and(|index| rows[index] == thread) {
@@ -1003,7 +1003,7 @@ mod tests {
             },
             lists: crate::state::Lists {
                 threads: Some(Arc::new(serde_json::from_value(json!({
-                    "data":[{"id":parent,"name":"Task","cwd":"/fixture","status":"idle","worktreeStatus":"unmerged"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap())),
+                    "data":[{"id":parent,"name":"Task","cwd":"/fixture","status":"idle","hasChanges":true}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap())),
                 ..Default::default()
             },
             sessions: crate::state::Sessions {
@@ -1193,7 +1193,7 @@ mod tests {
                     prop_assert!(!row.active);
                     prop_assert_eq!(row.unread, finished && !selected);
                     prop_assert_eq!(row.title.as_str(), "Task");
-                    prop_assert_eq!(row.worktree_status, Some(crate::models::WorktreeStatus::Unmerged));
+                    prop_assert_eq!(row.has_changes, Some(true));
                     prop_assert_eq!(&state.pane.navigation, &ended.pane.navigation);
                     state = ended;
                 }
@@ -1874,7 +1874,7 @@ mod tests {
                 name: Some("Kept title".into()),
                 cwd: Some("/work".into()),
                 git_branch: Some("main".into()),
-                worktree_status: Some(crate::models::WorktreeStatus::Merged),
+                has_changes: Some(false),
                 list_revision: 1,
                 updated_at: Some(1.),
                 ..Default::default()
@@ -1891,7 +1891,7 @@ mod tests {
         incoming.name = Some("Native title".into());
         incoming.preview = Some("updated preview".into());
         incoming.git_branch = None;
-        incoming.worktree_status = None;
+        incoming.has_changes = None;
         incoming.list_revision = 2;
         let (next, effects) = notification(
             &state,
@@ -1924,13 +1924,13 @@ mod tests {
                 row.name.as_deref(),
                 row.preview.as_deref(),
                 row.git_branch.as_deref(),
-                row.worktree_status
+                row.has_changes
             ),
             (
                 Some("Kept title"),
                 Some("updated preview"),
                 Some("main"),
-                Some(crate::models::WorktreeStatus::Merged)
+                Some(false)
             )
         );
         assert_eq!(

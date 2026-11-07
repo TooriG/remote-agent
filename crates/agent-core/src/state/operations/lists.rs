@@ -125,7 +125,7 @@ impl Operation for ReadListDecorations {
                         let (cwd, branch) = source.as_ref()?;
                         (thread.cwd.as_deref() == Some(*cwd)
                             && thread.git_branch.as_deref() == *branch
-                            && thread.worktree_status != *status)
+                            && thread.has_changes != *status)
                             .then_some((index, *status))
                     })
                     .collect();
@@ -145,7 +145,7 @@ impl Operation for ReadListDecorations {
             };
             let list = Arc::make_mut(list);
             for (index, status) in changed {
-                list.data[index].worktree_status = status;
+                list.data[index].has_changes = status;
             }
         }
         Vec::new()
@@ -423,7 +423,7 @@ fn merge_received(
                             old.cwd.as_deref(),
                             old.git_branch.as_deref(),
                         ),
-                        old.worktree_status,
+                        old.has_changes,
                     )
                 })
                 .collect::<HashMap<_, _>>()
@@ -445,10 +445,10 @@ fn merge_received(
                             && old.cwd == thread.cwd
                             && old.git_branch == thread.git_branch
                     })
-                    .map(|old| old.worktree_status),
+                    .map(|old| old.has_changes),
             };
             if let Some(status) = status {
-                thread.worktree_status = status;
+                thread.has_changes = status;
             }
         }
     }

@@ -79,7 +79,7 @@ fn list_metadata(list: &ThreadList) -> ThreadList {
                 parent_id: thread.parent_id.clone(),
                 name: thread.name.clone(),
                 cwd: thread.cwd.clone(),
-                worktree_status: thread.worktree_status,
+                has_changes: thread.has_changes,
                 git_branch: thread.git_branch.clone(),
                 project_id: thread.project_id.clone(),
                 preview: thread.preview.clone(),

@@ -1,52 +1,37 @@
 import XCTest
 
 extension LaunchUITests {
-    func testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus() throws {
+    func testSimulatorShowsChangesMarkToTheRightOfRunningStatus() throws {
         let app = try connectedSimulatorApp()
         try useSimulatorListFixture("merge-worktree/fresh")
-        // Refresh updates the open project while retaining closed project pages.
         refreshSimulatorTaskList(app)
         let project = app.buttons["tasks.project.simulator-project"]
         XCTAssertTrue(project.waitUntilExists(timeout: 10))
         let running = app.descendants(matching: .any)["tasks.running.codex:merge-active"]
         XCTAssertTrue(running.waitUntilExists(timeout: 10))
-        let merged = app.descendants(matching: .any)["tasks.merged.codex:merge-active"]
-        let unmerged = app.descendants(matching: .any)["tasks.unmerged.codex:merge-active"]
-        XCTAssertFalse(merged.exists || unmerged.exists)
+        let changes = app.descendants(matching: .any)["tasks.changes.codex:merge-active"]
+        XCTAssertFalse(changes.exists)
         try simulatorFixture("merge-worktree/dirty")
         refreshSimulatorTaskList(app)
-        XCTAssertTrue(unmerged.waitUntilExists(timeout: 10))
+        XCTAssertTrue(changes.waitUntilExists(timeout: 10))
         XCTAssertTrue(running.exists)
-        XCTAssertGreaterThan(unmerged.frame.minX, running.frame.maxX)
+        XCTAssertGreaterThan(changes.frame.minX, running.frame.maxX)
+        captureScreen(app, named: "Changes marker beside running status")
         try simulatorFixture("merge-worktree/clean")
+        refreshSimulatorTaskList(app)
+        XCTAssertTrue(changes.waitForNonExistence(timeout: 10))
         try simulatorFixture("merge-worktree/merged")
         refreshSimulatorTaskList(app)
-        XCTAssertTrue(merged.waitUntilExists(timeout: 10))
-        XCTAssertFalse(unmerged.exists)
-        XCTAssertTrue(running.exists)
-        XCTAssertGreaterThan(merged.frame.minX, running.frame.maxX)
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.merged.codex:merge-idle"].exists)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Merged worktree session list"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
+        XCTAssertFalse(changes.exists)
         app.terminate()
         app.launch()
         expandSimulatorProject(app)
-        XCTAssertTrue(merged.waitUntilExists(timeout: 10))
-        try simulatorFixture("merge-worktree/dirty")
-        refreshSimulatorTaskList(app)
-        XCTAssertTrue(unmerged.waitUntilExists(timeout: 10))
-        XCTAssertFalse(merged.exists)
-        try simulatorFixture("merge-worktree/clean")
-        refreshSimulatorTaskList(app)
-        XCTAssertTrue(merged.waitUntilExists(timeout: 10))
+        XCTAssertTrue(running.waitUntilExists(timeout: 10))
+        XCTAssertFalse(changes.exists)
         try simulatorFixture("merge-worktree/new-work")
         refreshSimulatorTaskList(app)
-        let removed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: merged)
-        wait(for: [removed], timeout: 10)
-        XCTAssertTrue(unmerged.exists)
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.unmerged.codex:merge-idle"].exists)
+        XCTAssertTrue(changes.waitUntilExists(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.changes.codex:merge-idle"].exists)
         XCTAssertTrue(running.exists)
     }
 

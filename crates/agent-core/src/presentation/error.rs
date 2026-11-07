@@ -425,7 +425,7 @@ mod error_tests {
         let host = |message: &str| {
             error_text(&format!(
                 "remote RPC error: {}",
-                serde_json::json!({"code": "worktree_status_failed", "message": message})
+                serde_json::json!({"code": "workspace_review_failed", "message": message})
             ))
         };
         assert_eq!(

@@ -2097,34 +2097,18 @@
         }
       }
     },
-    "main にマージ済み": {
+    "作成元からの変更あり": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "main にマージ済み"
+            "value": "作成元からの変更あり"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Merged into main"
-          }
-        }
-      }
-    },
-    "main に未反映の変更あり": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "main に未反映の変更あり"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Changes not merged into main"
+            "value": "Changes from base branch"
           }
         }
       }

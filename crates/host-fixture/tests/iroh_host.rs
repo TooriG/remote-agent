@@ -3256,7 +3256,6 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
     use agent_core::state::Intent;
     use agent_core::state::Snapshot;
     use agent_core::store::Store;
-    use agent_protocol::models::WorktreeStatus::{Merged, Unmerged};
     async fn wait_decorations(store: &Store) {
         let mut updates = store.subscribe();
         loop {
@@ -3308,6 +3307,7 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
             &repo,
             &["worktree", "add", "-b", "task", checkout.to_str().unwrap()],
         );
+        git(&repo, &["config", "branch.task.bex-base-ref", "refs/heads/main"]);
         std::fs::create_dir(checkout.join("nested")).unwrap();
         std::fs::write(
             root.join("bex-worktrees.json"),
@@ -3341,17 +3341,17 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
         std::fs::write(root.join("list-fixture.json"), serde_json::to_vec(&native_rows).unwrap()).unwrap();
         let store = Store::new((local.peer, local.events), Snapshot::default());
         for (step, expected) in [
-            ("fresh", None),
-            ("empty", None),
-            ("untracked", Some(Unmerged)),
-            ("staged", Some(Unmerged)),
-            ("commit", Some(Unmerged)),
-            ("merge", Some(Merged)),
-            ("edited", Some(Unmerged)),
-            ("reverted", Some(Merged)),
-            ("new-work", Some(Unmerged)),
-            ("main-only", Some(Unmerged)),
-            ("no-diff", None),
+            ("fresh", Some(false)),
+            ("empty", Some(false)),
+            ("untracked", Some(true)),
+            ("staged", Some(true)),
+            ("commit", Some(true)),
+            ("merge", Some(false)),
+            ("edited", Some(true)),
+            ("reverted", Some(false)),
+            ("new-work", Some(true)),
+            ("main-only", Some(true)),
+            ("no-diff", Some(false)),
         ] {
             match step {
                 "untracked" => std::fs::write(checkout.join("work.txt"), "work\n").unwrap(),
@@ -3397,8 +3397,8 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
             for (index, id) in ids.iter().enumerate() {
                 let row = list.threads.iter().find(|row| &row.id == id).unwrap();
                 assert_eq!(
-                    row.worktree_status,
-                    if index < 2 { expected } else { None },
+                    row.has_changes,
+                    if index < 2 { expected } else if index == 2 { Some(false) } else { None },
                     "{step}: {index}"
                 );
             }
@@ -3421,13 +3421,13 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
                 .iter()
                 .find(|row| row.id == ids[0])
                 .unwrap()
-                .worktree_status,
-            Some(Merged)
+                .has_changes,
+            Some(false)
         );
         std::fs::remove_dir(checkout.join("nested")).unwrap();
         store.dispatch(Intent::ListSessions(op::ListSessions::new(Default::default()))).await.unwrap();
         wait_decorations(&store).await;
-        assert_eq!(store.snapshot().thread_list().unwrap().threads.iter().find(|row| row.id == ids[1]).unwrap().worktree_status, None);
+        assert_eq!(store.snapshot().thread_list().unwrap().threads.iter().find(|row| row.id == ids[1]).unwrap().has_changes, None);
         std::fs::create_dir(checkout.join("nested")).unwrap();
         git(&checkout, &["checkout", "--detach"]);
         store
@@ -3446,17 +3446,17 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
                 .iter()
                 .find(|row| row.id == ids[0])
                 .unwrap()
-                .worktree_status,
-            None
+                .has_changes,
+            Some(false)
         );
         git(&checkout, &["checkout", "task"]);
         std::fs::write(checkout.join("work.txt"), "remaining work\n").unwrap();
         git(&checkout, &["commit", "-am", "remaining work"]);
         git(&repo, &["worktree", "remove", checkout.to_str().unwrap()]);
         for (step, expected) in [
-            ("deleted-unmerged", Some(Unmerged)),
-            ("deleted-merged", Some(Merged)),
-            ("missing-metadata", Some(Merged)),
+            ("deleted-unmerged", None),
+            ("deleted-merged", None),
+            ("missing-metadata", None),
             ("deleted-branch", None),
         ] {
             match step {
@@ -3474,7 +3474,7 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
             let list = snapshot.thread_list().unwrap();
             for (index, id) in ids.iter().enumerate() {
                 let row = list.threads.iter().find(|row| &row.id == id).unwrap();
-                assert_eq!(row.worktree_status, if index < 2 && !(index == 1 && step == "missing-metadata") { expected } else { None }, "{step}: {index}");
+                assert_eq!(row.has_changes, if index == 2 { Some(false) } else { expected }, "{step}: {index}");
             }
             assert_eq!(snapshot.pane.error, None);
         }

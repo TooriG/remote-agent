@@ -1,0 +1,172 @@
+use anyhow::{Result, anyhow};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+pub(super) struct Comparison {
+    pub root: PathBuf,
+    pub branch: String,
+    pub base: String,
+    index: tempfile::NamedTempFile,
+}
+
+pub(crate) fn base_key(branch: &str) -> String {
+    format!("branch.{branch}.bex-base-ref")
+}
+
+/// A symbolic source follows subsequent integration into that branch. Detached
+/// sources keep their exact starting commit instead.
+pub(crate) fn source_ref(cwd: &Path, source: &str) -> Result<String> {
+    let reference = crate::git::text(cwd, &["rev-parse", "--symbolic-full-name", source])?;
+    if reference.trim().starts_with("refs/") {
+        return Ok(reference.trim().into());
+    }
+    Ok(crate::git::text(cwd, &["rev-parse", "--verify", source])?
+        .trim()
+        .into())
+}
+
+impl Comparison {
+    pub fn open(cwd: &Path) -> Result<Option<Self>> {
+        match std::fs::metadata(cwd) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(anyhow!(
+                    "作業フォルダに指定したパスはフォルダではありません。"
+                ));
+            }
+            Ok(_) => {}
+        }
+        let membership = Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .env("LC_ALL", "C")
+            .current_dir(cwd)
+            .output()?;
+        // Discovery failure is the only Git error that means an ordinary folder.
+        let no_repository = membership.status.code() == Some(128)
+            && membership
+                .stderr
+                .starts_with(b"fatal: not a git repository (or any ");
+        if !membership.status.success() && !no_repository {
+            return Err(anyhow!(crate::git::failure(&membership)));
+        }
+        if no_repository || membership.stdout.trim_ascii() == b"false" {
+            return Ok(None);
+        }
+        let root = crate::git::text(cwd, &["rev-parse", "--show-toplevel"])?;
+        let root = dunce::canonicalize(root.trim_end())?;
+        let branch = crate::git::text(&root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .or_else(|_| crate::git::text(&root, &["rev-parse", "--short", "HEAD"]))?;
+        let branch = branch.trim().to_owned();
+        let base = comparison_base(&root, &branch)?;
+        let index = working_index(&root)?;
+        Ok(Some(Self {
+            root,
+            branch,
+            base,
+            index,
+        }))
+    }
+
+    pub fn diff(&self, format: &str) -> Result<Vec<u8>> {
+        // Compare the working tree itself: a dirty submodule cannot be
+        // represented by writing its parent repository's index to a tree.
+        index_output(
+            &self.root,
+            self.index.path(),
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--no-relative",
+                "--find-renames",
+                format,
+                "-z",
+                &self.base,
+                "--",
+            ],
+        )
+    }
+}
+
+fn comparison_base(cwd: &Path, branch: &str) -> Result<String> {
+    if crate::git::text(cwd, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_err() {
+        return Ok(
+            crate::git::text(cwd, &["hash-object", "-t", "tree", "--stdin"])?
+                .trim()
+                .into(),
+        );
+    }
+    let configured = crate::git::text(cwd, &["config", "--get", &base_key(branch)]).ok();
+    let history = crate::git::text(cwd, &["reflog", "show", "--format=%H%x00%gs", branch]).ok();
+    let creation = history
+        .as_deref()
+        .and_then(|history| history.lines().last())
+        .and_then(|line| line.split_once('\0'))
+        .and_then(|(commit, reason)| {
+            reason
+                .strip_prefix("branch: Created from ")
+                .map(|source| (commit, source))
+        });
+    let source = configured
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_owned)
+        .or_else(|| {
+            creation
+                .filter(|(_, source)| *source != "HEAD")
+                .and_then(|(_, source)| source_ref(cwd, source).ok())
+        });
+    let base = source
+        .as_deref()
+        .or_else(|| creation.map(|(commit, _)| commit))
+        .unwrap_or("HEAD");
+    // A deleted source branch can still be compared to its recorded creation
+    // commit. Never substitute main and attribute its inherited work to this task.
+    let base = if crate::git::text(cwd, &["rev-parse", "--verify", "--quiet", base]).is_ok() {
+        base
+    } else {
+        creation.map(|(commit, _)| commit).unwrap_or(base)
+    };
+    Ok(
+        crate::git::text(cwd, &["merge-base", "--end-of-options", base, "HEAD"])?
+            .trim()
+            .into(),
+    )
+}
+
+fn working_index(cwd: &Path) -> Result<tempfile::NamedTempFile> {
+    let git_dir = crate::git::text(cwd, &["rev-parse", "--absolute-git-dir"])?;
+    let index = tempfile::Builder::new()
+        .prefix("bex-review-index-")
+        .tempfile_in(git_dir.trim_end())?;
+    let original = crate::git::text(cwd, &["rev-parse", "--git-path", "index"])?;
+    let original = cwd.join(original.trim_end());
+    match std::fs::copy(original, index.path()) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            index_output(cwd, index.path(), &["read-tree", "--empty"])?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    // A private index includes untracked files and their content in the same
+    // comparison as committed/staged edits, without changing the user's staging.
+    index_output(cwd, index.path(), &["add", "-A", "--", "."])?;
+    Ok(index)
+}
+
+fn index_output(cwd: &Path, index: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let output = Command::new("git")
+        .args(["--no-optional-locks", "-c", "core.splitIndex=false"])
+        .args(args)
+        .env("GIT_INDEX_FILE", index)
+        .current_dir(cwd)
+        .output()?;
+    if !output.status.success() {
+        return Err(anyhow!(crate::git::failure(&output)));
+    }
+    Ok(output.stdout)
+}

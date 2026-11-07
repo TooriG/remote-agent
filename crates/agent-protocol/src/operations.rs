@@ -388,10 +388,7 @@ pub struct ReadListDecorations {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListDecorations {
     pub icons: std::collections::BTreeMap<String, Option<crate::models::ProjectIcon>>,
-    pub statuses: Vec<(
-        crate::session::SessionRef,
-        Option<crate::models::WorktreeStatus>,
-    )>,
+    pub statuses: Vec<(crate::session::SessionRef, Option<bool>)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,12 +1,12 @@
-use anyhow::{Context as _, Result, anyhow};
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    process::Command,
-};
+pub(crate) mod comparison;
 
-use agent_protocol::models::ChangedFile as WorkspaceFileChange;
-use agent_protocol::models::WorkspaceReview;
+use agent_protocol::models::{ChangedFile, WorkspaceReview};
+use anyhow::{Context as _, Result, anyhow};
+use comparison::Comparison;
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 pub async fn inspect_workspace(cwd: String) -> Result<WorkspaceReview> {
     tokio::task::spawn_blocking(move || collect_workspace_review(PathBuf::from(cwd)))
@@ -15,10 +15,8 @@ pub async fn inspect_workspace(cwd: String) -> Result<WorkspaceReview> {
 }
 
 fn collect_workspace_review(cwd: PathBuf) -> Result<WorkspaceReview> {
-    // A submission can replace a deleted worktree between Git commands. Retry
-    // a failed scan once; persistent repository errors still surface below.
+    // A submission can replace a deleted worktree between Git commands.
     let review = review_existing_workspace(&cwd).or_else(|_| review_existing_workspace(&cwd));
-    // Deletion can race any Git command, not just the initial path lookup.
     if review.is_err()
         && matches!(std::fs::metadata(&cwd), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
     {
@@ -28,101 +26,54 @@ fn collect_workspace_review(cwd: PathBuf) -> Result<WorkspaceReview> {
 }
 
 fn review_existing_workspace(cwd: &Path) -> Result<WorkspaceReview> {
-    let cwd = dunce::canonicalize(cwd).context("作業フォルダが見つかりません。")?;
-    if !cwd.is_dir() {
-        return Err(anyhow!(
-            "作業フォルダに指定したパスはフォルダではありません。"
-        ));
-    }
-    let membership = Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .env("LC_ALL", "C")
-        .current_dir(&cwd)
-        .output()
-        .context("gitを実行できませんでした。")?;
-    // Git has no distinct exit code for discovery failure. Recognize only its
-    // ordinary parent-directory/mount-boundary result in a fixed locale;
-    // broken metadata, permissions and ownership errors must still surface.
-    let no_repository = membership.status.code() == Some(128)
-        && membership
-            .stderr
-            .starts_with(b"fatal: not a git repository (or any ");
-    if !membership.status.success() && !no_repository {
-        return Err(anyhow!(crate::git::failure(&membership)));
-    }
-    if no_repository || membership.stdout.trim_ascii() == b"false" {
+    let Some(comparison) = Comparison::open(cwd)? else {
         return Ok(empty_review());
-    }
-    let branch = crate::git::text(&cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .or_else(|_| crate::git::text(&cwd, &["rev-parse", "--short", "HEAD"]))?
-        .trim()
-        .to_owned();
-    let status = crate::git::output(&cwd, &["status", "--porcelain=v1", "-z"])?.stdout;
-    let mut files = parse_git_status(&status);
-    let numstat = crate::git::output(&cwd, &["diff", "--numstat", "-z", "HEAD", "--"])
-        .or_else(|_| crate::git::output(&cwd, &["diff", "--numstat", "-z", "--"]))?;
-    let (mut additions, mut deletions) = {
-        let mut counts: HashMap<_, _> = files
-            .iter_mut()
-            .map(|file| {
-                (
-                    file.path.as_bytes(),
-                    (&mut file.additions, &mut file.deletions),
-                )
-            })
-            .collect();
-        parse_numstat(&numstat.stdout, |path, added, deleted| {
+    };
+    let mut files = parse_files(&comparison.diff("--name-status")?);
+    let mut counts: HashMap<_, _> = files
+        .iter_mut()
+        .map(|file| {
+            (
+                file.path.as_bytes(),
+                (&mut file.additions, &mut file.deletions),
+            )
+        })
+        .collect();
+    let (additions, deletions) =
+        parse_numstat(&comparison.diff("--numstat")?, |path, added, deleted| {
             if let Some((additions, deletions)) = counts.get_mut(path) {
                 **additions = added;
                 **deletions = deleted;
             }
-        })
-    };
-    let mut diff =
-        crate::git::text(&cwd, &["diff", "--no-ext-diff", "--no-color", "HEAD", "--"])
-            .or_else(|_| crate::git::text(&cwd, &["diff", "--no-ext-diff", "--no-color", "--"]))?;
-    for file in files.iter_mut().filter(|file| file.status == "untracked") {
-        let output = Command::new("git")
-            .args([
-                "diff",
-                "--no-index",
-                "--numstat",
-                "-z",
-                "--patch",
-                "--no-ext-diff",
-                "--no-color",
-                "--",
-                "/dev/null",
-                &file.path,
-            ])
-            .current_dir(&cwd)
-            .output()?;
-        if !matches!(output.status.code(), Some(0 | 1)) {
-            return Err(anyhow!("cannot read untracked file diff"));
-        }
-        let output = String::from_utf8_lossy(&output.stdout);
-        let patch_start = output.find("diff --git ").unwrap_or(output.len());
-        let (added, deleted) =
-            parse_numstat(output[..patch_start].as_bytes(), |_, added, deleted| {
-                file.additions = added;
-                file.deletions = deleted;
-            });
-        additions += added;
-        deletions += deleted;
-        diff.push_str(&output[patch_start..]);
-        if diff.len() > 8 * 1024 * 1024 {
-            return Err(anyhow!(
-                "working-tree diff exceeds 8 MiB; select a smaller working directory"
-            ));
-        }
+        });
+    let patch = comparison.diff("--patch")?;
+    if patch.len() > 8 * 1024 * 1024 {
+        return Err(anyhow!("working-tree diff exceeds 8 MiB"));
     }
     Ok(WorkspaceReview {
-        branch,
+        branch: comparison.branch,
         additions,
         deletions,
         files,
-        diff,
+        diff: String::from_utf8_lossy(&patch).into_owned(),
     })
+}
+
+pub(crate) async fn directory_changes(cwds: HashSet<String>) -> Result<HashMap<String, bool>> {
+    use futures_util::{StreamExt as _, TryStreamExt as _};
+    let results: Vec<_> = futures_util::stream::iter(cwds)
+        .map(|cwd| async move {
+            tokio::task::spawn_blocking(move || {
+                let comparison = Comparison::open(Path::new(&cwd)).ok().flatten()?;
+                let changed = !comparison.diff("--name-status").ok()?.is_empty();
+                Some((cwd, changed))
+            })
+            .await
+        })
+        .buffer_unordered(4)
+        .try_collect()
+        .await?;
+    Ok(results.into_iter().flatten().collect())
 }
 
 fn empty_review() -> WorkspaceReview {
@@ -135,40 +86,34 @@ fn empty_review() -> WorkspaceReview {
     }
 }
 
-fn parse_git_status(output: &[u8]) -> Vec<WorkspaceFileChange> {
-    let entries = output.split(|byte| *byte == 0).collect::<Vec<_>>();
+fn parse_files(output: &[u8]) -> Vec<ChangedFile> {
+    let mut entries = output.split(|byte| *byte == 0);
     let mut files = Vec::new();
-    let mut index = 0;
-    while index < entries.len() && files.len() < 200 {
-        let entry = entries[index];
-        if entry.len() < 4 {
-            index += 1;
-            continue;
-        }
-        let code = &entry[..2];
-        let path = String::from_utf8_lossy(&entry[3..]).into_owned();
-        let renamed = code.contains(&b'R') || code.contains(&b'C');
-        if renamed {
-            index += 1;
-        }
-        let status = if code == b"??" {
-            "untracked"
-        } else if code.contains(&b'D') {
-            "deleted"
-        } else if code.contains(&b'A') {
-            "added"
-        } else if renamed {
-            "renamed"
-        } else {
-            "modified"
+    while let Some(code) = entries.next().filter(|code| !code.is_empty()) {
+        let Some(mut path) = entries.next() else {
+            break;
         };
-        files.push(WorkspaceFileChange {
-            path,
+        let status = match code[0] {
+            b'A' => "added",
+            b'D' => "deleted",
+            b'R' | b'C' => "renamed",
+            _ => "modified",
+        };
+        if status == "renamed" {
+            let Some(destination) = entries.next() else {
+                break;
+            };
+            path = destination;
+        }
+        files.push(ChangedFile {
+            path: String::from_utf8_lossy(path).into_owned(),
             status: status.into(),
             additions: Some(0),
             deletions: Some(0),
         });
-        index += 1;
+        if files.len() == 200 {
+            break;
+        }
     }
     files
 }
@@ -207,6 +152,196 @@ fn parse_numstat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn git(cwd: &Path, args: &[&str]) -> String {
+        let mut configured = vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ];
+        configured.extend_from_slice(args);
+        crate::git::text(cwd, &configured).unwrap()
+    }
+
+    async fn assert_changes(cwd: &Path, paths: &[&str], lines: (u64, u64)) {
+        let cwd_text = cwd.to_str().unwrap().to_owned();
+        let review = inspect_workspace(cwd_text.clone()).await.unwrap();
+        assert_eq!((review.additions, review.deletions), lines);
+        let actual: std::collections::BTreeSet<_> =
+            review.files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(actual, paths.iter().copied().collect());
+        let marks = directory_changes([cwd_text.clone()].into()).await.unwrap();
+        assert_eq!(marks.get(&cwd_text), Some(&!paths.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn changes_and_marks_follow_the_worktrees_source_through_edits_commits_and_integration() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        git(root, &["init", "--initial-branch=main"]);
+        std::fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-m", "base"]);
+        git(root, &["switch", "-c", "source"]);
+        std::fs::write(root.join("inherited.txt"), "existing source work\n").unwrap();
+        git(root, &["add", "inherited.txt"]);
+        git(root, &["commit", "-m", "source work"]);
+        let store = crate::worktrees::Worktrees::new(&root.join("projects.json"));
+        store
+            .settings(Some(agent_protocol::models::WorktreeSettings {
+                create_on_new_session: true,
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let task = store
+            .prepare(root.to_str(), || async { Ok(()) })
+            .await
+            .unwrap()
+            .unwrap();
+        let branch = git(&task, &["branch", "--show-current"]).trim().to_owned();
+        let key = comparison::base_key(&branch);
+        assert_eq!(
+            git(&task, &["config", "--get", &key]).trim(),
+            "refs/heads/source"
+        );
+        assert_changes(&task, &[], (0, 0)).await;
+        assert!(!git(&task, &["diff", "--name-only", "main...HEAD"]).is_empty());
+
+        std::fs::write(root.join("source-only.txt"), "newer source work\n").unwrap();
+        git(root, &["add", "source-only.txt"]);
+        git(root, &["commit", "-m", "advance source"]);
+        assert_changes(&task, &[], (0, 0)).await;
+        std::fs::write(task.join("tracked.txt"), "base\nmine\n").unwrap();
+        std::fs::write(task.join("staged.txt"), "staged\n").unwrap();
+        git(&task, &["add", "staged.txt"]);
+        std::fs::create_dir(task.join("notes")).unwrap();
+        std::fs::write(task.join("notes/new.txt"), "one\ntwo\n").unwrap();
+        let index = PathBuf::from(git(&task, &["rev-parse", "--git-path", "index"]).trim());
+        let before = std::fs::read(task.join(&index)).unwrap();
+        assert_changes(
+            &task,
+            &["tracked.txt", "staged.txt", "notes/new.txt"],
+            (4, 0),
+        )
+        .await;
+        assert_eq!(
+            std::fs::read(task.join(&index)).unwrap(),
+            before,
+            "review must preserve staging"
+        );
+        assert_changes(
+            &task.join("notes"),
+            &["tracked.txt", "staged.txt", "notes/new.txt"],
+            (4, 0),
+        )
+        .await;
+        git(&task, &["add", "."]);
+        git(&task, &["commit", "-m", "task work"]);
+        assert_changes(
+            &task,
+            &["tracked.txt", "staged.txt", "notes/new.txt"],
+            (4, 0),
+        )
+        .await;
+        git(&task, &["branch", "-m", "renamed-task"]);
+        assert_changes(
+            &task,
+            &["tracked.txt", "staged.txt", "notes/new.txt"],
+            (4, 0),
+        )
+        .await;
+        git(root, &["merge", "--no-edit", "renamed-task"]);
+        assert_changes(&task, &[], (0, 0)).await;
+
+        // Staging can differ even when the final file content matches the base.
+        std::fs::write(task.join("tracked.txt"), "staged change\n").unwrap();
+        git(&task, &["add", "tracked.txt"]);
+        std::fs::write(task.join("tracked.txt"), "base\nmine\n").unwrap();
+        assert_changes(&task, &[], (0, 0)).await;
+    }
+
+    #[tokio::test]
+    async fn creation_history_excludes_inherited_work_without_a_saved_source_ref() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        git(cwd, &["init", "--initial-branch=main"]);
+        git(cwd, &["commit", "--allow-empty", "-m", "base"]);
+        git(cwd, &["switch", "-c", "source"]);
+        std::fs::write(cwd.join("inherited.txt"), "existing work\n").unwrap();
+        git(cwd, &["add", "."]);
+        git(cwd, &["commit", "-m", "source work"]);
+        git(cwd, &["switch", "-c", "task", "HEAD"]);
+        assert_changes(cwd, &[], (0, 0)).await;
+        git(cwd, &["commit", "--allow-empty", "-m", "no file changes"]);
+        assert_changes(cwd, &[], (0, 0)).await;
+        std::fs::write(cwd.join("own.txt"), "own work\n").unwrap();
+        git(cwd, &["add", "own.txt"]);
+        git(cwd, &["commit", "-m", "own work"]);
+        assert_changes(cwd, &["own.txt"], (1, 0)).await;
+        git(cwd, &["revert", "--no-edit", "HEAD"]);
+        assert_changes(cwd, &[], (0, 0)).await;
+    }
+
+    #[tokio::test]
+    async fn zero_line_file_changes_still_show_the_same_changes_mark() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path();
+        git(cwd, &["init", "--initial-branch=main"]);
+        std::fs::write(cwd.join("old.txt"), "same content\n").unwrap();
+        std::fs::write(cwd.join("binary.dat"), b"before\0").unwrap();
+        git(cwd, &["add", "."]);
+        git(cwd, &["commit", "-m", "base"]);
+        git(cwd, &["switch", "-c", "task"]);
+        std::fs::rename(cwd.join("old.txt"), cwd.join("new.txt")).unwrap();
+        std::fs::write(cwd.join("binary.dat"), b"after\0").unwrap();
+        std::fs::write(cwd.join("empty.txt"), b"").unwrap();
+        assert_changes(cwd, &["binary.dat", "empty.txt", "new.txt"], (0, 0)).await;
+    }
+
+    #[tokio::test]
+    async fn dirty_submodules_remain_visible_in_both_changes_and_marks() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let repo = directory.path().join("repo");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&repo).unwrap();
+        git(&source, &["init", "--initial-branch=main"]);
+        std::fs::write(source.join("tracked.txt"), "original\n").unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-m", "submodule base"]);
+        git(&repo, &["init", "--initial-branch=main"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                source.to_str().unwrap(),
+                "sub",
+            ],
+        );
+        git(&repo, &["commit", "-m", "base"]);
+        git(&repo, &["switch", "-c", "task"]);
+        std::fs::write(repo.join("sub/tracked.txt"), "pending\n").unwrap();
+        let cwd = repo.to_str().unwrap().to_owned();
+        let review = inspect_workspace(cwd.clone()).await.unwrap();
+        assert_eq!(
+            review
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["sub"]
+        );
+        assert!(review.diff.contains("-dirty"));
+        let marks = directory_changes([cwd.clone()].into()).await.unwrap();
+        assert_eq!(marks.get(&cwd), Some(&true));
+    }
 
     #[test]
     fn folders_without_a_git_worktree_have_no_changes() {
@@ -254,7 +389,7 @@ mod tests {
         assert_eq!((review.additions, review.deletions), (2, 0));
         assert!(review.diff.starts_with("diff --git "));
         assert!(review.diff.contains("+first\n+second\n"));
-        assert_eq!(review.files[0].status, "untracked");
+        assert_eq!(review.files[0].status, "added");
         assert_eq!(
             (review.files[0].additions, review.files[0].deletions),
             (Some(2), Some(0))
@@ -275,21 +410,7 @@ mod tests {
         std::fs::write(cwd.join(deleted), "one\ntwo\n").unwrap();
         std::fs::write(cwd.join("binary.dat"), b"before\0").unwrap();
         crate::git::text(cwd, &["add", "."]).unwrap();
-        crate::git::text(
-            cwd,
-            &[
-                "-c",
-                "user.name=Fixture",
-                "-c",
-                "user.email=fixture@example.invalid",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-m",
-                "initial",
-            ],
-        )
-        .unwrap();
+        git(cwd, &["commit", "-m", "initial"]);
         crate::git::text(cwd, &["mv", "old.txt", renamed]).unwrap();
         std::fs::write(cwd.join(renamed), "first\nsecond\nthird\nfourth\n").unwrap();
         std::fs::remove_file(cwd.join(deleted)).unwrap();
@@ -314,13 +435,13 @@ mod tests {
         assert_eq!(
             review.files.len(),
             3,
-            "a deleted staged rename still owns its source record"
+            "changes are compared to the source tree independently of staging"
         );
         assert_eq!(
             review
                 .files
                 .iter()
-                .find(|file| file.path == renamed)
+                .find(|file| file.path == "old.txt")
                 .unwrap()
                 .status,
             "deleted"

@@ -108,7 +108,7 @@ pub struct Thread {
     pub can_accept_direct_input: Option<bool>,
     pub name: Option<String>,
     pub cwd: Option<String>,
-    pub worktree_status: Option<WorktreeStatus>,
+    pub has_changes: Option<bool>,
     pub git_branch: Option<String>,
     #[serde(default)]
     pub status: SessionStatus,
@@ -706,21 +706,6 @@ mod tests {
                 prop_assert_eq!(settings.deletes_unchanged(Some(&other)), global);
             }
         }
-
-        #[test]
-        fn worktree_status_distinguishes_pending_work_from_integrated_history(
-            dirty in any::<bool>(),
-            unmerged_changes in any::<bool>(),
-            merged_history in any::<bool>(),
-        ) {
-            let status = worktree_branch_status(dirty, unmerged_changes, merged_history);
-            let expected = match (dirty, unmerged_changes, merged_history) {
-                (true, _, _) | (_, true, _) => Some(WorktreeStatus::Unmerged),
-                (false, false, true) => Some(WorktreeStatus::Merged),
-                _ => None,
-            };
-            prop_assert_eq!(status, expected);
-        }
     }
 
     #[test]
@@ -877,26 +862,4 @@ pub fn task_title<'a>(name: Option<&'a str>, preview: Option<&'a str>) -> &'a st
     name.filter(|name| !name.is_empty())
         .or_else(|| preview.filter(|preview| !preview.is_empty()))
         .unwrap_or("無題のタスク")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum WorktreeStatus {
-    Unmerged,
-    Merged,
-}
-
-/// Pending file changes take priority over previously integrated branch work.
-pub fn worktree_branch_status(
-    has_uncommitted_changes: bool,
-    has_unmerged_changes: bool,
-    has_merged_history: bool,
-) -> Option<WorktreeStatus> {
-    if has_uncommitted_changes || has_unmerged_changes {
-        Some(WorktreeStatus::Unmerged)
-    } else if has_merged_history {
-        Some(WorktreeStatus::Merged)
-    } else {
-        None
-    }
 }

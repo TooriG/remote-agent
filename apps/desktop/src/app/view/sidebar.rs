@@ -910,20 +910,13 @@ impl SidebarView {
         let host = thread.host_id.clone();
         let active = thread.active;
         let unread = thread.unread;
-        let worktree = thread.worktree_status.map(|status| match status {
-            agent_protocol::models::WorktreeStatus::Unmerged => (
-                "icons/diff.svg",
-                0xfb923c,
-                language.text("main に未反映の変更あり"),
-                format!("thread-unmerged-{}", thread.id),
-            ),
-            agent_protocol::models::WorktreeStatus::Merged => (
-                "icons/merge.svg",
-                0xa78bfa,
-                language.text("main にマージ済み"),
-                format!("thread-merged-{}", thread.id),
-            ),
-        });
+        let has_changes = thread.has_changes == Some(true);
+        let changes_label = language.text("作成元からの変更あり");
+        let changes_id = format!(
+            "thread-changes-{}:{}",
+            thread.id.provider.key(),
+            thread.id.id
+        );
         SidebarMenuItem::new(thread.title.clone())
             .active(selected)
             .suffix(move |_, _| {
@@ -935,17 +928,18 @@ impl SidebarView {
                     .when(!active && unread, |row| {
                         row.child(div().size(px(8.)).rounded_full().bg(rgb(0xffffff)))
                     })
-                    .when_some(worktree.clone(), |row, (path, color, label, id)| {
+                    .when(has_changes, |row| {
+                        let selector = changes_id.clone();
                         row.child(
                             div()
-                                .id(id)
-                                .debug_selector(move || path.into())
+                                .id(changes_id.clone())
+                                .debug_selector(move || selector.clone())
                                 .role(Role::Image)
-                                .child(Icon::default().path(path).size_4())
-                                .text_color(rgb(color))
-                                .aria_label(label)
+                                .child(Icon::default().path("icons/diff.svg").size_4())
+                                .text_color(rgb(0xfb923c))
+                                .aria_label(changes_label)
                                 .tooltip(move |window, cx| {
-                                    tooltip::Tooltip::new(label).build(window, cx)
+                                    tooltip::Tooltip::new(changes_label).build(window, cx)
                                 }),
                         )
                     })
@@ -1467,8 +1461,8 @@ mod tests {
                 threads: Some(Arc::new(
                     serde_json::from_value(serde_json::json!({
                         "data":[{"id":{"provider":"codex","id":"child"},"parentId":{"provider":"codex","id":"first"},"name":"Child task","status":"running"},
-                                {"id":{"provider":"codex","id":"first"},"name":"First task","worktreeStatus":"unmerged"},
-                                {"id":{"provider":"codex","id":"second"},"name":"Second task","worktreeStatus":"merged"}],
+                                {"id":{"provider":"codex","id":"first"},"name":"First task","hasChanges":true},
+                                {"id":{"provider":"codex","id":"second"},"name":"Second task","hasChanges":false}],
                         "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
                     .unwrap(),
                 )),
@@ -1518,8 +1512,8 @@ mod tests {
         });
         window.run_until_parked();
         // Leave the Tokio executor parked so both task reads remain pending.
-        assert!(window.debug_bounds("icons/diff.svg").is_some());
-        assert!(window.debug_bounds("icons/merge.svg").is_some());
+        assert!(window.debug_bounds("thread-changes-codex:first").is_some());
+        assert!(window.debug_bounds("thread-changes-codex:second").is_none());
         for (id, selector) in [("first", "drag-chat-first"), ("second", "drag-chat-second")] {
             let bounds = window.debug_bounds(selector).unwrap();
             let button = gpui::point(bounds.left() + gpui::px(70.), bounds.top() + gpui::px(14.));

@@ -149,11 +149,6 @@ struct TaskActivityView {
 struct UnregisterLiveActivity {
     pub activity_id: String,
 }
-#[uniffi::remote(Enum)]
-enum WorktreeStatus {
-    Unmerged,
-    Merged,
-}
 #[uniffi::remote(Record)]
 struct CreateInvitation {}
 #[uniffi::remote(Record)]

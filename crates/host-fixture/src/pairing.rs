@@ -312,6 +312,10 @@ fn merge_worktree(root: &Path, path: &str) -> Result<()> {
                     checkout.to_str().ok_or("fixture path is not UTF-8")?,
                 ],
             )?;
+            git(
+                &repo,
+                &["config", "branch.task.bex-base-ref", "refs/heads/main"],
+            )?;
         }
         "/merge-worktree/merged" => {
             git(&checkout, &["commit", "--allow-empty", "-m", "work"])?;
@@ -320,7 +324,7 @@ fn merge_worktree(root: &Path, path: &str) -> Result<()> {
         "/merge-worktree/dirty" => fs::write(checkout.join("pending.txt"), "pending\n")?,
         "/merge-worktree/clean" => fs::remove_file(checkout.join("pending.txt"))?,
         _ => {
-            // Unmerged status tracks net file changes, not empty commits.
+            // The mark follows the same net file changes as Changes.
             fs::write(checkout.join("new-work.txt"), "new work\n")?;
             git(&checkout, &["add", "new-work.txt"])?;
             git(&checkout, &["commit", "-m", "new work"])?;

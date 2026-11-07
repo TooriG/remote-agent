@@ -77,7 +77,7 @@ mod tests {
             active: false,
             waiting: false,
             unread: false,
-            worktree_status: None,
+            has_changes: None,
         }
     }
 

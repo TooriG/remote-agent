@@ -332,7 +332,7 @@
         "projectId": "workspace",
         "status": "idle",
         "updatedAt": 1,
-        "worktreeStatus": null,
+        "hasChanges": null,
         "session": {
           "provider": "codex",
           "id": "fixture-thread-1"
