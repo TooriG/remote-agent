@@ -265,13 +265,49 @@ impl Application {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{application::Host, shared::Shared};
+    use crate::{
+        application::{Host, State},
+        shared::Shared,
+    };
     use agent_core::presentation::view::Presentation;
+
+    fn isolated_application(
+        root: std::path::PathBuf,
+    ) -> (tokio::runtime::Runtime, Arc<Application>) {
+        // These tests publish explicit Host facts. Discovery must not race those facts.
+        let (runtime, client, _) = crate::client::Client::new(root).unwrap();
+        let (state, _) = tokio::sync::watch::channel(Arc::new(State::default()));
+        let app = Arc::new(Application {
+            client,
+            instance: uuid::Uuid::new_v4(),
+            state,
+            stop: tokio_util::sync::CancellationToken::new(),
+            runtime: runtime.handle().clone(),
+            jobs: Default::default(),
+        });
+        (runtime, app)
+    }
+
+    async fn idle_editor(mut updates: tokio::sync::watch::Receiver<Arc<State>>) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while updates
+                .borrow_and_update()
+                .worktrees
+                .as_ref()
+                .unwrap()
+                .pending
+            {
+                updates.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+    }
 
     #[test]
     fn managed_actions_preserve_current_worktrees_and_open_only_registered_resources() {
         let directory = tempfile::tempdir().unwrap();
-        let (runtime, app) = Application::new(directory.path().into()).unwrap();
+        let (runtime, app) = isolated_application(directory.path().into());
         let thread =
             SessionRef::new(agent_protocol::session::ProviderKind::Codex, "chat".into()).unwrap();
         let mut snapshot = agent_core::state::Snapshot::default();
@@ -289,7 +325,7 @@ mod tests {
                     active: false,
                 }],
             }]));
-        let p = Presentation::project(Arc::new(snapshot), None);
+        let p = Presentation::project(Arc::new(snapshot.clone()), None);
         let scope = p
             .snapshot
             .panel_scope("host".into(), p.context.navigation().draft_key);
@@ -308,13 +344,14 @@ mod tests {
             state.publications.insert("host".into(), Shared(p));
             state.worktrees = Some(editor.clone());
         });
+        let unchanged = app.subscribe();
         app.worktree_action(
             "editor",
             WorktreeAction::Remove {
                 path: "/managed/tree".into(),
             },
         );
-        assert!(!app.snapshot().worktrees.as_ref().unwrap().pending);
+        assert!(!unchanged.has_changed().unwrap());
         app.worktree_action(
             "editor",
             WorktreeAction::Review {
@@ -322,6 +359,28 @@ mod tests {
             },
         );
         assert!(app.snapshot().panels.get(scope.clone()).surfaces.is_empty());
+        assert!(!unchanged.has_changed().unwrap());
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd = "/another".into();
+        app.state.send_modify(|state| {
+            Arc::make_mut(state).publications.insert(
+                "host".into(),
+                Shared(Presentation::project(Arc::new(snapshot), None)),
+            );
+        });
+        let removal = app.subscribe();
+        app.worktree_action(
+            "editor",
+            WorktreeAction::Remove {
+                path: "/managed/tree".into(),
+            },
+        );
+        assert!(
+            removal.has_changed().unwrap(),
+            "An available registered checkout must reach the Host request"
+        );
+        runtime.block_on(idle_editor(app.subscribe()));
+        assert!(app.snapshot().worktrees.as_ref().unwrap().error.is_some());
+
         app.worktree_action(
             "editor",
             WorktreeAction::Review {
@@ -357,7 +416,7 @@ mod tests {
     #[test]
     fn worktree_requests_reject_stale_views_and_keep_saved_values_after_a_failed_save() {
         let directory = tempfile::tempdir().unwrap();
-        let (runtime, app) = Application::new(directory.path().into()).unwrap();
+        let (runtime, app) = isolated_application(directory.path().into());
         let saved = WorktreeSettings {
             worktree_directory: "/saved".into(),
             ..Default::default()
@@ -393,6 +452,27 @@ mod tests {
             },
         );
         assert!(!app.snapshot().worktrees.as_ref().unwrap().pending);
+        app.state
+            .send_modify(|state| Arc::make_mut(state).worktrees.as_mut().unwrap().settings = None);
+        let unloaded = app.subscribe();
+        app.worktree_action(
+            "editor",
+            WorktreeAction::Save {
+                id: "unloaded".into(),
+                settings: saved.clone(),
+            },
+        );
+        assert!(!unloaded.has_changed().unwrap());
+        app.worktree_action(
+            "editor",
+            WorktreeAction::Host {
+                id: "unregistered".into(),
+            },
+        );
+        assert!(!unloaded.has_changed().unwrap());
+        app.state.send_modify(|state| {
+            Arc::make_mut(state).worktrees.as_mut().unwrap().settings = Some(saved.clone())
+        });
         app.worktree_action(
             "editor",
             WorktreeAction::Save {
@@ -403,22 +483,7 @@ mod tests {
                 },
             },
         );
-        let mut updates = app.subscribe();
-        runtime.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                while updates
-                    .borrow_and_update()
-                    .worktrees
-                    .as_ref()
-                    .unwrap()
-                    .pending
-                {
-                    updates.changed().await.unwrap();
-                }
-            })
-            .await
-            .unwrap();
-        });
+        runtime.block_on(idle_editor(app.subscribe()));
         let snapshot = app.snapshot();
         let editor = snapshot.worktrees.as_ref().unwrap();
         assert_eq!(editor.settings.as_ref(), Some(&saved));
@@ -426,7 +491,27 @@ mod tests {
         let receipt = editor.receipt.as_ref().unwrap();
         assert_eq!(receipt.id, "request");
         assert!(!receipt.succeeded);
+        app.worktree_action(
+            "editor",
+            WorktreeAction::Host {
+                id: "missing".into(),
+            },
+        );
+        runtime.block_on(idle_editor(app.subscribe()));
+        let reopened = app.snapshot().worktrees.as_ref().unwrap().id.clone();
+        assert_ne!(reopened, "editor");
+        assert_eq!(app.snapshot().host, "missing");
+        assert!(
+            app.snapshot()
+                .worktrees
+                .as_ref()
+                .unwrap()
+                .settings
+                .is_none()
+        );
         app.worktree_action("editor", WorktreeAction::Close {});
+        assert!(app.snapshot().worktrees.is_some());
+        app.worktree_action(&reopened, WorktreeAction::Close {});
         app.worktree_action("editor", WorktreeAction::Load {});
         assert!(app.snapshot().worktrees.is_none());
         runtime.block_on(app.shutdown()).unwrap();
