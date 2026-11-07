@@ -265,6 +265,24 @@ fn activity_summary<'a>(items: impl Iterator<Item = ItemMetadata<'a>>) -> String
     }
 }
 
+/// A duration as the conversation names it: `<1秒`, `12秒`, `1時間 3秒`.
+fn duration_text(ms: u64) -> String {
+    if ms < 1000 {
+        return "<1秒".into();
+    }
+    let seconds = ms / 1000;
+    [
+        (seconds / 3600, "時間"),
+        (seconds / 60 % 60, "分"),
+        (seconds % 60, "秒"),
+    ]
+    .into_iter()
+    .filter(|(value, _)| *value != 0)
+    .map(|(value, unit)| format!("{value}{unit}"))
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
 fn work_summary(turn: &Turn) -> String {
     if turn.status == agent_protocol::execution::TurnStatus::Running {
         return "作業中…".into();
@@ -274,25 +292,7 @@ fn work_summary(turn: &Turn) -> String {
         .or_else(|| turn.completed_at_ms?.checked_sub(turn.started_at_ms?));
     let mut summary = String::new();
     if let Some(ms) = duration {
-        use std::fmt::Write;
-        if ms < 1000 {
-            summary.push_str("<1秒");
-        } else {
-            let seconds = ms / 1000;
-            for (value, unit) in [
-                (seconds / 3600, "時間"),
-                (seconds / 60 % 60, "分"),
-                (seconds % 60, "秒"),
-            ] {
-                if value == 0 {
-                    continue;
-                }
-                if !summary.is_empty() {
-                    summary.push(' ');
-                }
-                write!(summary, "{value}{unit}").unwrap();
-            }
-        }
+        summary.push_str(&duration_text(ms));
         summary.push_str(" 作業");
     } else {
         summary.push_str("作業");

@@ -165,9 +165,15 @@ pub struct WorkProgress {
 
 impl WorkProgress {
     pub fn label(&self, now_seconds: f64) -> String {
+        // As T3 Code's working row: the time so far, in the fold's units.
         let elapsed = self
             .started_at
-            .map(|started| format!("{}秒 ", (now_seconds - started).max(0.) as u64))
+            .map(|started| {
+                format!(
+                    "{} ",
+                    super::duration_text(((now_seconds - started).max(0.) * 1000.) as u64)
+                )
+            })
             .unwrap_or_default();
         match self.action.as_deref().filter(|action| !action.is_empty()) {
             Some(action) => format!("{elapsed}作業中 · {action}"),
@@ -3087,7 +3093,9 @@ mod progress_tests {
             progress.action = Some("cargo test".into());
             assert_eq!(progress.label(108.5), "8秒 作業中 · cargo test");
             assert_eq!(turn.work_progress(false).label(110.5), "10秒 作業中…");
-            assert_eq!(turn.work_progress(false).label(99.), "0秒 作業中…");
+            assert_eq!(turn.work_progress(false).label(99.), "<1秒 作業中…");
+            // The time so far reads in the fold's units, as T3 Code's working row.
+            assert_eq!(turn.work_progress(false).label(285.5), "3分 5秒 作業中…");
         }
         assert_eq!(
             WorkProgress {

@@ -16960,6 +16960,230 @@
           }
         }
       }
+    },
+    "<1秒 作業中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for <1s…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<1秒 作業中…"
+          }
+        }
+      }
+    },
+    "<1秒 作業中 · {0}": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for <1s · {0}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<1秒 作業中 · {0}"
+          }
+        }
+      }
+    },
+    "{0}分 {1}秒 作業中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}m {1}s…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}分 {1}秒 作業中…"
+          }
+        }
+      }
+    },
+    "{0}分 {1}秒 作業中 · {2}": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}m {1}s · {2}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}分 {1}秒 作業中 · {2}"
+          }
+        }
+      }
+    },
+    "{0}分 作業中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}m…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}分 作業中…"
+          }
+        }
+      }
+    },
+    "{0}分 作業中 · {1}": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}m · {1}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}分 作業中 · {1}"
+          }
+        }
+      }
+    },
+    "{0}時間 {1}分 {2}秒 作業中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}h {1}m {2}s…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間 {1}分 {2}秒 作業中…"
+          }
+        }
+      }
+    },
+    "{0}時間 {1}分 {2}秒 作業中 · {3}": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}h {1}m {2}s · {3}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間 {1}分 {2}秒 作業中 · {3}"
+          }
+        }
+      }
+    },
+    "{0}時間 {1}分 作業中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}h {1}m…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間 {1}分 作業中…"
+          }
+        }
+      }
+    },
+    "{0}時間 {1}分 作業中 · {2}": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}h {1}m · {2}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間 {1}分 作業中 · {2}"
+          }
+        }
+      }
+    },
+    "{0}時間 {1}秒 作業中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}h {1}s…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間 {1}秒 作業中…"
+          }
+        }
+      }
+    },
+    "{0}時間 {1}秒 作業中 · {2}": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}h {1}s · {2}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間 {1}秒 作業中 · {2}"
+          }
+        }
+      }
+    },
+    "{0}時間 作業中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}h…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間 作業中…"
+          }
+        }
+      }
+    },
+    "{0}時間 作業中 · {1}": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}h · {1}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間 作業中 · {1}"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

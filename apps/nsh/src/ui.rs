@@ -44,6 +44,10 @@ pub(crate) enum Icon {
     Details,
     Diff,
     Ellipsis,
+    Wrench,
+    Terminal,
+    FilePen,
+    Brain,
     #[cfg(target_os = "macos")]
     Replace,
     #[cfg(target_os = "macos")]
@@ -93,6 +97,10 @@ impl Icon {
             Self::Details => "list.bullet.rectangle",
             Self::Diff => "plusminus",
             Self::Ellipsis => "ellipsis",
+            Self::Wrench => "wrench.adjustable",
+            Self::Terminal => "apple.terminal",
+            Self::FilePen => "square.and.pencil",
+            Self::Brain => "brain",
             Self::Replace => "arrow.left.arrow.right",
             Self::FolderOpen => "folder",
             Self::FileText => "doc",
@@ -130,6 +138,10 @@ impl Icon {
             Self::Details => include_str!("../../desktop/assets/square-menu.svg"),
             Self::Diff => include_str!("../../desktop/assets/diff.svg"),
             Self::Ellipsis => include_str!("../assets/icons/ellipsis.svg"),
+            Self::Wrench => include_str!("../assets/icons/wrench.svg"),
+            Self::Terminal => include_str!("../assets/icons/square-terminal.svg"),
+            Self::FilePen => include_str!("../assets/icons/file-pen.svg"),
+            Self::Brain => include_str!("../assets/icons/brain.svg"),
             #[cfg(target_os = "macos")]
             Self::Replace => include_str!("../assets/icons/replace.svg"),
             #[cfg(target_os = "macos")]
@@ -161,6 +173,18 @@ impl Icon {
             Self::Settings => include_str!("../assets/icons/settings.svg"),
             Self::Steer => include_str!("../assets/icons/redo-2.svg"),
             Self::Stop => include_str!("../../desktop/assets/stop.svg"),
+        }
+    }
+}
+
+impl Icon {
+    /// A work item's tool, as T3 Code's work log shows it.
+    pub(crate) fn work(kind: &str) -> Self {
+        match kind {
+            "command" => Self::Terminal,
+            "fileChange" => Self::FilePen,
+            "reasoning" => Self::Brain,
+            _ => Self::Wrench,
         }
     }
 }
