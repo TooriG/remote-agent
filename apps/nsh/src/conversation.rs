@@ -39,6 +39,8 @@ struct Row {
     images: Vec<String>,
     detail: Option<crate::activity::Item>,
     progress: Option<WorkProgress>,
+    /// The local time it was sent or answered (`HH:MM`).
+    time: Option<String>,
 }
 
 fn project(
@@ -83,6 +85,11 @@ fn project(
                 | ConversationRowContent::Response { item, .. } => item.data.image_sources.clone(),
                 _ => Vec::new(),
             };
+            let time = row
+                .timestamp_ms
+                .and_then(|ms| i64::try_from(ms).ok())
+                .and_then(chrono::DateTime::from_timestamp_millis)
+                .map(|time| time.with_timezone(&chrono::Local).format("%H:%M").to_string());
             let activity = match &row.content { ConversationRowContent::ActivityHeader { activity } => Some(activity.clone()), _ => None };
             let actions = matches!(&row.content, ConversationRowContent::Response { show_actions: true, .. });
             let fork = match &row.content { ConversationRowContent::Response { fork_turn_id, .. } => fork_turn_id.clone(), _ => None };
@@ -125,6 +132,7 @@ fn project(
                 images,
                 detail,
                 progress,
+                time,
             })
         })
         .collect()
@@ -257,6 +265,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                         .py_3()
                         .child(
                             view()
+                                .group()
                                 .w_full()
                                 .max_w(px(780.0))
                                 .items_start()
@@ -270,7 +279,16 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                     move || {
                                         crate::ui::text_button(
                                             move || {
-                                                SharedString::from(label().unwrap_or_default().to_string())
+                                                let open = row.with(|row| {
+                                                    row.as_ref().and_then(|row| row.activity.as_ref()).is_some_and(|activity| {
+                                                        expanded.with(|all| activity_is_expanded(&activity.status, all.get(&activity.id).cloned()))
+                                                    })
+                                                });
+                                                SharedString::from(format!(
+                                                    "{} {}",
+                                                    label().unwrap_or_default(),
+                                                    if open { "⌄" } else { "›" }
+                                                ))
                                             },
                                             move || {
                                                 if let Some(activity) = row.with_untracked(|row| {
@@ -345,61 +363,9 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                     move || {
                                         row.with(|row| row.as_ref().is_some_and(|row| row.actions))
                                     },
-                                    move || {
-                                        view()
-                                            .flex_row()
-                                            .gap_4()
-                                            .mt_2()
-                                            .child(crate::ui::icon_button(
-                                                crate::ui::Icon::Copy,
-                                                "コピー",
-                                                move || {
-                                                    if let Some(row) = row.get_untracked() {
-                                                        set_clipboard(row.body.to_string());
-                                                    }
-                                                },
-                                            ))
-                                            .child(when(
-                                                move || {
-                                                    row.with(|row| {
-                                                        row.as_ref()
-                                                            .is_some_and(|row| row.fork.is_some())
-                                                    })
-                                                },
-                                                move || {
-                                                    crate::ui::icon_button(
-                                                        crate::ui::Icon::Branch,
-                                                        "会話を分岐",
-                                                        move || {
-                                                            if let Some(last_turn_id) = row
-                                                                .with_untracked(|row| {
-                                                                    row.as_ref().and_then(|row| {
-                                                                        row.fork.clone()
-                                                                    })
-                                                                })
-                                                                && let Some(thread_id) = connection
-                                                                    .context
-                                                                    .with_untracked(|p| {
-                                                                        p
-                                                                            .navigation()
-                                                                            .thread_id
-                                                                    })
-                                                            {
-                                                                connection.dispatch(
-                                                                    Intent::ForkSession(
-                                                                        op::ForkSession {
-                                                                            thread_id,
-                                                                            last_turn_id,
-                                                                        },
-                                                                    ),
-                                                                );
-                                                            }
-                                                        },
-                                                    )
-                                                },
-                                            ))
-                                    },
-                                )),
+                                    move || response_actions(row),
+                                ))
+                                .child(when(user, move || user_actions(row))),
                         )
                         .child(when(
                             move || {
@@ -441,6 +407,113 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 .rounded_full()
                 .absolute().self_center().bottom(px(6.0))
         }))
+}
+
+/// A response's actions, as the desktop client's: copy, fork from here, its time.
+fn response_actions(row: Memo<Option<Row>>) -> View {
+    use crate::ui::{self, Enabled, Icon, colors};
+    let connection = use_context::<Connection>().unwrap();
+    let fork = move || row.with(|row| row.as_ref().and_then(|row| row.fork.clone()));
+    let thread = move || {
+        connection
+            .context
+            .with(|context| context.navigation().thread_id)
+    };
+    let forking = move || match (thread(), fork()) {
+        (Some(session), Some(turn)) => connection.publication.with(|p| {
+            p.snapshot
+                .operation_running(op::OperationKey::Fork { session, turn })
+        }),
+        _ => false,
+    };
+    view()
+        .flex_row()
+        .items_center()
+        .gap_4()
+        .mt_2()
+        .child(ui::icon_button(
+            Icon::Copy,
+            "回答をコピー",
+            move || {
+                if let Some(row) = row.get_untracked() {
+                    set_clipboard(row.body.to_string());
+                }
+            },
+        ))
+        .child(when(
+            move || fork().is_some(),
+            move || {
+                ui::icon_button(Icon::Branch, "ここから会話を分岐", move || {
+                    if let (Some(thread_id), Some(last_turn_id)) =
+                        (untracked(thread), untracked(fork))
+                    {
+                        connection.dispatch(Intent::ForkSession(op::ForkSession {
+                            thread_id,
+                            last_turn_id,
+                        }));
+                    }
+                })
+                .enabled(move || !forking())
+            },
+        ))
+        .child(when(forking, || {
+            text("分岐を作成中…")
+                .text_size(px(12.0))
+                .text_color(colors::MUTED)
+        }))
+        .child(time(row))
+}
+
+/// The user's own message's actions, shown while the pointer is over it: its time,
+/// copy, and editing it in the composer.
+fn user_actions(row: Memo<Option<Row>>) -> View {
+    use crate::ui::{self, Icon};
+    let connection = use_context::<Connection>().unwrap();
+    let body = move || row.with_untracked(|row| row.as_ref().map(|row| row.body.to_string()));
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .opacity(0.0)
+        .group_hover(|s| s.opacity(1.0))
+        .child(time(row).mr_2())
+        .child(ui::icon_button(
+            Icon::Copy,
+            "発言をコピー",
+            move || {
+                if let Some(text) = body() {
+                    set_clipboard(text);
+                }
+            },
+        ))
+        .child(ui::icon_button(
+            Icon::Pencil,
+            "入力欄で編集",
+            move || {
+                let Some(text) = body() else { return };
+                let draft_key = connection
+                    .composer
+                    .with_untracked(|c| c.controls.navigation.draft_key.clone());
+                connection.dispatch(Intent::EditComposer {
+                    thread_id: draft_key,
+                    cursor: text.len() as u32,
+                    text,
+                });
+                connection.composer_ref.focus();
+            },
+        ))
+}
+
+fn time(row: Memo<Option<Row>>) -> Text {
+    text(move || {
+        row.with(|row| {
+            row.as_ref()
+                .and_then(|row| row.time.clone())
+                .unwrap_or_default()
+        })
+    })
+    .text_size(px(12.0))
+    .text_color(crate::ui::colors::MUTED)
 }
 
 #[cfg(test)]

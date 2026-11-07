@@ -62,6 +62,7 @@ pub(crate) enum Icon {
     #[cfg(not(target_os = "macos"))]
     Monitor,
     NewChat,
+    Pencil,
     #[cfg(target_os = "macos")]
     PanelLeftClose,
     #[cfg(target_os = "macos")]
@@ -102,6 +103,7 @@ impl Icon {
             Self::Merge => "arrow.triangle.merge",
             Self::Microphone => "mic",
             Self::NewChat => "square.and.pencil",
+            Self::Pencil => "pencil",
             Self::PanelLeftClose | Self::PanelLeftOpen => "sidebar.left",
             Self::PanelRight => "sidebar.right",
             Self::Plus => "plus",
@@ -145,6 +147,7 @@ impl Icon {
             #[cfg(not(target_os = "macos"))]
             Self::Monitor => include_str!("../../desktop/assets/monitor.svg"),
             Self::NewChat => include_str!("../../desktop/assets/square-pen.svg"),
+            Self::Pencil => include_str!("../../desktop/assets/pencil.svg"),
             #[cfg(target_os = "macos")]
             Self::PanelLeftClose => include_str!("../assets/icons/panel-left-close.svg"),
             #[cfg(target_os = "macos")]

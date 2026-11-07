@@ -17,6 +17,7 @@ tokio-util = { workspace = true, features = ["rt"] }
 async-channel = "2"
 uuid = { version = "1", features = ["v4", "v5"] }
 tempfile = "3"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # v0.4.0: the published iOS crate references the Mac crate's speech.rs,
 # which is absent from its crates.io archive. The pinned repository retains it.
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }

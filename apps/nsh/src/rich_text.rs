@@ -78,59 +78,10 @@ fn view_parts(
                 .h(px(1.0))
                 .bg(crate::ui::colors::BORDER)
                 .into_element(),
-            Part::Text(_) | Part::Code { .. } => view()
-                .w_full()
-                .gap_2()
-                // A code block sits in the desktop client's frame, its language and
-                // copy action at its top right.
-                .style_when(
-                    move || part.with(|(_, part)| matches!(part, Part::Code { .. })),
-                    |s| {
-                        s.px_4()
-                            .pt_2()
-                            .pb_4()
-                            .rounded(px(8.0))
-                            .border_1()
-                            .border_color(crate::ui::colors::BORDER)
-                            .bg(crate::ui::colors::SURFACE)
-                    },
-                )
-                .child(when(
-                    move || part.with(|(_, part)| matches!(part, Part::Code { .. })),
-                    move || {
-                        view()
-                            .flex_row()
-                            .items_center()
-                            .justify_end()
-                            .gap_2()
-                            .child(
-                                text(move || {
-                                    part.with(|(_, part)| {
-                                        if let Part::Code { label, .. } = part {
-                                            label.clone()
-                                        } else {
-                                            String::new()
-                                        }
-                                    })
-                                })
-                                .max_w(px(220.0))
-                                .number_of_lines(1)
-                                .text_size(px(12.0)),
-                            )
-                            .child(crate::ui::icon_button(
-                                crate::ui::Icon::Copy,
-                                "コードをコピー",
-                                move || {
-                                    part.with_untracked(|(_, part)| {
-                                        if let Part::Code { source, .. } = part {
-                                            set_clipboard(source.clone());
-                                        }
-                                    })
-                                },
-                            ))
-                    },
-                ))
-                .child(
+            Part::Text(_) | Part::Code { .. } => {
+                let is_code = move || part.with(|(_, part)| matches!(part, Part::Code { .. }));
+                let wrap = signal(false);
+                let message = move || {
                     native("bex.messageText")
                         .prop("data", move || {
                             part.with(|(_, part)| {
@@ -200,10 +151,81 @@ fn view_parts(
                                 _ => {}
                             }
                         })
-                        .w_full()
-                        .min_h(px(20.0)),
-                )
-                .into_element(),
+                        .min_h(px(20.0))
+                };
+                view()
+                    .w_full()
+                    .gap_2()
+                    // A code block sits in the desktop client's frame, its language and
+                    // copy action at its top right.
+                    .style_when(
+                        move || part.with(|(_, part)| matches!(part, Part::Code { .. })),
+                        |s| {
+                            s.px_4()
+                                .pt_2()
+                                .pb_4()
+                                .rounded(px(8.0))
+                                .border_1()
+                                .border_color(crate::ui::colors::BORDER)
+                                .bg(crate::ui::colors::SURFACE)
+                        },
+                    )
+                    .child(when(
+                        move || part.with(|(_, part)| matches!(part, Part::Code { .. })),
+                        move || {
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .justify_end()
+                                .gap_2()
+                                .child(
+                                    text(move || {
+                                        part.with(|(_, part)| {
+                                            if let Part::Code { label, .. } = part {
+                                                label.clone()
+                                            } else {
+                                                String::new()
+                                            }
+                                        })
+                                    })
+                                    .max_w(px(220.0))
+                                    .number_of_lines(1)
+                                    .text_size(px(12.0)),
+                                )
+                                .child(crate::ui::text_button(
+                                    move || {
+                                        SharedString::from(if wrap.get() {
+                                            "折り返し解除"
+                                        } else {
+                                            "折り返し"
+                                        })
+                                    },
+                                    move || wrap.update(|wrap| *wrap = !*wrap),
+                                ))
+                                .child(crate::ui::icon_button(
+                                    crate::ui::Icon::Copy,
+                                    "コードをコピー",
+                                    move || {
+                                        part.with_untracked(|(_, part)| {
+                                            if let Part::Code { source, .. } = part {
+                                                set_clipboard(source.clone());
+                                            }
+                                        })
+                                    },
+                                ))
+                        },
+                    ))
+                    .child(when(
+                        move || !is_code() || wrap.get(),
+                        move || message().w_full(),
+                    ))
+                    // An unwrapped code block keeps its lines and scrolls sideways.
+                    .child(when(
+                        move || is_code() && !wrap.get(),
+                        move || scroll().horizontal().w_full().child(message()),
+                    ))
+                    .into_element()
+            }
             Part::Image(_) => crate::media::image_view(
                 move || {
                     part.with(|(_, part)| {
@@ -256,69 +278,85 @@ fn table(
             }
         })
     };
+    let compact = signal(false);
+    let frame = move || {
+        view()
+            .w_full()
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(colors::BORDER)
+            .overflow_hidden()
+            .child(each(
+                move || {
+                    part.with(|(_, part)| {
+                        if let Part::Table { rows, .. } = part {
+                            rows.clone().into_iter().enumerate().collect()
+                        } else {
+                            Vec::new()
+                        }
+                    })
+                },
+                |(index, _): &(usize, Vec<Vec<Part>>)| *index,
+                move |row, position| {
+                    let header = row.with_untracked(|(index, _)| *index == 0);
+                    view()
+                        .flex_row()
+                        .items_stretch()
+                        .style_when(
+                            move || position.get() > 0,
+                            |s| s.border_t_1().border_t_color(colors::BORDER),
+                        )
+                        .style_when(move || header, |s| s.bg(colors::RAISED))
+                        .child(each(
+                            move || {
+                                row.with(|(_, row)| {
+                                    row.clone().into_iter().enumerate().collect::<Vec<_>>()
+                                })
+                            },
+                            |(index, _): &(usize, Vec<Part>)| *index,
+                            move |cell, column| {
+                                view()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .px_3()
+                                    .py_2()
+                                    .style_when(
+                                        move || column.get() > 0,
+                                        |s| s.border_l_1().border_l_color(colors::BORDER),
+                                    )
+                                    .child(view_parts(
+                                        move || cell.with(|(_, parts)| parts.clone()),
+                                        target,
+                                        secondary,
+                                    ))
+                            },
+                        ))
+                },
+            ))
+    };
     view()
         .w_full()
         .gap_2()
-        .child(
-            view()
-                .w_full()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(colors::BORDER)
-                .overflow_hidden()
-                .child(each(
-                    move || {
-                        part.with(|(_, part)| {
-                            if let Part::Table { rows, .. } = part {
-                                rows.clone().into_iter().enumerate().collect()
-                            } else {
-                                Vec::new()
-                            }
-                        })
-                    },
-                    |(index, _): &(usize, Vec<Vec<Part>>)| *index,
-                    move |row, position| {
-                        let header = row.with_untracked(|(index, _)| *index == 0);
-                        view()
-                            .flex_row()
-                            .items_stretch()
-                            .style_when(
-                                move || position.get() > 0,
-                                |s| s.border_t_1().border_t_color(colors::BORDER),
-                            )
-                            .style_when(move || header, |s| s.bg(colors::RAISED))
-                            .child(each(
-                                move || {
-                                    row.with(|(_, row)| {
-                                        row.clone().into_iter().enumerate().collect::<Vec<_>>()
-                                    })
-                                },
-                                |(index, _): &(usize, Vec<Part>)| *index,
-                                move |cell, column| {
-                                    view()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .px_3()
-                                        .py_2()
-                                        .style_when(
-                                            move || column.get() > 0,
-                                            |s| s.border_l_1().border_l_color(colors::BORDER),
-                                        )
-                                        .child(view_parts(
-                                            move || cell.with(|(_, parts)| parts.clone()),
-                                            target,
-                                            secondary,
-                                        ))
-                                },
-                            ))
-                    },
-                )),
-        )
+        .child(when(move || !compact.get(), frame))
+        .child(when(
+            move || compact.get(),
+            move || scroll().horizontal().w_full().child(frame()),
+        ))
         .child(
             view()
                 .flex_row()
                 .justify_end()
                 .gap_2()
+                .child(crate::ui::text_button(
+                    move || {
+                        SharedString::from(if compact.get() {
+                            "セルを折り返す"
+                        } else {
+                            "セルをコンパクトに表示"
+                        })
+                    },
+                    move || compact.update(|compact| *compact = !*compact),
+                ))
                 .child(crate::ui::text_button("Markdownをコピー", move || {
                     copy(true)
                 }))
