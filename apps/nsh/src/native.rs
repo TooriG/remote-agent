@@ -25,6 +25,13 @@ impl RowIndicators {
 }
 
 #[derive(PartialEq, serde::Deserialize)]
+#[cfg(target_os = "macos")]
+pub(super) struct ListCompose {
+    pub id: String,
+    pub enabled: bool,
+}
+
+#[derive(PartialEq, serde::Deserialize)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(super) struct ListRow {
     pub id: String,
@@ -40,6 +47,8 @@ pub(super) struct ListRow {
     pub group: bool,
     #[cfg(target_os = "macos")]
     pub expanded: bool,
+    #[cfg(target_os = "macos")]
+    pub compose: Option<ListCompose>,
 }
 
 pub fn items(choices: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Value {

@@ -140,11 +140,17 @@ define_class!(
             item: &AnyObject,
         ) -> Option<Retained<NSView>> {
             self.ivars().row(item).map(|row| {
-                let identifier = NSString::from_str(if row.group { "heading" } else if row.menu.is_some() { "menu-item" } else { "item" });
+                let identifier = NSString::from_str(match (row.group, row.menu.is_some(), row.compose.is_some()) {
+                    (true, true, _) => "heading-menu",
+                    (true, false, _) => "heading",
+                    (false, true, true) => "project-compose",
+                    (false, true, false) => "menu-item",
+                    (false, false, _) => "item",
+                });
                 let reused = unsafe { outline.makeViewWithIdentifier_owner(&identifier, None) };
                 let cell = reused
                     .and_then(|view| view.downcast::<NSTableCellView>().ok())
-                    .unwrap_or_else(|| cell_view(self.mtm(), &identifier, row.group, row.menu.is_some()));
+                    .unwrap_or_else(|| cell_view(self, &identifier, row.group, row.menu.is_some(), row.compose.is_some()));
                 cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
                 for stack in cell.subviews().iter().filter_map(|view| view.downcast::<NSStackView>().ok()) {
                     // Hidden stacks detach from subviews, but remain owned views.
@@ -152,6 +158,10 @@ define_class!(
                         if let Some(button) = view.downcast_ref::<NSPopUpButton>() && let Some(entries) = &row.menu {
                             super::macos::set_menu_items(button, Some(entries), self);
                             button.setAccessibilityIdentifier(Some(&NSString::from_str(&format!("{}.menu", row.id))));
+                        } else if let Some(button) = view.downcast_ref::<NSButton>() && let Some(compose) = &row.compose {
+                            button.setIdentifier(Some(&NSString::from_str(&compose.id)));
+                            button.setAccessibilityIdentifier(Some(&NSString::from_str(&compose.id)));
+                            button.setEnabled(compose.enabled);
                         }
                         if let Some(indicators) = view.downcast_ref::<NSStackView>() {
                             set_indicators(indicators, row.indicators.as_ref());
@@ -168,7 +178,7 @@ define_class!(
                         if self.ivars().sidebar.get() {
                             let weight = if row.group || row.disclosure { NSFontWeightSemibold } else { NSFontWeightRegular };
                             field.setFont(Some(&NSFont::systemFontOfSize_weight(if row.group { 12.0 } else { 14.0 }, weight)));
-                            let color = if row.group { NSColor::secondaryLabelColor() } else { NSColor::labelColor() };
+                            let color = if row.disclosure { NSColor::labelColor() } else { NSColor::secondaryLabelColor() };
                             field.setTextColor(Some(&color));
                         }
                     }
@@ -215,6 +225,12 @@ define_class!(
         }
     }
     impl Delegate {
+        #[unsafe(method(compose:))]
+        fn compose(&self, sender: &NSButton) {
+            if let Some(id) = sender.identifier() {
+                self.ivars().context.emit("compose", id.to_string().into());
+            }
+        }
         #[unsafe(method(chose:))]
         fn chose(&self, sender: &NSMenuItem) {
             if let Some(id) = sender.representedObject().and_then(|value| value.downcast::<NSString>().ok()) {
@@ -230,11 +246,13 @@ define_class!(
 );
 
 fn cell_view(
-    mtm: MainThreadMarker,
+    target: &Delegate,
     identifier: &NSString,
     heading: bool,
     has_menu: bool,
+    has_compose: bool,
 ) -> Retained<NSTableCellView> {
+    let mtm = target.mtm();
     let cell = NSTableCellView::initWithFrame(NSTableCellView::alloc(mtm), CGRect::ZERO);
     cell.setIdentifier(Some(identifier));
     let stack = NSStackView::initWithFrame(NSStackView::alloc(mtm), CGRect::ZERO);
@@ -272,9 +290,20 @@ fn cell_view(
     if has_menu {
         let menu = super::macos::menu_button(mtm);
         menu.setBordered(false);
-        menu.setAccessibilityLabel(Some(&NSString::from_str("プロジェクトの操作")));
+        menu.setAccessibilityLabel(Some(&NSString::from_str(if heading {
+            "プロジェクトを管理"
+        } else {
+            "プロジェクトの操作"
+        })));
         if let Some(item) = menu.itemAtIndex(0) {
-            item.setImage(symbol("ellipsis").as_deref());
+            item.setImage(
+                symbol(if heading {
+                    "folder.badge.plus"
+                } else {
+                    "ellipsis"
+                })
+                .as_deref(),
+            );
         }
         if let Some(control_cell) = menu
             .cell()
@@ -287,6 +316,26 @@ fn cell_view(
             menu.widthAnchor().constraintEqualToConstant(24.0),
             menu.heightAnchor().constraintEqualToConstant(24.0),
         ]));
+        if has_compose {
+            let button = unsafe {
+                NSButton::buttonWithTitle_target_action(
+                    &NSString::new(),
+                    Some(target),
+                    Some(sel!(compose:)),
+                    mtm,
+                )
+            };
+            button.setImage(symbol("square.and.pencil").as_deref());
+            button.setBordered(false);
+            button.setAccessibilityLabel(Some(&NSString::from_str(
+                "このプロジェクトで新しいチャット",
+            )));
+            stack.addArrangedSubview(&button);
+            NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+                button.widthAnchor().constraintEqualToConstant(24.0),
+                button.heightAnchor().constraintEqualToConstant(24.0),
+            ]));
+        }
     } else if !heading {
         let indicators = NSStackView::initWithFrame(NSStackView::alloc(mtm), CGRect::ZERO);
         indicators.setDistribution(NSStackViewDistribution::Fill);
@@ -519,15 +568,14 @@ impl NativeComponent for List {
         if name == "sidebar" {
             let sidebar = value.and_then(JsonValue::as_bool).unwrap_or(false);
             self.delegate.ivars().sidebar.set(sidebar);
-            self.outline.setStyle(if sidebar {
-                NSTableViewStyle::Plain
-            } else {
-                NSTableViewStyle::SourceList
-            });
             if sidebar {
+                // Section labels are root group rows. Only projects own
+                // children; AppKit supplies their 24-point indentation.
+                self.outline.setIndentationPerLevel(24.0);
                 self.outline.setBackgroundColor(&NSColor::clearColor());
                 self.view.setDrawsBackground(false);
-                self.outline.setIndentationPerLevel(24.0);
+                self.outline
+                    .setIntercellSpacing(CGSize::new(self.outline.intercellSpacing().width, 0.0));
             }
             self.outline.setRowHeight(if sidebar { 32.0 } else { 24.0 });
             self.outline.reloadData();

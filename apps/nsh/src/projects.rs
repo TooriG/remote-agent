@@ -49,6 +49,35 @@ fn encode(items: Vec<ProjectMenuItem>, host: &str, storage: &str) -> Value {
         }).collect::<Vec<_>>())
 }
 
+pub(crate) fn header_menu(
+    hidden: &[ProjectSummary],
+    desktop: bool,
+    host: &str,
+    storage: &str,
+    connected: bool,
+) -> Value {
+    let mut items = Vec::new();
+    if desktop {
+        items.push(json!({"id": "add", "title": "フォルダをプロジェクトに追加…", "enabled": host == "local" && connected}));
+    }
+    if !hidden.is_empty() {
+        let hidden = hidden
+            .iter()
+            .map(|project| ProjectMenuItem::Action {
+                title: project.name.clone(),
+                checked: false,
+                enabled: true,
+                action: ProjectAction::Dispatch(Box::new(Intent::SetProjectHidden {
+                    project_id: project.id.clone(),
+                    hidden: false,
+                })),
+            })
+            .collect();
+        items.push(json!({"title": "非表示のプロジェクトを戻す", "children": encode(hidden, host, storage)}));
+    }
+    json!(items)
+}
+
 #[derive(Clone, PartialEq)]
 struct Editor {
     id: String,
@@ -172,31 +201,50 @@ impl Projects {
         });
     }
 
-    pub fn header(self) -> impl IntoElement {
-        view().flex_row().items_center().px_2()
-            .child(text("プロジェクト").text_size(px(12.0)).text_color(move || nsh_base::theme().muted_foreground).flex_1())
-            .child(when(move || is_desktop() || self.publication.with(|p| p.list.as_ref().is_some_and(|list| !list.hidden_projects.is_empty())), move || native::menu("plus", "プロジェクトを管理", move || {
-                let host = self.host.get();
-                self.publication.with(|p| {
-                    let mut items = Vec::new();
-                    if is_desktop() {
-                        items.push(json!({"id": "add", "title": "フォルダをプロジェクトに追加…", "enabled": host == "local" && p.composer.controls.connected}));
-                    }
-                    if let Some(list) = &p.list {
-                        let hidden = list.hidden_projects.iter().map(|project| ProjectMenuItem::Action {
-                            title: project.name.clone(), checked: false, enabled: true,
-                            action: ProjectAction::Dispatch(Box::new(Intent::SetProjectHidden { project_id: project.id.clone(), hidden: false })),
-                        }).collect::<Vec<_>>();
-                        if !hidden.is_empty() {
-                            items.push(json!({"title": "非表示のプロジェクトを戻す", "children": encode(hidden, &host, &p.snapshot.connection.storage_scope)}));
-                        }
-                    }
-                    json!(items)
-                })
-            }, move |command| self.select(command))
-                .prop("appearance", json!("plain"))
-                .w(px(if is_desktop() { 24.0 } else { 44.0 }))
-                .h(px(if is_desktop() { 24.0 } else { 44.0 }))))
+    pub fn mobile_header(self) -> impl IntoElement {
+        view()
+            .flex_row()
+            .items_center()
+            .px_2()
+            .child(
+                text("プロジェクト")
+                    .text_size(px(12.0))
+                    .text_color(move || nsh_base::theme().muted_foreground)
+                    .flex_1(),
+            )
+            .child(when(
+                move || {
+                    self.publication.with(|p| {
+                        p.list
+                            .as_ref()
+                            .is_some_and(|list| !list.hidden_projects.is_empty())
+                    })
+                },
+                move || {
+                    native::menu(
+                        "plus",
+                        "プロジェクトを管理",
+                        move || {
+                            let host = self.host.get();
+                            self.publication.with(|p| {
+                                header_menu(
+                                    p.list
+                                        .as_ref()
+                                        .map_or(&[], |list| list.hidden_projects.as_slice()),
+                                    false,
+                                    &host,
+                                    &p.snapshot.connection.storage_scope,
+                                    p.composer.controls.connected,
+                                )
+                            })
+                        },
+                        move |command| self.select(command),
+                    )
+                    .prop("appearance", json!("plain"))
+                    .w(px(44.0))
+                    .h(px(44.0))
+                },
+            ))
     }
 
     pub fn view(self) -> impl IntoElement {
