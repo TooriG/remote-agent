@@ -24,7 +24,11 @@ final class ConversationTextView: UITextView {
         // Decorations draw with the text, so they share its tiles instead of a message-sized backing store.
         let layoutManager = DecoratingLayoutManager()
         storage.addLayoutManager(layoutManager)
-        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        #if AGENT_DEV_DIAGNOSTICS
+            let container = ConversationTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        #else
+            let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        #endif
         container.widthTracksTextView = true
         container.lineFragmentPadding = 0
         layoutManager.addTextContainer(container)
@@ -207,6 +211,23 @@ final class ConversationTextView: UITextView {
         return offset
     }
 }
+
+#if AGENT_DEV_DIAGNOSTICS
+    /// The conversation owns vertical scrolling. A message lays out all its lines even when SwiftUI
+    /// rounds its display height down by a pixel. UITextView otherwise overwrites the initial height
+    /// when scrolling is disabled, even with heightTracksTextView disabled.
+    private final class ConversationTextContainer: NSTextContainer {
+        override var size: CGSize {
+            get { super.size }
+            set {
+                let available = CGSize(width: newValue.width, height: CGFloat.greatestFiniteMagnitude)
+                if super.size != available {
+                    super.size = available
+                }
+            }
+        }
+    }
+#endif
 
 /// The message a text view shows, compared by value. Its hash is computed once
 /// because every size proposal looks it up.

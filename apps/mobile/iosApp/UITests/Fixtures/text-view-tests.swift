@@ -111,6 +111,7 @@ struct ConversationTextViewTests {
         checkReopening(blocks: blocks + ["Streamed line"], previousSize: view.frame.size)
         checkRestyling()
         #if AGENT_DEV_DIAGNOSTICS
+            checkPixelRounding()
             try await checkDiagnostics()
         #endif
         print("Conversation text view tests passed")
@@ -148,6 +149,27 @@ struct ConversationTextViewTests {
     }
 
     #if AGENT_DEV_DIAGNOSTICS
+        @MainActor private static func checkPixelRounding() {
+            let view = ConversationTextView()
+            view.traitOverrides.displayScale = 3
+            let body = "今回まず揃えるべきなのは、会話の基本情報です。途中保存の耐久性は、その次に扱う独立した改善になります。"
+            view.update(blocks: [body], dark: false, sizeCategory: .large)
+            let proposed = view.measure(width: 370)
+            // The affected device loses one physical pixel between SwiftUI measurement and assignment.
+            view.frame.size = CGSize(width: proposed.width, height: proposed.height - 1 / 3)
+            view.layoutIfNeeded()
+            _ = drawnRows(view, in: view.bounds)
+            let metrics = view.textLayoutDiagnostic()
+            check(metrics.placedEnd == metrics.requiredEnd,
+                  "One pixel lost by the parent must not discard the final Japanese line")
+            let end = view.textStorage.length
+            let glyphs = view.layoutManager.glyphRange(forCharacterRange: NSRange(location: end - 1, length: 1),
+                                                       actualCharacterRange: nil)
+            let last = view.layoutManager.boundingRect(forGlyphRange: glyphs, in: view.textContainer)
+            let row = CGRect(x: 0, y: last.minY, width: proposed.width, height: last.height)
+            check(drawnRows(view, in: row).text > 0, "The final character must actually be drawn after pixel rounding")
+        }
+
         @MainActor private static func checkDiagnostics() async throws {
             let body = "本文をログに記録しない検査\n最終行まで配置される必要があります。"
             let view = ConversationTextView()
