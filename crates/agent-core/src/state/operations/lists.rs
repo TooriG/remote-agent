@@ -249,6 +249,46 @@ fn merge_newer_rows(
     received
 }
 
+fn missing_failed_provider_rows<'a>(
+    received: &[crate::models::Thread],
+    cached: &'a [crate::models::Thread],
+    errors: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<&'a crate::models::Thread> {
+    let candidates: Vec<_> = cached
+        .iter()
+        .filter_map(|row| {
+            let id = row.id.as_ref()?;
+            errors
+                .contains_key(row.active_provider.unwrap_or(id.provider).key())
+                .then_some((id, row))
+        })
+        .collect();
+    let mut missing: Vec<&crate::models::Thread> = Vec::new();
+    if candidates.len() < 128 || received.len() > candidates.len().saturating_mul(4) {
+        for (id, cached) in candidates {
+            if !received.iter().any(|row| row.id.as_ref() == Some(id))
+                && !missing.iter().any(|row| row.id.as_ref() == Some(id))
+            {
+                missing.push(cached);
+            }
+        }
+        return missing;
+    }
+
+    let mut present = HashSet::with_capacity(received.len().max(candidates.len()));
+    for row in received {
+        if let Some(id) = row.id.as_ref() {
+            present.insert(id);
+        }
+    }
+    for (id, cached) in candidates {
+        if present.insert(id) {
+            missing.push(cached);
+        }
+    }
+    missing
+}
+
 fn missing_referenced_projects<'a>(
     received: &[crate::models::Project],
     cached: &'a [crate::models::Project],
@@ -412,7 +452,15 @@ fn merge_received(
             }
         }
     }
-    if let Some(previous) = previous {
+    if let Some(errors) = threads.provider_errors.as_ref()
+        && let Some(previous) = previous
+    {
+        for cached in missing_failed_provider_rows(&threads.data, &previous.data, errors) {
+            let mut cached = cached.clone();
+            cached.list_stale = Some(true);
+            cached.status = crate::models::SessionStatus::Unknown;
+            threads.data.push(cached);
+        }
         for project in
             missing_referenced_projects(&threads.projects, &previous.projects, &threads.data)
         {
@@ -686,6 +734,7 @@ impl Operation for ListSessions {
                     has_more_projects: false,
                     limit: page.limit,
                     project_pages: Default::default(),
+                    provider_errors: threads.provider_errors.clone(),
                 },
                 pages.get(id).map(AsRef::as_ref),
             );
@@ -946,6 +995,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            provider_errors: None,
         };
         let mut state = Snapshot {
             connection: crate::state::Connection {
@@ -985,6 +1035,7 @@ mod tests {
                 has_more: false,
                 has_more_projects: false,
                 project_pages: Default::default(),
+                provider_errors: None,
             },
         );
         let mut query = (*state.lists.list_query).clone();
@@ -1006,6 +1057,7 @@ mod tests {
                 has_more: false,
                 has_more_projects: true,
                 project_pages: Default::default(),
+                provider_errors: None,
             },
         );
         assert!(Arc::ptr_eq(&received, &state.lists.project_threads["p1"]));
@@ -1082,6 +1134,7 @@ mod tests {
                 .collect(),
             has_more: false,
             has_more_projects: false,
+            provider_errors: None,
         };
         let mut state = Snapshot {
             connection: crate::state::Connection {
@@ -1644,6 +1697,7 @@ mod tests {
             has_more: false,
             has_more_projects: false,
             project_pages: Default::default(),
+            provider_errors: None,
         });
         Arc::make_mut(&mut snapshot.lists.project_threads).insert("project".into(), loaded.clone());
         let key = OperationKey::ProjectList {

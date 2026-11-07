@@ -29,7 +29,6 @@ pub struct ProjectScan {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectImportResult {
-    pub warnings: BTreeMap<String, String>,
     pub imported: Vec<String>,
     pub errors: BTreeMap<String, String>,
 }

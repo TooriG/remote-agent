@@ -309,13 +309,12 @@ impl Threads {
     }
 
     fn history_page(
-        &mut self,
+        &self,
         context: &Context,
         id: &Value,
         method: &str,
         params: &Value,
     ) -> Result<()> {
-        self.refresh(&context.home)?;
         let Some(thread) = self.require_thread(context, id, thread_id(params))? else {
             return Ok(());
         };
@@ -813,15 +812,7 @@ impl Threads {
         Ok(())
     }
 
-    fn read(
-        &mut self,
-        context: &Rc<Context>,
-        id: &Value,
-        method: &str,
-        params: &Value,
-    ) -> Result<()> {
-        // Native history exists independently of a preceding conversation list.
-        self.refresh(&context.home)?;
+    fn read(&self, context: &Rc<Context>, id: &Value, method: &str, params: &Value) -> Result<()> {
         context.trace(method, json!({"threadId":params["threadId"]}))?;
         let failure = context.home.join("fail-next-history-read");
         if method == "thread/read" && failure.exists() {

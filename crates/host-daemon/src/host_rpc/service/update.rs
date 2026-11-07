@@ -45,7 +45,7 @@ impl HostRpcService {
             }
             let row = self
                 .inner
-                .database
+                .conversations
                 .get(&session)
                 .map_err(anyhow::Error::msg)?;
             let active = row.as_ref().map_or(&session, |row| &row.active);

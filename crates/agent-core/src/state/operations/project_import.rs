@@ -275,7 +275,6 @@ mod tests {
         let navigation = snapshot.pane.navigation.clone();
         let drafts = snapshot.input.drafts.clone();
         let result = ProjectImportResult {
-            warnings: Default::default(),
             imported: vec!["/a".into()],
             errors: [("/b".into(), "permission denied".into())].into(),
         };

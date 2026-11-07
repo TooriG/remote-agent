@@ -3,9 +3,7 @@ mod conversations;
 pub(crate) mod routing;
 pub(crate) mod service;
 mod session_actor;
-mod storage;
 pub(crate) mod submission;
-#[cfg(test)]
 mod transcripts;
 
 pub use routing::{HostSession, SessionId};

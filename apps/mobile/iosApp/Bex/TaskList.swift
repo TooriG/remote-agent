@@ -12,6 +12,9 @@ struct ThreadsScreen: View {
         List {
             if !model.profiles.isEmpty {
                 ErrorNotices(notices: model.notices[.projects] ?? [], perform: { model.perform($0) }).taskListRowStyle()
+                if let notice = model.list?.notice {
+                    AppNotice(text: notice).taskListRowStyle()
+                }
                 if model.threadLoadState == .failed {
                     Section {
                         Button("再試行") { model.refreshTaskList() }

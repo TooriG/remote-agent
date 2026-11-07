@@ -155,6 +155,7 @@ async fn until(store: &Store, condition: impl Fn(&Snapshot) -> bool) -> Arc<Snap
             snapshot.lists.threads.as_ref().map(|list| (
                 list.projects.iter().map(|project| &project.id).collect::<Vec<_>>(),
                 list.data.iter().map(|thread| (&thread.id, &thread.project_id)).collect::<Vec<_>>(),
+                &list.provider_errors,
             )),
             snapshot.lists.project_threads.iter().map(|(id, list)| (
                 id,
@@ -1024,7 +1025,9 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
             );
             let turns = snapshot.sessions.conversations[&id].turns.as_ref().unwrap();
             assert!(turns[index].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.starts_with(&format!("reply {}: independent {index}", index + 1)))));
-            listed(&store, &id, selected.then_some(workspace.as_path())).await;
+            let snapshot = listed(&store, &id, selected.then_some(workspace.as_path())).await;
+            let list = snapshot.lists.threads.as_ref().unwrap();
+            assert!(list.provider_errors.as_ref().unwrap()["codex"]["message"].is_string());
             let management = fixture.local().await.unwrap();
             let status = management.peer.call(&rpc::ReadHostStatus {}).await.map(|output| serde_json::to_value(output).unwrap()).unwrap();
             assert!(status["providerErrors"]["codex"]["message"].is_string());
@@ -1122,20 +1125,19 @@ async fn codex_exit_preserves_claude_approval_and_completes_after_reconnect() {
         );
         let local = fixture.local().await.unwrap();
         std::fs::write(root.path().join("exit-on-list"), "").unwrap();
-        let _ = local
-            .peer
-            .call(&agent_protocol::live_activity::ReadTaskActivity {})
-            .await;
-        let list = local
+        // BEX may return partial Claude results when Codex exits during listing.
+        if let Ok(list) = local
             .peer
             .call(&rpc::ListSessions::new(Default::default()))
             .await
-            .unwrap();
-        assert!(
-            list.data
-                .iter()
-                .any(|thread| thread.id.as_ref() == Some(&id))
-        );
+        {
+            assert!(list.provider_errors.unwrap().contains_key("codex"));
+            assert!(
+                list.data
+                    .iter()
+                    .any(|thread| thread.id.as_ref() == Some(&id))
+            );
+        }
         until(&store, |snapshot| {
             snapshot.requests().count() == 1
                 && !snapshot.lists.activity.active[&codex_id]

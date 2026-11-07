@@ -1,27 +1,26 @@
 //! Native reads do not expose every selected option (notably Codex speed).
 //! Retain accepted turn settings on the Host so every client can reopen them.
-use crate::host_rpc::storage::Database;
 use crate::providers::Failure;
 use agent_protocol::{models::ModelRef, session::SessionRef};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::{path::PathBuf, sync::Mutex};
 
 #[derive(Serialize, Deserialize)]
-pub(in crate::host_rpc) struct Selection {
-    pub session: SessionRef,
+struct Selection {
+    session: SessionRef,
     #[serde(flatten)]
-    pub options: SelectedOptions,
+    options: SelectedOptions,
 }
 
 #[derive(PartialEq, Serialize, Deserialize)]
-pub(in crate::host_rpc) struct SelectedOptions {
+pub(super) struct SelectedOptions {
     pub model: Option<ModelRef>,
     pub effort: Option<String>,
     pub service_tier: Option<String>,
 }
 
 pub(super) struct ModelSelections {
-    database: Arc<Database>,
+    path: PathBuf,
     state: Mutex<Result<Selections, String>>,
 }
 
@@ -31,10 +30,14 @@ struct Selections {
 }
 
 impl ModelSelections {
-    pub fn new(database: Arc<Database>) -> Self {
-        let selections = database.model_selections();
+    pub fn new(path: PathBuf) -> Self {
+        let selections = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| error.to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error.to_string()),
+        };
         Self {
-            database,
+            path,
             state: Mutex::new(selections.map(|entries| Selections {
                 entries,
                 dirty: false,
@@ -113,7 +116,7 @@ impl ModelSelections {
         }
         // Submission is already accepted. Keep the live fact and never invite a
         // duplicate send by reporting a storage failure as a submission failure.
-        match self.database.save_model_selections(&state.entries) {
+        match agent_local_host::save_private_json(&self.path, &state.entries) {
             Ok(()) => state.dirty = false,
             Err(error) => {
                 tracing::warn!(target: "agent", operation = "host.model_selection.record", message = %error);
@@ -126,28 +129,25 @@ impl ModelSelections {
 mod tests {
     use super::*;
     use agent_protocol::session::ProviderKind;
-    fn load_selections(path: impl AsRef<std::path::Path>) -> ModelSelections {
-        ModelSelections::new(Arc::new(Database::open(path.as_ref())))
-    }
 
     #[test]
     fn persisted_options_fill_native_gaps_without_overriding_external_changes() {
         for native_model in [None, Some("saved"), Some("external")] {
             for native_effort in [None, Some("low")] {
                 let directory = tempfile::tempdir().unwrap();
-                let path = directory.path().join("models.sqlite");
+                let path = directory.path().join("models.json");
                 let session = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
                 let model = |id: &str| ModelRef {
                     provider: session.provider,
                     id: id.into(),
                 };
-                load_selections(path.clone()).record(
+                ModelSelections::new(path.clone()).record(
                     &session,
                     Some(&model("saved")),
                     Some("high"),
                     Some("priority"),
                 );
-                let store = load_selections(path);
+                let store = ModelSelections::new(path);
                 let resolved = store
                     .resolve(
                         &session,
@@ -179,14 +179,14 @@ mod tests {
     fn failed_writes_keep_accepted_settings_live_and_later_writes_recover() {
         for (effort, tier) in [("high", "priority"), ("low", "default")] {
             let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("models.sqlite");
-            let store = load_selections(path.clone());
+            let path = directory.path().join("models.json");
+            let store = ModelSelections::new(path.clone());
             let session = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
             let model = ModelRef {
                 provider: session.provider,
                 id: "saved".into(),
             };
-            store.database.with(|connection| connection.execute_batch("CREATE TRIGGER reject_selection BEFORE INSERT ON model_selections BEGIN SELECT RAISE(ABORT, 'test failure'); END;").map_err(crate::host_rpc::storage::failure)).unwrap();
+            std::fs::create_dir(&path).unwrap();
             store.record(&session, Some(&model), Some("high"), Some("priority"));
             assert_eq!(
                 store
@@ -196,30 +196,22 @@ mod tests {
                     .as_deref(),
                 Some("high")
             );
-            store
-                .database
-                .with(|connection| {
-                    connection
-                        .execute_batch("DROP TRIGGER reject_selection;")
-                        .map_err(crate::host_rpc::storage::failure)
-                })
-                .unwrap();
+            std::fs::remove_dir(&path).unwrap();
             store.record(&session, Some(&model), Some(effort), Some(tier));
-            let recovered = load_selections(path.clone())
+            let recovered = ModelSelections::new(path.clone())
                 .resolve(&session, None, None, None)
                 .unwrap();
             assert_eq!(recovered.effort.as_deref(), Some(effort));
             assert_eq!(recovered.service_tier.as_deref(), Some(tier));
             store.record(&session, Some(&model), Some("low"), Some("default"));
-            let resolved = load_selections(path.clone())
+            let resolved = ModelSelections::new(path.clone())
                 .resolve(&session, None, None, None)
                 .unwrap();
             assert_eq!(resolved.effort.as_deref(), Some("low"));
             assert_eq!(resolved.service_tier.as_deref(), Some("default"));
-            drop(store);
             std::fs::write(&path, "broken").unwrap();
             assert!(
-                load_selections(path)
+                ModelSelections::new(path)
                     .resolve(&session, None, None, None)
                     .is_err()
             );
@@ -229,26 +221,24 @@ mod tests {
     #[test]
     fn unchanged_accepted_settings_do_not_rewrite_storage_including_after_restart() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("models.sqlite");
-        let store = load_selections(path.clone());
+        let path = directory.path().join("models.json");
+        let store = ModelSelections::new(path.clone());
         let session = SessionRef::new(ProviderKind::Codex, "task".into()).unwrap();
         let model = ModelRef {
             provider: session.provider,
             id: "saved".into(),
         };
         store.record(&session, Some(&model), Some("high"), Some("priority"));
-        let reopened = load_selections(path.clone());
-        let observer = rusqlite::Connection::open(&path).unwrap();
-        let version: i64 = observer
-            .pragma_query_value(None, "data_version", |row| row.get(0))
+        let reopened = ModelSelections::new(path.clone());
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
             .unwrap();
+        let modified = file.metadata().unwrap().modified().unwrap();
         for store in [&store, &reopened] {
             store.record(&session, Some(&model), Some("high"), Some("priority"));
             assert_eq!(
-                observer
-                    .pragma_query_value(None, "data_version", |row| row.get::<_, i64>(0))
-                    .unwrap(),
-                version
+                std::fs::metadata(&path).unwrap().modified().unwrap(),
+                modified
             );
         }
     }

@@ -1950,6 +1950,7 @@ mod submission_tests {
                     has_more_projects: false,
                     limit: 5,
                     project_pages: Default::default(),
+                    provider_errors: None,
                 })),
                 ..Default::default()
             },

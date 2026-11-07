@@ -3,7 +3,7 @@
 mod activity;
 mod capacity;
 mod conversations;
-pub(super) mod model_selections;
+mod model_selections;
 mod preparation;
 mod project_import;
 mod sessions;
@@ -14,7 +14,9 @@ mod worktrees;
 
 use super::routing::{HostReply, HostSession, SessionId, SessionRouter};
 use crate::ProjectStore;
-use crate::providers::{Agent, Backend, Failure, SessionListScope, session_pages};
+use crate::providers::{
+    Agent, Backend, Failure, SessionListScope, read_session_page, session_pages,
+};
 use agent_protocol::{
     models::{Thread, ThreadResponse},
     operations as op,
@@ -51,7 +53,8 @@ struct ServiceInner {
     permission_settings_access: tokio::sync::Mutex<()>,
     terminals: crate::terminals::Terminals,
     dictation: crate::dictation::Dictation,
-    database: Arc<super::storage::Database>,
+    conversations: super::conversations::Conversations,
+    transcripts: Arc<super::transcripts::Transcripts>,
     imports: std::sync::Mutex<HashMap<agent_protocol::session::SessionRef, transcripts::Import>>,
     model_selections: model_selections::ModelSelections,
     capacity: std::sync::Mutex<HashMap<agent_protocol::session::SessionRef, capacity::Run>>,
@@ -64,21 +67,26 @@ impl HostRpcService {
         let files = crate::workspace_files::WorkspaceFiles::new(
             projects.path().with_file_name("bex-attachments"),
         );
-        let transcripts = Arc::new(super::storage::Database::open(
+        let transcripts = Arc::new(super::transcripts::Transcripts::open(
             &projects.path().with_file_name("bex-transcripts.sqlite"),
         ));
         let router = SessionRouter::new()
             .with_read_state(projects.path().with_file_name("bex-read-state.json"))
-            .with_database(transcripts.clone());
+            .with_transcripts(transcripts.clone());
         let (providers, dictation) = crate::providers::Registry::new(backends);
         Self {
             inner: Arc::new(ServiceInner {
                 history_scope: OnceLock::new(),
                 updating: std::sync::atomic::AtomicBool::new(false),
-                database: transcripts.clone(),
+                conversations: super::conversations::Conversations::new(
+                    projects.path().with_file_name("bex-conversations.json"),
+                ),
+                transcripts,
                 imports: Default::default(),
                 capacity: Default::default(),
-                model_selections: model_selections::ModelSelections::new(transcripts),
+                model_selections: model_selections::ModelSelections::new(
+                    projects.path().with_file_name("bex-model-selections.json"),
+                ),
                 browser: OnceLock::new(),
                 provider_settings: crate::providers::Settings::new(
                     projects.path().with_file_name("bex-providers.json"),
@@ -294,31 +302,9 @@ impl HostRpcService {
                 {
                     return Ok(receipt.into());
                 }
-                if let Call::Submit(input) = message
-                    && let Some(receipt) = self.inner.database.admit_command(input)?
-                {
-                    // Replayed delivery evidence has the same runtime visibility
-                    // as a live acknowledgement, without calling the provider.
-                    let _ = self.inner.router.begin_submission(target, id);
-                    self.inner.router.finish_submission(
-                        target,
-                        id,
-                        agent_protocol::session::SubmissionDelivery::Accepted {
-                            turn_id: receipt.turn_id.clone(),
-                        },
-                    );
-                    return Ok(receipt.into());
-                }
-                if let Err(error) = self.inner.router.begin_submission(target, id) {
-                    self.inner.database.finish_command(
-                        target,
-                        id,
-                        &agent_protocol::session::SubmissionDelivery::Rejected,
-                    )?;
-                    return Err(error);
-                }
+                self.inner.router.begin_submission(target, id)?;
             }
-            let mut result = if let Call::Submit(input) = message {
+            let result = if let Call::Submit(input) = message {
                 self.submit_input(target.as_ref().expect("submission target"), input)
                     .await
                     .map(Into::into)
@@ -327,7 +313,7 @@ impl HostRpcService {
             };
             if let Some((target, id)) = submission {
                 use agent_protocol::session::SubmissionDelivery;
-                let mut delivery = match &result {
+                let delivery = match &result {
                     Ok(Body::Submission(receipt)) => SubmissionDelivery::Accepted {
                         turn_id: receipt.turn_id.clone(),
                     },
@@ -337,10 +323,6 @@ impl HostRpcService {
                     }
                     Err(_) => SubmissionDelivery::Unknown,
                 };
-                if let Err(error) = self.inner.database.finish_command(target, id, &delivery) {
-                    delivery = SubmissionDelivery::Unknown;
-                    result = Err(Failure::unknown("submission_storage_failed", error));
-                }
                 self.inner.router.finish_submission(target, id, delivery);
             }
             result
@@ -687,7 +669,7 @@ impl HostRpcService {
 
     fn start_event_pumps(&self) {
         self.inner.event_pumps.call_once(|| {
-            if let Err(message) = self.inner.database.interrupt_running() {
+            if let Err(message) = self.inner.transcripts.interrupt_running() {
                 tracing::error!(target: "agent", operation = "host.transcript.write", message);
             }
             if self.inner.router.apns().is_some() {
@@ -729,14 +711,14 @@ impl HostRpcService {
                                 event.change,
                                 crate::providers::AgentChange::Stopped { .. }
                             ) {
-                                inner.database.active_bindings()
+                                inner.conversations.active_bindings()
                             } else {
                                 Ok(Vec::new())
                             };
                             let result = bindings
                                 .and_then(|bindings| {
                                     inner
-                                        .database
+                                        .conversations
                                         .route(event.change, supports_fork)
                                         .map(|event| (bindings, event))
                                 })
@@ -939,7 +921,7 @@ mod tests {
                 b.accounts_started.notified().await;
             }) => result.expect("both providers must start before either one finishes"),
         }
-        tokio::time::timeout(
+        let list = tokio::time::timeout(
             std::time::Duration::from_secs(3),
             call::<agent_protocol::models::ThreadList>(
                 &host,
@@ -950,6 +932,7 @@ mod tests {
         .await
         .expect("conversation lists must not wait for accounts")
         .unwrap();
+        assert!(list.provider_errors.is_none());
         a.accounts_gate.add_permits(1);
         b.accounts_gate.add_permits(1);
         assert!(accounts.await.unwrap().errors.is_empty());
