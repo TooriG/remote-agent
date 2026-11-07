@@ -359,7 +359,7 @@ extension ConversationScrollTests {
 
 extension ConversationScrollTests {
     private func checkComposerUnderlay() async {
-        for height: CGFloat in [60, 100, 180] {
+        for height: CGFloat in [60, 100 + 1.0 / 3, 180] { // Dictation sizes fall between pixels.
             let scroll = ConversationScrollState()
             let controller = UIHostingController(rootView:
                 GeometryReader { geometry in

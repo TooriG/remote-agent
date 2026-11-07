@@ -55,7 +55,8 @@ PLIST
     else
         echo "Reusing unchanged $name build"
     fi
-    "$executable"
+    # A main-thread layout loop never reaches the fixture's own failure checks.
+    timeout 120 "$executable"
     if [[ $name == text-view-tests ]]; then
         if [[ ${#swift_flags[@]} -gt 0 ]]; then
             nm "$executable" | grep -E 'ConversationTextDiagnosticLog' >/dev/null
