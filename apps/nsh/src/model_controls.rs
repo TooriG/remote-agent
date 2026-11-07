@@ -185,7 +185,7 @@ fn act(connection: Connection, picker: Signal<Option<Picker>>, action: &str, val
 }
 
 #[cfg(target_os = "macos")]
-fn provider_mark(id: &str) -> Option<(&'static str, nsh_core::element::Rgba)> {
+pub(crate) fn provider_mark(id: &str) -> Option<(&'static str, nsh_core::element::Rgba)> {
     use crate::ui::colors::FOREGROUND;
     use nsh_core::element::rgb;
     Some(match id {
@@ -287,7 +287,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                     .number_of_lines(1)
                     .text_size(px(16.0)),
                 )
-                .child(ui::icon(Icon::ChevronRight, 16.0)),
+                .child(ui::icon(Icon::CHEVRON_RIGHT, 16.0)),
         )
         .child(each(
             move || {
@@ -376,7 +376,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                         .child(when(selected, || {
                             view()
                                 .text_color(colors::ACCENT)
-                                .child(ui::icon(Icon::Check, 20.0))
+                                .child(ui::icon(Icon::CHECK, 20.0))
                         }))
                 },
             ))

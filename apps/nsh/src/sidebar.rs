@@ -51,7 +51,7 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                                 .min_w_0(),
                         )
                         .child(
-                            ui::icon_button(Icon::NewChat, "新しいチャット", compose)
+                            ui::icon_button(Icon::NEW_CHAT, "新しいチャット", compose)
                                 .enabled(connected),
                         ),
                 ),
@@ -66,12 +66,12 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                 .pt_2()
                 .pb(px(20.0))
                 .child(ui::icon_button(
-                    Icon::Settings,
+                    Icon::SETTINGS,
                     "設定を開く",
                     move || navigate(Navigation::Settings(true)),
                 ))
                 .child(ui::icon_button(
-                    Icon::Refresh,
+                    Icon::REFRESH,
                     "会話を更新",
                     move || {
                         connection.application.with(|application| {
@@ -92,9 +92,9 @@ pub(crate) fn header(expanded: bool, toggle: impl Fn() + 'static) -> View {
             .encode(include_bytes!("../../desktop/assets/icon.png"))
     );
     let (glyph, label) = if expanded {
-        (Icon::PanelLeftClose, "サイドバーを閉じる")
+        (Icon::PANEL_LEFT_CLOSE, "サイドバーを閉じる")
     } else {
-        (Icon::PanelLeftOpen, "サイドバーを開く")
+        (Icon::PANEL_LEFT_OPEN, "サイドバーを開く")
     };
     view()
         .h(px(HEADER_HEIGHT))
@@ -154,7 +154,7 @@ pub(crate) fn conversation_header(
         .child(when(details_inline, move || {
             view().window_drag(false).child(
                 ui::icon_button(
-                    Icon::Details,
+                    Icon::DETAILS,
                     "スレッド詳細を切り替え",
                     move || details.update(|open| *open = !*open),
                 )
@@ -165,7 +165,7 @@ pub(crate) fn conversation_header(
             move || !panel_open(),
             move || {
                 view().window_drag(false).child(ui::icon_button(
-                    Icon::PanelRight,
+                    Icon::PANEL_RIGHT,
                     "右パネルを切り替え",
                     toggle_panel,
                 ))
@@ -230,5 +230,5 @@ fn connection_menu(hosts: Memo<Vec<Host>>) -> impl IntoElement {
             })
         })
         .child(text(title).text_size(px(14.0)).number_of_lines(1))
-        .child(ui::icon(Icon::ChevronDown, 14.0))
+        .child(ui::icon(Icon::CHEVRON_DOWN, 14.0))
 }

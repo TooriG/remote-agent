@@ -203,7 +203,7 @@ fn view_parts(
                                     move || wrap.update(|wrap| *wrap = !*wrap),
                                 ))
                                 .child(crate::ui::icon_button(
-                                    crate::ui::Icon::Copy,
+                                    crate::ui::Icon::COPY,
                                     "コードをコピー",
                                     move || {
                                         part.with_untracked(|(_, part)| {

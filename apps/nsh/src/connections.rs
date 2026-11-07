@@ -87,52 +87,79 @@ pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> imp
     }
     #[cfg(not(target_os = "macos"))]
     {
-        ui::labeled_button(Icon::Monitor, name, move || {
+        ui::labeled_button(Icon::MONITOR, name, move || {
             ui::popup(&untracked(items), select)
         })
-        .child(ui::icon(Icon::ChevronDown, 14.0))
+        .child(ui::icon(Icon::CHEVRON_DOWN, 14.0))
     }
 }
 
-pub(crate) fn screen(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl IntoElement {
+/// The Hosts this device can work on, and pairing another PC.
+pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
+    use crate::ui::{self, Enabled, colors};
     let connection = use_context::<Connection>().unwrap();
     let invitation = signal(String::new());
     let confirmation = signal(None::<agent_protocol::models::Invitation>);
     let error = signal(None::<String>);
+    let heading = |title: &'static str| {
+        text(title)
+            .text_size(px(16.0))
+            .font_weight(FontWeight::SEMIBOLD)
+    };
+    let confirmed = move |read: fn(&agent_protocol::models::Invitation) -> String| {
+        move || confirmation.with(|value| value.as_ref().map(read).unwrap_or_default())
+    };
     view()
-        .p_4()
-        .gap_3()
+        .gap_4()
         .text_color(move || nsh_base::theme().foreground)
-        .child(text("接続先").text_size(px(20.0)))
-        .child(each(
-            move || hosts.get(),
-            |host: &Host| host.id.clone(),
-            move |host, _| {
-                let host = host.get_untracked();
-                let id = host.id.clone();
-                view()
-                    .flex_row()
-                    .gap_2()
-                    .child(text(host.name))
-                    .child(native::text_button(json!("接続"), move || {
-                        connection
-                            .application
-                            .with(|application| application.select_host(id.clone(), false));
-                    }))
-            },
-        ))
+        .child(heading("接続先"))
+        .child(
+            view()
+                .rounded(px(12.0))
+                .border_1()
+                .border_color(colors::BORDER)
+                .bg(colors::SURFACE)
+                .child(each(
+                    move || hosts.get(),
+                    |host: &Host| host.id.clone(),
+                    move |host, index| {
+                        let host = host.get_untracked();
+                        let id = host.id.clone();
+                        ui::setting(
+                            host.name,
+                            String::new,
+                            ui::text_button("接続", move || {
+                                connection.application.with(|application| {
+                                    application.select_host(id.clone(), false)
+                                });
+                            }),
+                        )
+                        .style_when(move || index.get() > 0, |s| {
+                            s.border_t_1().border_t_color(colors::BORDER)
+                        })
+                    },
+                )),
+        )
+        .child(heading("PCを追加"))
         .child(when(move || confirmation.get().is_none(), move || {
-            view().gap_3()
-                .child(text("PCを追加"))
-                .child(text("PCのBexで発行した接続情報を貼り付けてください。"))
+            ui::card(vec![view()
+                .px_5()
+                .py_4()
+                .gap_3()
+                .child(text("PCのBexで発行した接続情報を貼り付けてください。").text_size(px(13.0)).text_color(colors::MUTED))
                 .child(input().masked(true)
                     .auto_correct(false).auto_capitalize(AutoCapitalize::None)
                     .value(move || invitation.get())
                     .on_change(move |text: &str| invitation.set(text.into()))
                     .placeholder("接続情報")
                     .text_color(move || nsh_base::theme().foreground)
-                    .h(px(44.0)))
-                .child(native::text_button(json!("接続先を確認"), move || {
+                    .w_full()
+                    .h(px(36.0))
+                    .px_3()
+                    .rounded(px(ui::RADIUS))
+                    .border_1()
+                    .border_color(colors::BORDER))
+                .child(view().flex_row().justify_end().child(ui::text_button("接続先を確認", move || {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|time| time.as_secs()).unwrap_or_default();
@@ -140,27 +167,30 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>, close: impl Fn() + 'static) -> impl
                         Ok(value) => { confirmation.set(Some(value)); error.set(None); }
                         Err(reason) => error.set(Some(reason.to_string())),
                     }
-                }))
+                })))])
         }))
         .child(when(move || confirmation.get().is_some(), move || {
-            view().gap_3()
-                .child(text(move || confirmation.with(|value| value.as_ref().map(|value| value.host_name.clone()).unwrap_or_default())))
+            ui::card(vec![view()
+                .px_5()
+                .py_4()
+                .gap_3()
+                .child(text(confirmed(|value| value.host_name.clone())).font_weight(FontWeight::MEDIUM))
                 .child(text("メッセージ・添付ファイル・作業に必要なプロジェクトの内容を、このPCと利用するAIサービスに送信します。"))
-                .child(text(move || confirmation.with(|value| {
-                    let recipients = value.as_ref().map(|value| value.ai_recipients.join("、")).filter(|value| !value.is_empty()).unwrap_or_else(|| "未設定".into());
+                .child(text(confirmed(|value| {
+                    let recipients = Some(value.ai_recipients.join("、")).filter(|value| !value.is_empty()).unwrap_or_else(|| "未設定".into());
                     format!("AI処理：{recipients}")
                 })))
-                .child(text(move || confirmation.with(|value| value.as_ref().and_then(|value| value.transcription_recipient.as_ref()).map(|recipient| format!("音声入力：{recipient}（文字起こし）")).unwrap_or_default())))
-                .child(text("共有PCでは、管理者などが内容を閲覧できる場合があります。"))
-                .child(native::text_button(json!("同意して接続"), move || {
-                    if !connection.pairing.get_untracked() && let Some(invitation) = confirmation.get_untracked() {
-                        connection.application.with(|application| application.pair(invitation));
-                    }
-                }).prop("enabled", move || json!(!connection.pairing.get())))
-                .child(native::text_button(json!("変更"), move || {
-                    confirmation.set(None); invitation.set(String::new());
-                }).prop("enabled", move || json!(!connection.pairing.get())))
+                .child(text(confirmed(|value| value.transcription_recipient.as_ref().map(|recipient| format!("音声入力：{recipient}（文字起こし）")).unwrap_or_default())))
+                .child(text("共有PCでは、管理者などが内容を閲覧できる場合があります。").text_size(px(13.0)).text_color(colors::MUTED))
+                .child(view().flex_row().justify_end().gap_2()
+                    .child(ui::text_button("変更", move || {
+                        confirmation.set(None); invitation.set(String::new());
+                    }).enabled(move || !connection.pairing.get()))
+                    .child(ui::text_button("同意して接続", move || {
+                        if !connection.pairing.get_untracked() && let Some(invitation) = confirmation.get_untracked() {
+                            connection.application.with(|application| application.pair(invitation));
+                        }
+                    }).enabled(move || !connection.pairing.get())))])
         }))
-        .child(text(move || error.get().unwrap_or_default()))
-        .child(native::text_button(json!("閉じる"), close))
+        .child(text(move || error.get().unwrap_or_default()).selectable(true))
 }

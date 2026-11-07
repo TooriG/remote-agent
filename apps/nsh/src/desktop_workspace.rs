@@ -151,11 +151,11 @@ fn summary_card(
         .text_color(colors::FOREGROUND)
         .child(heading(
             "ワークスペース",
-            ui::icon_button(Icon::Refresh, "変更を更新", move || act(Action::Refresh))
+            ui::icon_button(Icon::REFRESH, "変更を更新", move || act(Action::Refresh))
                 .enabled(move || enabled() && has_directory()),
         ))
         .child(
-            row(Icon::FolderOpen, move || summary.with(|s| s.directory.clone()))
+            row(Icon::FOLDER_OPEN, move || summary.with(|s| s.directory.clone()))
                 .on_press(move || act(Action::Files))
                 .disabled(move || !enabled()),
         )
@@ -166,7 +166,7 @@ fn summary_card(
                     .flex_row()
                     .items_center()
                     .child(
-                        row(Icon::ExternalLink, move || {
+                        row(Icon::EXTERNAL_LINK, move || {
                             summary.with(|s| s.editor_label.clone())
                         })
                         .flex_1()
@@ -178,7 +178,7 @@ fn summary_card(
                         .disabled(move || !has_directory() || summary.with(|s| s.editor.is_none())),
                     )
                     .child(
-                        ui::icon_button(Icon::ChevronDown, "エディターを選択", move || {
+                        ui::icon_button(Icon::CHEVRON_DOWN, "エディターを選択", move || {
                             let editors = summary.with_untracked(|s| {
                                 s.editors
                                     .iter()
@@ -207,7 +207,7 @@ fn summary_card(
             },
         ))
         .child(
-            row(Icon::Replace, || "変更".to_owned())
+            row(Icon::REPLACE, || "変更".to_owned())
                 .on_press(move || act(Action::Diff))
                 .disabled(move || !enabled() || !has_directory())
                 .child(
@@ -224,7 +224,7 @@ fn summary_card(
         .child(view().h(px(1.0)).my_2().bg(colors::BORDER))
         .child(heading(
             "ソース",
-            ui::icon_button(Icon::Plus, "ソースを追加", move || act(Action::Attach))
+            ui::icon_button(Icon::PLUS, "ソースを追加", move || act(Action::Attach))
                 .enabled(enabled),
         ))
         .child(when(
@@ -242,12 +242,12 @@ fn summary_card(
             |(path, _): &(String, String)| path.clone(),
             move |source, _| {
                 let (path, title) = source.get_untracked();
-                row(Icon::FileText, move || title.clone())
+                row(Icon::FILE_TEXT, move || title.clone())
                     .on_press(move || act(Action::Source(path.clone())))
             },
         ))
         .child(
-            row(Icon::Folder, || "すべてのファイル".to_owned())
+            row(Icon::FOLDER, || "すべてのファイル".to_owned())
                 .on_press(move || act(Action::Files))
                 .disabled(move || !enabled()),
         )
@@ -362,9 +362,16 @@ pub(crate) fn draft_hero() -> View {
                     .child(text("プロジェクトなしで始める").text_size(px(14.0)))
             },
         ))
-        .child(when(chat, || text("何に取り組みますか？").text_size(px(30.0))))
+        .child(when(chat, || {
+            text("何に取り組みますか？").text_size(px(30.0))
+        }))
         .child(when(chat, move || {
-            project_menu(|| "プロジェクトなし".to_owned(), 14.0, colors::MUTED, choose)
+            project_menu(
+                || "プロジェクトなし".to_owned(),
+                14.0,
+                colors::MUTED,
+                choose,
+            )
         }))
 }
 
@@ -394,5 +401,5 @@ fn project_menu(
                 .number_of_lines(1)
                 .min_w_0(),
         )
-        .child(ui::icon(Icon::ChevronDown, (size * 0.5).max(12.0)))
+        .child(ui::icon(Icon::CHEVRON_DOWN, (size * 0.5).max(12.0)))
 }

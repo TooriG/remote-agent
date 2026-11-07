@@ -366,7 +366,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                         move || answering.with(Option::is_none),
                         move || {
                             ui::icon_button_sized(
-                                Icon::Plus,
+                                Icon::PLUS,
                                 "ファイルを添付",
                                 40.0,
                                 24.0,
@@ -432,8 +432,8 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                 })
                                 .style_when(inactive, |s| s.opacity(0.5))
                                 .on_press(submit)
-                                .child(when(move || !stopping(), || ui::icon(Icon::ArrowUp, 24.0)))
-                                .child(when(stopping, || ui::icon(Icon::Stop, 24.0)))
+                                .child(when(move || !stopping(), || ui::icon(Icon::ARROW_UP, 24.0)))
+                                .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))
                         },
                     )),
             )
@@ -449,7 +449,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             .px_2()
             .child(
                 ui::labeled_button(
-                    Icon::Folder,
+                    Icon::FOLDER,
                     move || {
                         let directory = directory.get();
                         if directory.is_empty() {

@@ -28,173 +28,168 @@ pub(crate) mod colors {
 
 pub(crate) const RADIUS: f32 = 6.0;
 
+/// An icon: its markup in the current text color and, on the Mac, the SF Symbol
+/// AppKit draws for it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Icon {
-    ArrowDown,
-    ArrowUp,
-    Fork,
+pub(crate) struct Icon {
+    markup: &'static str,
     #[cfg(target_os = "macos")]
-    Check,
-    ChevronDown,
-    ChevronRight,
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    Close,
-    Copy,
-    #[cfg(target_os = "macos")]
-    Details,
-    Diff,
-    Ellipsis,
-    Wrench,
-    Terminal,
-    FilePen,
-    Brain,
-    #[cfg(target_os = "macos")]
-    Replace,
-    #[cfg(target_os = "macos")]
-    FolderOpen,
-    #[cfg(target_os = "macos")]
-    FileText,
-    #[cfg(target_os = "macos")]
-    ExternalLink,
-    Folder,
-    FolderPlus,
-    Loader,
-    Merge,
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    Microphone,
-    #[cfg(not(target_os = "macos"))]
-    Monitor,
-    NewChat,
-    Pencil,
-    #[cfg(target_os = "macos")]
-    PanelLeftClose,
-    #[cfg(target_os = "macos")]
-    PanelLeftOpen,
-    #[cfg(target_os = "macos")]
-    PanelRight,
-    Plus,
-    #[cfg(target_os = "macos")]
-    Refresh,
-    #[cfg(target_os = "macos")]
-    Settings,
-    Steer,
-    Stop,
+    symbol: &'static str,
+}
+
+macro_rules! icon {
+    ($file:literal) => {
+        Icon {
+            markup: include_str!($file),
+        }
+    };
+    ($file:literal, $symbol:literal) => {
+        Icon {
+            markup: include_str!($file),
+            #[cfg(target_os = "macos")]
+            symbol: $symbol,
+        }
+    };
 }
 
 impl Icon {
-    /// The SF Symbol AppKit draws for this icon.
+    pub(crate) const ARROW_DOWN: Self = icon!("../assets/icons/arrow-down.svg", "arrow.down");
+    pub(crate) const ARROW_UP: Self = icon!("../assets/icons/arrow-up.svg", "arrow.up");
+    pub(crate) const FORK: Self = icon!("../../desktop/assets/branch.svg", "arrow.triangle.branch");
     #[cfg(target_os = "macos")]
-    fn symbol(self) -> &'static str {
-        match self {
-            Self::ArrowDown => "arrow.down",
-            Self::ArrowUp => "arrow.up",
-            Self::Fork => "arrow.triangle.branch",
-            Self::Check => "checkmark",
-            Self::ChevronDown => "chevron.down",
-            Self::ChevronRight => "chevron.right",
-            Self::Close => "xmark",
-            Self::Copy => "doc.on.doc",
-            Self::Details => "list.bullet.rectangle",
-            Self::Diff => "plusminus",
-            Self::Ellipsis => "ellipsis",
-            Self::Wrench => "wrench.adjustable",
-            Self::Terminal => "apple.terminal",
-            Self::FilePen => "square.and.pencil",
-            Self::Brain => "brain",
-            Self::Replace => "arrow.left.arrow.right",
-            Self::FolderOpen => "folder",
-            Self::FileText => "doc",
-            Self::ExternalLink => "arrow.up.right.square",
-            Self::Folder => "folder",
-            Self::FolderPlus => "folder.badge.plus",
-            Self::Loader => "progress.indicator",
-            Self::Merge => "arrow.triangle.merge",
-            Self::Microphone => "mic",
-            Self::NewChat => "square.and.pencil",
-            Self::Pencil => "pencil",
-            Self::PanelLeftClose | Self::PanelLeftOpen => "sidebar.left",
-            Self::PanelRight => "sidebar.right",
-            Self::Plus => "plus",
-            Self::Refresh => "arrow.clockwise",
-            Self::Settings => "gearshape",
-            Self::Steer => "arrow.uturn.forward",
-            Self::Stop => "stop.fill",
-        }
-    }
-
-    fn markup(self) -> &'static str {
-        match self {
-            Self::ArrowDown => include_str!("../assets/icons/arrow-down.svg"),
-            Self::ArrowUp => include_str!("../assets/icons/arrow-up.svg"),
-            Self::Fork => include_str!("../../desktop/assets/branch.svg"),
-            #[cfg(target_os = "macos")]
-            Self::Check => include_str!("../assets/icons/check.svg"),
-            Self::ChevronDown => include_str!("../assets/icons/chevron-down.svg"),
-            Self::ChevronRight => include_str!("../assets/icons/chevron-right.svg"),
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Self::Close => include_str!("../assets/icons/x.svg"),
-            Self::Copy => include_str!("../assets/icons/copy.svg"),
-            #[cfg(target_os = "macos")]
-            Self::Details => include_str!("../../desktop/assets/square-menu.svg"),
-            Self::Diff => include_str!("../../desktop/assets/diff.svg"),
-            Self::Ellipsis => include_str!("../assets/icons/ellipsis.svg"),
-            Self::Wrench => include_str!("../assets/icons/wrench.svg"),
-            Self::Terminal => include_str!("../assets/icons/square-terminal.svg"),
-            Self::FilePen => include_str!("../assets/icons/file-pen.svg"),
-            Self::Brain => include_str!("../assets/icons/brain.svg"),
-            #[cfg(target_os = "macos")]
-            Self::Replace => include_str!("../assets/icons/replace.svg"),
-            #[cfg(target_os = "macos")]
-            Self::FolderOpen => include_str!("../assets/icons/folder-open.svg"),
-            #[cfg(target_os = "macos")]
-            Self::FileText => include_str!("../assets/icons/file-text.svg"),
-            #[cfg(target_os = "macos")]
-            Self::ExternalLink => include_str!("../assets/icons/external-link.svg"),
-            Self::Folder => include_str!("../assets/icons/folder.svg"),
-            Self::FolderPlus => include_str!("../../desktop/assets/folder-plus.svg"),
-            Self::Loader => include_str!("../assets/icons/loader.svg"),
-            Self::Merge => include_str!("../../desktop/assets/merge.svg"),
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Self::Microphone => include_str!("../../desktop/assets/microphone.svg"),
-            #[cfg(not(target_os = "macos"))]
-            Self::Monitor => include_str!("../../desktop/assets/monitor.svg"),
-            Self::NewChat => include_str!("../../desktop/assets/square-pen.svg"),
-            Self::Pencil => include_str!("../../desktop/assets/pencil.svg"),
-            #[cfg(target_os = "macos")]
-            Self::PanelLeftClose => include_str!("../assets/icons/panel-left-close.svg"),
-            #[cfg(target_os = "macos")]
-            Self::PanelLeftOpen => include_str!("../assets/icons/panel-left-open.svg"),
-            #[cfg(target_os = "macos")]
-            Self::PanelRight => include_str!("../assets/icons/panel-right.svg"),
-            Self::Plus => include_str!("../assets/icons/plus.svg"),
-            #[cfg(target_os = "macos")]
-            Self::Refresh => include_str!("../assets/icons/rotate-cw.svg"),
-            #[cfg(target_os = "macos")]
-            Self::Settings => include_str!("../assets/icons/settings.svg"),
-            Self::Steer => include_str!("../assets/icons/redo-2.svg"),
-            Self::Stop => include_str!("../../desktop/assets/stop.svg"),
-        }
-    }
+    pub(crate) const CHECK: Self = icon!("../assets/icons/check.svg", "checkmark");
+    pub(crate) const CHEVRON_DOWN: Self = icon!("../assets/icons/chevron-down.svg", "chevron.down");
+    pub(crate) const CHEVRON_RIGHT: Self =
+        icon!("../assets/icons/chevron-right.svg", "chevron.right");
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub(crate) const CLOSE: Self = icon!("../assets/icons/x.svg", "xmark");
+    pub(crate) const COPY: Self = icon!("../assets/icons/copy.svg", "doc.on.doc");
+    #[cfg(target_os = "macos")]
+    pub(crate) const DETAILS: Self = icon!(
+        "../../desktop/assets/square-menu.svg",
+        "list.bullet.rectangle"
+    );
+    pub(crate) const DIFF: Self = icon!("../../desktop/assets/diff.svg", "plusminus");
+    pub(crate) const ELLIPSIS: Self = icon!("../assets/icons/ellipsis.svg", "ellipsis");
+    pub(crate) const WRENCH: Self = icon!("../assets/icons/wrench.svg", "wrench.adjustable");
+    pub(crate) const TERMINAL: Self =
+        icon!("../assets/icons/square-terminal.svg", "apple.terminal");
+    pub(crate) const FILE_PEN: Self = icon!("../assets/icons/file-pen.svg", "square.and.pencil");
+    pub(crate) const BRAIN: Self = icon!("../assets/icons/brain.svg", "brain");
+    #[cfg(target_os = "macos")]
+    pub(crate) const REPLACE: Self = icon!("../assets/icons/replace.svg", "arrow.left.arrow.right");
+    #[cfg(target_os = "macos")]
+    pub(crate) const FOLDER_OPEN: Self = icon!("../assets/icons/folder-open.svg", "folder");
+    #[cfg(target_os = "macos")]
+    pub(crate) const FILE_TEXT: Self = icon!("../assets/icons/file-text.svg", "doc");
+    #[cfg(target_os = "macos")]
+    pub(crate) const EXTERNAL_LINK: Self =
+        icon!("../assets/icons/external-link.svg", "arrow.up.right.square");
+    pub(crate) const FOLDER: Self = icon!("../assets/icons/folder.svg", "folder");
+    pub(crate) const FOLDER_PLUS: Self =
+        icon!("../../desktop/assets/folder-plus.svg", "folder.badge.plus");
+    pub(crate) const LOADER: Self = icon!("../assets/icons/loader.svg", "progress.indicator");
+    pub(crate) const MERGE: Self = icon!("../../desktop/assets/merge.svg", "arrow.triangle.merge");
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub(crate) const MICROPHONE: Self = icon!("../../desktop/assets/microphone.svg", "mic");
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) const MONITOR: Self = icon!("../../desktop/assets/monitor.svg");
+    pub(crate) const NEW_CHAT: Self =
+        icon!("../../desktop/assets/square-pen.svg", "square.and.pencil");
+    pub(crate) const PENCIL: Self = icon!("../../desktop/assets/pencil.svg", "pencil");
+    #[cfg(target_os = "macos")]
+    pub(crate) const PANEL_LEFT_CLOSE: Self =
+        icon!("../assets/icons/panel-left-close.svg", "sidebar.left");
+    #[cfg(target_os = "macos")]
+    pub(crate) const PANEL_LEFT_OPEN: Self =
+        icon!("../assets/icons/panel-left-open.svg", "sidebar.left");
+    #[cfg(target_os = "macos")]
+    pub(crate) const PANEL_RIGHT: Self = icon!("../assets/icons/panel-right.svg", "sidebar.right");
+    pub(crate) const PLUS: Self = icon!("../assets/icons/plus.svg", "plus");
+    #[cfg(target_os = "macos")]
+    pub(crate) const REFRESH: Self = icon!("../assets/icons/rotate-cw.svg", "arrow.clockwise");
+    #[cfg(target_os = "macos")]
+    pub(crate) const SETTINGS: Self = icon!("../assets/icons/settings.svg", "gearshape");
+    #[cfg(target_os = "macos")]
+    pub(crate) const SLIDERS: Self = icon!("../assets/icons/settings-2.svg", "slider.horizontal.3");
+    #[cfg(target_os = "macos")]
+    pub(crate) const FOLDER_TREE: Self = icon!("../assets/icons/folder-tree.svg", "folder");
+    #[cfg(target_os = "macos")]
+    pub(crate) const SERVER: Self = icon!("../assets/icons/server.svg", "server.rack");
+    #[cfg(target_os = "macos")]
+    pub(crate) const BOT: Self = icon!("../assets/icons/bot.svg", "cpu");
+    pub(crate) const STEER: Self = icon!("../assets/icons/redo-2.svg", "arrow.uturn.forward");
+    pub(crate) const STOP: Self = icon!("../../desktop/assets/stop.svg", "stop.fill");
 }
 
 impl Icon {
     /// A work item's tool, as T3 Code's work log shows it.
     pub(crate) fn work(kind: &str) -> Self {
         match kind {
-            "command" => Self::Terminal,
-            "fileChange" => Self::FilePen,
-            "reasoning" => Self::Brain,
-            _ => Self::Wrench,
+            "command" => Self::TERMINAL,
+            "fileChange" => Self::FILE_PEN,
+            "reasoning" => Self::BRAIN,
+            _ => Self::WRENCH,
         }
     }
 }
 
 /// An icon in the current text color.
 pub(crate) fn icon(icon: Icon, size: f32) -> impl IntoElement {
-    svg(ImageSrc::svg_markup(icon.markup()))
+    svg(ImageSrc::svg_markup(icon.markup))
         .w(px(size))
         .h(px(size))
         .flex_shrink_0()
+}
+
+/// A card of rows divided by rules, as T3 Code's settings groups.
+pub(crate) fn card(rows: Vec<View>) -> View {
+    rows.into_iter().enumerate().fold(
+        view()
+            .rounded(px(12.0))
+            .border_1()
+            .border_color(colors::BORDER)
+            .bg(colors::SURFACE),
+        |group, (index, row)| {
+            group.child(if index == 0 {
+                row
+            } else {
+                row.border_t_1().border_t_color(colors::BORDER)
+            })
+        },
+    )
+}
+
+/// A setting: its title and description, and its control at the end.
+pub(crate) fn setting(
+    title: impl IntoReactive<SharedString>,
+    description: impl Fn() -> String + 'static,
+    control: impl IntoElement,
+) -> View {
+    view()
+        .flex_row()
+        .items_center()
+        .gap_4()
+        .px_5()
+        .py_4()
+        .child(
+            view()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    text(title)
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::MEDIUM),
+                )
+                .child(
+                    text(description)
+                        .text_size(px(13.0))
+                        .text_color(colors::MUTED)
+                        .selectable(true),
+                ),
+        )
+        .child(control)
 }
 
 /// The activity indicator: a turning loader, as the desktop client's.
@@ -203,7 +198,7 @@ pub(crate) fn spinner() -> impl IntoElement {
         .w(px(14.0))
         .h(px(14.0))
         .animate_spin()
-        .child(icon(Icon::Loader, 14.0))
+        .child(icon(Icon::LOADER, 14.0))
 }
 
 /// A control: nsh-base's button (focus, keys, accessibility) in the desktop client's
@@ -379,7 +374,7 @@ pub(crate) fn icon_button_sized(
     press: impl Fn() + 'static,
 ) -> Control {
     appkit_button(label, press)
-        .prop("symbol", serde_json::json!(glyph.symbol()))
+        .prop("symbol", serde_json::json!(glyph.symbol))
         .prop("symbolSize", serde_json::json!(icon_size))
         .w(px(size))
         .h(px(size))
@@ -404,7 +399,7 @@ pub(crate) fn labeled_button(
     press: impl Fn() + 'static,
 ) -> Control {
     appkit_button(move || SharedString::from(title()), press)
-        .prop("symbol", serde_json::json!(glyph.symbol()))
+        .prop("symbol", serde_json::json!(glyph.symbol))
         .prop("symbolSize", serde_json::json!(16.0))
         .prop("title", move || serde_json::json!(title()))
         .min_w_0()

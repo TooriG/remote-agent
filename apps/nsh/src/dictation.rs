@@ -246,7 +246,7 @@ impl Dictation {
             .items_center()
             .child(
                 crate::ui::icon_button_sized(
-                    crate::ui::Icon::Microphone,
+                    crate::ui::Icon::MICROPHONE,
                     "音声をCodexで文字起こし",
                     40.0,
                     20.0,
@@ -312,7 +312,7 @@ impl Dictation {
                 move || self.active.get(),
                 move || {
                     crate::ui::icon_button_sized(
-                        crate::ui::Icon::Close,
+                        crate::ui::Icon::CLOSE,
                         "録音を取り消す",
                         40.0,
                         20.0,

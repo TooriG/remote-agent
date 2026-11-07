@@ -1,3 +1,4 @@
+use crate::ui::{self, Enabled};
 use crate::{Connection, native};
 use agent_core::state::{Intent, operations as op};
 use agent_protocol::{dsh::KeyProvider, session::ProviderKind};
@@ -12,10 +13,7 @@ pub(crate) fn icon(provider: ProviderKind) -> &'static str {
     }
 }
 
-pub(crate) fn screen(
-    provider: ProviderKind,
-    close: impl Fn() + Copy + 'static,
-) -> impl IntoElement {
+pub(crate) fn screen(provider: ProviderKind) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let publication = connection.publication;
     let agent = computed(move || {
@@ -54,72 +52,61 @@ pub(crate) fn screen(
             }
         }
     });
-    scroll().flex_1().child(
-        view()
-            .p_4()
-            .gap_4()
-            .pb_keyboard()
-            .child(when(is_desktop, move || {
-                native::text_button(json!("戻る"), close).prop("enabled", move || {
-                    json!(!pending.get() && login.get().is_none())
-                })
-            }))
-            .child(when(is_desktop, move || {
-                text(move || {
-                    agent.with(|agent| agent.as_ref().map(|a| a.name.clone()).unwrap_or_default())
-                })
-                .text_size(px(22.0))
-            }))
-            .child(text(move || {
+    view()
+        .gap_4()
+        .child(
+            text(move || {
                 connection
                     .settings
                     .with(|p| p.host_name().unwrap_or_default())
-            }))
-            .child(
-                text(move || {
-                    publication.with(|p| {
-                        p.settings
-                            .account_login_error(provider)
-                            .map(|error| error.to_string())
-                            .unwrap_or_default()
-                    })
+            })
+            .text_size(px(13.0))
+            .text_color(ui::colors::MUTED),
+        )
+        .child(
+            text(move || {
+                publication.with(|p| {
+                    p.settings
+                        .account_login_error(provider)
+                        .map(|error| error.to_string())
+                        .unwrap_or_default()
                 })
-                .selectable(true),
-            )
-            .child(when(
-                move || login.get().is_some(),
-                move || login_panel(login, pending, perform),
-            ))
-            .child(when(
-                move || login.get().is_none(),
-                move || {
-                    view()
-                        .gap_4()
-                        .child(
-                            text(move || {
-                                agent.with(|agent| {
-                                    agent
-                                        .as_ref()
-                                        .map(|a| {
-                                            a.error
-                                                .as_ref()
-                                                .map(ToString::to_string)
-                                                .unwrap_or_else(|| a.label.clone())
-                                        })
-                                        .unwrap_or_default()
-                                })
+            })
+            .selectable(true),
+        )
+        .child(when(
+            move || login.get().is_some(),
+            move || login_panel(login, pending, perform),
+        ))
+        .child(when(
+            move || login.get().is_none(),
+            move || {
+                view()
+                    .gap_4()
+                    .child(
+                        text(move || {
+                            agent.with(|agent| {
+                                agent
+                                    .as_ref()
+                                    .map(|a| {
+                                        a.error
+                                            .as_ref()
+                                            .map(ToString::to_string)
+                                            .unwrap_or_else(|| a.label.clone())
+                                    })
+                                    .unwrap_or_default()
                             })
-                            .selectable(true),
-                        )
-                        .child(if provider == ProviderKind::DeepSeek {
-                            credentials(busy, perform).into_element()
-                        } else {
-                            account_list(provider, busy, perform).into_element()
                         })
-                        .child(runtime(provider, busy, perform))
-                },
-            )),
-    )
+                        .selectable(true),
+                    )
+                    .child(if provider == ProviderKind::DeepSeek {
+                        credentials(busy, perform).into_element()
+                    } else {
+                        account_list(provider, busy, perform).into_element()
+                    })
+                    .child(runtime(provider, busy, perform))
+            },
+        ))
 }
 
 fn account_list(
@@ -131,10 +118,25 @@ fn account_list(
     view()
         .gap_3()
         .child(
-            native::text_button(json!("アカウントを再読み込み"), move || {
-                perform(Intent::ListAccounts(op::ListAccounts {}))
-            })
-            .prop("enabled", move || json!(!busy.get())),
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(heading("アカウント").flex_1())
+                .child(
+                    ui::text_button("アカウントを再読み込み", move || {
+                        perform(Intent::ListAccounts(op::ListAccounts {}))
+                    })
+                    .enabled(move || !busy.get()),
+                )
+                .child(
+                    ui::text_button("アカウントを追加", move || {
+                        perform(Intent::StartAccountLogin(op::StartAccountLogin {
+                            provider,
+                        }))
+                    })
+                    .enabled(move || !busy.get()),
+                ),
         )
         .child(each(
             move || {
@@ -154,14 +156,12 @@ fn account_list(
             |account: &agent_protocol::operations::Account| account.id.clone(),
             move |account, _| account_row(account, busy, perform),
         ))
-        .child(
-            native::text_button(json!("アカウントを追加"), move || {
-                perform(Intent::StartAccountLogin(op::StartAccountLogin {
-                    provider,
-                }))
-            })
-            .prop("enabled", move || json!(!busy.get())),
-        )
+}
+
+fn heading(title: &'static str) -> Text {
+    text(title)
+        .text_size(px(16.0))
+        .font_weight(FontWeight::SEMIBOLD)
 }
 
 fn account_row(
@@ -174,15 +174,12 @@ fn account_row(
         publication
             .with(|p| account.with(|a| p.settings.account_is_selected(a.provider, a.id.clone())))
     };
-    view().gap_2()
-        .child(text(move || account.with(|a| a.email.as_ref().unwrap_or(&a.id).clone())))
-        .child(text(move || account.with(|a| a.plan_type.clone().unwrap_or_default())))
-        .child(when(selected, move || usage(account)))
-        .child(native::text_button(move || json!(if selected() { "選択中" } else { "このアカウントを使う" }), move || {
+    let actions = view().flex_row().gap_2()
+        .child(ui::text_button(move || SharedString::from(if selected() { "選択中" } else { "このアカウントを使う" }), move || {
             let (provider, id) = account.with_untracked(|a| (a.provider, a.id.clone()));
             perform(Intent::SelectAccount(op::SelectAccount { provider, id }));
-        }).prop("enabled", move || json!(!busy.get() && !selected())))
-        .child(native::text_button(json!("サインアウト"), move || {
+        }).enabled(move || !busy.get() && !selected()))
+        .child(ui::text_button("サインアウト", move || {
             let (provider, id) = account.with_untracked(|a| (a.provider, a.id.clone()));
             spawn(async move {
                 if nsh_base::alert_dialog().title("サインアウトしますか？")
@@ -192,7 +189,41 @@ fn account_row(
                     perform(Intent::LogoutAccount(op::LogoutAccount { provider, id }));
                 }
             });
-        }).prop("enabled", move || json!(!busy.get())))
+        }).enabled(move || !busy.get()));
+    ui::card(vec![
+        view()
+            .px_5()
+            .py_4()
+            .gap_3()
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_4()
+                    .child(
+                        view()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                text(move || {
+                                    account.with(|a| a.email.as_ref().unwrap_or(&a.id).clone())
+                                })
+                                .text_size(px(14.0))
+                                .font_weight(FontWeight::MEDIUM),
+                            )
+                            .child(
+                                text(move || {
+                                    account.with(|a| a.plan_type.clone().unwrap_or_default())
+                                })
+                                .text_size(px(13.0))
+                                .text_color(ui::colors::MUTED),
+                            ),
+                    )
+                    .child(actions),
+            )
+            .child(when(selected, move || usage(account))),
+    ])
 }
 
 fn usage(account: ReadSignal<agent_protocol::operations::Account>) -> impl IntoElement {
@@ -235,24 +266,32 @@ fn usage(account: ReadSignal<agent_protocol::operations::Account>) -> impl IntoE
                             .w_full()
                             .h(px(8.0)),
                     )
-                    .child(text(move || {
-                        window.with(|w| {
-                            w.resets_at
-                                .map(|at| format!("リセット: {}", native::date_time(at)))
-                                .unwrap_or_default()
+                    .child(
+                        text(move || {
+                            window.with(|w| {
+                                w.resets_at
+                                    .map(|at| format!("リセット: {}", native::date_time(at)))
+                                    .unwrap_or_default()
+                            })
                         })
-                    }))
+                        .text_size(px(12.0))
+                        .text_color(ui::colors::MUTED),
+                    )
             },
         ))
-        .child(text(move || {
-            account.with(|a| {
-                a.usage
-                    .as_ref()
-                    .filter(|u| u.error.is_none())
-                    .map(|u| format!("{} 更新", native::date_time(u.fetched_at)))
-                    .unwrap_or_default()
+        .child(
+            text(move || {
+                account.with(|a| {
+                    a.usage
+                        .as_ref()
+                        .filter(|u| u.error.is_none())
+                        .map(|u| format!("{} 更新", native::date_time(u.fetched_at)))
+                        .unwrap_or_default()
+                })
             })
-        }))
+            .text_size(px(12.0))
+            .text_color(ui::colors::MUTED),
+        )
 }
 
 fn login_panel(
@@ -306,6 +345,7 @@ fn login_panel(
         move || login.with(|l| l.as_ref().is_some_and(|l| l.requires_code_submission));
     let current = move || login.get_untracked();
     view()
+        .items_start()
         .gap_3()
         .child(text("1. ブラウザでサインイン").text_size(px(18.0)))
         .child(when(
@@ -322,15 +362,15 @@ fn login_panel(
                         })
                         .selectable(true),
                     )
-                    .child(native::text_button(json!("コピー"), move || {
+                    .child(ui::text_button("コピー", move || {
                         if let Some(login) = current() {
                             set_clipboard(login.user_code);
                         }
                     }))
             },
         ))
-        .child(native::text_button(
-            json!("ログインページを開く"),
+        .child(ui::text_button(
+            "ログインページを開く",
             move || {
                 if let Some(login) = current()
                     && login.verification_url.starts_with("https://")
@@ -352,10 +392,15 @@ fn login_panel(
                         .value(move || code.get())
                         .on_change(move |value: &str| code.set(value.into()))
                         .text_color(move || nsh_base::theme().foreground)
-                        .h(px(44.0)),
+                        .w_full()
+                        .h(px(36.0))
+                        .px_3()
+                        .rounded(px(ui::RADIUS))
+                        .border_1()
+                        .border_color(ui::colors::BORDER),
                 )
                 .child(
-                    native::text_button(json!("サインインを完了"), move || {
+                    ui::text_button("サインインを完了", move || {
                         if let Some(login) = current() {
                             let value = code.get_untracked();
                             code.set(String::new());
@@ -366,9 +411,7 @@ fn login_panel(
                             }));
                         }
                     })
-                    .prop("enabled", move || {
-                        json!(!pending.get() && !code.with(|code| code.trim().is_empty()))
-                    }),
+                    .enabled(move || !pending.get() && !code.with(|code| code.trim().is_empty())),
                 )
         }))
         .child(text(move || {
@@ -381,13 +424,13 @@ fn login_panel(
         .child(when(
             move || poll_failed.get(),
             move || {
-                native::text_button(json!("認証状態を再確認"), move || {
+                ui::text_button("認証状態を再確認", move || {
                     retry.update(|r| *r += 1)
                 })
             },
         ))
         .child(
-            native::text_button(json!("サインインを中止"), move || {
+            ui::text_button("サインインを中止", move || {
                 if let Some(login) = current() {
                     code.set(String::new());
                     perform(Intent::CancelAccountLogin(op::CancelAccountLogin {
@@ -396,7 +439,7 @@ fn login_panel(
                     }));
                 }
             })
-            .prop("enabled", move || json!(!pending.get())),
+            .enabled(move || !pending.get()),
         )
 }
 
@@ -413,22 +456,22 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
         })
     });
     let enabled = move || !busy.get() && !connection.settings.with(|p| p.credential_busy());
-    view().gap_3()
+    view().items_start().gap_3()
         .child(text("APIキー").text_size(px(18.0)))
         .child(native::menu("key", "接続先", native::items(KeyProvider::ALL.into_iter().map(|provider| (provider.reference(), provider.label()))), move |id| {
             if let Some(provider) = KeyProvider::ALL.into_iter().find(|p| p.reference() == id) { selected.set(provider); key.set(String::new()); }
         }).prop("title", move || json!(selected.get().label())).prop("enabled", move || json!(enabled())))
         .child(text(move || control.with(|c| c.as_ref().map(|c| c.status.clone()).unwrap_or_default())))
-        .child(native::text_button(json!("キーの発行ページ"), move || { native::open_link(selected.get_untracked().key_url()); }))
+        .child(ui::text_button("キーの発行ページ", move || { native::open_link(selected.get_untracked().key_url()); }))
         .child(input().masked(true).auto_correct(false).auto_capitalize(AutoCapitalize::None)
             .placeholder("APIキー").value(move || key.get()).on_change(move |value: &str| key.set(value.into()))
-            .text_color(move || nsh_base::theme().foreground).h(px(44.0)))
-        .child(native::text_button(json!("保存"), move || {
+            .text_color(move || nsh_base::theme().foreground).w_full().h(px(36.0)).px_3().rounded(px(ui::RADIUS)).border_1().border_color(ui::colors::BORDER))
+        .child(ui::text_button("保存", move || {
             let value = key.get_untracked(); key.set(String::new());
             perform(Intent::UpdateDshCredential(op::UpdateDshCredential { provider: selected.get_untracked(), key: Some(value) }));
-        }).prop("enabled", move || json!(enabled() && !key.with(|key| key.trim().is_empty()))))
+        }).enabled(move || enabled() && !key.with(|key| key.trim().is_empty())))
         .child(when(move || control.with(|c| c.as_ref().is_some_and(|c| c.can_remove)), move || {
-            native::text_button(json!("保存済みキーを削除"), move || {
+            ui::text_button("保存済みキーを削除", move || {
                 let provider = selected.get_untracked();
                 spawn(async move {
                     if nsh_base::alert_dialog().title("保存済みキーを削除しますか？")
@@ -438,10 +481,10 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
                         perform(Intent::UpdateDshCredential(op::UpdateDshCredential { provider, key: None }));
                     }
                 });
-            }).prop("enabled", move || json!(enabled()))
+            }).enabled(enabled)
         }))
-        .child(native::text_button(json!("設定状態を取得"), move || perform(Intent::ReadDshCredentials(op::ReadDshCredentials {})))
-            .prop("enabled", move || json!(enabled())))
+        .child(ui::text_button("設定状態を取得", move || perform(Intent::ReadDshCredentials(op::ReadDshCredentials {})))
+            .enabled(enabled))
         .child(text(move || connection.settings.with(|p| p.credential_error().map(|error| error.to_string()).unwrap_or_default())).selectable(true))
         .child(text("APIキーは選択したPCに保存されます。保存済みのキーは表示されません。"))
 }
@@ -453,44 +496,50 @@ fn runtime(
 ) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     if provider != ProviderKind::Codex {
-        return text("このプロバイダーはBexと一緒に更新されます。").into_element();
+        return text("このプロバイダーはBexと一緒に更新されます。")
+            .text_size(px(13.0))
+            .text_color(ui::colors::MUTED)
+            .into_element();
     }
     let status = computed(move || connection.settings.with(|p| p.codex_cli_status()));
-    view()
-        .gap_2()
-        .child(text("Codex CLI").text_size(px(18.0)))
-        .child(text(move || {
-            status.with(|s| {
-                s.as_ref()
-                    .and_then(|s| s.version.clone())
-                    .unwrap_or_default()
-            })
-        }))
-        .child(
-            text(move || {
-                status.with(|s| s.as_ref().and_then(|s| s.error.clone()).unwrap_or_default())
-            })
-            .selectable(true),
-        )
-        .child(when(
-            move || status.with(|s| s.as_ref().is_some_and(|s| s.restart_required)),
-            || text("更新が完了しました。新しいCLIを使用するにはホストを再起動してください。"),
-        ))
-        .child(
-            native::text_button(json!("状態を確認"), move || {
-                perform(Intent::ManageCodexCli(op::ManageCodexCli { update: false }))
-            })
-            .prop("enabled", move || {
-                json!(!busy.get() && !connection.settings.with(|p| p.codex_cli_busy()))
-            }),
-        )
-        .child(
-            native::text_button(json!("最新版に更新"), move || {
-                perform(Intent::ManageCodexCli(op::ManageCodexCli { update: true }))
-            })
-            .prop("enabled", move || {
-                json!(!busy.get() && !connection.settings.with(|p| p.codex_cli_busy()))
-            }),
-        )
-        .into_element()
+    let idle = move || !busy.get() && !connection.settings.with(|p| p.codex_cli_busy());
+    let description = move || {
+        status.with(|s| {
+            let Some(s) = s.as_ref() else {
+                return String::new();
+            };
+            [
+                s.version.clone(),
+                s.error.clone(),
+                s.restart_required.then(|| {
+                    "更新が完了しました。新しいCLIを使用するにはホストを再起動してください。"
+                        .to_owned()
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n")
+        })
+    };
+    ui::card(vec![ui::setting(
+        "Codex CLI",
+        description,
+        view()
+            .flex_row()
+            .gap_2()
+            .child(
+                ui::text_button("状態を確認", move || {
+                    perform(Intent::ManageCodexCli(op::ManageCodexCli { update: false }))
+                })
+                .enabled(idle),
+            )
+            .child(
+                ui::text_button("最新版に更新", move || {
+                    perform(Intent::ManageCodexCli(op::ManageCodexCli { update: true }))
+                })
+                .enabled(idle),
+            ),
+    )])
+    .into_element()
 }

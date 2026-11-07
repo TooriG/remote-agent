@@ -522,9 +522,11 @@ fn desktop_row(
                 .map(|item| item["enabled"].as_bool().unwrap_or(false));
             section(row.title.clone())
                 .child(add.map(|enabled| {
-                    ui::icon_button(Icon::FolderPlus, "プロジェクトを追加", move || {
-                        activate("menu", "add", None)
-                    })
+                    ui::icon_button(
+                        Icon::FOLDER_PLUS,
+                        "プロジェクトを追加",
+                        move || activate("menu", "add", None),
+                    )
                     .enabled(move || enabled)
                 }))
                 .into_element()
@@ -551,7 +553,7 @@ fn desktop_row(
                         .any(|source| Some(&source.scope) == row.scope.as_ref() && source.connected)
                 });
                 ui::small_icon_button(
-                    Icon::NewChat,
+                    Icon::NEW_CHAT,
                     "このプロジェクトで新しいチャット",
                     move || activate("compose", &compose_id, None),
                 )
@@ -589,7 +591,7 @@ fn desktop_row(
                         .opacity(0.0)
                         .group_hover(|s| s.opacity(1.0))
                         .child(ui::small_icon_button(
-                            Icon::Ellipsis,
+                            Icon::ELLIPSIS,
                             "プロジェクトのメニュー",
                             move || {
                                 ui::popup(&menu, move |command| activate("menu", command, None))
@@ -712,8 +714,8 @@ fn indicators(indicators: native::RowIndicators) -> impl IntoElement {
         })
         .child(indicators.worktree.map(|status| {
             let (glyph, color) = match status {
-                agent_protocol::models::WorktreeStatus::Unmerged => (Icon::Diff, 0xfb923c),
-                agent_protocol::models::WorktreeStatus::Merged => (Icon::Merge, 0xa78bfa),
+                agent_protocol::models::WorktreeStatus::Unmerged => (Icon::DIFF, 0xfb923c),
+                agent_protocol::models::WorktreeStatus::Merged => (Icon::MERGE, 0xa78bfa),
             };
             view()
                 .text_color(nsh_core::element::rgb(color))

@@ -414,7 +414,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             .min_h_0(),
         )
         .child(when(move || !following.get(), move || {
-            crate::ui::icon_button_sized(crate::ui::Icon::ArrowDown, "最新のメッセージへ", 32.0, 16.0, move || following.set(true))
+            crate::ui::icon_button_sized(crate::ui::Icon::ARROW_DOWN, "最新のメッセージへ", 32.0, 16.0, move || following.set(true))
                 .bg(crate::ui::colors::RAISED)
                 .border_1()
                 .border_color(crate::ui::colors::BORDER)
@@ -448,8 +448,11 @@ fn fold_row(
                 .hover(|s| s.text_color(colors::FOREGROUND))
                 .on_press(toggle)
                 .child(text(label).text_size(px(14.0)))
-                .child(when(open, || ui::icon(Icon::ChevronDown, 14.0)))
-                .child(when(move || !open(), || ui::icon(Icon::ChevronRight, 14.0))),
+                .child(when(open, || ui::icon(Icon::CHEVRON_DOWN, 14.0)))
+                .child(when(
+                    move || !open(),
+                    || ui::icon(Icon::CHEVRON_RIGHT, 14.0),
+                )),
         )
 }
 
@@ -464,7 +467,7 @@ fn steer_marker() -> View {
         .mb_1()
         .text_color(colors::MUTED)
         .label("実行中の作業に追加で指示しました")
-        .child(ui::icon(Icon::Steer, 12.0))
+        .child(ui::icon(Icon::STEER, 12.0))
         .child(text("追加の指示").text_size(px(12.0)))
 }
 
@@ -491,7 +494,7 @@ fn response_actions(row: Memo<Option<Row>>) -> View {
         .gap_4()
         .mt_2()
         .child(ui::icon_button(
-            Icon::Copy,
+            Icon::COPY,
             "回答をコピー",
             move || {
                 if let Some(row) = row.get_untracked() {
@@ -502,7 +505,7 @@ fn response_actions(row: Memo<Option<Row>>) -> View {
         .child(when(
             move || fork().is_some(),
             move || {
-                ui::icon_button(Icon::Fork, "ここから会話を分岐", move || {
+                ui::icon_button(Icon::FORK, "ここから会話を分岐", move || {
                     if let (Some(thread_id), Some(last_turn_id)) =
                         (untracked(thread), untracked(fork))
                     {
@@ -539,7 +542,7 @@ fn user_actions(row: Memo<Option<Row>>) -> View {
         .group_hover(|s| s.opacity(1.0))
         .child(time(row).mr_2())
         .child(ui::icon_button(
-            Icon::Copy,
+            Icon::COPY,
             "発言をコピー",
             move || {
                 if let Some(text) = body() {
@@ -548,7 +551,7 @@ fn user_actions(row: Memo<Option<Row>>) -> View {
             },
         ))
         .child(ui::icon_button(
-            Icon::Pencil,
+            Icon::PENCIL,
             "入力欄で編集",
             move || {
                 let Some(text) = body() else { return };

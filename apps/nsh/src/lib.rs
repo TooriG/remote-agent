@@ -25,6 +25,8 @@ mod notices;
 mod projects;
 mod requests;
 mod rich_text;
+#[cfg(target_os = "macos")]
+mod settings;
 mod shared;
 mod side_chat;
 #[cfg(target_os = "macos")]
@@ -257,24 +259,6 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         }
     };
     #[cfg(target_os = "macos")]
-    let environment = move || {
-        view()
-            .flex_1()
-            .child(when(
-                move || provider.get().is_none(),
-                move || environment::overview(hosts, close_settings),
-            ))
-            .child(each(
-                move || provider.get().into_iter().collect::<Vec<_>>(),
-                |provider: &agent_protocol::session::ProviderKind| *provider,
-                move |selected, _| {
-                    accounts::screen(selected.get_untracked(), move || {
-                        navigate(Navigation::Provider(None))
-                    })
-                },
-            ))
-    };
-    #[cfg(target_os = "macos")]
     let hero = desktop_workspace::draft_hero;
     #[cfg(not(target_os = "macos"))]
     let hero = view;
@@ -410,14 +394,15 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                         .min_w_0()
                         .child(notices())
                         .child(when(
-                            move || settings.get() || hosts.with(Vec::is_empty),
-                            environment,
+                            move || hosts.with(Vec::is_empty),
+                            move || environment::overview(hosts),
                         ))
-                        .child(when(
-                            move || !settings.get() && !hosts.with(Vec::is_empty),
-                            main,
-                        )),
+                        .child(when(move || !hosts.with(Vec::is_empty), main)),
                 )
+                .child(when(
+                    move || settings.get(),
+                    move || settings::overlay(hosts),
+                ))
                 .into_element();
         }
         Area::Mobile => {}
@@ -468,7 +453,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                 2 => nsh_base::nav_page()
                     .title("環境")
                     .child(notices())
-                    .child(environment::overview(hosts, close_settings)),
+                    .child(environment::overview(hosts)),
                 5 => nsh_base::nav_page()
                     .title(move || {
                         connection.settings.with(|p| {
@@ -485,10 +470,14 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                     .pop_on_back(move || !account_locked.get())
                     .pop_on_swipe(move || !account_locked.get())
                     .child(notices())
-                    .child(accounts::screen(
-                        provider.get_untracked().unwrap(),
-                        move || navigate(Navigation::Provider(None)),
-                    )),
+                    .child(
+                        scroll().flex_1().child(
+                            view()
+                                .p_4()
+                                .pb_keyboard()
+                                .child(accounts::screen(provider.get_untracked().unwrap())),
+                        ),
+                    ),
                 3 => nsh_base::nav_page()
                     .title(workbench::title)
                     .child(notices())
@@ -501,7 +490,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                     .child(notices())
                     .child(when(
                         move || hosts.with(Vec::is_empty),
-                        move || connections::screen(hosts, || {}),
+                        move || connections::screen(hosts),
                     ))
                     .child(when(
                         move || !hosts.with(Vec::is_empty),
