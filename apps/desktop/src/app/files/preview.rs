@@ -205,7 +205,7 @@ mod tests {
     #[tokio::test]
     async fn failed_downloads_remove_their_private_preview_directory() {
         let root = tempfile::tempdir().unwrap();
-        let store = Store::offline(Snapshot::default());
+        let store = Store::offline(Snapshot::default(), None);
         assert!(
             download_preview(&store, "/movie.mp4".into(), root.path().into())
                 .await

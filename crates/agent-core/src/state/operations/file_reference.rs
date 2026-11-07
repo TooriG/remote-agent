@@ -183,7 +183,7 @@ mod tests {
             ..Default::default()
         };
         let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-        let store = Store::new(peer, initial);
+        let store = Store::new(peer, initial, None);
         for _ in 0..4 {
             let request = reader.read_request().await.unwrap().unwrap();
             let result = match request["method"].as_str().unwrap() {

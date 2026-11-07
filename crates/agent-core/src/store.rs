@@ -1,6 +1,9 @@
 //! The single state owner. Independent RPC work publishes completed results.
 use crate::{
-    client::{ClientExt, SessionImage},
+    client::{
+        ClientExt, SessionImage,
+        persistence::{DevicePreferences, ModelChoice, Preferences},
+    },
     diagnostics::{ConnectionPerformance, ConnectionPhase as Phase},
     peer::PeerError,
     state::{Event, Intent, Snapshot, operations as op, reduce},
@@ -376,6 +379,7 @@ impl Scheduled {
     }
 }
 pub struct Store {
+    preferences: Arc<DevicePreferences>,
     updates: watch::Receiver<Arc<Snapshot>>,
     presentations: watch::Receiver<Arc<crate::presentation::view::Presentation>>,
     publications: Mutex<Option<watch::Sender<Arc<Snapshot>>>>,
@@ -386,15 +390,36 @@ pub struct Store {
     finished: watch::Receiver<bool>,
 }
 impl Store {
-    pub fn new(peer: (Client, Updates), snapshot: Snapshot) -> Self {
-        Self::start(Some(peer), snapshot)
+    pub fn new(
+        peer: (Client, Updates),
+        snapshot: Snapshot,
+        preferences: Option<Arc<DevicePreferences>>,
+    ) -> Self {
+        Self::start(Some(peer), snapshot, preferences)
     }
-    pub fn offline(snapshot: Snapshot) -> Self {
+    pub fn offline(snapshot: Snapshot, preferences: Option<Arc<DevicePreferences>>) -> Self {
         let (snapshot, _) = reduce(&snapshot, Event::Disconnected);
-        Self::start(None, snapshot)
+        Self::start(None, snapshot, preferences)
     }
-    fn start(peer: Option<(Client, Updates)>, snapshot: Snapshot) -> Self {
-        let (writer, updates) = watch::channel(Arc::new(snapshot));
+    fn start(
+        peer: Option<(Client, Updates)>,
+        snapshot: Snapshot,
+        preferences: Option<Arc<DevicePreferences>>,
+    ) -> Self {
+        let preferences = preferences.unwrap_or_else(|| {
+            DevicePreferences::memory(Preferences {
+                models: snapshot.catalog.model_preferences.clone(),
+                editor: crate::persistence::EditorPreferences {
+                    preferred: snapshot.files.preferred_editor,
+                },
+                language: snapshot.catalog.ui_language,
+            })
+        });
+        let mut device_updates = preferences.subscribe();
+        let mut snapshot = Arc::new(snapshot);
+        adopt_preferences(&mut snapshot, &preferences.current());
+        preferences.start_writer();
+        let (writer, updates) = watch::channel(snapshot);
         let connection = peer.map(|(peer, events)| {
             (
                 Connection {
@@ -408,6 +433,24 @@ impl Store {
         });
         let (commands, mut incoming) = mpsc::channel(MAX_COMMANDS);
         let stop = CancellationToken::new();
+        let preference_writer = writer.clone();
+        let device = preferences.clone();
+        let preference_stop = stop.child_token();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = preference_stop.cancelled() => break,
+                    result = device_updates.changed() => {
+                        if result.is_err() { break; }
+                        device_updates.borrow_and_update();
+                        preference_writer.send_if_modified(|current| {
+                            adopt_preferences(current, &device.current())
+                        });
+                    }
+                }
+            }
+        });
         let presentations = crate::presentation::view::observe(
             updates.clone(),
             String::new(),
@@ -440,6 +483,7 @@ impl Store {
             finished_tx.send_replace(true);
         });
         Self {
+            preferences,
             updates,
             presentations,
             publications: Mutex::new(Some(writer)),
@@ -461,6 +505,7 @@ impl Store {
                 },
                 ..Default::default()
             },
+            None,
         );
         let (commands, mut reports) = mpsc::channel(MAX_COMMANDS);
         let worker = std::mem::replace(&mut store.commands, commands);
@@ -481,8 +526,9 @@ impl Store {
         snapshot: Snapshot,
         invitation: Option<uuid::Uuid>,
         device_name: &str,
+        preferences: Option<Arc<DevicePreferences>>,
     ) -> Result<Self, crate::transport::TransportError> {
-        let store = Self::offline(snapshot);
+        let store = Self::offline(snapshot, preferences);
         store
             .reconnect(endpoint, ticket, invitation, device_name)
             .await?;
@@ -775,6 +821,21 @@ impl Store {
         pane: &str,
         intent: Intent,
     ) -> impl Future<Output = Result<Outcome, PeerError>> + Send + use<> {
+        let choice = match &intent {
+            Intent::SelectModel { thread_id, .. } => Some((thread_id.clone(), ModelChoice::Model)),
+            Intent::SelectEffort { thread_id, .. } => {
+                Some((thread_id.clone(), ModelChoice::Effort))
+            }
+            Intent::SelectServiceTier { thread_id, .. } => {
+                Some((thread_id.clone(), ModelChoice::ServiceTier))
+            }
+            _ => None,
+        };
+        let editor = match &intent {
+            Intent::SetPreferredEditor { editor } => Some(*editor),
+            _ => None,
+        };
+        let mut preferences_changed = false;
         let pause = matches!(intent, Intent::SetConnectionEnabled { enabled: false });
         let attempt = pause.then(|| self.connection_attempt.lock().unwrap());
         let mut disconnected = None;
@@ -792,8 +853,8 @@ impl Store {
                     receipt = Err(PeerError::InvalidMessage("pane is closed".into()));
                     return false;
                 }
-                let (effects, changed) =
-                    apply_pane_locked(&mut candidate, Event::Intent(intent), pane);
+                adopt_preferences(&mut candidate, &self.preferences.current());
+                let (effects, _) = apply_pane_locked(&mut candidate, Event::Intent(intent), pane);
                 if let Some(attempt) = &attempt {
                     attempt.cancel();
                     match self.request_disconnect() {
@@ -804,21 +865,60 @@ impl Store {
                         }
                     }
                 }
-                if !effects.is_empty() {
-                    let permit = match self.commands.try_reserve() {
-                        Ok(permit) => permit,
+                let permit = if effects.is_empty() {
+                    None
+                } else {
+                    match self.commands.try_reserve() {
+                        Ok(permit) => Some(permit),
                         Err(error) => {
                             receipt = Err(command_error(error));
                             return false;
                         }
-                    };
+                    }
+                };
+                let update = if let Some((thread, choice)) = choice {
+                    candidate.input.drafts.get(&thread).and_then(|draft| {
+                        draft.model.clone().map(|model| {
+                            self.preferences.apply_model(
+                                choice,
+                                crate::state::ModelSelection {
+                                    model,
+                                    effort: draft.effort.clone(),
+                                    service_tier: draft.service_tier.clone(),
+                                },
+                            )
+                        })
+                    })
+                } else {
+                    editor.map(|editor| self.preferences.apply_editor(editor))
+                };
+                if let Some(update) = update {
+                    match update {
+                        Ok(preferences) => {
+                            adopt_preferences(&mut candidate, &preferences);
+                            preferences_changed = true;
+                        }
+                        Err(reason) => {
+                            receipt = Err(PeerError::InvalidMessage(reason.to_string()));
+                            return false;
+                        }
+                    }
+                }
+                if let Some(permit) = permit {
                     let (complete, result) = oneshot::channel();
                     permit.send(Command::Dispatch(Dispatch { effects, complete }));
                     receipt = Ok(Some(result));
                 }
+                // A stale preference may be adopted then explicitly selected back.
+                // Only the final state determines whether readers need notification.
+                let changed = candidate.changes_from(current).any;
                 *current = candidate;
                 changed
             });
+        }
+        if preferences_changed {
+            // Watch notifications can synchronously read this Store again.
+            self.preferences.publish();
         }
         drop(attempt);
         async move {
@@ -940,6 +1040,20 @@ fn apply_pane_locked(
     let changed = publish_locked(current, next.for_pane(&owner).unwrap());
     (scheduled, changed)
 }
+fn adopt_preferences(snapshot: &mut Arc<Snapshot>, preferences: &Preferences) -> bool {
+    if snapshot.catalog.model_preferences == preferences.models
+        && snapshot.files.preferred_editor == preferences.editor.preferred
+        && snapshot.catalog.ui_language == preferences.language
+    {
+        return false;
+    }
+    let snapshot = Arc::make_mut(snapshot);
+    snapshot.catalog.model_preferences = preferences.models.clone();
+    snapshot.files.preferred_editor = preferences.editor.preferred;
+    snapshot.catalog.ui_language = preferences.language;
+    true
+}
+
 /// Publish one consistent transition when any state group changed.
 fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
     let changed = next.changes_from(current).any;
@@ -1815,7 +1929,7 @@ mod tests {
             busy_error().to_string()
         );
         assert_eq!(updates.borrow().as_ref(), &snapshot);
-        let store = Store::offline(Snapshot::default());
+        let store = Store::offline(Snapshot::default(), None);
         assert!(
             store
                 .dispatch(Intent::DownloadFile(op::DownloadFile {
@@ -2255,7 +2369,7 @@ mod tests {
                 }),
             );
             let (peer, _old_reader, old_writer) = host_fixture::connect(&initial).await;
-            let store = Arc::new(Store::new(peer, initial));
+            let store = Arc::new(Store::new(peer, initial, None));
             let mut snapshots = store.subscribe();
             drop(old_writer);
             snapshots
@@ -2374,7 +2488,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let store = Store::offline(initial);
+        let store = Store::offline(initial, None);
         assert!(!store.snapshot().connection.connected);
         assert!(
             store
@@ -2400,7 +2514,7 @@ mod tests {
         use crate::presentation::error::ErrorScope;
         let initial = Snapshot::default();
         let (peer, _reader, writer) = host_fixture::connect(&initial).await;
-        let store = Store::new(peer, initial);
+        let store = Store::new(peer, initial, None);
         let mut snapshots = store.subscribe();
         match action {
             "disconnect" => store.disconnect().await.unwrap(),
@@ -2429,7 +2543,7 @@ mod tests {
         use serde_json::json;
         let initial = Snapshot::default();
         let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-        let store = Store::new(peer, initial);
+        let store = Store::new(peer, initial, None);
         let publications = store.publications.lock().unwrap().clone().unwrap();
         // Dispatch publishes before its command is consumed. Commands can arrive
         // out of order after newer work has already been published.
@@ -2518,7 +2632,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let store = Store::offline(initial);
+        let store = Store::offline(initial, None);
         let draft_key = store.snapshot().pane.navigation.draft_key.clone();
         store
             .dispatch(Intent::SetDraftText {
@@ -2627,6 +2741,9 @@ mod tests {
             ("model_preferences", |snapshot| {
                 snapshot.catalog.model_preferences.provider =
                     Some(crate::session::ProviderKind::Claude);
+            }),
+            ("ui_language", |snapshot| {
+                snapshot.catalog.ui_language = crate::localization::UiLanguage::English;
             }),
             ("permission_settings", |snapshot| {
                 snapshot.catalog.permission_settings = Arc::new(

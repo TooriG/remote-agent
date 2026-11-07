@@ -95,6 +95,11 @@ fn main() {
         .build()
         .expect("start async runtime");
     let handle = runtime.handle().clone();
+    let preferences = agent_core::client::persistence::DevicePreferences::new(std::sync::Arc::new(
+        platform::DeviceStorage {
+            directory: platform::state_dir(),
+        },
+    ));
     let closing = tokio_util::task::TaskTracker::new();
     let shutdown = closing.clone();
     let application = gpui_kit::application()
@@ -111,7 +116,7 @@ fn main() {
             closing,
             logging_error,
             sessions: Default::default(),
-            connections: std::sync::Arc::new(platform::Connections::default()),
+            connections: std::sync::Arc::new(platform::Connections::new(preferences.clone())),
         });
         cx.on_app_quit(|cx| {
             #[cfg(target_os = "macos")]

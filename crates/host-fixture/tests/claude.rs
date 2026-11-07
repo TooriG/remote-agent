@@ -53,9 +53,16 @@ async fn connect(host: &HostFixture, snapshot: Snapshot) -> (Store, Endpoint) {
     let endpoint = Endpoint::bind(host.credentials.local_identity().await, Relays::Disabled)
         .await
         .unwrap();
-    let store = Store::connect(&endpoint, &host.ticket, snapshot, None, "Fixture device")
-        .await
-        .unwrap();
+    let store = Store::connect(
+        &endpoint,
+        &host.ticket,
+        snapshot,
+        None,
+        "Fixture device",
+        None,
+    )
+    .await
+    .unwrap();
     let (codex, claude) = tokio::join!(
         store.dispatch(Intent::LoadModels(op::LoadModels {
             provider: ProviderKind::Codex
@@ -1776,6 +1783,7 @@ async fn live_claude_account_login_url_and_cancellation() {
         Snapshot::default(),
         None,
         "Fixture device",
+        None,
     )
     .await
     .unwrap();

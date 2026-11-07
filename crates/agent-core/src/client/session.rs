@@ -302,7 +302,12 @@ impl ClientSession {
             .await
             .map_err(error)?;
         let read = started.elapsed().as_micros() as u64;
-        let store = AgentStore::restored(snapshot, directory, self.client_build.revision.clone())?;
+        let store = AgentStore::restored(
+            snapshot,
+            directory,
+            self.client_build.revision.clone(),
+            Some(self.persistence.device.clone()),
+        )?;
         store.record_connection_event(ConnectionPhase::SnapshotRead, read);
         store.record_connection_event(
             ConnectionPhase::AppPreparation,
@@ -413,7 +418,7 @@ impl Drop for ClientSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::persistence::StorageKey;
+    use crate::client::persistence::{DevicePreferences, PreferenceKey, PreferenceStorage};
     use std::sync::{
         Condvar,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -566,16 +571,7 @@ mod tests {
         diagnostics_directory: Option<String>,
     }
     impl ClientStorage for Storage {
-        fn load(&self, key: StorageKey) -> Result<Vec<u8>, AgentError> {
-            match key {
-                StorageKey::ModelPreferences => {
-                    return Ok(self.model_preferences.lock().unwrap().clone());
-                }
-                StorageKey::EditorPreferences => {
-                    return Ok(self.editor_preferences.lock().unwrap().clone());
-                }
-                StorageKey::LocalState => {}
-            }
+        fn load(&self) -> Result<Vec<u8>, AgentError> {
             self.loads.fetch_add(1, Ordering::SeqCst);
             let gate = self.read_gate.lock().unwrap().take();
             if let Some(gate) = gate {
@@ -583,21 +579,7 @@ mod tests {
             }
             Ok(self.bytes.lock().unwrap().clone())
         }
-        fn save(&self, key: StorageKey, bytes: Vec<u8>) -> Result<(), AgentError> {
-            match key {
-                StorageKey::ModelPreferences => {
-                    serde_json::from_slice::<crate::state::ModelPreferences>(&bytes).unwrap();
-                    *self.model_preferences.lock().unwrap() = bytes;
-                    return Ok(());
-                }
-                StorageKey::EditorPreferences => {
-                    serde_json::from_slice::<crate::persistence::EditorPreferences>(&bytes)
-                        .unwrap();
-                    *self.editor_preferences.lock().unwrap() = bytes;
-                    return Ok(());
-                }
-                StorageKey::LocalState => {}
-            }
+        fn save(&self, bytes: Vec<u8>) -> Result<(), AgentError> {
             let gate = self.write_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 gate.block();
@@ -609,6 +591,30 @@ mod tests {
             *self.bytes.lock().unwrap() = bytes.clone();
             self.writes.lock().unwrap().push(bytes);
             self.saved.notify_one();
+            Ok(())
+        }
+    }
+    impl PreferenceStorage for Storage {
+        fn load(&self, key: PreferenceKey) -> Result<Vec<u8>, AgentError> {
+            Ok(match key {
+                PreferenceKey::Models => self.model_preferences.lock().unwrap().clone(),
+                PreferenceKey::Editor => self.editor_preferences.lock().unwrap().clone(),
+                PreferenceKey::Language => Vec::new(),
+            })
+        }
+        fn save(&self, key: PreferenceKey, bytes: Vec<u8>) -> Result<(), AgentError> {
+            match key {
+                PreferenceKey::Models => {
+                    serde_json::from_slice::<crate::state::ModelPreferences>(&bytes).unwrap();
+                    *self.model_preferences.lock().unwrap() = bytes;
+                }
+                PreferenceKey::Editor => {
+                    serde_json::from_slice::<crate::persistence::EditorPreferences>(&bytes)
+                        .unwrap();
+                    *self.editor_preferences.lock().unwrap() = bytes;
+                }
+                PreferenceKey::Language => panic!("this fixture never edits language"),
+            }
             Ok(())
         }
     }
@@ -653,12 +659,17 @@ mod tests {
     }
 
     fn clients() -> Arc<ClientSessions> {
-        ClientSessions::new(false, client_build(42), "Fixture device".into())
+        ClientSessions::new(
+            false,
+            client_build(42),
+            "Fixture device".into(),
+            DevicePreferences::new(Arc::new(Storage::default())),
+        )
     }
 
     fn open(storage: Arc<Storage>) -> Arc<ClientSession> {
         ClientSession::create(
-            Persistence::new(storage.clone(), Arc::default()),
+            Persistence::new(storage.clone(), DevicePreferences::new(storage.clone())),
             storage,
             false,
             client_build(42),
@@ -998,7 +1009,7 @@ mod tests {
                 diagnostics_directory: Some(directory.path().to_string_lossy().into_owned()),
                 ..Default::default()
             });
-            let original = crate::store::Store::offline(Snapshot::default());
+            let original = crate::store::Store::offline(Snapshot::default(), None);
             original.dispatch(edit("cached")).await.unwrap();
             *storage.bytes.lock().unwrap() =
                 crate::persistence::encode(&original.snapshot()).unwrap();
@@ -1166,7 +1177,7 @@ mod tests {
                 },
                 ..Default::default()
             };
-            let store = AgentStore::restored(snapshot, None, "fixture".into()).unwrap();
+            let store = AgentStore::restored(snapshot, None, "fixture".into(), None).unwrap();
             let mut presentations = store.store.subscribe_presentation();
             session.install(store, false).unwrap();
             tokio::time::timeout(

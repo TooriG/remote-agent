@@ -1,9 +1,8 @@
 use agent_core::{
     persistence,
     state::{
-        Draft, DraftKey, Event, Intent, Snapshot,
+        Draft, DraftKey, Intent, Snapshot,
         operations::{ListAccounts, Operation, ReadThread},
-        reduce,
     },
 };
 use agent_protocol::{
@@ -15,30 +14,38 @@ use serde_json::json;
 use std::sync::Arc;
 
 fn restart(snapshot: &Snapshot) -> Snapshot {
-    use crate::client::persistence::{ClientStorage, Persistence, StorageKey};
+    use crate::client::persistence::{
+        ClientStorage, DevicePreferences, Persistence, PreferenceKey, PreferenceStorage,
+    };
     struct Storage {
         local: Vec<u8>,
         models: Vec<u8>,
     }
     impl ClientStorage for Storage {
-        fn load(&self, key: StorageKey) -> Result<Vec<u8>, crate::client::AgentError> {
-            Ok(match key {
-                StorageKey::LocalState => self.local.clone(),
-                StorageKey::ModelPreferences => self.models.clone(),
-                StorageKey::EditorPreferences => Vec::new(),
-            })
+        fn load(&self) -> Result<Vec<u8>, crate::client::AgentError> {
+            Ok(self.local.clone())
         }
-        fn save(&self, _: StorageKey, _: Vec<u8>) -> Result<(), crate::client::AgentError> {
+        fn save(&self, _: Vec<u8>) -> Result<(), crate::client::AgentError> {
             panic!("restoration must not write")
         }
     }
-    let persistence = Persistence::new(
-        Arc::new(Storage {
-            local: persistence::encode(snapshot).unwrap(),
-            models: serde_json::to_vec(&snapshot.catalog.model_preferences).unwrap(),
-        }),
-        Arc::default(),
-    );
+    impl PreferenceStorage for Storage {
+        fn load(&self, key: PreferenceKey) -> Result<Vec<u8>, crate::client::AgentError> {
+            Ok(match key {
+                PreferenceKey::Models => self.models.clone(),
+                PreferenceKey::Editor | PreferenceKey::Language => Vec::new(),
+            })
+        }
+        fn save(&self, _: PreferenceKey, _: Vec<u8>) -> Result<(), crate::client::AgentError> {
+            panic!("restoration must not write")
+        }
+    }
+    let storage = Arc::new(Storage {
+        local: persistence::encode(snapshot).unwrap(),
+        models: serde_json::to_vec(&snapshot.catalog.model_preferences).unwrap(),
+    });
+    let preferences = DevicePreferences::new(storage.clone());
+    let persistence = Persistence::new(storage, preferences);
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -265,7 +272,18 @@ fn catalog_failures_only_preserve_the_affected_providers_saved_model(
 }
 
 fn apply(snapshot: &Snapshot, intent: Intent) -> Snapshot {
-    reduce(snapshot, Event::Intent(intent)).0
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let store = crate::store::Store::offline(snapshot.clone(), None);
+            // Native input controls observe accepted changes before awaiting Host effects.
+            drop(store.dispatch(intent));
+            let next = store.snapshot().as_ref().clone();
+            store.close().await.unwrap();
+            next
+        })
 }
 
 #[test]
@@ -714,7 +732,7 @@ async fn selecting_the_already_visible_model_publishes_the_remembered_choice() {
             ..Default::default()
         }),
     );
-    let store = agent_core::store::Store::offline(snapshot);
+    let store = agent_core::store::Store::offline(snapshot, None);
     let mut updates = store.subscribe();
     store
         .dispatch(Intent::SelectModel {

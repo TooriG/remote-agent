@@ -902,7 +902,7 @@ mod tests {
                 logging_error: None,
             });
         });
-        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default())) });
+        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default(), None)) });
         let window = cx.add_empty_window();
         let browser = window.update(|window, cx| {
             Browser::new(
@@ -1000,7 +1000,7 @@ mod tests {
                 logging_error: None,
             });
         });
-        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default())) });
+        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default(), None)) });
         let window = cx.add_empty_window();
         let browser = window.update(|window, cx| {
             Browser::new(
@@ -1105,7 +1105,7 @@ mod tests {
                 logging_error: None,
             });
         });
-        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default())) });
+        let store = runtime.block_on(async { Arc::new(Store::offline(Default::default(), None)) });
         let window = cx.add_empty_window();
         let browser = window.update(|window, cx| {
             Browser::new(

@@ -55,8 +55,17 @@ class ConversationRecoveryTest {
             withContext(Dispatchers.Main) {
                 val models = ViewModelStore()
                 val model =
-                    ViewModelProvider(models, viewModelFactory { initializer { AndroidAppModel(context) } })[
-                        AndroidAppModel::class.java]
+                    ViewModelProvider(
+                        models,
+                        viewModelFactory {
+                            initializer {
+                                AndroidAppModel(
+                                    context,
+                                    dev.remoteagent.core.DevicePreferences(AndroidPreferenceStorage(context)),
+                                )
+                            }
+                        },
+                    )[AndroidAppModel::class.java]
                 suspend fun perform(intent: Intent): Result<Outcome> {
                     val result = CompletableDeferred<Result<Outcome>>()
                     model.perform(intent) { result.complete(it) }

@@ -106,9 +106,16 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .context("cannot bind client endpoint")?;
         let ticket: Ticket = args.ticket.parse().context("cannot parse Host ticket")?;
         let device_name = tokio::task::spawn_blocking(agent_local_host::machine_name).await?;
-        Store::connect(&endpoint, &ticket, snapshot, args.invitation, &device_name)
-            .await
-            .context("cannot connect to Host")?
+        Store::connect(
+            &endpoint,
+            &ticket,
+            snapshot,
+            args.invitation,
+            &device_name,
+            None,
+        )
+        .await
+        .context("cannot connect to Host")?
     };
     let mut updates = store.subscribe();
     tokio::time::timeout(Duration::from_secs(30), async {

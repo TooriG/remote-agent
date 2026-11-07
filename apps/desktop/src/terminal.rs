@@ -881,8 +881,8 @@ mod tests {
             .unwrap();
         let (store, replacement) = runtime.block_on(async {
             (
-                Arc::new(Store::offline(checkpoint(42, b"old"))),
-                Arc::new(Store::offline(checkpoint(1, b"restored"))),
+                Arc::new(Store::offline(checkpoint(42, b"old"), None)),
+                Arc::new(Store::offline(checkpoint(1, b"restored"), None)),
             )
         });
         cx.update(|cx| {

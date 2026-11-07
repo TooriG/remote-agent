@@ -439,7 +439,7 @@ fn authenticated_snapshot() -> Snapshot {
 
 async fn connected(snapshot: Snapshot) -> (Arc<Store>, host_fixture::Reader, host_fixture::Writer) {
     let (peer, reader, writer) = host_fixture::connect(&snapshot).await;
-    (Arc::new(Store::new(peer, snapshot)), reader, writer)
+    (Arc::new(Store::new(peer, snapshot, None)), reader, writer)
 }
 async fn setup(snapshot: Snapshot) -> (Arc<Store>, host_fixture::Reader, host_fixture::Writer) {
     let (store, mut reader, writer) = connected(snapshot.clone()).await;
@@ -1036,7 +1036,7 @@ async fn snapshot_notification_can_reenter_store_synchronously() {
                 .unwrap();
         }
     }
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let mut updates = store.subscribe();
     let mut changed = Box::pin(updates.changed());
     let (observed, received) = std::sync::mpsc::channel();
@@ -2959,7 +2959,7 @@ async fn notification_eof_publishes_disconnection_before_waiting_for_close_ack()
         remote.open_peer(Duration::from_secs(1), 16),
         incoming.accept_peer()
     );
-    let store = Store::new(peer.unwrap(), Snapshot::default());
+    let store = Store::new(peer.unwrap(), Snapshot::default(), None);
     events.unwrap().finish().unwrap();
     // Keep the Host alive without acknowledging CLOSE. Native input must still
     // observe the lost event stream before transport cleanup finishes.
@@ -3030,7 +3030,7 @@ async fn initial_titles_wait_for_scope_verification_and_use_the_current_query() 
                     ..Default::default()
                 },
                 ..Default::default()
-            }));
+            }, None));
             let connecting = tokio::spawn({
                 let store = store.clone();
                 let client = client.clone();
@@ -3101,7 +3101,7 @@ async fn cached_scope_starts_reads_before_the_host_confirms_it_and_holds_user_wo
                     ..Default::default()
                 },
                 ..Default::default()
-            }));
+            }, None));
             let connecting = tokio::spawn({
                 let (store, client, ticket) = (store.clone(), client.clone(), host.ticket());
                 async move { store.reconnect(&client, &ticket, None, "Fixture device").await }
@@ -3164,7 +3164,7 @@ async fn reconnect_preserves_edits_made_during_pairing() {
             allowed: BTreeSet::from([client.node_id()]),
             ..Default::default()
         };
-        let store = Arc::new(Store::offline(Snapshot::default()));
+        let store = Arc::new(Store::offline(Snapshot::default(), None));
         let connecting = {
             let store = store.clone();
             let ticket = host.ticket();
@@ -3308,7 +3308,7 @@ async fn reconnect_cancels_obsolete_pairing_and_retains_local_state() {
 
 #[tokio::test]
 async fn dispatch_publishes_edits_before_returning_to_the_native_input_control() {
-    let store = Store::offline(Snapshot::default());
+    let store = Store::offline(Snapshot::default(), None);
     let navigation = store.dispatch(Intent::NewChat {
         cwd: "/input".into(),
     });
@@ -3516,7 +3516,8 @@ async fn stores_share_an_endpoint_without_closing_each_others_transport() {
                     &ticket,
                     Snapshot::default(),
                     None,
-                    "Fixture device"
+                    "Fixture device",
+                    None
                 ),
                 scoped_incoming(&host, &trust)
             );
@@ -3531,7 +3532,8 @@ async fn stores_share_an_endpoint_without_closing_each_others_transport() {
                 &ticket,
                 Snapshot::default(),
                 None,
-                "Fixture device"
+                "Fixture device",
+                None
             ),
             scoped_incoming(&host, &trust)
         );
@@ -3847,7 +3849,7 @@ async fn item_transfer_releases_wire_order_and_preserves_newer_items() {
         }).await.unwrap();
         let trust = Trust { allowed: [client.node_id()].into(), ..Default::default() };
         let ticket = host.ticket();
-        let store = Arc::new(Store::offline(Snapshot::default()));
+        let store = Arc::new(Store::offline(Snapshot::default(), None));
         let connecting = network.spawn({
             let store = store.clone();
             let client = client.clone();

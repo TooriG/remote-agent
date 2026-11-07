@@ -47,7 +47,7 @@ mod task_activity_tests {
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             let initial = Snapshot::default();
             let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-            let store = crate::store::Store::new(peer, initial);
+            let store = crate::store::Store::new(peer, initial, None);
             let mut activity = None;
             for _ in 0..4 {
                 let request = reader.read_request().await.unwrap().unwrap();

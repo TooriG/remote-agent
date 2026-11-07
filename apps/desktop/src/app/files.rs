@@ -105,7 +105,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("saved.zip");
         std::fs::write(&destination, b"existing file").unwrap();
-        let store = Store::offline(Snapshot::default());
+        let store = Store::offline(Snapshot::default(), None);
         let error = download_to(&store, "/bundle.zip".into(), destination.clone())
             .await
             .unwrap_err();

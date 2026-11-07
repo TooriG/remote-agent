@@ -302,7 +302,7 @@ mod tests {
 
     #[tokio::test]
     async fn disconnected_directory_failure_settles_in_the_tree_and_can_be_retried() {
-        let store = crate::store::Store::offline(Snapshot::default());
+        let store = crate::store::Store::offline(Snapshot::default(), None);
         let open = Intent::FileTree {
             key: key("/workspace"),
             action: FileTreeAction::Open {
@@ -363,7 +363,7 @@ mod tests {
             }).is_empty());
             assert!(initial.files.file_tree(key.clone()).error.is_some());
             let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-            let store = crate::store::Store::new(peer, initial);
+            let store = crate::store::Store::new(peer, initial, None);
             let mut methods = Vec::new();
             for _ in 0..6 {
                 let request = reader.read_request().await.unwrap().unwrap();

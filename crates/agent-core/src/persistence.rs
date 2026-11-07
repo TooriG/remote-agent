@@ -10,15 +10,9 @@
 //! private atomic writes. Restoration marks unconfirmed sends as delivery-unknown
 //! until Host evidence reconciles them, preserving their content and order
 //! without automatically resending.
-use crate::state::{
-    Draft, FileDraft, ModelPreferences, ModelSelection, Navigation, PendingSubmission, ScopedData,
-    Snapshot,
-};
+use crate::state::{Draft, FileDraft, Navigation, PendingSubmission, Same, ScopedData, Snapshot};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 /// One device's editor selection, shared across Host snapshots. Discovery is never persisted.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -26,17 +20,10 @@ pub struct EditorPreferences {
     pub preferred: Option<agent_protocol::editors::EditorId>,
 }
 
-impl EditorPreferences {
-    pub fn capture(snapshot: &Snapshot) -> Self {
-        Self {
-            preferred: snapshot.files.preferred_editor,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::ModelPreferences;
     use agent_protocol::editors::EditorId;
 
     #[test]
@@ -68,7 +55,10 @@ mod tests {
             },
             ..Default::default()
         };
-        let bytes = serde_json::to_vec(&EditorPreferences::capture(&snapshot)).unwrap();
+        let bytes = serde_json::to_vec(&EditorPreferences {
+            preferred: snapshot.files.preferred_editor,
+        })
+        .unwrap();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
             serde_json::json!({"preferred":"cursor"})
@@ -106,6 +96,19 @@ pub struct PersistedState {
     navigation: Arc<Navigation>,
 }
 
+impl Same for PersistedState {
+    fn same(&self, other: &Self) -> bool {
+        self.connection_disabled == other.connection_disabled
+            && self.project_preferences.same(&other.project_preferences)
+            && self.storage_scope == other.storage_scope
+            && self.archived_scopes.same(&other.archived_scopes)
+            && self.drafts.same(&other.drafts)
+            && self.pending_submissions.same(&other.pending_submissions)
+            && self.file_drafts.same(&other.file_drafts)
+            && self.navigation.same(&other.navigation)
+    }
+}
+
 impl PersistedState {
     pub fn capture(snapshot: &Snapshot) -> Self {
         Self {
@@ -123,71 +126,6 @@ impl PersistedState {
 
 pub fn encode(snapshot: &Snapshot) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&PersistedState::capture(snapshot))
-}
-
-/// Merge only the session's explicit edits, preserving another window's
-/// provider choices and options. Options always stay with their selected model.
-pub(crate) fn merge_model_preferences(
-    current: &ModelPreferences,
-    before: &ModelPreferences,
-    after: &ModelPreferences,
-) -> ModelPreferences {
-    if before == after {
-        return current.clone();
-    }
-    let mut merged = current.clone();
-    // Effort/tier picks also select their provider for the next new chat.
-    merged.provider = after.provider;
-    for provider in before
-        .selections
-        .keys()
-        .chain(after.selections.keys())
-        .collect::<BTreeSet<_>>()
-    {
-        let (before, after) = (
-            before.selections.get(provider),
-            after.selections.get(provider),
-        );
-        if before == after {
-            continue;
-        }
-        match after {
-            Some(after) => {
-                let selection = match (merged.selections.get(provider), before) {
-                    (Some(current), Some(before)) => merge_selection(current, before, after),
-                    _ => after.clone(),
-                };
-                merged.selections.insert(*provider, selection);
-            }
-            None => {
-                merged.selections.remove(provider);
-            }
-        }
-    }
-    merged
-}
-
-fn merge_selection(
-    current: &ModelSelection,
-    before: &ModelSelection,
-    after: &ModelSelection,
-) -> ModelSelection {
-    if before.model != after.model || current.model != after.model {
-        return after.clone();
-    }
-    ModelSelection {
-        model: current.model.clone(),
-        effort: if before.effort != after.effort {
-            after.effort.clone()
-        } else {
-            current.effort.clone()
-        },
-        service_tier: if before.service_tier != after.service_tier {
-            after.service_tier.clone()
-        } else {
-            current.service_tier.clone()
-        },
-    }
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {

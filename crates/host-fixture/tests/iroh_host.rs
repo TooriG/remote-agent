@@ -261,6 +261,7 @@ async fn pairing_is_atomic_local_management_is_private_and_revocation_closes_act
             Default::default(),
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -442,6 +443,7 @@ async fn binary_transfers_use_the_issuing_iroh_session_and_preserve_bytes() {
             Default::default(),
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -704,6 +706,7 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             codex_chat_snapshot(),
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -736,9 +739,16 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
         let restored =
             serde_json::from_slice(&serde_json::to_vec(&store.snapshot()).unwrap()).unwrap();
         store.close().await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, restored, None, "Fixture device")
-            .await
-            .unwrap();
+        let store = Store::connect(
+            &endpoint,
+            &fixture.ticket,
+            restored,
+            None,
+            "Fixture device",
+            None,
+        )
+        .await
+        .unwrap();
         store
             .dispatch(Intent::Submit {
                 thread_id: None,
@@ -803,9 +813,16 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
         let restored =
             serde_json::from_slice(&serde_json::to_vec(&store.snapshot()).unwrap()).unwrap();
         store.close().await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, restored, None, "Fixture device")
-            .await
-            .unwrap();
+        let store = Store::connect(
+            &endpoint,
+            &fixture.ticket,
+            restored,
+            None,
+            "Fixture device",
+            None,
+        )
+        .await
+        .unwrap();
         store
             .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
             .await
@@ -929,7 +946,7 @@ async fn chat_preparation_recovers_in_the_same_conversation_after_reconnecting()
         let root = dunce::canonicalize(directory.path()).unwrap();
         let fixture = start_host(&root).await;
         let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
+        let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device", None).await.unwrap();
         let blocked = root.join("bex-chats");
         std::fs::write(&blocked, "not a directory").unwrap();
         store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
@@ -1004,7 +1021,7 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
         std::fs::write(&source, bytes).unwrap();
         let fixture = start_host(&root).await;
         let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
+        let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device", None).await.unwrap();
         // Compare submission effects after asynchronous model defaults
         // have loaded, so catalog normalization cannot change the draft.
         let mut updates = store.subscribe();
@@ -1117,6 +1134,7 @@ async fn remote_registration_pairs_the_local_client_identity_for_direct_connecti
             Default::default(),
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -1126,6 +1144,7 @@ async fn remote_registration_pairs_the_local_client_identity_for_direct_connecti
             Default::default(),
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -1239,7 +1258,7 @@ async fn opening_a_task_uses_cached_history_while_the_host_read_is_pending() {
         let local = fixture.local().await.unwrap();
         let invitation: Invitation = local.peer.call(&op::CreateInvitation {}).await.unwrap();
         let endpoint = Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, Default::default(), Some(invitation.invitation), "Fixture device").await.unwrap();
+        let store = Store::connect(&endpoint, &fixture.ticket, Default::default(), Some(invitation.invitation), "Fixture device", None).await.unwrap();
         store.dispatch(Intent::ListSessions(op::ListSessions::new(Default::default()))).await.unwrap();
         // A paired mobile client must resume without local management privileges.
         tokio::time::timeout(Duration::from_millis(500), store.resume(&endpoint, &fixture.ticket, "Fixture device")).await.unwrap().unwrap();
@@ -1248,7 +1267,7 @@ async fn opening_a_task_uses_cached_history_while_the_host_read_is_pending() {
         let mut owner = Some(store);
         for cached in [false, true] {
             let store = if let Some(store) = owner.take() { store } else {
-                Store::connect(&endpoint, &fixture.ticket, saved.take().unwrap(), None, "Fixture device").await.unwrap()
+                Store::connect(&endpoint, &fixture.ticket, saved.take().unwrap(), None, "Fixture device", None).await.unwrap()
             };
             assert_eq!(store.snapshot().sessions.conversations.contains_key(&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "selected".into() }), cached);
             if cached {
@@ -1314,6 +1333,7 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
             codex_chat_snapshot(),
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -1359,9 +1379,16 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
                 let saved = serde_json::from_slice(&serde_json::to_vec(&store.snapshot()).unwrap())
                     .unwrap();
                 store.close().await.unwrap();
-                store = Store::connect(&endpoint, &fixture.ticket, saved, None, "Fixture device")
-                    .await
-                    .unwrap();
+                store = Store::connect(
+                    &endpoint,
+                    &fixture.ticket,
+                    saved,
+                    None,
+                    "Fixture device",
+                    None,
+                )
+                .await
+                .unwrap();
             }
             store
                 .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
@@ -1461,7 +1488,7 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
             },
             ..Default::default()
         };
-        let store = Store::new((local.peer, local.events), initial);
+        let store = Store::new((local.peer, local.events), initial, None);
         store.dispatch(Intent::ListSessions(op::ListSessions::new(Default::default()))).await.unwrap();
         let session = agent_protocol::session::SessionRef::new(agent_protocol::session::ProviderKind::Codex, "history".into()).unwrap();
         // The first open reads native history and imports it once.
@@ -2214,7 +2241,7 @@ async fn upstream_exit_keeps_host_management_connected() {
         let directory = tempfile::tempdir().unwrap();
         let fixture = start_host(directory.path()).await;
         let local = fixture.local().await.unwrap();
-        let store = Store::new((local.peer, local.events), Snapshot::default());
+        let store = Store::new((local.peer, local.events), Snapshot::default(), None);
         store
             .dispatch(Intent::ListSessions(op::ListSessions::new(
                 Default::default(),
@@ -2487,6 +2514,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
             Snapshot::default(),
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -2525,6 +2553,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
             codex_chat_snapshot(),
             Some(invitation),
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -2593,6 +2622,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
                 serde_json::from_value(saved).unwrap(),
                 None,
                 "Fixture device",
+                None,
             )
             .await
             .unwrap();
@@ -2724,8 +2754,8 @@ async fn completed_conversations_refresh_the_sidebar_without_manual_reload() {
                     .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root).unwrap();
                 let fixture = HostFixture::start(&root, AppServerConfig { program, ..Default::default() }, Arc::new(Memory::default()), "isolated", false, None).await.unwrap();
                 let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
-                let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
-                let observer = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
+                let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device", None).await.unwrap();
+                let observer = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device", None).await.unwrap();
                 for client in [&store, &observer] {
                     let mut initial = client.subscribe();
                     while initial.borrow_and_update().lists.threads.is_none() || !initial.borrow().operations.is_empty() { initial.changed().await.unwrap(); }
@@ -2798,7 +2828,7 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
         git(&["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "--quiet", "-m", "fixture"]);
         let fixture = start_host(&root).await;
         let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
+        let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device", None).await.unwrap();
         store.dispatch(Intent::UpdateWorktreeSettings(op::UpdateWorktreeSettings { settings: models::WorktreeSettings { create_on_new_session: true, ..Default::default() } })).await.unwrap();
         store.dispatch(Intent::NewChat { cwd: project.to_str().unwrap().into() }).await.unwrap();
         let key = store.snapshot().pane.navigation.draft_key.clone();
@@ -3138,6 +3168,7 @@ async fn visualization_reaches_store_and_reopens_after_source_removal() {
             codex_chat_snapshot(),
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -3230,6 +3261,7 @@ async fn visualization_reaches_store_and_reopens_after_source_removal() {
             persisted,
             None,
             "Fixture device",
+            None,
         )
         .await
         .unwrap();
@@ -3339,7 +3371,7 @@ async fn session_list_tracks_real_worktree_changes_and_merges_through_host_and_s
             json!({"id":id.id,"cwd":cwd,"name":"worktree history","gitInfo":{"branch":"task"}})
         }).collect();
         std::fs::write(root.join("list-fixture.json"), serde_json::to_vec(&native_rows).unwrap()).unwrap();
-        let store = Store::new((local.peer, local.events), Snapshot::default());
+        let store = Store::new((local.peer, local.events), Snapshot::default(), None);
         for (step, expected) in [
             ("fresh", Some(false)),
             ("empty", Some(false)),
@@ -3666,7 +3698,7 @@ async fn oversized_session_opens_repeatedly_and_downloads_lossless_items_without
         let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled)
             .await
             .unwrap();
-        let store = Store::connect(&endpoint, &fixture.ticket, Default::default(), None, "Fixture device")
+        let store = Store::connect(&endpoint, &fixture.ticket, Default::default(), None, "Fixture device", None)
             .await
             .unwrap();
         let mut updates = store.subscribe();
@@ -3726,7 +3758,7 @@ async fn adding_a_chat_folder_registers_a_project_before_submission() {
         let local = fixture.local().await.unwrap();
         let direct = fixture.local().await.unwrap();
         let peer = &direct.peer;
-        let store = Store::new((local.peer, local.events), Snapshot::default());
+        let store = Store::new((local.peer, local.events), Snapshot::default(), None);
         let mut updates = store.subscribe();
         updates
             .wait_for(|snapshot| snapshot.connection.connected && snapshot.lists.threads.is_some())

@@ -1158,7 +1158,7 @@ mod tests {
         let session = runtime.block_on(async {
             let (updates, receive) = async_channel::unbounded();
             tokio::spawn(StoreSession::publish(
-                Ok(Arc::new(Store::offline(snapshot))),
+                Ok(Arc::new(Store::offline(snapshot, None))),
                 app_runtime.clone(),
                 updates,
                 Some,
@@ -1331,8 +1331,8 @@ mod tests {
                     ..Default::default()
                 }),
             );
-            let store =
-                runtime.block_on(async { Arc::new(Store::offline((*desktop.snapshot).clone())) });
+            let store = runtime
+                .block_on(async { Arc::new(Store::offline((*desktop.snapshot).clone(), None)) });
             let app_runtime = desktop.runtime.clone();
             desktop.session = Some(runtime.block_on(async {
                 let (updates, receive) = async_channel::unbounded();
@@ -1598,7 +1598,7 @@ mod tests {
             ..Default::default()
         };
         let session = runtime.block_on(async {
-            let store = Arc::new(Store::offline(snapshot));
+            let store = Arc::new(Store::offline(snapshot, None));
             let (updates, receive) = async_channel::unbounded();
             tokio::spawn(StoreSession::publish(
                 Ok(store),

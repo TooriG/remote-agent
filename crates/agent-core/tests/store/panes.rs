@@ -91,7 +91,7 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
 
 #[tokio::test]
 async fn side_chat_without_an_agent_or_after_close_cannot_change_input() {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let pane = store.open_pane("/fixture".into()).unwrap();
     let before = pane.snapshot().unwrap();
     let error = pane
@@ -184,7 +184,7 @@ async fn closing_a_side_chat_during_creation_cannot_apply_its_quote_to_another_p
 
 #[tokio::test]
 async fn closing_the_primary_view_does_not_close_the_host_or_accept_more_view_actions() {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let primary = store.primary_pane();
     let side = store.open_pane("/side".into()).unwrap();
     primary.close();
@@ -208,7 +208,7 @@ async fn closing_the_primary_view_does_not_close_the_host_or_accept_more_view_ac
 
 #[tokio::test]
 async fn local_validation_errors_and_dismissals_belong_to_the_originating_pane() {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let pane = store.open_pane("/side".into()).unwrap();
     pane.dispatch(Intent::EditProject {
         project_id: "project".into(),
@@ -248,7 +248,7 @@ async fn local_validation_errors_and_dismissals_belong_to_the_originating_pane()
 
 #[tokio::test]
 async fn panes_keep_distinct_local_drafts_and_closing_one_keeps_the_store_available() {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let first = store.open_pane("/same".into()).unwrap();
     let second = store.open_pane("/same".into()).unwrap();
     store
@@ -297,7 +297,7 @@ async fn panes_keep_distinct_local_drafts_and_closing_one_keeps_the_store_availa
 #[tokio::test]
 async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusing_operation_identity()
  {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let first = store.open_pane("/same".into()).unwrap();
     let second = store.open_pane("/same".into()).unwrap();
     let first_id = first.id().to_owned();
@@ -351,6 +351,7 @@ async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusin
     store.close().await.unwrap();
     let restored = Arc::new(Store::offline(
         agent_core::persistence::decode(&saved).unwrap(),
+        None,
     ));
     let mut panes = Vec::new();
     for (key, text) in keys.iter().zip(["first unsent", "second unsent"]) {
@@ -364,13 +365,16 @@ async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusin
 
 #[tokio::test]
 async fn changing_host_storage_keeps_secondary_new_chat_drafts_separate() {
-    let store = Arc::new(Store::offline(Snapshot {
-        connection: agent_core::state::Connection {
-            storage_scope: "original-host".into(),
+    let store = Arc::new(Store::offline(
+        Snapshot {
+            connection: agent_core::state::Connection {
+                storage_scope: "original-host".into(),
+                ..Default::default()
+            },
             ..Default::default()
         },
-        ..Default::default()
-    }));
+        None,
+    ));
     let panes = [
         store.open_pane("/same".into()).unwrap(),
         store.open_pane("/same".into()).unwrap(),
@@ -637,7 +641,7 @@ async fn connection_reopens_every_pane_in_one_shared_subscription_map() {
     }
     initial.sessions.conversations = Arc::new(sources.clone());
     let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-    let store = Store::new(peer, initial);
+    let store = Store::new(peer, initial, None);
     let mut opened = std::collections::BTreeSet::new();
     for _ in 0..8 {
         let request = read(&mut reader).await;

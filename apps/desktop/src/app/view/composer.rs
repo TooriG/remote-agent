@@ -935,7 +935,7 @@ mod composer_tests {
         );
         // The parked executor leaves the submitted RPC pending.
         let store =
-            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
+            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot, None)) });
         let (desktop, window) = cx.add_window_view(|window, cx| {
             let mut desktop = Desktop::new(
                 Mode::Fixture {
@@ -1204,7 +1204,10 @@ mod composer_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 let store = runtime.block_on(async {
-                    Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
+                    Arc::new(agent_core::store::Store::offline(
+                        (*view.snapshot).clone(),
+                        None,
+                    ))
                 });
                 view.snapshot = store.snapshot();
                 let app_runtime = view.runtime.clone();
@@ -1583,7 +1586,10 @@ mod composer_tests {
                     media.fixture_image(&source, source.clone().into(), cx);
                 });
                 let store = runtime.block_on(async {
-                    Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
+                    Arc::new(agent_core::store::Store::offline(
+                        (*view.snapshot).clone(),
+                        None,
+                    ))
                 });
                 let app_runtime = view.runtime.clone();
                 view.session = Some(runtime.block_on(async {

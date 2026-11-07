@@ -593,7 +593,7 @@ mod tests {
         let session = runtime.block_on(async {
             let (send, receive) = async_channel::unbounded();
             tokio::spawn(StoreSession::publish(
-                Ok(Arc::new(Store::offline(Snapshot::default()))),
+                Ok(Arc::new(Store::offline(Snapshot::default(), None))),
                 app_runtime.clone(),
                 send,
                 Some,

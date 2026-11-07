@@ -200,6 +200,7 @@ impl Connections {
                 snapshot,
                 None,
                 device_name,
+                Some(self.preferences.clone()),
             )
             .await?,
         );

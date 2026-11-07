@@ -1087,7 +1087,7 @@ mod tests {
                 ..Default::default()
             };
             let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-            let store = crate::store::Store::new(peer, initial);
+            let store = crate::store::Store::new(peer, initial, None);
             let page =
                 json!({"data":[],"projects":[{"id":"old","name":"Old","roots":[]}],"hasMore":true,"hasMoreProjects":false,"projectPages":{},"limit":5});
             for _ in 0..4 {
@@ -1225,7 +1225,7 @@ mod tests {
             ..Default::default()
         };
         let (peer, mut reader, writer) = host_fixture::connect(&snapshot).await;
-        let store = crate::store::Store::new(peer, snapshot);
+        let store = crate::store::Store::new(peer, snapshot, None);
         let empty_list = json!({"data":[],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5});
         for _ in 0..5 {
             let request = read(&mut reader).await;

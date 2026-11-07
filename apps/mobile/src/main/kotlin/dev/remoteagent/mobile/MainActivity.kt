@@ -32,7 +32,9 @@ private const val LOCAL_NETWORK_PERMISSION_API = 37
 
 class MainActivity : ComponentActivity() {
     private val model: AndroidAppModel by viewModels {
-        viewModelFactory { initializer { AndroidAppModel(applicationContext) } }
+        viewModelFactory {
+            initializer { AndroidAppModel(applicationContext, (application as BexApplication).devicePreferences) }
+        }
     }
 
     private var localNetworkGranted by mutableStateOf(false)

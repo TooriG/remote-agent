@@ -384,7 +384,7 @@ async fn presented(store: &Store, id: &SessionRef) -> Arc<Presentation> {
 
 #[tokio::test]
 async fn the_native_stream_keeps_acknowledgments_and_selected_history_consistent() {
-    let store = Store::offline(snapshot());
+    let store = Store::offline(snapshot(), None);
     let initial = presented(&store, &session("a")).await;
     store
         .dispatch(Intent::SetDraftText {

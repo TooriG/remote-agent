@@ -225,7 +225,10 @@ impl Sessions {
             Err(error) => {
                 snapshot.connection.connected = false;
                 snapshot.connection.connection_failure = Some(format!("{error:#}"));
-                Arc::new(Store::offline(snapshot))
+                Arc::new(Store::offline(
+                    snapshot,
+                    Some(runtime.connections.preferences.clone()),
+                ))
             }
         };
         if let Some(cwd) = cwd {
@@ -365,6 +368,7 @@ impl StoreSession {
     pub(crate) fn persist<E: Send + 'static>(
         &self,
         persistence: Arc<Persistence>,
+        mut device_failures: tokio::sync::watch::Receiver<Option<String>>,
         updates: async_channel::Sender<E>,
         failure: impl Fn(String) -> E + Send + 'static,
     ) {
@@ -381,15 +385,32 @@ impl StoreSession {
         let mut failures = persistence.failures();
         let stop = self.stop.clone();
         handle.spawn(async move {
-            loop {
-                let error = failures.borrow_and_update().clone();
-                if let Some(error) = error {
-                    let _ = updates.send(failure(error)).await;
+            let initial = [
+                failures.borrow_and_update().clone(),
+                device_failures.borrow_and_update().clone(),
+            ];
+            for error in initial.into_iter().flatten() {
+                if updates.send(failure(error)).await.is_err() {
+                    return;
                 }
-                tokio::select! {
+            }
+            loop {
+                let error = tokio::select! {
                     biased;
                     _ = stop.cancelled() => break,
-                    result = failures.changed() => if result.is_err() { break; },
+                    result = failures.changed() => {
+                        if result.is_err() { break; }
+                        failures.borrow_and_update().clone()
+                    },
+                    result = device_failures.changed() => {
+                        if result.is_err() { break; }
+                        device_failures.borrow_and_update().clone()
+                    },
+                };
+                if let Some(error) = error
+                    && updates.send(failure(error)).await.is_err()
+                {
+                    break;
                 }
             }
         });
@@ -430,37 +451,56 @@ impl Drop for StoreSession {
 mod tests {
     use super::*;
     use agent_core::state::{Intent, Snapshot};
-    use std::{path::PathBuf, time::Duration};
+    use std::{
+        path::{Path, PathBuf},
+        time::Duration,
+    };
 
     enum Update {
         Connected(Result<StoreSession, String>),
         Snapshot,
         Error,
     }
-    fn runtime() -> Runtime {
+    fn runtime(directory: Option<&Path>) -> Runtime {
         Runtime {
             handle: tokio::runtime::Handle::current(),
-            connections: Arc::default(),
+            connections: directory.map_or_else(Arc::default, |directory| {
+                Arc::new(crate::platform::Connections::new(
+                    agent_core::client::persistence::DevicePreferences::new(Arc::new(
+                        crate::platform::DeviceStorage {
+                            directory: Ok(directory.to_owned()),
+                        },
+                    )),
+                ))
+            }),
             sessions: Arc::default(),
             closing: tokio_util::task::TaskTracker::new(),
             logging_error: None,
         }
     }
 
-    fn persistence(path: PathBuf) -> Arc<Persistence> {
+    fn persistence(
+        path: PathBuf,
+        preferences: Arc<agent_core::client::persistence::DevicePreferences>,
+    ) -> Arc<Persistence> {
         Persistence::new(
             Arc::new(crate::platform::SessionStorage { path }),
-            Arc::default(),
+            preferences,
         )
     }
 
     #[test]
     fn persistence_starts_outside_the_runtime_and_flushes_on_close() {
         let executor = tokio::runtime::Runtime::new().unwrap();
-        let runtime = executor.block_on(async { runtime() });
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("snapshot.json");
-        let store = executor.block_on(async { Arc::new(Store::offline(Snapshot::default())) });
+        let runtime = executor.block_on(async { runtime(Some(directory.path())) });
+        let store = executor.block_on(async {
+            Arc::new(Store::offline(
+                Snapshot::default(),
+                Some(runtime.connections.preferences.clone()),
+            ))
+        });
         let (updates, incoming) = async_channel::unbounded();
         let publish = runtime.handle.spawn(StoreSession::publish(
             Ok(store.clone()),
@@ -474,7 +514,12 @@ mod tests {
         };
         // GPUI delivers Connected on its main thread, without a Tokio context.
         assert!(tokio::runtime::Handle::try_current().is_err());
-        session.persist(persistence(path.clone()), updates, |_| Update::Error);
+        session.persist(
+            persistence(path.clone(), runtime.connections.preferences.clone()),
+            runtime.connections.preferences.failures(),
+            updates,
+            |_| Update::Error,
+        );
         executor.block_on(async {
             tokio::time::timeout(Duration::from_secs(5), async {
                 store
@@ -502,7 +547,7 @@ mod tests {
     #[tokio::test]
     async fn connection_switches_address_the_owner_without_changing_its_panes() {
         use agent_transport::transport::{Endpoint, Identity, Relays};
-        let runtime = runtime();
+        let runtime = runtime(None);
         let endpoint = Endpoint::bind(Identity::generate(), Relays::Loopback)
             .await
             .unwrap();
@@ -516,11 +561,11 @@ mod tests {
             .unwrap();
         let ticket = endpoint.ticket().to_string();
         let local = StoreSession::new(
-            Arc::new(Store::offline(Snapshot::default())),
+            Arc::new(Store::offline(Snapshot::default(), None)),
             runtime.clone(),
         );
         let remote = StoreSession::new(
-            Arc::new(Store::offline(Snapshot::default())),
+            Arc::new(Store::offline(Snapshot::default(), None)),
             runtime.clone(),
         );
         for (key, session) in [
@@ -596,8 +641,8 @@ mod tests {
 
     #[tokio::test]
     async fn application_shutdown_closes_registered_hosts_and_prevents_reopening() {
-        let runtime = runtime();
-        let store = Arc::new(Store::offline(Snapshot::default()));
+        let runtime = runtime(None);
+        let store = Arc::new(Store::offline(Snapshot::default(), None));
         let primary = StoreSession::new(store.clone(), runtime.clone());
         let side = primary.side("/side".into()).unwrap();
         runtime.sessions.hosts.lock().unwrap().insert(
@@ -622,10 +667,16 @@ mod tests {
     async fn side_panes_share_one_host_and_survive_primary_view_replacement() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("snapshot.json");
-        let runtime = runtime();
-        let store = Arc::new(Store::offline(Snapshot::default()));
+        let runtime = runtime(Some(directory.path()));
+        let store = Arc::new(Store::offline(
+            Snapshot::default(),
+            Some(runtime.connections.preferences.clone()),
+        ));
         let mut primary = StoreSession::new(store.clone(), runtime.clone());
-        primary.start_persistence(persistence(path.clone()));
+        primary.start_persistence(persistence(
+            path.clone(),
+            runtime.connections.preferences.clone(),
+        ));
         let mut side = primary.side("/side".into()).unwrap();
         assert!(Arc::ptr_eq(&primary.host, &side.host));
         let key = side
@@ -677,8 +728,11 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), async {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("snapshot.json");
-            let runtime = runtime();
-            let store = Arc::new(Store::offline(Snapshot::default()));
+            let runtime = runtime(Some(directory.path()));
+            let store = Arc::new(Store::offline(
+                Snapshot::default(),
+                Some(runtime.connections.preferences.clone()),
+            ));
             let (updates, incoming) = async_channel::unbounded();
             let publish = tokio::spawn(StoreSession::publish(
                 Ok(store.clone()),
@@ -690,7 +744,12 @@ mod tests {
             let Update::Connected(Ok(session)) = incoming.recv().await.unwrap() else {
                 panic!("missing session")
             };
-            session.persist(persistence(path.clone()), updates, |_| Update::Error);
+            session.persist(
+                persistence(path.clone(), runtime.connections.preferences.clone()),
+                runtime.connections.preferences.failures(),
+                updates,
+                |_| Update::Error,
+            );
             store
                 .dispatch(Intent::SelectModel {
                     thread_id: "draft".into(),
@@ -738,8 +797,11 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("snapshot.json");
             std::fs::create_dir(&path).unwrap();
-            let runtime = runtime();
-            let store = Arc::new(Store::offline(Snapshot::default()));
+            let runtime = runtime(Some(directory.path()));
+            let store = Arc::new(Store::offline(
+                Snapshot::default(),
+                Some(runtime.connections.preferences.clone()),
+            ));
             let (updates, incoming) = async_channel::unbounded();
             let publish = tokio::spawn(StoreSession::publish(
                 Ok(store.clone()),
@@ -751,7 +813,12 @@ mod tests {
             let Update::Connected(Ok(session)) = incoming.recv().await.unwrap() else {
                 panic!("missing session")
             };
-            session.persist(persistence(path.clone()), updates, |_| Update::Error);
+            session.persist(
+                persistence(path.clone(), runtime.connections.preferences.clone()),
+                runtime.connections.preferences.failures(),
+                updates,
+                |_| Update::Error,
+            );
             while !matches!(incoming.recv().await.unwrap(), Update::Error) {}
             std::fs::remove_dir(&path).unwrap();
             store
@@ -779,8 +846,8 @@ mod tests {
     #[tokio::test]
     async fn failed_connection_is_delivered_and_undelivered_session_closes_its_store() {
         tokio::time::timeout(Duration::from_secs(5), async {
-            let runtime = runtime();
-            let store = Arc::new(Store::offline(Snapshot::default()));
+            let runtime = runtime(None);
+            let store = Arc::new(Store::offline(Snapshot::default(), Some(runtime.connections.preferences.clone())));
             let (updates, incoming) = async_channel::unbounded();
             StoreSession::publish(
                 Err(anyhow::anyhow!("connection failed").context("cannot open session")), runtime.clone(), updates.clone(),
@@ -803,5 +870,101 @@ mod tests {
         })
         .await
         .expect("undelivered session remained open");
+    }
+
+    #[tokio::test]
+    async fn preference_failures_reach_the_window_without_rewriting_host_state() {
+        use agent_core::client::{
+            AgentError,
+            persistence::{ClientStorage, DevicePreferences, PreferenceKey, PreferenceStorage},
+        };
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        #[derive(Default)]
+        struct Device {
+            fail: AtomicBool,
+        }
+        impl PreferenceStorage for Device {
+            fn load(&self, _: PreferenceKey) -> Result<Vec<u8>, AgentError> {
+                Ok(Vec::new())
+            }
+            fn save(&self, _: PreferenceKey, _: Vec<u8>) -> Result<(), AgentError> {
+                if self.fail.load(Ordering::SeqCst) {
+                    Err(AgentError::Failed {
+                        reason: "preferences unavailable".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        #[derive(Default)]
+        struct Local {
+            writes: AtomicUsize,
+            saved: tokio::sync::Notify,
+        }
+        impl ClientStorage for Local {
+            fn load(&self) -> Result<Vec<u8>, AgentError> {
+                Ok(Vec::new())
+            }
+            fn save(&self, _: Vec<u8>) -> Result<(), AgentError> {
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                self.saved.notify_one();
+                Ok(())
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let disk = Arc::new(Device::default());
+            let preferences = DevicePreferences::new(disk.clone());
+            let local = Arc::new(Local::default());
+            let persistence = Persistence::new(local.clone(), preferences.clone());
+            let mut runtime = runtime(None);
+            runtime.connections = Arc::new(crate::platform::Connections::new(preferences.clone()));
+            let store = Arc::new(Store::offline(
+                Snapshot::default(),
+                Some(preferences.clone()),
+            ));
+            let session = StoreSession::new(store.clone(), runtime.clone());
+            let (updates, incoming) = async_channel::unbounded();
+            session.persist(persistence.clone(), preferences.failures(), updates, |_| {
+                Update::Error
+            });
+            local.saved.notified().await;
+            let mut failures = preferences.failures();
+            disk.fail.store(true, Ordering::SeqCst);
+            store
+                .dispatch(Intent::SetPreferredEditor {
+                    editor: agent_protocol::editors::EditorId::Zed,
+                })
+                .await
+                .unwrap();
+            assert!(matches!(incoming.recv().await.unwrap(), Update::Error));
+            assert!(
+                persistence
+                    .failure()
+                    .unwrap()
+                    .contains("preferences unavailable")
+            );
+            assert_eq!(local.writes.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                store.snapshot().files.preferred_editor,
+                Some(agent_protocol::editors::EditorId::Zed)
+            );
+            failures.borrow_and_update();
+            disk.fail.store(false, Ordering::SeqCst);
+            store
+                .dispatch(Intent::SetPreferredEditor {
+                    editor: agent_protocol::editors::EditorId::Zed,
+                })
+                .await
+                .unwrap();
+            failures.wait_for(Option::is_none).await.unwrap();
+            assert!(persistence.failure().is_none());
+            assert_eq!(local.writes.load(Ordering::SeqCst), 1);
+            drop(session);
+            runtime.closing.close();
+            runtime.closing.wait().await;
+        })
+        .await
+        .expect("preference error notification stalled");
     }
 }

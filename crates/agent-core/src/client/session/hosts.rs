@@ -20,13 +20,18 @@ pub struct ClientSessions {
 #[uniffi::export(async_runtime = "tokio")]
 impl ClientSessions {
     #[uniffi::constructor]
-    pub fn new(recent_chats: bool, client_build: ClientBuild, device_name: String) -> Arc<Self> {
+    pub fn new(
+        recent_chats: bool,
+        client_build: ClientBuild,
+        device_name: String,
+        device: Arc<DevicePreferences>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             hosts: Mutex::new(Hosts {
                 sessions: BTreeMap::new(),
                 active: true,
             }),
-            device: Arc::default(),
+            device,
             recent_chats,
             client_build,
             device_name,

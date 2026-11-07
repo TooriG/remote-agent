@@ -773,8 +773,9 @@ mod cache_tests {
     #[gpui::test]
     fn snapshot_bursts_adopt_the_latest_state_once_per_frame(cx: &mut TestAppContext) {
         let (runtime, app_runtime) = init(cx);
-        let store = runtime
-            .block_on(async { Arc::new(agent_core::store::Store::offline(Snapshot::default())) });
+        let store = runtime.block_on(async {
+            Arc::new(agent_core::store::Store::offline(Snapshot::default(), None))
+        });
         let mut session = Some(runtime.block_on(async {
             let (updates, receive) = async_channel::unbounded();
             tokio::spawn(StoreSession::publish(
@@ -924,7 +925,7 @@ mod cache_tests {
                 },
             };
         let store =
-            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
+            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot, None)) });
         let mut session = Some(runtime.block_on(async {
             let (updates, receive) = async_channel::unbounded();
             tokio::spawn(StoreSession::publish(
@@ -1137,8 +1138,9 @@ mod cache_tests {
     #[gpui::test]
     fn native_commands_use_the_bound_pane_without_notifying_the_window(cx: &mut TestAppContext) {
         let (runtime, app_runtime) = init(cx);
-        let store = runtime
-            .block_on(async { Arc::new(agent_core::store::Store::offline(Snapshot::default())) });
+        let store = runtime.block_on(async {
+            Arc::new(agent_core::store::Store::offline(Snapshot::default(), None))
+        });
         let session = runtime.block_on(async { StoreSession::new(store.clone(), app_runtime) });
         let key = store.snapshot().pane.navigation.draft_key.clone();
         let (desktop, window) = cx.add_window_view(|window, cx| {
@@ -1236,7 +1238,7 @@ mod cache_tests {
                     "turns":[{"id":"turn","status":"completed","items":[{"id":"answer","body":{"inline":{"body":{"assistantText":{"text":"Original answer","phase":"final"}}}}}]}]
                 })).unwrap()));
                 let store = runtime.block_on(async {
-                    Arc::new(agent_core::store::Store::offline((*view.snapshot).clone()))
+                    Arc::new(agent_core::store::Store::offline((*view.snapshot).clone(), None))
                 });
                 view.snapshot = store.snapshot();
                 view.epoch += 1;

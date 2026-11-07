@@ -33,13 +33,13 @@ mod tests {
 
     #[test]
     fn file_menu_launches_and_reveals_do_not_change_the_preferred_editor() {
-        let (mut snapshot, effects) = crate::state::reduce(
-            &Snapshot::default(),
-            Event::Intent(Intent::SetPreferredEditor {
-                editor: EditorId::Zed,
-            }),
-        );
-        assert!(effects.is_empty());
+        let mut snapshot = Snapshot {
+            files: crate::state::Files {
+                preferred_editor: Some(EditorId::Zed),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let mut request = OpenInEditor {
             path: "~/a.rs".into(),
             line: Some(12),

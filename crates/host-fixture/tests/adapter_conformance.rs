@@ -187,6 +187,7 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
         Snapshot::default(),
         None,
         "Fixture device",
+        None,
     )
     .await
     .unwrap();

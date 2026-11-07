@@ -32,8 +32,10 @@ final class AppViewModel {
     private(set) var allProfiles = false
     private(set) var list: ThreadList?
 
+    @ObservationIgnored let preferences: DevicePreferences
+    private(set) var language: UiLanguage
     @ObservationIgnored lazy var sessions = ClientSessions(recentChats: false, clientBuild: Self.clientBuild,
-                                                           deviceName: UIDevice.current.name)
+                                                           deviceName: UIDevice.current.name, device: preferences)
     private(set) var chat: ConversationModel?
     private var conversations: [String: ConversationModel] = [:]
     private(set) var session: ClientSession?
@@ -46,7 +48,9 @@ final class AppViewModel {
     private let pathMonitor = NWPathMonitor()
     let liveActivities = TaskLiveActivities()
 
-    init() {
+    init(preferences: DevicePreferences) {
+        self.preferences = preferences
+        language = preferences.language()
         observeLiveActivityRequests()
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let available = path.status == .satisfied
@@ -71,6 +75,12 @@ final class AppViewModel {
     }
 
     deinit { pathMonitor.cancel() }
+
+    func selectLanguage(_ value: UiLanguage) {
+        // UserDefaults keeps the existing non-throwing mobile save contract.
+        try? preferences.selectLanguage(language: value)
+        language = preferences.language()
+    }
 
     func selectProfile(_ id: String) {
         guard profiles.contains(where: { $0.id == id }) else { return }

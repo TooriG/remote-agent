@@ -55,8 +55,17 @@ class VisualizationTest {
         try {
             withContext(Dispatchers.Main) {
                 model =
-                    ViewModelProvider(models, viewModelFactory { initializer { AndroidAppModel(isolated) } })[
-                        AndroidAppModel::class.java]
+                    ViewModelProvider(
+                        models,
+                        viewModelFactory {
+                            initializer {
+                                AndroidAppModel(
+                                    isolated,
+                                    dev.remoteagent.core.DevicePreferences(AndroidPreferenceStorage(isolated)),
+                                )
+                            }
+                        },
+                    )[AndroidAppModel::class.java]
                 model.pair(File(base.cacheDir, "fixture-invitation.json").readText())
             }
             withTimeout(30_000) {

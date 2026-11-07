@@ -813,9 +813,12 @@ impl Desktop {
         self.local_shell = local_shell;
         let persistence = session.host.persistence();
         if let Some(persistence) = persistence {
-            session.persist(persistence, self.updates.clone(), move |error| {
-                (epoch, Update::PersistenceError(error))
-            });
+            session.persist(
+                persistence,
+                cx.global::<Runtime>().connections.preferences.failures(),
+                self.updates.clone(),
+                move |error| (epoch, Update::PersistenceError(error)),
+            );
         }
         self.session = Some(session);
         self.accept_snapshot(window, cx);

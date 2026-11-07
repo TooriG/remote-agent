@@ -111,7 +111,7 @@ struct ConnectionsScreen: View {
                 AppNotice(text: error)
             }
             if model.profiles.isEmpty {
-                LanguageSettings()
+                LanguageSettings(language: model.language, select: model.selectLanguage)
                 Section { PrivacyPolicyButton() }
             }
         }

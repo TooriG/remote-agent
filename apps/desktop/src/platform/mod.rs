@@ -1,6 +1,6 @@
 use agent_core::client::{
     AgentError,
-    persistence::{ClientStorage, DevicePreferences, StorageKey},
+    persistence::{ClientStorage, DevicePreferences, PreferenceKey, PreferenceStorage},
 };
 use agent_core::{state::Snapshot, store::Store};
 use agent_local_host::{LocalHost, LocalHostRegistry, LocalHostState};
@@ -15,13 +15,17 @@ use std::{
 pub(crate) struct SessionStorage {
     pub(crate) path: PathBuf,
 }
-impl SessionStorage {
-    fn file(&self, key: StorageKey) -> PathBuf {
-        match key {
-            StorageKey::LocalState => self.path.clone(),
-            StorageKey::ModelPreferences => self.path.with_file_name("model-preferences.json"),
-            StorageKey::EditorPreferences => self.path.with_file_name("editor-preferences.json"),
-        }
+pub(crate) struct DeviceStorage {
+    pub(crate) directory: Result<PathBuf, String>,
+}
+impl DeviceStorage {
+    fn file(&self, key: PreferenceKey) -> Result<PathBuf, AgentError> {
+        let directory = self.directory.as_ref().map_err(storage_error)?;
+        Ok(directory.join(match key {
+            PreferenceKey::Models => "model-preferences.json",
+            PreferenceKey::Editor => "editor-preferences.json",
+            PreferenceKey::Language => "language.json",
+        }))
     }
 }
 fn storage_error(reason: impl std::fmt::Display) -> AgentError {
@@ -30,15 +34,27 @@ fn storage_error(reason: impl std::fmt::Display) -> AgentError {
     }
 }
 impl ClientStorage for SessionStorage {
-    fn load(&self, key: StorageKey) -> Result<Vec<u8>, AgentError> {
-        match std::fs::read(self.file(key)) {
+    fn load(&self) -> Result<Vec<u8>, AgentError> {
+        match std::fs::read(&self.path) {
             Ok(bytes) => Ok(bytes),
             Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(reason) => Err(storage_error(reason)),
         }
     }
-    fn save(&self, key: StorageKey, bytes: Vec<u8>) -> Result<(), AgentError> {
-        agent_local_host::save_private_bytes(&self.file(key), &bytes).map_err(storage_error)
+    fn save(&self, bytes: Vec<u8>) -> Result<(), AgentError> {
+        agent_local_host::save_private_bytes(&self.path, &bytes).map_err(storage_error)
+    }
+}
+impl PreferenceStorage for DeviceStorage {
+    fn load(&self, key: PreferenceKey) -> Result<Vec<u8>, AgentError> {
+        match std::fs::read(self.file(key)?) {
+            Ok(bytes) => Ok(bytes),
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(reason) => Err(storage_error(reason)),
+        }
+    }
+    fn save(&self, key: PreferenceKey, bytes: Vec<u8>) -> Result<(), AgentError> {
+        agent_local_host::save_private_bytes(&self.file(key)?, &bytes).map_err(storage_error)
     }
 }
 
@@ -112,7 +128,6 @@ pub(crate) async fn ssh_invitation(
 }
 
 /// One identity with separate local and remote endpoints. Views own sessions.
-#[derive(Default)]
 pub(crate) struct Connections {
     pub(crate) preferences: Arc<DevicePreferences>,
     endpoint: tokio::sync::OnceCell<(PathBuf, Endpoint)>,
@@ -120,14 +135,41 @@ pub(crate) struct Connections {
     startup: tokio::sync::Mutex<()>,
     wsl: wsl::WslConnections,
 }
+#[cfg(test)]
+impl Default for Connections {
+    fn default() -> Self {
+        struct Memory;
+        impl PreferenceStorage for Memory {
+            fn load(&self, _: PreferenceKey) -> Result<Vec<u8>, AgentError> {
+                Ok(Vec::new())
+            }
+            fn save(&self, _: PreferenceKey, _: Vec<u8>) -> Result<(), AgentError> {
+                Ok(())
+            }
+        }
+        Self::new(DevicePreferences::new(Arc::new(Memory)))
+    }
+}
 impl Connections {
+    pub(crate) fn new(preferences: Arc<DevicePreferences>) -> Self {
+        Self {
+            preferences,
+            endpoint: Default::default(),
+            local_endpoint: Default::default(),
+            startup: Default::default(),
+            wsl: Default::default(),
+        }
+    }
     pub(crate) async fn connect(
         self: &Arc<Self>,
         remote: Option<&str>,
         snapshot: Snapshot,
     ) -> anyhow::Result<Arc<Store>> {
         if !snapshot.connection_enabled() {
-            return Ok(Arc::new(Store::offline(snapshot)));
+            return Ok(Arc::new(Store::offline(
+                snapshot,
+                Some(self.preferences.clone()),
+            )));
         }
         let device_name = tokio::task::spawn_blocking(agent_local_host::machine_name).await?;
         let startup = self.startup.lock().await;
@@ -146,7 +188,15 @@ impl Connections {
             };
             drop(startup);
             return Ok(Arc::new(
-                Store::connect(endpoint, &ticket, snapshot, None, &device_name).await?,
+                Store::connect(
+                    endpoint,
+                    &ticket,
+                    snapshot,
+                    None,
+                    &device_name,
+                    Some(self.preferences.clone()),
+                )
+                .await?,
             ));
         }
         let store = Arc::new(self.connect_local(snapshot, &device_name).await?);
@@ -228,7 +278,14 @@ impl Connections {
                         let endpoint = self.endpoint_for(&location.directory, true).await?;
                         let attempt = tokio::time::timeout(
                             Duration::from_secs(1),
-                            Store::connect(endpoint, ticket, snapshot.clone(), None, device_name),
+                            Store::connect(
+                                endpoint,
+                                ticket,
+                                snapshot.clone(),
+                                None,
+                                device_name,
+                                Some(self.preferences.clone()),
+                            ),
                         )
                         .await;
                         match attempt {

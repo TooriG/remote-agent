@@ -1,5 +1,6 @@
 package dev.remoteagent.mobile
 
+import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -9,10 +10,10 @@ import dev.remoteagent.core.AgentStore
 import dev.remoteagent.core.ConversationRowContent
 import dev.remoteagent.core.DraftKey
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.PreferenceKey
 import dev.remoteagent.core.ProviderKind
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.Snapshot
-import dev.remoteagent.core.StorageKey
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineStart
@@ -103,13 +104,22 @@ class StorePersistenceTest {
                     base.getSharedPreferences("$token-$name", mode)
             }
         val repository = AndroidMobileRepository(context)
+        val language = context.getSharedPreferences("bex-app", Context.MODE_PRIVATE)
+        language.edit().putInt("language", 42).commit()
+        val device = dev.remoteagent.core.DevicePreferences(AndroidPreferenceStorage(context))
+        assertEquals(dev.remoteagent.core.UiLanguage.JAPANESE, device.language())
+        assertEquals(42, language.getInt("language", 0))
+        device.selectLanguage(dev.remoteagent.core.UiLanguage.ENGLISH)
+        assertEquals("en", language.getString("language", null))
+        assertEquals(
+            dev.remoteagent.core.UiLanguage.ENGLISH,
+            dev.remoteagent.core.DevicePreferences(AndroidPreferenceStorage(context)).language(),
+        )
         val store = AgentStore.offline(byteArrayOf(), null, "test-revision")
         try {
             val preferences = "opaque device preferences".encodeToByteArray()
-            repository.sessionStorage("host-a").save(StorageKey.MODEL_PREFERENCES, preferences)
-            assertTrue(
-                repository.sessionStorage("host-b").load(StorageKey.MODEL_PREFERENCES).contentEquals(preferences)
-            )
+            AndroidPreferenceStorage(context).save(PreferenceKey.MODELS, preferences)
+            assertTrue(AndroidPreferenceStorage(context).load(PreferenceKey.MODELS).contentEquals(preferences))
             store.dispatch(Intent.NewChat("/fixture")).wait()
             val key = store.snapshot().navigation().draftKey
             store.dispatch(Intent.SetDraftText(key, "日本語の下書き")).wait()
@@ -122,18 +132,18 @@ class StorePersistenceTest {
                     "attachments",
                     JSONArray("""[{"path":"/fixture/photo.png","name":"photo.png","isImage":true}]"""),
                 )
-            repository.sessionStorage("host-a").save(StorageKey.LOCAL_STATE, saved.toString().encodeToByteArray())
+            repository.sessionStorage("host-a").save(saved.toString().encodeToByteArray())
             store.dispatch(Intent.SetDraftText(key, "別の Host の下書き")).wait()
-            repository.sessionStorage("host-b").save(StorageKey.LOCAL_STATE, store.snapshot().serializeLocalState())
+            repository.sessionStorage("host-b").save(store.snapshot().serializeLocalState())
             val restoredA =
                 AgentStore.offline(
-                    repository.sessionStorage("host-a").load(StorageKey.LOCAL_STATE),
+                    repository.sessionStorage("host-a").load(),
                     null,
                     "test-revision",
                 )
             val restoredB =
                 AgentStore.offline(
-                    repository.sessionStorage("host-b").load(StorageKey.LOCAL_STATE),
+                    repository.sessionStorage("host-b").load(),
                     null,
                     "test-revision",
                 )

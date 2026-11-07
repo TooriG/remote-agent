@@ -935,8 +935,15 @@ fn disconnected_catalog_reads_do_not_apply_or_retry_stale_responses() {
     assert_eq!(state, before);
 }
 
-#[test]
-fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_drafts() {
+#[tokio::test]
+async fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_drafts() {
+    async fn accepted(state: Snapshot, intent: Intent) -> Snapshot {
+        let store = agent_core::store::Store::offline(state, None);
+        store.dispatch(intent).await.unwrap();
+        let next = store.snapshot().as_ref().clone();
+        store.close().await.unwrap();
+        next
+    }
     use agent_core::state::{Draft, Intent};
     for (restored, failed) in [(false, false), (true, false), (false, true), (true, true)] {
         let draft = Draft {
@@ -1004,14 +1011,14 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
             provider: agent_protocol::session::ProviderKind::Claude,
             id: "default".into(),
         };
-        state = reduce(
-            &state,
-            Event::Intent(Intent::SelectModel {
+        state = accepted(
+            state,
+            Intent::SelectModel {
                 thread_id: "chosen".into(),
                 model: claude.clone(),
-            }),
+            },
         )
-        .0;
+        .await;
         state = reduce(
             &state,
             Event::Intent(Intent::NewChat {
@@ -1025,14 +1032,14 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
                 .as_ref(),
             Some(&claude)
         );
-        state = reduce(
-            &state,
-            Event::Intent(Intent::SelectEffort {
+        state = accepted(
+            state,
+            Intent::SelectEffort {
                 thread_id: "saved".into(),
                 effort: "high".into(),
-            }),
+            },
         )
-        .0;
+        .await;
         assert_eq!(*state.input.drafts[&DraftKey::from("saved")], draft);
         let catalog = serde_json::from_value(json!({"data":[{
             "id":"codex-model","model":{"provider": "codex", "id": "codex-model"},"displayName":"Codex", "settings": {

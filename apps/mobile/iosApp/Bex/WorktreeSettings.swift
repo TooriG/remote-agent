@@ -23,7 +23,7 @@ struct SettingsScreen: View {
                     .accessibilityIdentifier("settings.providers")
                     .disabled(model.profiles.isEmpty)
             }
-            LanguageSettings()
+            LanguageSettings(language: model.language, select: model.selectLanguage)
             Section("プロジェクトと会話") {
                 NavigationLink {
                     WorktreeSettingsScreen(model: model).id(model.selectedProfileId)
@@ -45,13 +45,14 @@ struct SettingsScreen: View {
 }
 
 struct LanguageSettings: View {
-    @AppStorage("bex.language") private var language = "ja"
+    let language: UiLanguage
+    let select: (UiLanguage) -> Void
 
     var body: some View {
         Section("表示言語") {
-            Picker("言語", selection: $language) {
-                Text(verbatim: "English").tag("en")
-                Text(verbatim: "日本語").tag("ja")
+            Picker("言語", selection: Binding(get: { language }, set: select)) {
+                Text(verbatim: "English").tag(UiLanguage.english)
+                Text(verbatim: "日本語").tag(UiLanguage.japanese)
             }
             .accessibilityIdentifier("settings.language")
         }

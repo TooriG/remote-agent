@@ -107,7 +107,8 @@ impl Fixture {
                 &ticket,
                 Snapshot::default(),
                 None,
-                "Fixture device"
+                "Fixture device",
+                None
             ),
             incoming
         );

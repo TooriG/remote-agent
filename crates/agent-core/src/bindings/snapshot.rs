@@ -210,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_snapshot_identity_distinguishes_edits_from_duplicate_publication() {
-        let store = crate::store::Store::offline(Snapshot::default());
+        let store = crate::store::Store::offline(Snapshot::default(), None);
         let before = store.snapshot();
         let edit = || crate::state::Intent::SetDraftText {
             thread_id: crate::state::DraftKey::Local {

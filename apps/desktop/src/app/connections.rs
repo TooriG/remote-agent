@@ -212,8 +212,8 @@ mod tests {
             name: "Same machine".into(),
             ticket: endpoint.ticket().to_string(),
         };
-        let local = runtime.block_on(async { Arc::new(Store::offline(snapshot())) });
-        let distant = runtime.block_on(async { Arc::new(Store::offline(snapshot())) });
+        let local = runtime.block_on(async { Arc::new(Store::offline(snapshot(), None)) });
+        let distant = runtime.block_on(async { Arc::new(Store::offline(snapshot(), None)) });
         let local_session =
             app_runtime
                 .sessions

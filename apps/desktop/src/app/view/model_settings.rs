@@ -1949,7 +1949,7 @@ mod tests {
             }),
         );
         let store =
-            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
+            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot, None)) });
         let session = runtime.block_on(async {
             let (updates, receive) = async_channel::unbounded();
             tokio::spawn(crate::store_session::StoreSession::publish(

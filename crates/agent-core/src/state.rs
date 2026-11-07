@@ -277,6 +277,7 @@ same_by_eq!(
     u64,
     String,
     ModelPreferences,
+    crate::localization::UiLanguage,
     agent_protocol::editors::EditorId,
     crate::session::SessionRef,
 );
@@ -342,6 +343,8 @@ group! {
         pub model_errors: Arc<Map<String, Value>>,
         #[serde(default)]
         pub model_preferences: ModelPreferences,
+        #[serde(default)]
+        pub ui_language: crate::localization::UiLanguage,
         #[serde(default)]
         pub account: Arc<AccountState>,
         #[serde(skip)]
@@ -699,7 +702,8 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
     ], {
         Intent::RefreshModels => return (next, op::refresh_models()),
         Intent::SetConnectionEnabled { enabled } => next.connection.connection_disabled = !enabled,
-        Intent::SetPreferredEditor { editor } => next.files.preferred_editor = Some(editor),
+        // Store commits this device-owned value after admitting the action.
+        Intent::SetPreferredEditor { .. } => (),
         Intent::EnsureFileMetadata { paths, now_ms } => {
             let effects = op::ensure_file_metadata(&mut next, paths, now_ms);
             return (next, effects);
@@ -1121,14 +1125,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                     tier.map(str::to_owned),
                 );
                 (draft.model, draft.effort, draft.service_tier) = settings;
-            }
-            if let Some(model) = &draft.model {
-                next.catalog.model_preferences.provider = Some(model.provider);
-                next.catalog.model_preferences.selections.insert(model.provider, ModelSelection {
-                    model: model.clone(),
-                    effort: draft.effort.clone(),
-                    service_tier: draft.service_tier.clone(),
-                });
             }
             draft.model_settings_changed |= previous.input.drafts.get(&thread_id).is_none_or(|saved| {
                 (saved.model.as_ref(), saved.effort.as_deref(), saved.service_tier.as_deref())

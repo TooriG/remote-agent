@@ -28,6 +28,7 @@ import dev.remoteagent.core.ClientSession
 import dev.remoteagent.core.ClientSessions
 import dev.remoteagent.core.ConversationRowPolicy
 import dev.remoteagent.core.ConversationRows
+import dev.remoteagent.core.DevicePreferences
 import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListSessions
@@ -68,21 +69,13 @@ internal enum class Screen {
 /** Core presentations feed each surface; business changes are queued typed intents. */
 // The selected Store owns browser requests as well as conversation operations.
 @Suppress("TooManyFunctions")
-internal class AndroidAppModel(private val context: Context) : ViewModel() {
-    private val appPreferences = context.getSharedPreferences("bex-app", Context.MODE_PRIVATE)
-    var language by
-        mutableStateOf(
-            if (appPreferences.getString("language", "ja") == "en") dev.remoteagent.core.UiLanguage.ENGLISH
-            else dev.remoteagent.core.UiLanguage.JAPANESE
-        )
+internal class AndroidAppModel(private val context: Context, private val preferences: DevicePreferences) : ViewModel() {
+    var language by mutableStateOf(preferences.language())
         private set
 
     fun selectLanguage(value: dev.remoteagent.core.UiLanguage) {
-        appPreferences
-            .edit()
-            .putString("language", if (value == dev.remoteagent.core.UiLanguage.ENGLISH) "en" else "ja")
-            .apply()
-        language = value
+        preferences.selectLanguage(value)
+        language = preferences.language()
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -155,7 +148,8 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var list by mutableStateOf<ThreadList?>(null)
         private set
 
-    private val sessions = ClientSessions(true, ClientBuild(0uL, BuildConfig.BUILD_REVISION), repository.deviceName)
+    private val sessions =
+        ClientSessions(true, ClientBuild(0uL, BuildConfig.BUILD_REVISION), repository.deviceName, preferences)
     private var session: ClientSession? = null
     private var owner: AgentStore? = null
 
@@ -171,6 +165,12 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         get() = connectionSelection.hostId to draftKey
 
     init {
+        scope.launch {
+            while (isActive) {
+                preferences.nextLanguage(language)
+                language = preferences.language()
+            }
+        }
         try {
             profiles = repository.profiles()
             val selection =

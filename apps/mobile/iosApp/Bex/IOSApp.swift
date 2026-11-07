@@ -5,13 +5,17 @@ import SwiftUI
 struct IOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var wasBackgrounded = false
-    @State private var model = AppViewModel()
-    @AppStorage("bex.language") private var language = "ja"
+    @State private var model: AppViewModel
+
+    init() {
+        let preferences = DevicePreferences(storage: MobilePreferenceStorage())
+        _model = State(initialValue: AppViewModel(preferences: preferences))
+    }
 
     var body: some Scene {
         WindowGroup {
             SwiftUIRoot(model: model)
-                .environment(\.locale, Locale(identifier: language))
+                .environment(\.locale, Locale(identifier: model.language == .english ? "en" : "ja"))
                 .onOpenURL { model.openTaskActivity($0) }
                 .onChange(of: scenePhase) { phase in
                     model.synchronizeLiveActivities(foreground: phase == .active)

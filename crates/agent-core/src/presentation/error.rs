@@ -859,7 +859,7 @@ mod notice_tests {
 
     #[tokio::test]
     async fn offline_operation_failure_stays_with_its_operation() {
-        let store = crate::store::Store::offline(Snapshot::default());
+        let store = crate::store::Store::offline(Snapshot::default(), None);
         assert!(
             store
                 .snapshot()

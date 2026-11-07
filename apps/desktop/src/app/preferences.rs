@@ -626,7 +626,7 @@ mod tests {
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.files.workspace).settings = Some(settings.clone());
         let store =
-            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot)) });
+            runtime.block_on(async { Arc::new(agent_core::store::Store::offline(snapshot, None)) });
         let (owner, window) = cx.add_window_view(|window, cx| {
             Desktop::new(
                 Mode::Fixture {
@@ -680,7 +680,7 @@ mod tests {
         let stores: Vec<_> = (0..2)
             .map(|_| {
                 runtime.block_on(async {
-                    Arc::new(agent_core::store::Store::offline(Snapshot::default()))
+                    Arc::new(agent_core::store::Store::offline(Snapshot::default(), None))
                 })
             })
             .collect();

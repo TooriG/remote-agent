@@ -27,28 +27,15 @@ final class MobileSessionStorage: ClientStorage, ClientPlatform, @unchecked Send
         do { return try body() } catch { throw AgentError.Failed(reason: error.localizedDescription) }
     }
 
-    func load(key: StorageKey) throws -> Data {
+    func load() throws -> Data {
         try access {
-            switch key {
-            case .localState:
-                let url = try location()
-                return FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : Data()
-            case .modelPreferences:
-                return UserDefaults.standard.data(forKey: "bex.model-preferences") ?? Data()
-            case .editorPreferences:
-                return UserDefaults.standard.data(forKey: "bex.editor-preferences") ?? Data()
-            }
+            let url = try location()
+            return FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : Data()
         }
     }
 
-    func save(key: StorageKey, bytes: Data) throws {
-        try access {
-            switch key {
-            case .localState: try bytes.write(to: location(), options: .atomic)
-            case .modelPreferences: UserDefaults.standard.set(bytes, forKey: "bex.model-preferences")
-            case .editorPreferences: UserDefaults.standard.set(bytes, forKey: "bex.editor-preferences")
-            }
-        }
+    func save(bytes: Data) throws {
+        try access { try bytes.write(to: location(), options: .atomic) }
     }
 
     func identity() throws -> Data {
@@ -66,6 +53,28 @@ final class MobileSessionStorage: ClientStorage, ClientPlatform, @unchecked Send
     /// Saved conversation copies for this Host; removing the Host removes them.
     func conversations() throws -> URL {
         try location().deletingPathExtension().appendingPathExtension("conversations")
+    }
+}
+
+/// These locations belong to the application, including before its first Host opens.
+final class MobilePreferenceStorage: PreferenceStorage, @unchecked Sendable {
+    func load(key: PreferenceKey) throws -> Data {
+        switch key {
+        case .models: return UserDefaults.standard.data(forKey: "bex.model-preferences") ?? Data()
+        case .editor: return UserDefaults.standard.data(forKey: "bex.editor-preferences") ?? Data()
+        case .language:
+            guard let language = UserDefaults.standard.string(forKey: "bex.language") else { return Data() }
+            return try JSONEncoder().encode(language)
+        }
+    }
+
+    func save(key: PreferenceKey, bytes: Data) throws {
+        switch key {
+        case .models: UserDefaults.standard.set(bytes, forKey: "bex.model-preferences")
+        case .editor: UserDefaults.standard.set(bytes, forKey: "bex.editor-preferences")
+        case .language:
+            try UserDefaults.standard.set(JSONDecoder().decode(String.self, from: bytes), forKey: "bex.language")
+        }
     }
 }
 

@@ -12,9 +12,11 @@ import dev.remoteagent.core.ClientPlatform
 import dev.remoteagent.core.ClientSession
 import dev.remoteagent.core.ClientSessions
 import dev.remoteagent.core.ClientStorage
+import dev.remoteagent.core.DevicePreferences
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.PreferenceKey
+import dev.remoteagent.core.PreferenceStorage
 import dev.remoteagent.core.Snapshot
-import dev.remoteagent.core.StorageKey
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -25,13 +27,24 @@ import org.junit.Test
 class ModelSelectionTest {
     @get:Rule val compose = createComposeRule()
 
-    private class Storage(snapshot: Snapshot) : ClientStorage, ClientPlatform {
-        private val values = mutableMapOf(StorageKey.LOCAL_STATE to snapshot.serializeLocalState())
+    private class Preferences : PreferenceStorage {
+        private val values = mutableMapOf<PreferenceKey, ByteArray>()
 
-        override fun load(key: StorageKey): ByteArray = synchronized(values) { values[key] ?: byteArrayOf() }
+        override fun load(key: PreferenceKey): ByteArray = synchronized(values) { values[key] ?: byteArrayOf() }
 
-        override fun save(key: StorageKey, bytes: ByteArray) {
+        override fun save(key: PreferenceKey, bytes: ByteArray) {
             synchronized(values) { values[key] = bytes }
+        }
+    }
+
+    private class Storage(snapshot: Snapshot) : ClientStorage, ClientPlatform, AutoCloseable {
+        private var local = snapshot.serializeLocalState()
+        private val preferences = Preferences()
+
+        override fun load(): ByteArray = synchronized(this) { local }
+
+        override fun save(bytes: ByteArray) {
+            synchronized(this) { local = bytes }
         }
 
         override fun identity(): ByteArray = error("offline fixture does not connect")
@@ -43,9 +56,16 @@ class ModelSelectionTest {
         private var sessions: ClientSessions? = null
 
         fun open(): ClientSession {
-            val next = ClientSessions(false, ClientBuild(0uL, "test-revision"), "Fixture")
+            sessions?.close()
+            val next =
+                ClientSessions(false, ClientBuild(0uL, "test-revision"), "Fixture", DevicePreferences(preferences))
             sessions = next
             return next.open("fixture", this, this)
+        }
+
+        override fun close() {
+            sessions?.close()
+            sessions = null
         }
     }
 
@@ -116,6 +136,7 @@ class ModelSelectionTest {
                 }
             } finally {
                 session.shutdown()
+                storage.close()
             }
         }
     }

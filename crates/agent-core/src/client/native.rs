@@ -256,6 +256,7 @@ impl AgentStore {
         snapshot: Snapshot,
         diagnostics_directory: Option<String>,
         client_revision: String,
+        preferences: Option<Arc<super::persistence::DevicePreferences>>,
     ) -> Result<Arc<Self>, AgentError> {
         let started = std::time::Instant::now();
         let trace = Trace::new(client_revision);
@@ -263,7 +264,7 @@ impl AgentStore {
             trace.persist(directory.into()).map_err(error)?;
         }
         trace.activate();
-        let store = crate::store::Store::offline(snapshot);
+        let store = crate::store::Store::offline(snapshot, preferences);
         trace.record(
             ConnectionPhase::StoreRestored,
             0,
@@ -293,6 +294,7 @@ impl AgentStore {
             crate::persistence::decode(&persisted).map_err(error)?,
             diagnostics_directory,
             client_revision,
+            None,
         )
     }
 
@@ -648,7 +650,7 @@ mod tests {
             let restored = AgentStore::offline(serde_json::to_vec(&saved).unwrap(), None, "test-revision".into()).await.unwrap();
             assert_eq!(*restored.snapshot().lists.list_query, crate::models::ListQuery::default());
             restored.shutdown().await.unwrap();
-            let store = Arc::new(AgentStore { store: Arc::new(crate::store::Store::offline(cached)), recovery: Mutex::new(None), connection_active: tokio::sync::watch::channel(true).0, connection_work: Default::default(), endpoint: Default::default(), trace: Trace::new("development".into()) });
+            let store = Arc::new(AgentStore { store: Arc::new(crate::store::Store::offline(cached, None)), recovery: Mutex::new(None), connection_active: tokio::sync::watch::channel(true).0, connection_work: Default::default(), endpoint: Default::default(), trace: Trace::new("development".into()) });
             let (connected, (session, reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
             connected.unwrap();
             let first = session;
@@ -990,7 +992,8 @@ mod tests {
                 &ticket,
                 Snapshot::default(),
                 None,
-                "Fixture device"
+                "Fixture device",
+                None
             ),
             scoped_incoming(&host, &trust),
         );
@@ -1100,7 +1103,7 @@ mod tests {
             .unwrap();
         let endpoint = Endpoint::bind(identity, Relays::Disabled).await.unwrap();
         let ticket = host.local_ticket();
-        let store = Arc::new(crate::store::Store::offline(Snapshot::default()));
+        let store = Arc::new(crate::store::Store::offline(Snapshot::default(), None));
         let connecting = tokio::spawn({
             let store = store.clone();
             let endpoint = endpoint.clone();
