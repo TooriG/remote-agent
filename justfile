@@ -50,27 +50,18 @@ typescript:
 # macOS-only unit tests; CI runs these separately from portable validation.
 apple-unit-tests: macos-unit-tests ios-unit-tests
 
-# Build and open the separate NSH evaluation app on Mac.
-nsh-macos:
-    bash apps/nsh/build-native.sh macos
-    cargo build --locked -p agent-nsh --target aarch64-apple-darwin
-    bash apps/nsh/package.sh macos
-    open "${CARGO_TARGET_DIR:-target}/nsh-preview/macos/Bex NSH Preview.app"
-
-# Drive the Mac NSH app through apps/nsh/acceptance scenarios, each against a fresh fixture Host.
+# Drive the Mac app through apps/nsh/acceptance scenarios, each against a fresh fixture Host.
 # Only on request: the app activates its window while it runs. Report: target/nsh-acceptance/.
 nsh-acceptance *scenarios:
-    bash apps/nsh/build-native.sh macos
-    cargo build --locked -p agent-nsh --target aarch64-apple-darwin
+    AGENT_CODE_SIGN_IDENTITY=- bash scripts/build-macos.sh desktop dev
     cargo build --locked -p host-fixture -p agent-process --bins --target aarch64-apple-darwin
-    bash apps/nsh/package.sh macos
     cargo xtask nsh-acceptance "$@"
 
-# Build the separate NSH evaluation app for an iPhone simulator.
+# Build the NSH preview app for an iPhone simulator.
 nsh-ios-simulator:
     bash apps/nsh/build-native.sh ios-simulator
     CC=/usr/bin/clang CXX=/usr/bin/clang++ CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER=/usr/bin/clang cargo build --locked -p agent-nsh --target aarch64-apple-ios-sim
-    bash apps/nsh/package.sh ios-simulator
+    bash apps/nsh/package.sh
 
 macos-unit-tests:
     cargo test --locked -p native-focus --test native_focus
@@ -82,7 +73,8 @@ ios-unit-tests:
 build-host-macos profile="release":
     scripts/build-macos.sh host "$1"
 
-# Build and verify the certificate-signed bundle in the selected profile directory.
+# Build and verify the certificate-signed Mac app (NSH) in the selected profile directory.
+# AGENT_CODE_SIGN_IDENTITY=- signs ad hoc for checks without the BEX Developer ID.
 build-desktop-macos profile="release":
     scripts/build-macos.sh desktop "$1"
 

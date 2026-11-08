@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-# Run through scripts/dev-env.sh after building the selected Apple target.
+# Package the iPhone Simulator preview after building agent-nsh for it.
+# The Mac app is packaged by scripts/build-macos.sh desktop.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-platform=${1:?usage: package.sh macos|ios-simulator}
-case "$platform" in
-    macos) rust_target=aarch64-apple-darwin ;;
-    ios-simulator) rust_target=aarch64-apple-ios-sim ;;
-    *) printf 'Unsupported platform: %s\n' "$platform" >&2; exit 1 ;;
-esac
-bundle="${CARGO_TARGET_DIR:-$PWD/target}/nsh-preview/$platform/Bex NSH Preview.app"
-python3 - "$platform" "$bundle" "${CARGO_TARGET_DIR:-$PWD/target}/$rust_target/debug/agent-nsh" \
-    "${CARGO_TARGET_DIR:-$PWD/target}/nsh-preview-native/$platform/BexNshNative.framework" <<'PY'
+target=${CARGO_TARGET_DIR:-$PWD/target}
+bundle="$target/nsh-preview/ios-simulator/Bex NSH Preview.app"
+python3 - "$bundle" "$target/aarch64-apple-ios-sim/debug/agent-nsh" \
+    "$target/nsh-native/debug/ios-simulator/BexNshNative.framework" <<'PY'
 import pathlib
 import plistlib
 import shutil
@@ -19,7 +15,7 @@ import tempfile
 
 def copy_file(source, destination):
     # A signed image may still be mapped by a previous launch. Give each
-    # replacement its own inode so macOS validates the new signature.
+    # replacement its own inode so the new signature is validated.
     destination = pathlib.Path(destination)
     with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as pending:
         path = pathlib.Path(pending.name)
@@ -30,7 +26,7 @@ def copy_file(source, destination):
         path.unlink(missing_ok=True)
     return str(destination)
 
-platform, destination, executable, native = sys.argv[1:]
+destination, executable, native = sys.argv[1:]
 bundle = pathlib.Path(destination)
 info = {
     "CFBundleIdentifier": "com.bex.nsh-preview",
@@ -41,43 +37,27 @@ info = {
     "CFBundleShortVersionString": "0.1.0",
     "CFBundleVersion": "1",
     "NSMicrophoneUsageDescription": "録音した音声を接続先PCへ送り、文字起こししてメッセージに入力します。",
+    "CFBundleSupportedPlatforms": ["iPhoneSimulator"],
+    "MinimumOSVersion": "26.0",
+    "UIDeviceFamily": [1, 2],
+    "UILaunchScreen": {},
+    "UIApplicationSupportsMultipleScenes": False,
+    "CADisableMinimumFrameDurationOnPhone": True,
 }
-if platform == "macos":
-    contents = bundle / "Contents"
-    binary = contents / "MacOS" / "agent-nsh"
-    info.update(LSMinimumSystemVersion="26.0", NSHighResolutionCapable=True)
-    resources = contents / "Resources"
-    resources.mkdir(parents=True, exist_ok=True)
-    copy_file("apps/desktop/assets/icon.icns", resources / "Bex.icns")
-    info["CFBundleIconFile"] = "Bex.icns"
-else:
-    contents = bundle
-    binary = bundle / "agent-nsh"
-    info.update(
-        CFBundleSupportedPlatforms=["iPhoneSimulator"],
-        MinimumOSVersion="26.0",
-        UIDeviceFamily=[1, 2],
-        UILaunchScreen={},
-        UIApplicationSupportsMultipleScenes=False,
-        CADisableMinimumFrameDurationOnPhone=True,
-    )
+binary = bundle / "agent-nsh"
 binary.parent.mkdir(parents=True, exist_ok=True)
-frameworks = contents / "Frameworks"
+frameworks = bundle / "Frameworks"
 frameworks.mkdir(parents=True, exist_ok=True)
 shutil.copytree(native, frameworks / "BexNshNative.framework", dirs_exist_ok=True, copy_function=copy_file)
 copy_file(executable, binary)
-with (contents / "Info.plist").open("wb") as output:
+with (bundle / "Info.plist").open("wb") as output:
     plistlib.dump(info, output)
 PY
-if [[ $platform == macos ]]; then
-    xcrun actool apps/mobile/iosApp/Bex/Assets.xcassets --compile "$bundle/Contents/Resources" \
-        --platform macosx --minimum-deployment-target 26.0 > /dev/null
-else
-    icon_info="${CARGO_TARGET_DIR:-$PWD/target}/nsh-preview/ios-icon-info.plist"
-    xcrun actool apps/mobile/iosApp/Bex/Assets.xcassets --compile "$bundle" \
-        --platform iphonesimulator --minimum-deployment-target 26.0 --target-device iphone \
-        --target-device ipad --app-icon AppIconPreview --output-partial-info-plist "$icon_info" > /dev/null
-    python3 - "$bundle/Info.plist" "$icon_info" <<'PY'
+icon_info="$target/nsh-preview/ios-icon-info.plist"
+xcrun actool apps/mobile/iosApp/Bex/Assets.xcassets --compile "$bundle" \
+    --platform iphonesimulator --minimum-deployment-target 26.0 --target-device iphone \
+    --target-device ipad --app-icon AppIconPreview --output-partial-info-plist "$icon_info" > /dev/null
+python3 - "$bundle/Info.plist" "$icon_info" <<'PY'
 import plistlib
 import sys
 with open(sys.argv[1], "rb") as source:
@@ -87,7 +67,6 @@ with open(sys.argv[2], "rb") as source:
 with open(sys.argv[1], "wb") as output:
     plistlib.dump(info, output)
 PY
-fi
 codesign --force --sign - "$bundle"
 codesign --verify --deep --strict "$bundle"
 printf '%s\n' "$bundle"

@@ -233,7 +233,7 @@ test('planning separates Preview and stable identities and preserves an approved
     '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'Fixture release']).status, 0);
   const files = {
     'apps/mobile/iosApp/Bex.xcodeproj/project.pbxproj': 'CURRENT_PROJECT_VERSION = 76; MARKETING_VERSION = 1.0;',
-    'apps/desktop/macos/Info.plist': '<key>CFBundleVersion</key><string>76</string>',
+    'apps/nsh/macos/Info.plist': '<key>CFBundleVersion</key><string>76</string>',
     'target/apple-release/releases.json': JSON.stringify([{ tagName: 'nightly-81' }]),
   };
   for (const [name, contents] of Object.entries(files)) {

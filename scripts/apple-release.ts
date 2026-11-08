@@ -168,7 +168,7 @@ async function main(command: string | undefined) {
     const builds = await listAll<AppleBuild>(request, `/v1/builds?filter[app]=${app.id}&limit=200`);
     const source = readFileSync('apps/mobile/iosApp/Bex.xcodeproj/project.pbxproj', 'utf8');
     const versions = [...source.matchAll(/CURRENT_PROJECT_VERSION = (\d+);/g)].map(match => match[1]);
-    const mac = readFileSync('apps/desktop/macos/Info.plist', 'utf8');
+    const mac = readFileSync('apps/nsh/macos/Info.plist', 'utf8');
     const macVersion = /<key>CFBundleVersion<\/key>\s*<string>(\d+)<\/string>/.exec(mac)?.[1];
     const releases = JSON.parse(readFileSync('target/apple-release/releases.json', 'utf8')) as { tagName: string }[];
     const version = nextBuildNumber([...versions, macVersion], builds.map(build => build.attributes.version), releases.map(release => release.tagName));

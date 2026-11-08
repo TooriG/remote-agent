@@ -459,7 +459,7 @@ jobs:
             target/qa/Bex-*
           retention-days: 7
   nsh-apple:
-    name: NSH Apple previews
+    name: NSH Mac app and iPhone preview
     needs: changes
     if: (needs.changes.outputs.mac == 'true' || needs.changes.outputs.iphone == 'true') && !inputs.ios-tests
     concurrency:
@@ -481,14 +481,13 @@ jobs:
           key: nsh-apple-xcode-26.6-${{ hashFiles('flake.lock') }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      # Preview builds must not delay publication of the shared iPhone test app.
-      - name: Build and package the native NSH Mac app
-        run: |
-          nix develop .#native --command bash -euo pipefail <<'BUILD'
-          bash apps/nsh/build-native.sh macos
-          cargo build --locked -p agent-nsh --target aarch64-apple-darwin
-          bash apps/nsh/package.sh macos
-          BUILD
+      # These builds must not delay publication of the shared iPhone test app.
+      # CI has no Developer ID; the ad hoc bundle checks layout, signatures,
+      # bundled runtimes and the updater's build-number probe.
+      - name: Package and probe the Mac app
+        env:
+          AGENT_CODE_SIGN_IDENTITY: '-'
+        run: nix develop .#native --command just build-desktop-macos dev
       - name: Build and package the native NSH iPhone app
         run: nix develop .#ios-build --command just nsh-ios-simulator
   iphone-tests:
