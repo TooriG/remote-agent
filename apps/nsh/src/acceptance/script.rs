@@ -303,8 +303,12 @@ fn words(line: &str) -> Result<Vec<String>, String> {
 }
 
 fn step(words: &[String]) -> Result<Step, String> {
+    let name = words[0].as_str();
     let arguments: Vec<&str> = words[1..].iter().map(String::as_str).collect();
-    Ok(match (words[0].as_str(), arguments.as_slice()) {
+    if name == "expect" || name.starts_with("expect_") {
+        return expectation(name, &arguments);
+    }
+    Ok(match (name, arguments.as_slice()) {
         ("fixture", [path]) if path.starts_with('/') => Step::Fixture((*path).to_owned()),
         ("first-launch", []) => Step::FirstLaunch,
         ("host", ["without-codex"]) => Step::WithoutCodex,
@@ -326,34 +330,7 @@ fn step(words: &[String]) -> Result<Step, String> {
             Step::Compose(find(target, rest)?, Composition::Commit((*text).to_owned()))
         }
         ("unmark", [target, rest @ ..]) => Step::Compose(find(target, rest)?, Composition::Unmark),
-        ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
-        ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
-        ("expect_menu_bar", [text, rest @ ..]) => Step::ExpectMenuBar(find(text, rest)?),
-        ("expect_scrolled", [label, from, to, rest @ ..]) => {
-            Step::ExpectScrolled(find(label, rest)?, fraction(from)?, fraction(to)?)
-        }
-        ("expect_apart", [text, other, rest @ ..]) => {
-            Step::ExpectApart(find(text, rest)?, (*other).to_owned())
-        }
-        ("expect_inside", [text, rest @ ..]) => Step::ExpectInside(find(text, rest)?),
         ("window", [width, height]) => Step::Window(points(width)?, points(height)?),
-        ("expect_count", [text, count, rest @ ..]) => Step::ExpectCount(
-            find(text, rest)?,
-            count
-                .parse()
-                .map_err(|_| format!("{count:?} is not a count"))?,
-        ),
-        ("expect_enabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, true),
-        ("expect_disabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, false),
-        ("expect_height", [target, side @ ("above" | "below"), points, rest @ ..]) => {
-            Step::ExpectHeight(
-                find(target, rest)?,
-                points
-                    .parse()
-                    .map_err(|_| format!("{points:?} is not a number of points"))?,
-                *side == "above",
-            )
-        }
         ("scroll", [target, lines, rest @ ..]) => wheel(target, lines, rest)?,
         ("select", [target, text, rest @ ..]) => {
             Step::Select(find(target, rest)?, (*text).to_owned())
@@ -364,11 +341,6 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("drag", [from, to, rest @ ..]) => Step::Drag(find(from, rest)?, find(to, &[])?),
         ("drop", []) => Step::Drop,
         ("choose", [path]) if absolute(path) => Step::Choose((*path).to_owned()),
-        ("expect_file", [path, rest @ ..]) if absolute(path) => written(path, rest)?,
-        ("expect_clipboard", [text]) => Step::ExpectClipboard((*text).to_owned(), DEFAULT_TIMEOUT),
-        ("expect_clipboard", [text, timeout]) => {
-            Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
-        }
         ("copy", [text]) => Step::Copy {
             text: (*text).to_owned(),
             image: false,
@@ -390,6 +362,45 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
         ("capture", [name]) => Step::Capture(artifact(name)?),
+        (name, _) => return Err(format!("unknown step or wrong arguments: {name}")),
+    })
+}
+
+/// A step that waits until something is so.
+fn expectation(name: &str, arguments: &[&str]) -> Result<Step, String> {
+    Ok(match (name, arguments) {
+        ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
+        ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
+        ("expect_menu_bar", [text, rest @ ..]) => Step::ExpectMenuBar(find(text, rest)?),
+        ("expect_scrolled", [label, from, to, rest @ ..]) => {
+            Step::ExpectScrolled(find(label, rest)?, fraction(from)?, fraction(to)?)
+        }
+        ("expect_apart", [text, other, rest @ ..]) => {
+            Step::ExpectApart(find(text, rest)?, (*other).to_owned())
+        }
+        ("expect_inside", [text, rest @ ..]) => Step::ExpectInside(find(text, rest)?),
+        ("expect_count", [text, count, rest @ ..]) => Step::ExpectCount(
+            find(text, rest)?,
+            count
+                .parse()
+                .map_err(|_| format!("{count:?} is not a count"))?,
+        ),
+        ("expect_enabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, true),
+        ("expect_disabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, false),
+        ("expect_height", [target, side @ ("above" | "below"), points, rest @ ..]) => {
+            Step::ExpectHeight(
+                find(target, rest)?,
+                points
+                    .parse()
+                    .map_err(|_| format!("{points:?} is not a number of points"))?,
+                *side == "above",
+            )
+        }
+        ("expect_file", [path, rest @ ..]) if absolute(path) => written(path, rest)?,
+        ("expect_clipboard", [text]) => Step::ExpectClipboard((*text).to_owned(), DEFAULT_TIMEOUT),
+        ("expect_clipboard", [text, timeout]) => {
+            Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
+        }
         (name, _) => return Err(format!("unknown step or wrong arguments: {name}")),
     })
 }
