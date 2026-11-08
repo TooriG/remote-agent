@@ -1,4 +1,4 @@
-//! The list owns its native project editor; Core owns project decisions and persistence.
+//! The list owns its project editor; Core owns project decisions and persistence.
 use crate::application::{Application, ListScope, ListSource};
 use crate::l10n::{localized, tr};
 use crate::{native, shared::Shared};
@@ -216,7 +216,49 @@ impl Projects {
         });
     }
 
-    pub fn view(self) -> impl IntoElement {
+    /// Saves the open editor's labels once Core accepts them; a rejection stays
+    /// in the editor beside its fields.
+    fn save(self, editor: Editor, name: &str, section: &str) {
+        if !self.same_scope(&editor.scope) {
+            self.editor.set(None);
+            native::message(
+                tr("プロジェクトを編集"),
+                tr("接続先が変わりました。プロジェクトを開き直してください"),
+            );
+            return;
+        }
+        if let Err(reason) = agent_core::state::projects::validate_project_labels(name, section) {
+            self.editor.update(|editor| {
+                if let Some(editor) = editor {
+                    editor.error = Some(localized(reason.into()));
+                }
+            });
+            return;
+        }
+        self.application.with(|application| {
+            application.list_action(
+                &editor.scope,
+                Intent::EditProject {
+                    project_id: editor.project,
+                    name: name.into(),
+                    section: section.into(),
+                },
+                false,
+            )
+        });
+        self.editor.set(None);
+    }
+
+    /// The project editor: an NSH dialog on the desktop, the platform's sheet on
+    /// phones.
+    pub fn view(self) -> AnyElement {
+        if is_desktop() {
+            return when(
+                move || self.editor.with(Option::is_some),
+                move || self.dialog(),
+            )
+            .into_element();
+        }
         native("bex.details")
             .prop("data", move || {
                 self.editor.with(|editor| editor_data(editor.as_ref()))
@@ -229,51 +271,132 @@ impl Projects {
                 else {
                     return;
                 };
-                if event.data["action"] == "cancel" {
-                    self.editor.set(None);
-                    return;
+                match (
+                    event.data["action"].as_str(),
+                    event.data["name"].as_str(),
+                    event.data["section"].as_str(),
+                ) {
+                    (Some("cancel"), ..) => self.editor.set(None),
+                    (Some("save"), Some(name), Some(section)) => self.save(editor, name, section),
+                    _ => {}
                 }
-                if event.data["action"] != "save" {
-                    return;
-                }
-                if !self.same_scope(&editor.scope) {
-                    self.editor.set(None);
-                    native::message(
-                        tr("プロジェクトを編集"),
-                        tr("接続先が変わりました。プロジェクトを開き直してください"),
-                    );
-                    return;
-                }
-                let (Some(name), Some(section)) =
-                    (event.data["name"].as_str(), event.data["section"].as_str())
-                else {
-                    return;
-                };
-                if let Err(reason) =
-                    agent_core::state::projects::validate_project_labels(name, section)
-                {
-                    self.editor.update(|editor| {
-                        if let Some(editor) = editor {
-                            editor.error = Some(localized(reason.into()));
-                        }
-                    });
-                    return;
-                }
-                self.application.with(|application| {
-                    application.list_action(
-                        &editor.scope,
-                        Intent::EditProject {
-                            project_id: editor.project,
-                            name: name.into(),
-                            section: section.into(),
-                        },
-                        false,
-                    )
-                });
-                self.editor.set(None);
             })
             .w(px(0.0))
             .h(px(0.0))
+            .into_element()
+    }
+
+    /// T3 Code's dialog over the window: the title and what editing keeps, the
+    /// display name and section, then cancelling or saving.
+    fn dialog(self) -> impl IntoElement {
+        use crate::ui::{self, colors};
+        use agent_core::presentation::conversation::ActionTone;
+        use nsh_core::element::{overlay, rgba};
+        let Some(editor) = self.editor.get_untracked() else {
+            return view().into_element();
+        };
+        let name = signal(editor.name.clone());
+        let section = signal(editor.section.clone());
+        let save = move || {
+            if let Some(editor) = self.editor.get_untracked() {
+                self.save(editor, &name.get_untracked(), &section.get_untracked());
+            }
+        };
+        let cancel = move || self.editor.set(None);
+        let error = move || self.editor.with(|editor| editor.as_ref()?.error.clone());
+        let label = |title: &'static str| {
+            text(title)
+                .text_size(px(13.0))
+                .font_weight(FontWeight::MEDIUM)
+        };
+        overlay()
+            .absolute()
+            .top(px(0.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .bottom(px(0.0))
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000052))
+            .backdrop_blur(px(4.0))
+            .on_press(cancel)
+            .child(
+                view()
+                    .w(px(448.0))
+                    .rounded(px(16.0))
+                    .border_1()
+                    .border_color(colors::BORDER)
+                    .bg(colors::BACKGROUND)
+                    .text_color(colors::FOREGROUND)
+                    .overflow_hidden()
+                    .on_press(|| {})
+                    .child(
+                        view()
+                            .px_6()
+                            .pt_6()
+                            .gap_1()
+                            .child(
+                                text(tr("プロジェクトを編集"))
+                                    .text_size(px(18.0))
+                                    .font_weight(FontWeight::SEMIBOLD),
+                            )
+                            .child(
+                                text(tr("表示名とセクションはこの端末・接続先ごとに保存されます。フォルダや会話履歴は残ります。"))
+                                    .text_size(px(13.0))
+                                    .text_color(colors::MUTED),
+                            ),
+                    )
+                    .child(
+                        view()
+                            .px_6()
+                            .py_5()
+                            .gap_4()
+                            .child(
+                                view().gap_2().child(label(tr("表示名"))).child(
+                                    ui::field()
+                                        .auto_focus(true)
+                                        .value(move || name.get())
+                                        .on_change(move |text: &str| name.set(text.into()))
+                                        .on_submit(move |_: &str| save()),
+                                ),
+                            )
+                            .child(
+                                view().gap_2().child(label(tr("セクション"))).child(
+                                    ui::field()
+                                        .value(move || section.get())
+                                        .placeholder(tr("空欄で未分類"))
+                                        .on_change(move |text: &str| section.set(text.into()))
+                                        .on_submit(move |_: &str| save()),
+                                ),
+                            )
+                            .child(when(
+                                move || error().is_some(),
+                                move || {
+                                    text(move || error().unwrap_or_default())
+                                        .text_size(px(13.0))
+                                        .text_color(rgb(0xff8e86))
+                                },
+                            )),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .justify_end()
+                            .gap_2()
+                            .px_6()
+                            .py_4()
+                            .border_t_1()
+                            .border_t_color(colors::BORDER)
+                            .bg(colors::SURFACE)
+                            .child(ui::action_button(
+                                tr("キャンセル"),
+                                ActionTone::Secondary,
+                                cancel,
+                            ))
+                            .child(ui::action_button(tr("保存"), ActionTone::Primary, save)),
+                    ),
+            )
+            .into_element()
     }
 }
 

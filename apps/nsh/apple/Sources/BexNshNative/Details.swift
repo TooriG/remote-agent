@@ -24,7 +24,6 @@ struct DiffFile: Decodable {
 enum DetailsContent: Decodable {
     case separator
     case loading
-    case sideChatLoading
     case diff(files: [DiffFile])
     case error(message: String)
     case welcome(directory: String)
@@ -58,8 +57,6 @@ private struct DetailsView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loading:
                 ProgressView().accessibilityIdentifier("files.diff.loading")
-            case .sideChatLoading:
-                ProgressView("サイドチャットを準備中…").accessibilityIdentifier("sideChat.loading")
             case let .diff(files):
                 if files.isEmpty {
                     ContentUnavailableView("変更はありません", systemImage: "checkmark.circle")

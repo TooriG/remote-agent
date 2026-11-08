@@ -1,4 +1,5 @@
-//! Native controls send displayed-page-scoped operations to the Host's browser.
+//! The browser's controls send displayed-page-scoped operations to the Host's browser;
+//! the page itself stays the platform's web view or the Host's rendered image.
 use crate::l10n::{localized, tr};
 use crate::{Connection, native, shared::Shared, workbench::Workbench};
 use agent_core::state::DraftKey;
@@ -143,18 +144,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                         }
                         if !address_editing.get_untracked() {
                             address.set(
-                                result
-                                    .tabs
-                                    .iter()
-                                    .find(|t| t.id == result.tab_id)
-                                    .map(|t| {
-                                        if t.url == "about:blank" {
-                                            String::new()
-                                        } else {
-                                            t.url.clone()
-                                        }
-                                    })
-                                    .unwrap_or_default(),
+                                agent_core::browser_view::displayed_address(&result).to_owned(),
                             );
                         }
                         frame.set(Shared(Arc::new(result)));
@@ -226,46 +216,32 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
             send(action);
         }
     };
+    let page = Page {
+        frame,
+        address,
+        address_editing,
+        accepts_input,
+        native_page,
+    };
+    let controls = Controls {
+        send,
+        open,
+        toggle_keyboard: move || set_keyboard(!keyboard.get_untracked()),
+        choose: move |key: &str| {
+            let viewport = viewport.get_untracked();
+            if let Some(action) = frame.with_untracked(|f| menu_action(key, f, viewport)) {
+                send(action);
+            }
+        },
+    };
     view()
         .flex_1()
         .min_h_0()
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .p_2()
-                .child(
-                    input()
-                        .test_id("browser.address")
-                        .auto_correct(false)
-                        .auto_capitalize(AutoCapitalize::None)
-                        .keyboard_type(KeyboardType::Url)
-                        .value(move || address.get())
-                        .placeholder(tr("検索または URL を入力"))
-                        .readonly(move || !accepts_input.get())
-                        .on_focus(move || address_editing.set(true))
-                        .on_blur(move || address_editing.set(false))
-                        .on_change(move |value: &str| address.set(value.to_owned()))
-                        .on_submit(move |_: &str| open())
-                        .flex_1(),
-                )
-                .child(
-                    native::button("arrow.right", tr("開く"), open)
-                        .prop("identifier", json!("browser.open"))
-                        .prop("enabled", move || json!(accepts_input.get()))
-                        .w(px(44.))
-                        .h(px(44.)),
-                )
-                .child(
-                    native::button("arrow.clockwise", tr("再読み込み"), move || {
-                        send(BrowserAction::Reload);
-                    })
-                    .prop("enabled", move || json!(accepts_input.get()))
-                    .w(px(44.))
-                    .h(px(44.)),
-                ),
-        )
+        .child(when(is_desktop, move || header(page, controls)))
+        .child(when(
+            move || !is_desktop(),
+            move || address_row(page, controls),
+        ))
         .child(when(
             move || message.get().is_some(),
             move || {
@@ -321,158 +297,349 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
         .child(when(
             move || keyboard.get() && !native_page.get(),
             move || {
-                view()
-                    .gap_2()
-                    .p_2()
-                    .child(
-                        view()
-                            .flex_row()
-                            .gap_2()
-                            .child(
-                                input()
-                                    .test_id("browser.text")
-                                    .auto_focus(true)
-                                    .auto_correct(false)
-                                    .auto_capitalize(AutoCapitalize::None)
-                                    .value(move || input_text.get())
-                                    .masked(move || {
-                                        frame.with(|f| f.input_kind != Some(BrowserInputKind::Text))
-                                    })
-                                    .placeholder(tr("選択した欄に入力"))
-                                    .readonly(move || !accepts_input.get())
-                                    .on_change(move |text: &str| input_text.set(text.to_owned()))
-                                    .on_composition_change(move |event: &Composition| {
-                                        composing.set(event.composing)
-                                    })
-                                    .on_submit(move |_: &str| insert())
-                                    .flex_1(),
-                            )
-                            .child(native::text_button(json!(tr("入力")), insert).prop(
-                                "enabled",
-                                move || {
-                                    json!(
-                                        accepts_input.get()
-                                            && !composing.get()
-                                            && !input_text.get().is_empty()
-                                    )
-                                },
-                            )),
-                    )
-                    .child(
-                        view()
-                            .flex_row()
-                            .gap_2()
-                            .child(
-                                native::button(
-                                    "keyboard.chevron.compact.down",
-                                    tr("入力を閉じる"),
-                                    move || set_keyboard(false),
-                                )
-                                .w(px(44.))
-                                .h(px(44.)),
-                            )
-                            .child(native::text_button(json!("Tab"), move || {
-                                send(BrowserAction::Key {
-                                    key: BrowserKey::Tab,
-                                });
-                            }))
-                            .child(native::text_button(json!(tr("全選択")), move || {
-                                send(BrowserAction::Key {
-                                    key: BrowserKey::SelectAll,
-                                });
-                            }))
-                            .child(native::text_button(json!("⌫"), move || {
-                                send(BrowserAction::Key {
-                                    key: BrowserKey::Backspace,
-                                });
-                            }))
-                            .child(native::text_button(json!("Enter"), move || {
-                                send(BrowserAction::Key {
-                                    key: BrowserKey::Enter,
-                                });
-                            })),
-                    )
+                let typing = Typing {
+                    frame,
+                    text: input_text,
+                    composing,
+                    accepts_input,
+                };
+                keyboard_row(typing, send, insert, move || set_keyboard(false))
             },
         ))
+        .child(when(move || !is_desktop(), move || toolbar(page, controls)))
+}
+
+/// What the browser's controls read.
+#[derive(Clone, Copy)]
+struct Page {
+    frame: Signal<Shared<BrowserFrame>>,
+    address: Signal<String>,
+    address_editing: Signal<bool>,
+    accepts_input: Memo<bool>,
+    native_page: Memo<bool>,
+}
+
+/// What the browser's controls do.
+#[derive(Clone, Copy)]
+struct Controls<Send, Open, Toggle, Choose> {
+    send: Send,
+    open: Open,
+    toggle_keyboard: Toggle,
+    choose: Choose,
+}
+
+/// The text the browser types into the page's selected field.
+#[derive(Clone, Copy)]
+struct Typing {
+    frame: Signal<Shared<BrowserFrame>>,
+    text: Signal<String>,
+    composing: Signal<bool>,
+    accepts_input: Memo<bool>,
+}
+
+/// The menu's choice as a browser operation.
+fn menu_action(key: &str, frame: &BrowserFrame, viewport: (f64, f64)) -> Option<BrowserAction> {
+    match key {
+        "credentials" => Some(BrowserAction::Credentials),
+        "new" => Some(BrowserAction::OpenTab {
+            url: "about:blank".into(),
+        }),
+        "close" => Some(BrowserAction::CloseTab {
+            id: frame.tab_id.clone(),
+        }),
+        "fit" => {
+            agent_core::browser_view::fit_action(viewport.0, viewport.1, frame.width, frame.height)
+        }
+        "desktop" => Some(BrowserAction::Resize {
+            width: 1280,
+            height: 800,
+        }),
+        "phone" => Some(BrowserAction::Resize {
+            width: 390,
+            height: 844,
+        }),
+        key => key
+            .strip_prefix("tab:")
+            .map(|id| BrowserAction::SelectTab { id: id.into() }),
+    }
+}
+
+fn address_field(page: Page, open: impl Fn() + 'static) -> nsh_core::element::Input {
+    let Page {
+        address,
+        address_editing,
+        accepts_input,
+        ..
+    } = page;
+    input()
+        .test_id("browser.address")
+        .auto_correct(false)
+        .auto_capitalize(AutoCapitalize::None)
+        .keyboard_type(KeyboardType::Url)
+        .value(move || address.get())
+        .placeholder(tr("検索または URL を入力"))
+        .readonly(move || !accepts_input.get())
+        .on_focus(move || address_editing.set(true))
+        .on_blur(move || address_editing.set(false))
+        .on_change(move |value: &str| address.set(value.to_owned()))
+        .on_submit(move |_: &str| open())
+}
+
+/// T3 Code's preview chrome: navigation, the address with its page opened
+/// in the default browser, then typing into the page and its menu.
+fn header(
+    page: Page,
+    controls: Controls<
+        impl Fn(BrowserAction) -> bool + Copy + 'static,
+        impl Fn() + Copy + 'static,
+        impl Fn() + Copy + 'static,
+        impl Fn(&str) + Copy + 'static,
+    >,
+) -> impl IntoElement {
+    use crate::ui::{self, Enabled, Icon, colors};
+    let Page {
+        frame,
+        accepts_input,
+        native_page,
+        ..
+    } = page;
+    let send = controls.send;
+    let external =
+        computed(move || frame.with(|f| agent_core::browser_view::displayed_address(f).to_owned()));
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .h(px(40.0))
+        .flex_shrink_0()
+        .px_2()
+        .border_b_1()
+        .border_b_color(colors::BORDER)
+        .child(
+            ui::icon_button(Icon::ARROW_LEFT, tr("前のページ"), move || {
+                send(BrowserAction::Back);
+            })
+            .enabled(move || accepts_input.get() && frame.with(|f| f.can_go_back)),
+        )
+        .child(
+            ui::icon_button(Icon::ARROW_RIGHT, tr("次のページ"), move || {
+                send(BrowserAction::Forward);
+            })
+            .enabled(move || accepts_input.get() && frame.with(|f| f.can_go_forward)),
+        )
+        .child(
+            ui::icon_button(Icon::REFRESH, tr("再読み込み"), move || {
+                send(BrowserAction::Reload);
+            })
+            .enabled(move || accepts_input.get()),
+        )
+        .child(
+            view()
+                .flex_1()
+                .min_w_0()
+                .flex_row()
+                .items_center()
+                .h(px(28.0))
+                .pl_2()
+                .pr_1()
+                .rounded(px(ui::RADIUS))
+                .bg(colors::SURFACE)
+                .child(
+                    address_field(page, controls.open)
+                        .label(tr("ブラウザの URL"))
+                        .text_size(px(13.0))
+                        .text_color(colors::FOREGROUND)
+                        .placeholder_color(colors::MUTED)
+                        .flex_1()
+                        .min_w_0(),
+                )
+                .child(when(
+                    move || external.with(|address| !address.is_empty()),
+                    move || {
+                        ui::small_icon_button(
+                            Icon::EXTERNAL_LINK,
+                            tr("既定のブラウザで開く"),
+                            move || native::open_link(external.get_untracked()),
+                        )
+                    },
+                )),
+        )
+        .child(when(
+            move || !native_page.get(),
+            move || {
+                ui::icon_button(Icon::KEYBOARD, tr("文字入力"), controls.toggle_keyboard)
+                    .enabled(move || accepts_input.get())
+            },
+        ))
+        .child(
+            ui::icon_button(
+                Icon::ELLIPSIS,
+                tr("ブラウザのメニュー"),
+                move || ui::popup(&frame.with_untracked(|f| menu(f)), controls.choose),
+            )
+            .enabled(move || accepts_input.get()),
+        )
+}
+
+/// The phone's address row: the field, opening it and reloading.
+fn address_row(
+    page: Page,
+    controls: Controls<
+        impl Fn(BrowserAction) -> bool + Copy + 'static,
+        impl Fn() + Copy + 'static,
+        impl Fn() + Copy + 'static,
+        impl Fn(&str) + Copy + 'static,
+    >,
+) -> impl IntoElement {
+    let accepts_input = page.accepts_input;
+    let send = controls.send;
+    view()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .p_2()
+        .child(address_field(page, controls.open).flex_1())
+        .child(
+            native::button("arrow.right", tr("開く"), controls.open)
+                .prop("identifier", json!("browser.open"))
+                .prop("enabled", move || json!(accepts_input.get()))
+                .w(px(44.))
+                .h(px(44.)),
+        )
+        .child(
+            native::button("arrow.clockwise", tr("再読み込み"), move || {
+                send(BrowserAction::Reload);
+            })
+            .prop("enabled", move || json!(accepts_input.get()))
+            .w(px(44.))
+            .h(px(44.)),
+        )
+}
+
+/// The phone's toolbar under the page.
+fn toolbar(
+    page: Page,
+    controls: Controls<
+        impl Fn(BrowserAction) -> bool + Copy + 'static,
+        impl Fn() + Copy + 'static,
+        impl Fn() + Copy + 'static,
+        impl Fn(&str) + Copy + 'static,
+    >,
+) -> impl IntoElement {
+    let Page {
+        frame,
+        accepts_input,
+        native_page,
+        ..
+    } = page;
+    let send = controls.send;
+    view()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .p_2()
+        .child(
+            native::button("chevron.left", tr("前のページ"), move || {
+                send(BrowserAction::Back);
+            })
+            .prop("enabled", move || {
+                json!(accepts_input.get() && frame.with(|f| f.can_go_back))
+            })
+            .w(px(44.))
+            .h(px(44.)),
+        )
+        .child(
+            native::button("chevron.right", tr("次のページ"), move || {
+                send(BrowserAction::Forward);
+            })
+            .prop("enabled", move || {
+                json!(accepts_input.get() && frame.with(|f| f.can_go_forward))
+            })
+            .w(px(44.))
+            .h(px(44.)),
+        )
+        .child(
+            native::button("keyboard", tr("文字入力"), controls.toggle_keyboard)
+                .prop("enabled", move || {
+                    json!(accepts_input.get() && !native_page.get())
+                })
+                .w(px(44.))
+                .h(px(44.)),
+        )
+        .child(
+            native::menu(
+                "ellipsis.circle",
+                tr("ブラウザのメニュー"),
+                move || frame.with(|frame| menu(frame)),
+                controls.choose,
+            )
+            .prop("enabled", move || json!(accepts_input.get()))
+            .w(px(44.))
+            .h(px(44.)),
+        )
+}
+
+/// Typing into the page's selected field, with the keys a field needs.
+fn keyboard_row(
+    typing: Typing,
+    send: impl Fn(BrowserAction) -> bool + Copy + 'static,
+    insert: impl Fn() + Copy + 'static,
+    close: impl Fn() + 'static,
+) -> impl IntoElement {
+    use crate::ui::{self, Enabled, Icon};
+    let Typing {
+        frame,
+        text: input_text,
+        composing,
+        accepts_input,
+    } = typing;
+    let key = move |label: &'static str, key: BrowserKey| {
+        ui::text_button(label, move || {
+            send(BrowserAction::Key { key });
+        })
+        .enabled(move || accepts_input.get())
+    };
+    view()
+        .gap_2()
+        .p_2()
         .child(
             view()
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .p_2()
                 .child(
-                    native::button("chevron.left", tr("前のページ"), move || {
-                        send(BrowserAction::Back);
-                    })
-                    .prop("enabled", move || {
-                        json!(accepts_input.get() && frame.with(|f| f.can_go_back))
-                    })
-                    .w(px(44.))
-                    .h(px(44.)),
+                    input()
+                        .test_id("browser.text")
+                        .auto_focus(true)
+                        .auto_correct(false)
+                        .auto_capitalize(AutoCapitalize::None)
+                        .value(move || input_text.get())
+                        .masked(move || {
+                            frame.with(|f| f.input_kind != Some(BrowserInputKind::Text))
+                        })
+                        .placeholder(tr("選択した欄に入力"))
+                        .readonly(move || !accepts_input.get())
+                        .on_change(move |text: &str| input_text.set(text.to_owned()))
+                        .on_composition_change(move |event: &Composition| {
+                            composing.set(event.composing)
+                        })
+                        .on_submit(move |_: &str| insert())
+                        .flex_1(),
                 )
-                .child(
-                    native::button("chevron.right", tr("次のページ"), move || {
-                        send(BrowserAction::Forward);
-                    })
-                    .prop("enabled", move || {
-                        json!(accepts_input.get() && frame.with(|f| f.can_go_forward))
-                    })
-                    .w(px(44.))
-                    .h(px(44.)),
-                )
-                .child(
-                    native::button("keyboard", tr("文字入力"), move || {
-                        set_keyboard(!keyboard.get_untracked())
-                    })
-                    .prop("enabled", move || {
-                        json!(accepts_input.get() && !native_page.get())
-                    })
-                    .w(px(44.))
-                    .h(px(44.)),
-                )
-                .child(
-                    native::menu(
-                        "ellipsis.circle",
-                        tr("ブラウザのメニュー"),
-                        move || frame.with(|frame| menu(frame)),
-                        move |key| {
-                            let action = match key {
-                                "credentials" => Some(BrowserAction::Credentials),
-                                "new" => Some(BrowserAction::OpenTab {
-                                    url: "about:blank".into(),
-                                }),
-                                "close" => Some(BrowserAction::CloseTab {
-                                    id: frame.with_untracked(|f| f.tab_id.clone()),
-                                }),
-                                "fit" => {
-                                    let (w, h) = viewport.get_untracked();
-                                    frame.with_untracked(|f| {
-                                        agent_core::browser_view::fit_action(
-                                            w, h, f.width, f.height,
-                                        )
-                                    })
-                                }
-                                "desktop" => Some(BrowserAction::Resize {
-                                    width: 1280,
-                                    height: 800,
-                                }),
-                                "phone" => Some(BrowserAction::Resize {
-                                    width: 390,
-                                    height: 844,
-                                }),
-                                key => key
-                                    .strip_prefix("tab:")
-                                    .map(|id| BrowserAction::SelectTab { id: id.into() }),
-                            };
-                            if let Some(action) = action {
-                                send(action);
-                            }
-                        },
-                    )
-                    .prop("enabled", move || json!(accepts_input.get()))
-                    .w(px(44.))
-                    .h(px(44.)),
-                ),
+                .child(ui::text_button(tr("入力"), insert).enabled(move || {
+                    accepts_input.get() && !composing.get() && !input_text.get().is_empty()
+                })),
+        )
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(ui::icon_button(Icon::CLOSE, tr("入力を閉じる"), close))
+                .child(key("Tab", BrowserKey::Tab))
+                .child(key(tr("全選択"), BrowserKey::SelectAll))
+                .child(key("⌫", BrowserKey::Backspace))
+                .child(key("Enter", BrowserKey::Enter)),
         )
 }
 
@@ -480,7 +647,7 @@ fn menu(frame: &BrowserFrame) -> serde_json::Value {
     let mut items = vec![
         json!({"id":"credentials", "title":tr("ログイン状態・保存パスワード"), "symbol":"key"}),
     ];
-    items.extend(frame.tabs.iter().map(|tab| json!({"id": format!("tab:{}", tab.id), "title": if tab.url == "about:blank" { tr("新しいタブ") } else if tab.title.is_empty() { &tab.url } else { &tab.title }, "symbol":"globe", "selected": frame.tab_id == tab.id})));
+    items.extend(frame.tabs.iter().map(|tab| json!({"id": format!("tab:{}", tab.id), "title": agent_core::browser_view::tab_label(tab).unwrap_or(tr("新しいタブ")), "symbol":"globe", "selected": frame.tab_id == tab.id})));
     items.extend([
         json!({"id":"new", "title":tr("新しいタブ"), "symbol":"plus"}),
         json!({"id":"close", "title":tr("タブを閉じる"), "symbol":"xmark", "enabled": !frame.tab_id.is_empty()}),

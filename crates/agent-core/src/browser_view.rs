@@ -64,9 +64,77 @@ pub fn input_focus(
     }
 }
 
+/// The address bar's text: the shown tab's URL, empty for a blank page or no tab.
+pub fn displayed_address(frame: &agent_protocol::browser::BrowserFrame) -> &str {
+    frame
+        .tabs
+        .iter()
+        .find(|tab| tab.id == frame.tab_id)
+        .map_or("", |tab| {
+            if tab.url == "about:blank" {
+                ""
+            } else {
+                &tab.url
+            }
+        })
+}
+
+/// A tab's name: its title, else its URL. A blank page has none; the client
+/// names it as a new tab.
+pub fn tab_label(tab: &agent_protocol::browser::BrowserTab) -> Option<&str> {
+    if tab.url == "about:blank" {
+        None
+    } else if tab.title.is_empty() {
+        Some(&tab.url)
+    } else {
+        Some(&tab.title)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_protocol::browser::{BrowserFrame, BrowserTab};
+
+    fn tab(id: &str, title: &str, url: &str) -> BrowserTab {
+        BrowserTab {
+            id: id.into(),
+            title: title.into(),
+            url: url.into(),
+        }
+    }
+
+    #[test]
+    fn the_address_bar_shows_the_selected_page_and_leaves_blank_pages_empty() {
+        let mut frame = BrowserFrame {
+            tabs: vec![
+                tab("blank", "", "about:blank"),
+                tab("page", "例", "https://example.com/日本語"),
+            ],
+            tab_id: "page".into(),
+            ..BrowserFrame::default()
+        };
+        assert_eq!(displayed_address(&frame), "https://example.com/日本語");
+        frame.tab_id = "blank".into();
+        assert_eq!(displayed_address(&frame), "");
+        frame.tab_id = "closed".into();
+        assert_eq!(displayed_address(&frame), "");
+        frame.tab_id = String::new();
+        assert_eq!(displayed_address(&frame), "");
+    }
+
+    #[test]
+    fn tabs_are_named_by_title_then_url_and_blank_pages_by_the_client() {
+        assert_eq!(
+            tab_label(&tab("a", "Example 👋", "https://example.com/")),
+            Some("Example 👋")
+        );
+        assert_eq!(
+            tab_label(&tab("a", "", "https://example.com/")),
+            Some("https://example.com/")
+        );
+        assert_eq!(tab_label(&tab("a", "Blank", "about:blank")), None);
+    }
 
     #[test]
     fn only_explicit_editor_selection_changes_keyboard_focus() {

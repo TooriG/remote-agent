@@ -1,5 +1,6 @@
 //! The app's controls, drawn with NSH's views in the existing desktop client's look.
 //! Text input, scrolling, menus, alerts and web views stay the platform's.
+use agent_core::presentation::conversation::ActionTone;
 use nsh_core::{
     element::{ImageSrc, Rgba, desktop::MenuItem, rgb, rgba},
     prelude::*,
@@ -9,7 +10,6 @@ use serde_json::Value;
 pub(crate) mod colors {
     use super::{Rgba, rgb, rgba};
 
-    #[cfg(target_os = "macos")]
     pub(crate) const BACKGROUND: Rgba = rgb(0x080808);
     pub(crate) const SIDEBAR: Rgba = rgb(0x000000);
     pub(crate) const SURFACE: Rgba = rgb(0x0f0f0f);
@@ -53,9 +53,10 @@ macro_rules! icon {
 
 impl Icon {
     pub(crate) const ARROW_DOWN: Self = icon!(ArrowDown, "arrow.down");
+    pub(crate) const ARROW_LEFT: Self = icon!(ArrowLeft, "arrow.left");
+    pub(crate) const ARROW_RIGHT: Self = icon!(ArrowRight, "arrow.right");
     pub(crate) const ARROW_UP: Self = icon!(ArrowUp, "arrow.up");
     pub(crate) const FORK: Self = icon!(GitBranch, "arrow.triangle.branch");
-    #[cfg(target_os = "macos")]
     pub(crate) const CHECK: Self = icon!(Check, "checkmark");
     pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown, "chevron.down");
     pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight, "chevron.right");
@@ -72,14 +73,13 @@ impl Icon {
     pub(crate) const REPLACE: Self = icon!(Replace, "arrow.left.arrow.right");
     #[cfg(target_os = "macos")]
     pub(crate) const FOLDER_OPEN: Self = icon!(FolderOpen, "folder");
-    #[cfg(target_os = "macos")]
     pub(crate) const FILE_TEXT: Self = icon!(FileText, "doc");
-    #[cfg(target_os = "macos")]
     pub(crate) const EXTERNAL_LINK: Self = icon!(ExternalLink, "arrow.up.right.square");
     pub(crate) const FOLDER: Self = icon!(Folder, "folder");
     pub(crate) const GLOBE: Self = icon!(Globe, "globe");
     pub(crate) const NETWORK: Self = icon!(Network, "network");
     pub(crate) const LAYOUT: Self = icon!(PanelsRightBottom, "rectangle.split.2x1");
+    pub(crate) const KEYBOARD: Self = icon!(Keyboard, "keyboard");
     pub(crate) const FOLDER_PLUS: Self = icon!(FolderPlus, "folder.badge.plus");
     pub(crate) const LOADER: Self = icon!(Loader, "progress.indicator");
     pub(crate) const MERGE: Self = icon!(GitMerge, "arrow.triangle.merge");
@@ -95,7 +95,10 @@ impl Icon {
     pub(crate) const PANEL_LEFT_OPEN: Self = icon!(PanelLeftOpen, "sidebar.left");
     pub(crate) const PANEL_RIGHT: Self = icon!(PanelRight, "sidebar.right");
     pub(crate) const PLUS: Self = icon!(Plus, "plus");
-    #[cfg(target_os = "macos")]
+    pub(crate) const PUZZLE: Self = icon!(Puzzle, "puzzlepiece.extension");
+    pub(crate) const SHIELD: Self = icon!(Shield, "shield");
+    pub(crate) const SPARKLES: Self = icon!(Sparkles, "sparkles");
+    pub(crate) const QUESTION: Self = icon!(MessageCircleQuestionMark, "questionmark.bubble");
     pub(crate) const REFRESH: Self = icon!(RotateCw, "arrow.clockwise");
     #[cfg(target_os = "macos")]
     pub(crate) const SETTINGS: Self = icon!(Settings, "gearshape");
@@ -151,6 +154,63 @@ pub(crate) fn card(rows: Vec<View>) -> View {
             })
         },
     )
+}
+
+/// A text field in a bordered box, as T3 Code's inputs.
+pub(crate) fn field() -> nsh_core::element::Input {
+    nsh_core::element::input()
+        .auto_correct(false)
+        .auto_capitalize(AutoCapitalize::None)
+        .text_color(move || nsh_base::theme().foreground)
+        .placeholder_color(move || color(nsh_base::theme().muted_foreground))
+        .w_full()
+        .h(px(32.0))
+        .px_3()
+        .rounded(px(RADIUS))
+        .border_1()
+        .border_color(colors::BORDER)
+}
+
+/// A labeled action in T3 Code's button tones: the primary fill, an outline,
+/// or the destructive tint. NSH draws it on every platform.
+pub(crate) fn action_button(
+    title: impl IntoReactive<SharedString>,
+    tone: ActionTone,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
+    let (fill, foreground, hover, outline) = match tone {
+        ActionTone::Primary => (rgb(0xf5f5f5), rgb(0x0f0f0f), rgb(0xd4d4d4), rgb(0xf5f5f5)),
+        ActionTone::Secondary => (
+            rgba(0x00000000),
+            colors::FOREGROUND,
+            colors::GHOST_HOVER,
+            colors::BORDER,
+        ),
+        ActionTone::Danger => (rgb(0x301214), rgb(0xff6467), rgb(0x3d171a), rgb(0x301214)),
+    };
+    let title = title.into_reactive();
+    nsh_base::button()
+        .accessibility_label(nsh_core::element::Prop::from(title.clone().map(Some)))
+        .flex_shrink_0()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .h(px(28.0))
+        .px_3()
+        .rounded(px(RADIUS))
+        .border_1()
+        .border_color(outline)
+        .bg(fill)
+        .text_color(foreground)
+        .hover(move |s| s.bg(hover))
+        .disabled_style(|s| s.opacity(0.5))
+        .child(
+            text(title)
+                .text_size(px(13.0))
+                .font_weight(FontWeight::MEDIUM)
+                .number_of_lines(1),
+        )
+        .on_press(press)
 }
 
 /// A setting: its title and description, and its control at the end.

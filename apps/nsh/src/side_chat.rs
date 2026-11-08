@@ -1,8 +1,8 @@
 use crate::l10n::{localized, tr};
-use crate::{Connection, native, shared::Shared};
+use crate::ui::{self, colors};
+use crate::{Connection, shared::Shared};
 use agent_core::presentation::view::Presentation;
 use nsh_core::prelude::*;
-use serde_json::json;
 
 pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
     let parent = use_context::<Connection>().unwrap();
@@ -44,9 +44,15 @@ pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
         .child(when(
             move || pending.get(),
             move || {
-                native("bex.details")
-                    .prop("data", json!({"sideChatLoading": {}}))
+                view()
                     .flex_1()
+                    .flex_row()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .text_color(colors::MUTED)
+                    .child(ui::spinner())
+                    .child(text(tr("サイドチャットを準備中…")).text_size(px(13.0)))
             },
         ))
         .child(when(
@@ -66,10 +72,11 @@ pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
                         .text_color(move || nsh_base::theme().destructive),
                     )
                     .child(
-                        native::text_button(json!(tr("再試行")), move || {
-                            parent.application.with(|app| app.prepare_side_chat(id))
-                        })
-                        .prop("identifier", json!("sideChat.retry")),
+                        view()
+                            .flex_row()
+                            .child(ui::text_button(tr("再試行"), move || {
+                                parent.application.with(|app| app.prepare_side_chat(id))
+                            })),
                     )
             },
         ))

@@ -18544,6 +18544,22 @@
           }
         }
       }
+    },
+    "既定のブラウザで開く": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in default browser"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "既定のブラウザで開く"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

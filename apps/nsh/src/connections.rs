@@ -1,6 +1,6 @@
 use crate::l10n::{localized, tr, tr_format};
 use crate::{Connection, application::Host, native};
-use nsh_core::{element::input, prelude::*};
+use nsh_core::prelude::*;
 use serde_json::json;
 
 pub(crate) fn selector(
@@ -97,19 +97,8 @@ pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> imp
 
 /// The Hosts this device can work on, and pairing another PC.
 pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
-    use crate::ui::{self, Enabled, colors};
+    use crate::ui::{self, colors};
     let connection = use_context::<Connection>().unwrap();
-    let invitation = signal(String::new());
-    let confirmation = signal(None::<agent_protocol::models::Invitation>);
-    let error = signal(None::<String>);
-    let heading = |title: &'static str| {
-        text(title)
-            .text_size(px(16.0))
-            .font_weight(FontWeight::SEMIBOLD)
-    };
-    let confirmed = move |read: fn(&agent_protocol::models::Invitation) -> String| {
-        move || confirmation.with(|value| value.as_ref().map(read).unwrap_or_default())
-    };
     view()
         .gap_4()
         .text_color(move || nsh_base::theme().foreground)
@@ -130,36 +119,83 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                             host.name,
                             String::new,
                             ui::text_button(tr("接続"), move || {
-                                connection.application.with(|application| {
-                                    application.select_host(id.clone(), false)
-                                });
+                                connection
+                                    .application
+                                    .with(|application| application.select_host(id.clone(), false));
                             }),
                         )
-                        .style_when(move || index.get() > 0, |s| {
-                            s.border_t_1().border_t_color(colors::BORDER)
-                        })
+                        .style_when(
+                            move || index.get() > 0,
+                            |s| s.border_t_1().border_t_color(colors::BORDER),
+                        )
                     },
                 )),
         )
         .child(heading(tr("PCを追加")))
+        .child(pairing())
+}
+
+/// The desktop's first screen before any Host: T3 Code's hero over pairing a PC.
+#[cfg(target_os = "macos")]
+pub(crate) fn hero() -> impl IntoElement {
+    use crate::ui::colors;
+    scroll().flex_1().child(
+        view().w_full().items_center().px_8().py(px(96.0)).child(
+            view()
+                .w_full()
+                .max_w(px(512.0))
+                .gap_6()
+                .child(
+                    view()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            text(tr("どこで作業しますか？"))
+                                .text_size(px(24.0))
+                                .font_weight(FontWeight::SEMIBOLD),
+                        )
+                        .child(
+                            text(tr(
+                                "手元のPCでも、クラウドでも。いつもの環境でAIを使えます。",
+                            ))
+                            .text_size(px(14.0))
+                            .text_color(colors::MUTED),
+                        ),
+                )
+                .child(pairing()),
+        ),
+    )
+}
+
+fn heading(title: &'static str) -> impl IntoElement {
+    text(title)
+        .text_size(px(16.0))
+        .font_weight(FontWeight::SEMIBOLD)
+}
+
+/// Pairing a PC from the connection information its Bex issued: the
+/// information, then what this device will send it, then the agreement.
+fn pairing() -> impl IntoElement {
+    use crate::ui::{self, Enabled, colors};
+    let connection = use_context::<Connection>().unwrap();
+    let invitation = signal(String::new());
+    let confirmation = signal(None::<agent_protocol::models::Invitation>);
+    let error = signal(None::<String>);
+    let confirmed = move |read: fn(&agent_protocol::models::Invitation) -> String| {
+        move || confirmation.with(|value| value.as_ref().map(read).unwrap_or_default())
+    };
+    view()
+        .gap_4()
         .child(when(move || confirmation.get().is_none(), move || {
             ui::card(vec![view()
                 .px_5()
                 .py_4()
                 .gap_3()
                 .child(text(tr("PCのBexで発行した接続情報を貼り付けてください。")).text_size(px(13.0)).text_color(colors::MUTED))
-                .child(input().masked(true)
-                    .auto_correct(false).auto_capitalize(AutoCapitalize::None)
+                .child(ui::field().masked(true)
                     .value(move || invitation.get())
                     .on_change(move |text: &str| invitation.set(text.into()))
-                    .placeholder(tr("接続情報"))
-                    .text_color(move || nsh_base::theme().foreground)
-                    .w_full()
-                    .h(px(36.0))
-                    .px_3()
-                    .rounded(px(ui::RADIUS))
-                    .border_1()
-                    .border_color(colors::BORDER))
+                    .placeholder(tr("接続情報")))
                 .child(view().flex_row().justify_end().child(ui::text_button(tr("接続先を確認"), move || {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

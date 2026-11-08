@@ -1,12 +1,14 @@
+use crate::Connection;
 use crate::l10n::{localized, tr};
-use crate::{Connection, native};
+use crate::ui::{self, Icon, colors};
 use agent_core::{
     presentation::error::{ErrorNotice, ErrorScope},
     state::Intent,
 };
-use nsh_core::prelude::*;
-use serde_json::json;
+use nsh_core::{element::rgba, prelude::*};
 
+/// Errors as T3 Code's error banners: the title and its dismissal, the reason,
+/// and the recovery Core offers.
 pub(crate) fn notices(
     workspace: impl Fn() -> bool + 'static,
     settings: impl Fn() -> bool + 'static,
@@ -35,19 +37,48 @@ pub(crate) fn notices(
         |notice: &ErrorNotice| format!("{:?}", notice.id),
         move |notice, _| {
             view()
-                .p_2()
+                .m_2()
+                .px_4()
+                .py_3()
                 .gap_2()
-                .child(text(move || notice.with(|notice| localized(notice.title.clone()))))
+                .rounded(px(12.0))
+                .border_1()
+                .border_color(rgba(0xff8e8652))
+                .bg(rgba(0xff8e8614))
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            text(move || notice.with(|notice| localized(notice.title.clone())))
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .flex_1()
+                                .min_w_0(),
+                        )
+                        .child(ui::small_icon_button(
+                            Icon::CLOSE,
+                            tr("閉じる"),
+                            move || {
+                                connection.dispatch(Intent::DismissError {
+                                    id: notice.with_untracked(|notice| notice.id.clone()),
+                                });
+                            },
+                        )),
+                )
                 .child(
                     text(move || notice.with(|notice| localized(notice.text.to_string())))
-                        .selectable(true),
+                        .selectable(true)
+                        .text_size(px(13.0))
+                        .text_color(colors::MUTED),
                 )
                 .child(when(
                     move || notice.with(|notice| notice.recovery_label.is_some()),
                     move || {
-                        native::text_button(
+                        view().flex_row().child(ui::text_button(
                             move || {
-                                json!(notice.with(|notice| {
+                                SharedString::from(notice.with(|notice| {
                                     localized(notice.recovery_label.clone().unwrap_or_default())
                                 }))
                             },
@@ -56,19 +87,9 @@ pub(crate) fn notices(
                                     id: notice.with_untracked(|notice| notice.id.clone()),
                                 });
                             },
-                        )
-                        .prop("identifier", move || json!(notice.with(|notice| {
-                            matches!(&notice.id, agent_core::state::operations::ErrorId::Operation {
-                                key: agent_core::state::operations::OperationKey::WorkspaceReview, ..
-                            }).then_some("files.diff.retry")
-                        })))
+                        ))
                     },
                 ))
-                .child(native::text_button(json!(tr("閉じる")), move || {
-                    connection.dispatch(Intent::DismissError {
-                        id: notice.with_untracked(|notice| notice.id.clone()),
-                    });
-                }))
         },
     )
 }

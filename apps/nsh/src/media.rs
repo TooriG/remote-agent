@@ -214,10 +214,13 @@ pub(crate) fn image_view(
                             .map(localized)
                             .unwrap_or_default()
                     }))
-                    .child(native::text_button(json!(tr("再試行")), move || {
-                        decode_error.set(None);
-                        loaded.refetch()
-                    }))
+                    .child(view().flex_row().child(crate::ui::text_button(
+                        tr("再試行"),
+                        move || {
+                            decode_error.set(None);
+                            loaded.refetch()
+                        },
+                    )))
             },
         ))
 }

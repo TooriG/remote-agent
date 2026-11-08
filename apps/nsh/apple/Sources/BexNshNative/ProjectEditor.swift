@@ -7,6 +7,7 @@ struct ProjectEditorData: Decodable {
     let error: String?
 }
 
+/// The phones' project editor; the Mac draws its dialog with NSH.
 struct ProjectEditorPresenter: View {
     let editor: ProjectEditorData?
     let send: ([String: String]) -> Void
@@ -62,9 +63,7 @@ private struct ProjectEditorForm: View {
             }
         }
         .padding(24)
-        #if os(macOS)
-            .frame(width: 440)
-        #else
+        #if os(iOS)
             .presentationDetents([.medium])
         #endif
     }

@@ -1,5 +1,6 @@
 use crate::l10n::{localized, tr};
-use crate::{Connection, native, shared::Shared, workbench::Workbench};
+use crate::ui::{self, Enabled, Icon, colors};
+use crate::{Connection, shared::Shared, workbench::Workbench};
 use agent_core::{
     panels::PanelSurface,
     presentation::terminals::terminal_grid,
@@ -73,52 +74,71 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
             }));
         }
     });
+    // T3 Code's terminal fills its panel; Bex's folder, status and reconnection
+    // sit in one quiet row above it.
     view()
         .flex_1()
         .min_h_0()
-        .gap_2()
         .child(
-            text(move || cwd.get())
-                .text_size(px(12.0))
-                .selectable(true)
-                .truncate(),
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .h(px(32.0))
+                .flex_shrink_0()
+                .px_3()
+                .border_b_1()
+                .border_b_color(colors::BORDER)
+                .text_color(colors::MUTED)
+                .child(ui::icon(Icon::TERMINAL, 14.0))
+                .child(
+                    text(move || cwd.get())
+                        .text_size(px(12.0))
+                        .selectable(true)
+                        .truncate()
+                        .flex_1()
+                        .min_w_0(),
+                )
+                .child(when(move || loading.get(), ui::spinner))
+                .child(
+                    text(move || {
+                        if loading.get() {
+                            tr("接続中…").to_owned()
+                        } else {
+                            terminal.with(|terminal| {
+                                terminal
+                                    .as_ref()
+                                    .and_then(|terminal| terminal.status.clone())
+                                    .map(localized)
+                                    .unwrap_or_default()
+                            })
+                        }
+                    })
+                    .text_size(px(12.0))
+                    .number_of_lines(1),
+                )
+                .child(when(
+                    move || {
+                        terminal.with(|terminal| {
+                            terminal
+                                .as_ref()
+                                .is_some_and(|terminal| terminal.status.is_some())
+                        })
+                    },
+                    move || {
+                        ui::text_button(tr("再接続"), move || {
+                            if let Some(size) = size.get_untracked() {
+                                start(size);
+                            }
+                        })
+                        .enabled(move || {
+                            size.get().is_some()
+                                && connection.settings.with(|p| p.connected())
+                                && !loading.get()
+                        })
+                    },
+                )),
         )
-        .child(text(move || {
-            if loading.get() {
-                tr("接続中…").to_owned()
-            } else {
-                terminal.with(|terminal| {
-                    terminal
-                        .as_ref()
-                        .and_then(|terminal| terminal.status.clone())
-                        .map(localized)
-                        .unwrap_or_default()
-                })
-            }
-        }))
-        .child(when(
-            move || {
-                terminal.with(|terminal| {
-                    terminal
-                        .as_ref()
-                        .is_some_and(|terminal| terminal.status.is_some())
-                })
-            },
-            move || {
-                native::text_button(json!(tr("再接続")), move || {
-                    if let Some(size) = size.get_untracked() {
-                        start(size);
-                    }
-                })
-                .prop("enabled", move || {
-                    json!(
-                        size.get().is_some()
-                            && connection.settings.with(|p| p.connected())
-                            && !loading.get()
-                    )
-                })
-            },
-        ))
         .child(
             native("bex.terminal")
                 .prop("input", move || json!(input.get()))

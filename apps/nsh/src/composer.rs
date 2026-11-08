@@ -546,65 +546,13 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                         move || composer.with(|c| c.draft.attachments.clone()),
                         |file: &agent_core::state::Attachment| file.path.clone(),
                         move |file, index| {
-                            view()
-                                .child(when(
-                                    move || file.with(|file| file.is_image),
-                                    move || {
-                                        crate::media::image_view(
-                                            connection,
-                                            preview,
-                                            move || file.with(|file| file.path.clone()),
-                                            120.0,
-                                            120.0,
-                                        )
-                                    },
-                                ))
-                                .child(when(
-                                    move || file.with(|file| !file.is_image),
-                                    move || {
-                                        native::text_button(
-                                            move || json!(file.with(|file| file.name.clone())),
-                                            move || {
-                                                let (cwd, home) =
-                                                    connection.publication.with_untracked(|p| {
-                                                        (
-                                                            p.composer
-                                                                .controls
-                                                                .navigation
-                                                                .cwd
-                                                                .clone(),
-                                                            p.context.home(),
-                                                        )
-                                                    });
-                                                files.open(
-                                                    file.with_untracked(|file| file.path.clone()),
-                                                    cwd,
-                                                    home,
-                                                    connection.host.get_untracked(),
-                                                    connection.client.get(),
-                                                );
-                                            },
-                                        )
-                                        .max_w(px(240.0))
-                                        .min_h(px(44.0))
-                                        .pr(px(44.0))
-                                    },
-                                ))
-                                .child(
-                                    native::button("xmark", tr("添付を削除"), move || {
-                                        connection.dispatch(Intent::RemoveAttachment {
-                                            draft_key: controls
-                                                .with_untracked(|c| c.navigation.draft_key.clone()),
-                                            index: index.get_untracked() as u32,
-                                        })
-                                    })
-                                    .prop("appearance", json!("glass"))
-                                    .absolute()
-                                    .top(px(0.0))
-                                    .right(px(0.0))
-                                    .w(px(44.0))
-                                    .h(px(44.0)),
-                                )
+                            attachment(connection, preview, files, file, move || {
+                                connection.dispatch(Intent::RemoveAttachment {
+                                    draft_key: controls
+                                        .with_untracked(|c| c.navigation.draft_key.clone()),
+                                    index: index.get_untracked() as u32,
+                                })
+                            })
                         },
                     )))
             },
@@ -630,6 +578,72 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     .text_size(px(11.0))
             },
         ))
+}
+
+/// An attached file as T3 Code's composer chips: an image's thumbnail or a
+/// file's name, which opens it, with its removal at the corner.
+fn attachment(
+    connection: Connection,
+    preview: crate::media::Preview,
+    files: crate::files::Browser,
+    file: ReadSignal<agent_core::state::Attachment>,
+    remove: impl Fn() + 'static,
+) -> impl IntoElement {
+    use crate::ui::{self, Icon, colors};
+    let open = move || {
+        let (cwd, home) = connection
+            .publication
+            .with_untracked(|p| (p.composer.controls.navigation.cwd.clone(), p.context.home()));
+        files.open(
+            file.with_untracked(|file| file.path.clone()),
+            cwd,
+            home,
+            connection.host.get_untracked(),
+            connection.client.get(),
+        );
+    };
+    view()
+        .rounded(px(ui::RADIUS))
+        .border_1()
+        .border_color(colors::BORDER)
+        .bg(colors::RAISED)
+        .overflow_hidden()
+        .child(when(
+            move || file.with(|file| file.is_image),
+            move || {
+                crate::media::image_view(
+                    connection,
+                    preview,
+                    move || file.with(|file| file.path.clone()),
+                    120.0,
+                    120.0,
+                )
+            },
+        ))
+        .child(when(
+            move || file.with(|file| !file.is_image),
+            move || {
+                view()
+                    .h(px(40.0))
+                    .pl_1()
+                    .pr(px(32.0))
+                    .justify_center()
+                    .child(ui::labeled_button(
+                        Icon::FILE_TEXT,
+                        move || file.with(|file| file.name.clone()),
+                        open,
+                    ))
+            },
+        ))
+        .child(
+            view()
+                .absolute()
+                .top(px(4.0))
+                .right(px(4.0))
+                .rounded_full()
+                .bg(colors::SURFACE)
+                .child(ui::small_icon_button(Icon::CLOSE, tr("添付を削除"), remove)),
+        )
 }
 
 /// Both the composer and desktop workspace use the OS picker and Core's upload owner.

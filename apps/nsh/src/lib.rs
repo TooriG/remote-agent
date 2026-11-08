@@ -314,7 +314,7 @@ fn app_content(
                         .gap_2()
                         .p_2()
                         .child(text(move || failure.get().unwrap_or_default()))
-                        .child(native::text_button(json!(tr("閉じる")), move || {
+                        .child(ui::text_button(tr("閉じる"), move || {
                             application.with(|application| application.dismiss_failure())
                         }))
                 },
@@ -426,10 +426,7 @@ fn app_content(
                         .flex_1()
                         .min_w_0()
                         .child(notices())
-                        .child(when(
-                            move || hosts.with(Vec::is_empty),
-                            move || environment::overview(hosts),
-                        ))
+                        .child(when(move || hosts.with(Vec::is_empty), connections::hero))
                         .child(when(move || !hosts.with(Vec::is_empty), main)),
                 )
                 .child(when(
