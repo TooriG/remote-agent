@@ -1,0 +1,12 @@
+# Command-click on a web link in an answer opens it in the in-app browser
+# rather than the default browser. The browser loads pages only while the app
+# is active, which the runner does not force, so the page itself is not read.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[generated-images] [immediate] 生成画像を表示します"
+press 送信
+expect "生成画像を表示しました。" 30000
+expect_absent "ブラウザの URL"
+click cmd Webサイトを開く
+expect "ブラウザの URL" after ツールを閉じる 10000
+screenshot browser

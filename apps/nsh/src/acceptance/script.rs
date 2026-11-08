@@ -14,6 +14,10 @@
 //! - `type <label> <text> [after <anchor>] [timeout-ms]`: focuses that element
 //!   and inserts `<text>`.
 //! - `key <name>`: a key with optional modifiers, as `return`, `escape` or `cmd+,`.
+//! - `click <modifiers> <label> [after <anchor>] [timeout-ms]`: a mouse click
+//!   on the middle of the first element `<label>` names (a link in text
+//!   included), with `<modifiers>` held: `none`, or `cmd`, `shift`, `option`
+//!   and `ctrl` joined by `+`.
 //! - `expect <text> [after <anchor>] [timeout-ms]` / `expect_absent ...`: waits
 //!   until some element's text contains `<text>`, or none does.
 //! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
@@ -49,6 +53,7 @@ pub(crate) enum Step {
     Press(Find),
     Type(Find, String),
     Key(Key),
+    Click(Modifiers, Find),
     Expect(Find),
     ExpectAbsent(Find),
     /// A wheel of this many lines over the element.
@@ -77,6 +82,12 @@ pub(crate) struct Find {
 pub(crate) struct Key {
     pub characters: String,
     pub code: u16,
+    pub modifiers: Modifiers,
+}
+
+/// The modifier keys a key or a click holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Modifiers {
     pub command: bool,
     pub shift: bool,
     pub option: bool,
@@ -160,6 +171,14 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("press", [target, rest @ ..]) => Step::Press(find(target, rest)?),
         ("type", [target, text, rest @ ..]) => Step::Type(find(target, rest)?, (*text).to_owned()),
         ("key", [name]) => Step::Key(key(name)?),
+        ("click", [held, target, rest @ ..]) => Step::Click(
+            if *held == "none" {
+                Modifiers::default()
+            } else {
+                modifiers(held.split('+'))?
+            },
+            find(target, rest)?,
+        ),
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
         ("scroll", [target, lines, rest @ ..]) => Step::Scroll(
@@ -253,17 +272,23 @@ fn key(spec: &str) -> Result<Key, String> {
         .filter(|name| !name.is_empty())
         .ok_or("no key")?;
     let mut key = named(name).ok_or_else(|| format!("unknown key {name:?}"))?;
-    for modifier in parts {
-        let flag = match modifier {
-            "cmd" => &mut key.command,
-            "shift" => &mut key.shift,
-            "option" | "alt" => &mut key.option,
-            "ctrl" => &mut key.control,
+    key.modifiers = modifiers(parts)?;
+    Ok(key)
+}
+
+fn modifiers<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<Modifiers, String> {
+    let mut held = Modifiers::default();
+    for name in names {
+        let flag = match name {
+            "cmd" => &mut held.command,
+            "shift" => &mut held.shift,
+            "option" | "alt" => &mut held.option,
+            "ctrl" => &mut held.control,
             other => return Err(format!("unknown modifier {other:?}")),
         };
         *flag = true;
     }
-    Ok(key)
+    Ok(held)
 }
 
 /// ANSI virtual key codes of the keys scenarios name.
@@ -293,10 +318,7 @@ fn named(name: &str) -> Option<Key> {
     Some(Key {
         characters,
         code,
-        command: false,
-        shift: false,
-        option: false,
-        control: false,
+        modifiers: Modifiers::default(),
     })
 }
 
@@ -388,7 +410,40 @@ mod tests {
             panic!("not a key");
         };
         assert_eq!((key.characters.as_str(), key.code), ("n", 45));
-        assert!(key.command && key.shift && !key.option && !key.control);
+        assert_eq!(
+            key.modifiers,
+            Modifiers {
+                command: true,
+                shift: true,
+                ..Modifiers::default()
+            }
+        );
+        assert_eq!(
+            step(&["click".into(), "cmd".into(), "Webサイトを開く".into()]).unwrap(),
+            Step::Click(
+                Modifiers {
+                    command: true,
+                    ..Modifiers::default()
+                },
+                Find {
+                    text: "Webサイトを開く".into(),
+                    after: None,
+                    timeout: DEFAULT_TIMEOUT
+                }
+            )
+        );
+        assert_eq!(
+            step(&["click".into(), "none".into(), "a".into(), "500".into()]).unwrap(),
+            Step::Click(
+                Modifiers::default(),
+                Find {
+                    text: "a".into(),
+                    after: None,
+                    timeout: std::time::Duration::from_millis(500)
+                }
+            )
+        );
+        assert!(step(&["click".into(), "hyper".into(), "a".into()]).is_err());
         for (name, characters, code) in [
             ("return", "\r", 36),
             ("escape", "\u{1b}", 53),

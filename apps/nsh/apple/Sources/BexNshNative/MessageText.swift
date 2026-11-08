@@ -37,6 +37,9 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
     final class MessageTextView: NSTextView, NSTextViewDelegate {
         var action: (([String: Any]) -> Void)?
         var document = MessageDocument.empty
+        /// The modifier keys of the click being handled: a link opens from
+        /// within it, where `NSApp.currentEvent` may be another event.
+        private var clickModifiers: NSEvent.ModifierFlags = []
 
         init() {
             let storage = NSTextStorage()
@@ -71,6 +74,12 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             fatalError("init(coder:) is unavailable")
         }
 
+        override func mouseDown(with event: NSEvent) {
+            clickModifiers = event.modifierFlags
+            defer { clickModifiers = [] }
+            super.mouseDown(with: event)
+        }
+
         override func menu(for event: NSEvent) -> NSMenu? {
             guard let menu = super.menu(for: event) else { return nil }
             let range = selectedRange()
@@ -99,8 +108,8 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         func textView(_: NSTextView, clickedOnLink link: Any, at _: Int) -> Bool {
             let url = (link as? URL)?.absoluteString ?? (link as? String) ?? ""
             // Command-click opens a web page in the in-app browser.
-            let command = NSApp.currentEvent?.modifierFlags.contains(.command) ?? false
-            action?(["action": "link", "text": url, "target": document.target, "command": command])
+            action?(["action": "link", "text": url, "target": document.target,
+                     "command": clickModifiers.contains(.command)])
             return true
         }
 

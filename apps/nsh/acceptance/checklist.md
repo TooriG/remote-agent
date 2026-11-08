@@ -102,8 +102,8 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Changed-files bar and review | covered | review-panel, worktree-review, diff-files (a file row opens the diff at that file) |
 | Diff: binary files, file menu, copying the diff | covered | diff-files |
 | Image viewer: zoom, reset, save, the conversation's generated images | covered | image-viewer |
-| An image's menu: save as | not yet | the driver's right click does not reliably open the menu of a view NSH draws |
-| Command-click (Control-click on Windows) on a web link opens the in-app browser | not yet | the driver clicks a link through its text view, without modifier keys |
+| An image's menu: save as | covered | image-save-as |
+| Command-click (Control-click on Windows) on a web link opens the in-app browser | partial | link-browser (the in-app browser opens; it loads pages only while the app is active, which the runner does not force) |
 | Tool panel: files, file preview, diff, close | covered | tool-panel |
 | Tool panel: layout, browser, terminal, agents, side chat | partial | review-panel (layout), tools, side-chat; the terminal's screen and a loaded page are not observable |
 | Settings: general, providers, environment, worktrees | covered | settings, environment-settings |
