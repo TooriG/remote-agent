@@ -184,7 +184,15 @@ fn view_parts(
                         .min_h(px(20.0))
                 };
                 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-                let message = move || drawn::message(part, secondary, target, connection, files);
+                let message = move || {
+                    drawn::message(
+                        part,
+                        move || kind() == Kind::Activity,
+                        target,
+                        connection,
+                        files,
+                    )
+                };
                 view()
                     .w_full()
                     .gap_2()

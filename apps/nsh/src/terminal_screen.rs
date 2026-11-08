@@ -363,8 +363,10 @@ mod draw {
     pub(crate) fn grid(
         accepts: impl Fn() -> bool + Copy + 'static,
         output: impl Fn() -> Vec<TerminalOutput> + 'static,
-        report: impl Fn(Report) + Copy + 'static,
+        report: impl Fn(Report) + 'static,
     ) -> impl IntoElement {
+        // Kept by the view, so each of its handlers can reach it.
+        let report = stored(Rc::new(report) as Rc<dyn Fn(Report)>);
         let screen = Rc::new(RefCell::new(Screen::new(TerminalSize {
             cols: 80,
             rows: 24,
@@ -382,13 +384,13 @@ mod draw {
                 if let Some(sequence) = screen.feed(&chunks) {
                     frame.set(Shared(Arc::new(screen.frame())));
                     mode.set(screen.mode());
-                    report(Report::Ack(sequence));
+                    (report.get())(Report::Ack(sequence));
                 }
             });
         }
         let send = move |bytes: Vec<u8>| {
             if !bytes.is_empty() {
-                report(Report::Input(bytes));
+                (report.get())(Report::Input(bytes));
             }
         };
         let resize = {
@@ -401,7 +403,7 @@ mod draw {
                 if screen.size != size {
                     screen.resize(size);
                     frame.set(Shared(Arc::new(screen.frame())));
-                    report(Report::Resize(size));
+                    (report.get())(Report::Resize(size));
                 }
             }
         };
