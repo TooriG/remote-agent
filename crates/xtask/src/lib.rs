@@ -8,6 +8,8 @@ pub mod ios_e2e;
 pub mod ios_markdown;
 #[cfg(unix)]
 pub mod nsh_acceptance;
+#[cfg(unix)]
+pub mod nsh_parity;
 pub mod supervision;
 #[cfg(unix)]
 pub mod terminal_probe;

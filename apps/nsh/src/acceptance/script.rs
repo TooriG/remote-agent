@@ -56,6 +56,8 @@
 //!   of that element, moves onto the middle of the first element labelled
 //!   `<target>` and holds the button there, so `expect` and `screenshot` see the
 //!   drag; `drop` releases it. `after` and the timeout find the dragged element.
+//! - `hover <label> [after <anchor>] [timeout-ms]`: moves the pointer over that
+//!   element's centre, as hover-only controls need.
 //! - `choose <path>`: answers the open or save panel the app shows with
 //!   `<path>`, waiting for one to appear. A leading `$AGENT_STATE_DIR` is the
 //!   fixture Host's directory, whose `project` folder is the fixture's project.
@@ -79,6 +81,11 @@
 //! - `relaunch`: quits the app as the user would; the runner starts it again on
 //!   the same Host and state, and the next steps run in the new process.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
+//! - `capture <name>`: `<name>.png` as `screenshot` writes it, and `<name>.json`: every
+//!   view of the main window, parents first, with its frame in the content's points
+//!   (origin top left), accessibility role and texts, its layer's background, border
+//!   and corner radius, and the animations running in its layers. `cargo xtask
+//!   nsh-parity` compares it with T3's rendering of the same state.
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 use std::time::Duration;
@@ -124,6 +131,7 @@ pub(crate) enum Step {
     Window(f64, f64),
     Select(Find, String),
     Menu(Find),
+    Hover(Find),
     /// A press on the first element, moved onto the second and held there.
     /// The first is found after its anchor, if it names one.
     Drag(Find, Find),
@@ -146,6 +154,7 @@ pub(crate) enum Step {
     Wait(Duration),
     Screenshot(String),
     Dump(String),
+    Capture(String),
 }
 
 /// What a step looks for, and how long it waits for it.
@@ -308,6 +317,7 @@ fn step(words: &[String]) -> Result<Step, String> {
             Step::Select(find(target, rest)?, (*text).to_owned())
         }
         ("menu", [target, rest @ ..]) => Step::Menu(find(target, rest)?),
+        ("hover", [target, rest @ ..]) => Step::Hover(find(target, rest)?),
         // `after` and a timeout name where the drag starts.
         ("drag", [from, to, rest @ ..]) => Step::Drag(find(from, rest)?, find(to, &[])?),
         ("drop", []) => Step::Drop,
@@ -337,6 +347,7 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
+        ("capture", [name]) => Step::Capture(artifact(name)?),
         (name, _) => return Err(format!("unknown step or wrong arguments: {name}")),
     })
 }
@@ -498,10 +509,10 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\nfirst-launch\nhost without-codex\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
-             scroll 会話 -3\nscroll 画像 2 held cmd after 見出し\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nexpect_inside 送信 1000\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             scroll 会話 -3\nscroll 画像 2 held cmd after 見出し\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nexpect_inside 送信 1000\nselect 回答 Needle\nmenu 回答 after 見出し\nhover 回答\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png contains \"a.txt:2\"\n\
              expect_clipboard \"a b\" 500\ncopy \"a\\nb\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
-             fixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\ndump tree_1\n",
+             fixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\ndump tree_1\nwindow 1280 800\ncapture state_1\n",
         )
         .unwrap();
         let steps: Vec<_> = lines.iter().map(|line| line.step.clone()).collect();
@@ -607,6 +618,11 @@ mod tests {
                     after: Some("見出し".into()),
                     timeout: DEFAULT_TIMEOUT
                 }),
+                Step::Hover(Find {
+                    text: "回答".into(),
+                    after: None,
+                    timeout: DEFAULT_TIMEOUT
+                }),
                 Step::Drag(
                     Find {
                         text: "nested".into(),
@@ -658,6 +674,8 @@ mod tests {
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
                 Step::Dump("tree_1".into()),
+                Step::Window(1280.0, 800.0),
+                Step::Capture("state_1".into()),
             ]
         );
         assert_eq!(lines[0].number, 2);
@@ -778,6 +796,10 @@ mod tests {
             (
                 "copy_image a b",
                 "line 1: unknown step or wrong arguments: copy_image",
+            ),
+            (
+                "window 1280",
+                "line 1: unknown step or wrong arguments: window",
             ),
             (
                 "fixture release-inputs",

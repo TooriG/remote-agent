@@ -56,6 +56,14 @@ nsh-acceptance *scenarios:
     cargo build --locked -p host-fixture -p agent-process --bins --target aarch64-apple-darwin
     cargo xtask nsh-acceptance "$@"
 
+# Compare the Mac app with T3 Code state by state (apps/nsh/parity/map.toml); T3_CODE_ROOT
+# names a T3 Code checkout with its dependencies installed. `--compare RUN` measures a run
+# again. Only on request, as nsh-acceptance. Report: target/nsh-parity/run-*/report.md.
+nsh-parity *args:
+    AGENT_CODE_SIGN_IDENTITY=- bash scripts/build-macos.sh desktop dev
+    cargo build --locked -p host-fixture -p agent-process --bins --target aarch64-apple-darwin
+    cargo xtask nsh-parity "$@"
+
 # List worktrees whose build outputs went unused for three days; --delete removes those outputs.
 prune-idle-builds *args:
     node scripts/prune-idle-builds.ts "$@"

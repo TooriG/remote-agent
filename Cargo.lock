@@ -9048,6 +9048,7 @@ version = "0.1.0"
 dependencies = [
  "nix 0.31.3",
  "plist",
+ "png 0.18.1",
  "process-wrap",
  "proptest",
  "roxmltree 0.21.1",

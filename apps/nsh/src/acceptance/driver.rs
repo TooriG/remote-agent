@@ -19,7 +19,8 @@
 //! `evidence` names the screenshot and tree written when a step fails. A
 //! `relaunch` step quits with `relaunch` set; the runner starts the app again
 //! with `BEX_ACCEPTANCE_RESUME`, and the driver goes on after the steps the file
-//! already records.
+//! already records. A `capture` step's artifact is its screenshot; its views
+//! are the `.json` beside it.
 use super::script::{Find, Key, Line, Modifiers, Step};
 use objc2::{
     MainThreadMarker, Message, msg_send,
@@ -243,6 +244,7 @@ fn limit(step: &Step) -> Duration {
         | Step::Menu(find)
         | Step::Drag(find, _)
         | Step::Click(_, find)
+        | Step::Hover(find)
         | Step::Expect(find)
         | Step::ExpectAbsent(find)
         | Step::ExpectCount(find, _)
@@ -281,19 +283,13 @@ fn attempt(
         }
         Step::Wait(_) => Attempt::Pending(String::new()),
         Step::Screenshot(name) => artifact(screenshot(mtm, output, name)),
+        Step::Window(width, height) => done(resize(mtm, *width, *height)),
+        Step::Capture(name) => artifact(capture(mtm, output, name)),
         Step::Dump(name) => artifact(dump(&Tree::read(mtm, menus), output, name)),
         Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
         Step::ExpectApart(find, other) => apart(&Tree::read(mtm, menus), find, other),
         Step::ExpectInside(find) => inside(&Tree::read(mtm, menus), find),
-        Step::Window(width, height) => done(
-            main_window(mtm)
-                .ok_or_else(|| "no window to resize".to_owned())
-                .map(|window| {
-                    window.setContentSize(NSSize::new(*width, *height));
-                    format!("resized the window to {width}×{height}")
-                }),
-        ),
         Step::ExpectCount(find, count) => counted(&Tree::read(mtm, menus), find, *count),
         Step::ExpectEnabled(find, enabled) => element_is(&Tree::read(mtm, menus), find, |object| {
             let actual = !responds(object, sel!(isAccessibilityEnabled))
@@ -352,6 +348,9 @@ fn attempt(
         ),
         Step::Drag(from, to) => drag(&Tree::read(mtm, menus), from, to),
         Step::Drop => done(release()),
+        Step::Hover(find) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
+            hover(tree, index).map(|()| format!("hovered over {}", tree.nodes[index].describe()))
+        }),
         Step::Choose(path) => choose(path, mtm),
         Step::ExpectFile(path, contains, _) => file_written(path, contains.as_deref()),
         Step::ExpectClipboard(text, _) => {
@@ -1193,6 +1192,29 @@ fn scroll(
     Ok(())
 }
 
+/// A pointer move to the element's centre, handed to the view under it: NSH
+/// tracks hover from the moves its views receive.
+fn hover(tree: &Tree, index: usize) -> Result<(), String> {
+    let node = &tree.nodes[index];
+    let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
+        return Err(format!("{} cannot be hovered", node.describe()));
+    };
+    let frame = window.convertRectFromScreen(unsafe { msg_send![&**object, accessibilityFrame] });
+    let point = NSPoint::new(
+        frame.origin.x + frame.size.width / 2.0,
+        frame.origin.y + frame.size.height / 2.0,
+    );
+    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::MouseMoved, point, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 0, 0.0,
+    ).ok_or("AppKit made no pointer event")?;
+    let content = window.contentView().ok_or("the window has no content")?;
+    let view = content
+        .hitTest(content.convertPoint_fromView(point, None))
+        .ok_or_else(|| format!("no view is under {}", node.describe()))?;
+    view.mouseMoved(&event);
+    Ok(())
+}
+
 fn screenshot(mtm: MainThreadMarker, output: &Path, name: &str) -> Result<String, String> {
     let view = main_window(mtm)
         .and_then(|window| window.contentView())
@@ -1210,6 +1232,153 @@ fn screenshot(mtm: MainThreadMarker, output: &Path, name: &str) -> Result<String
     std::fs::write(output.join(&file), data.to_vec())
         .map_err(|reason| format!("{file}: {reason}"))?;
     Ok(file)
+}
+
+fn resize(mtm: MainThreadMarker, width: f64, height: f64) -> Result<String, String> {
+    let window = main_window(mtm).ok_or("no window to resize")?;
+    window.setContentSize(NSSize::new(width, height));
+    Ok(format!("resized the window to {width}×{height}"))
+}
+
+/// The screenshot and every view of the main window as `<name>.json` (see the
+/// step's documentation in `script.rs`).
+fn capture(mtm: MainThreadMarker, output: &Path, name: &str) -> Result<String, String> {
+    let file = screenshot(mtm, output, name)?;
+    let content = main_window(mtm)
+        .and_then(|window| window.contentView())
+        .ok_or("no window to capture")?;
+    let mut views = Vec::new();
+    describe_views(&content, &content, None, &mut views);
+    let size = content.bounds().size;
+    let report = json!({
+        "width": size.width,
+        "height": size.height,
+        "scale": content.window().map(|window| window.backingScaleFactor()).unwrap_or(1.0),
+        "views": views,
+    });
+    let json = format!("{name}.json");
+    std::fs::write(
+        output.join(&json),
+        serde_json::to_vec_pretty(&report).unwrap_or_default(),
+    )
+    .map_err(|reason| format!("{json}: {reason}"))?;
+    Ok(file)
+}
+
+fn describe_views(view: &NSView, content: &NSView, parent: Option<usize>, out: &mut Vec<Value>) {
+    if out.len() >= MAX_NODES {
+        return;
+    }
+    let frame = view.convertRect_toView(view.bounds(), Some(content));
+    // The content view of a window is not flipped: count from its top.
+    let top = if content.isFlipped() {
+        frame.origin.y
+    } else {
+        content.bounds().size.height - frame.origin.y - frame.size.height
+    };
+    let object: &AnyObject = view;
+    let texts: serde_json::Map<String, Value> = [
+        ("label", sel!(accessibilityLabel)),
+        ("title", sel!(accessibilityTitle)),
+        ("value", sel!(accessibilityValue)),
+        ("identifier", sel!(accessibilityIdentifier)),
+        ("placeholder", sel!(accessibilityPlaceholderValue)),
+    ]
+    .into_iter()
+    .filter_map(|(name, selector)| {
+        text(object, selector)
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| (name.to_owned(), Value::from(text)))
+    })
+    .collect();
+    let index = out.len();
+    out.push(json!({
+        "parent": parent,
+        "class": view.class().name().to_string_lossy(),
+        "frame": [frame.origin.x, top, frame.size.width, frame.size.height],
+        "hidden": view.isHiddenOrHasHiddenAncestor(),
+        "alpha": view.alphaValue(),
+        "role": text(object, sel!(accessibilityRole)),
+        "texts": texts,
+        "layer": layer(view),
+    }));
+    for child in view.subviews() {
+        describe_views(&child, content, Some(index), out);
+    }
+}
+
+/// What Core Animation draws for the view: its layer's fill, border and corner
+/// radius, and the keys of the animations running in it or its sublayers.
+fn layer(view: &NSView) -> Value {
+    let Some(layer): Option<Retained<AnyObject>> = (unsafe { msg_send![view, layer] }) else {
+        return Value::Null;
+    };
+    let mut animations = Vec::new();
+    animation_keys(&layer, &mut animations, 0);
+    let background: *const AnyObject = unsafe { msg_send![&*layer, backgroundColor] };
+    let border: *const AnyObject = unsafe { msg_send![&*layer, borderColor] };
+    let radius: f64 = unsafe { msg_send![&*layer, cornerRadius] };
+    let border_width: f64 = unsafe { msg_send![&*layer, borderWidth] };
+    let opacity: f32 = unsafe { msg_send![&*layer, opacity] };
+    json!({
+        "background": rgba(background),
+        "border": rgba(border),
+        "borderWidth": border_width,
+        "radius": radius,
+        "opacity": opacity,
+        "animations": animations,
+    })
+}
+
+fn animation_keys(layer: &AnyObject, out: &mut Vec<String>, depth: usize) {
+    let keys: Option<Retained<NSArray<NSString>>> = unsafe { msg_send![layer, animationKeys] };
+    out.extend(
+        keys.iter()
+            .flat_map(|keys| keys.iter())
+            .map(|key| key.to_string()),
+    );
+    let sublayers: Option<Retained<NSArray<AnyObject>>> = unsafe { msg_send![layer, sublayers] };
+    // A view's own content and mask layers, not the layers of its subviews,
+    // which are views of their own.
+    if depth < 4 {
+        for sublayer in sublayers.iter().flat_map(|layers| layers.iter()) {
+            let delegate: Option<Retained<AnyObject>> = unsafe { msg_send![&*sublayer, delegate] };
+            if delegate.is_some_and(|delegate| delegate.downcast_ref::<NSView>().is_some()) {
+                continue;
+            }
+            animation_keys(&sublayer, out, depth + 1);
+        }
+    }
+}
+
+/// A `CGColor` as sRGB components from 0 to 255 and its alpha from 0 to 1.
+fn rgba(color: *const AnyObject) -> Value {
+    if color.is_null() {
+        return Value::Null;
+    }
+    let class = objc2::class!(NSColor);
+    let color: Option<Retained<AnyObject>> = unsafe { msg_send![class, colorWithCGColor: color] };
+    let space: Retained<AnyObject> =
+        unsafe { msg_send![objc2::class!(NSColorSpace), sRGBColorSpace] };
+    let Some(color): Option<Retained<AnyObject>> =
+        color.and_then(|color| unsafe { msg_send![&*color, colorUsingColorSpace: &*space] })
+    else {
+        return Value::Null;
+    };
+    let (red, green, blue, alpha): (f64, f64, f64, f64) = unsafe {
+        (
+            msg_send![&*color, redComponent],
+            msg_send![&*color, greenComponent],
+            msg_send![&*color, blueComponent],
+            msg_send![&*color, alphaComponent],
+        )
+    };
+    json!([
+        (red * 255.0).round(),
+        (green * 255.0).round(),
+        (blue * 255.0).round(),
+        alpha
+    ])
 }
 
 fn dump(tree: &Tree, output: &Path, name: &str) -> Result<String, String> {
