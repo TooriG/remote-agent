@@ -32,6 +32,8 @@
 //! - `paste <label> [after <anchor>] [timeout-ms]`: focuses that element and
 //!   pastes the clipboard into it, as Edit > Paste does (a posted ⌘V reaches
 //!   no field while the app is in the background).
+//! - `undo <label> [after <anchor>] [timeout-ms]`: focuses that element and
+//!   undoes its last edit, as Edit > Undo does.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -66,6 +68,7 @@ pub(crate) enum Step {
         image: bool,
     },
     Paste(Find),
+    Undo(Find),
     Wait(Duration),
     Screenshot(String),
     Dump(String),
@@ -200,6 +203,7 @@ fn step(words: &[String]) -> Result<Step, String> {
             image: true,
         },
         ("paste", [target, rest @ ..]) => Step::Paste(find(target, rest)?),
+        ("undo", [target, rest @ ..]) => Step::Undo(find(target, rest)?),
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
@@ -322,7 +326,7 @@ mod tests {
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
              scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
-             expect_clipboard \"a b\" 500\ncopy \"a b\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\n\
+             expect_clipboard \"a b\" 500\ncopy \"a b\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
              fixture /release-inputs\nwait 250\nscreenshot after-send\ndump tree_1\n",
         )
         .unwrap();
@@ -394,6 +398,11 @@ mod tests {
                     text: "入力欄".into(),
                     after: Some("見出し".into()),
                     timeout: DEFAULT_TIMEOUT
+                }),
+                Step::Undo(Find {
+                    text: "入力欄".into(),
+                    after: None,
+                    timeout: Duration::from_millis(500)
                 }),
                 Step::Control("/release-inputs".into()),
                 Step::Wait(Duration::from_millis(250)),

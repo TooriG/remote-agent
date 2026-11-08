@@ -219,6 +219,7 @@ fn limit(step: &Step) -> Duration {
         Step::Press(find)
         | Step::Type(find, _)
         | Step::Paste(find)
+        | Step::Undo(find)
         | Step::Scroll(find, _)
         | Step::Select(find, _)
         | Step::Menu(find)
@@ -261,6 +262,9 @@ fn attempt(
         }),
         Step::Paste(find) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             paste(tree, index).map(|()| format!("pasted into {}", tree.nodes[index].describe()))
+        }),
+        Step::Undo(find) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
+            undo(tree, index).map(|()| format!("undid in {}", tree.nodes[index].describe()))
         }),
         Step::Scroll(find, lines) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             scroll(tree, index, *lines, mtm).map(|()| {
@@ -767,6 +771,20 @@ fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
 fn paste(tree: &Tree, index: usize) -> Result<(), String> {
     let responder = editor(tree, index)?;
     let _: () = unsafe { msg_send![&*responder, paste: Option::<&AnyObject>::None] };
+    Ok(())
+}
+
+/// Edit > Undo in the element `index`: its editor's undo manager undoes the
+/// last edit.
+fn undo(tree: &Tree, index: usize) -> Result<(), String> {
+    let responder = editor(tree, index)?;
+    let manager: Option<Retained<AnyObject>> = unsafe { msg_send![&*responder, undoManager] };
+    let manager = manager.ok_or("the editor keeps no undo history")?;
+    let can: bool = unsafe { msg_send![&*manager, canUndo] };
+    if !can {
+        return Err("there is no edit to undo".into());
+    }
+    let _: () = unsafe { msg_send![&*manager, undo] };
     Ok(())
 }
 

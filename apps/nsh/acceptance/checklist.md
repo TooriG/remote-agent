@@ -99,7 +99,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Composer: DeepSeek's OpenRouter route, Flash 4.1 pick and models | covered | openrouter |
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
-| Composer: paste text at the selection, paste an image | covered | composer-paste |
+| Composer: paste text at the selection and undo it, paste an image | partial | composer-paste; text copied with an image is pasted too (T3 Code leaves it out), since NSH settles a paste's text before the app hears of it |
 | Composer: Escape discards a recording | not yet | dictation needs microphone permission |
 | Composer: folder menu (no project, a project, another folder) | covered | folder-menu |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
