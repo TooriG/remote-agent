@@ -16,6 +16,23 @@ pub struct Map {
     pub states: Vec<State>,
     #[serde(rename = "element")]
     pub elements: Vec<Element>,
+    #[serde(rename = "approved", default)]
+    pub approvals: Vec<Approval>,
+}
+
+/// A difference the user approved: Bex keeps its own design there, and the
+/// report lists it as approved rather than as a difference.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Approval {
+    pub element: String,
+    /// The metrics approved, as the report names them (`position`, `text
+    /// position (drawn)`, …).
+    pub metrics: Vec<String>,
+    pub reason: String,
+    /// The day it was approved, `YYYY-MM-DD`.
+    pub approved: String,
+    pub by: String,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy)]
@@ -188,6 +205,14 @@ impl Map {
         self.elements.iter().find(|element| element.id == id)
     }
 
+    /// The approval that covers `metric` of `element`, if one does.
+    pub fn approval(&self, element: &str, metric: &str) -> Option<&Approval> {
+        self.approvals.iter().find(|approval| {
+            approval.element == element
+                && approval.metrics.iter().any(|approved| approved == metric)
+        })
+    }
+
     fn check(&self) -> Result<(), String> {
         let mut seen = BTreeMap::new();
         for element in &self.elements {
@@ -200,6 +225,23 @@ impl Map {
                 return Err(format!(
                     "element {}: up = {name:?} is not \"background\" or a number",
                     element.id
+                ));
+            }
+        }
+        for approval in &self.approvals {
+            let date = approval.approved.as_bytes();
+            let dated = date.len() == 10
+                && date.iter().enumerate().all(|(index, byte)| {
+                    if index == 4 || index == 7 {
+                        *byte == b'-'
+                    } else {
+                        byte.is_ascii_digit()
+                    }
+                });
+            if self.element(&approval.element).is_none() || !dated {
+                return Err(format!(
+                    "the approval of {} must name a defined element and a YYYY-MM-DD date",
+                    approval.element
                 ));
             }
         }
@@ -412,6 +454,13 @@ gpui = { x = 20, height = 14, glyph_dy = 0, source = "sidebar.rs:744" }
         assert_eq!(
             Map::parse(&columnless).unwrap_err(),
             "state turn measures from composer, which it does not compare"
+        );
+        let undated = format!(
+            "{MAP}\n[[approved]]\nelement = \"answer\"\nmetrics = [\"position\"]\nreason = \"r\"\napproved = \"8 Nov\"\nby = \"user\"\n"
+        );
+        assert_eq!(
+            Map::parse(&undated).unwrap_err(),
+            "the approval of answer must name a defined element and a YYYY-MM-DD date"
         );
         let unknown_up = MAP.replace("up = \"background\"", "up = \"parent\"");
         assert_eq!(

@@ -782,3 +782,21 @@ what = "Settings button"
 kind = "icon"
 nsh = { text = "Open settings" }
 gpui = { source = "sidebar.rs:778 icon_button(Settings) in a py_2 footer" }
+
+# ── Approved deviations ─────────────────────────────────────────────────────
+# Differences the user approved: the report lists them as approved, not as
+# differences. `metrics` name the report's metrics for that element.
+
+[[approved]]
+element = "composer-attach"
+metrics = ["position"]
+reason = "Bex keeps attach at the left of the composer footer (T3: beside send, at the right)."
+approved = "2026-11-08"
+by = "the user"
+
+[[approved]]
+element = "composer-model"
+metrics = ["text position (drawn)"]
+reason = "Bex keeps the model picker at the right of the composer footer (T3: at the left)."
+approved = "2026-11-08"
+by = "the user"

@@ -84,11 +84,15 @@ pub async fn run(arguments: &[String]) -> Result<()> {
         .unwrap_or_default();
     let path = records.join("report.md");
     fs::write(&path, report::render(&name, &map, &outcomes))?;
-    let differences: usize = outcomes
+    let differences = outcomes
         .iter()
         .filter_map(|outcome| outcome.result.as_ref().ok())
-        .map(Vec::len)
-        .sum();
+        .flatten()
+        .filter(|difference| {
+            map.approval(&difference.element, difference.metric)
+                .is_none()
+        })
+        .count();
     let failed = outcomes
         .iter()
         .filter(|outcome| outcome.result.is_err())
@@ -248,10 +252,19 @@ fn compare_state(
         ),
     };
     let differences = compare::differences(map, state, &reference, &nsh);
+    // Approved deviations are outlined as matching.
+    let unapproved: Vec<Difference> = differences
+        .iter()
+        .filter(|difference| {
+            map.approval(&difference.element, difference.metric)
+                .is_none()
+        })
+        .cloned()
+        .collect();
     let composite = composite(
         [reference_image, nsh_image],
         [&reference, &nsh],
-        &differences,
+        &unapproved,
     );
     fs::write(directory.join("composite.png"), composite.encode())
         .map_err(|error| error.to_string())?;
