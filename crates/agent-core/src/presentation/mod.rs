@@ -24,6 +24,7 @@ pub mod permissions;
 pub mod project_menu;
 pub mod settings;
 
+use crate::localization::{UiLanguage, localized_ui_format};
 use crate::models::{
     ApprovalReviewStatus, AssistantPhase, AttachmentKind, Item, ItemBody, ToolKind, Turn,
     TurnStatus,
@@ -40,6 +41,15 @@ pub mod task_activity;
 pub mod terminals;
 pub mod thread_status;
 pub mod worktrees;
+
+/// Names and previews are opaque; only the absence of both has UI copy.
+fn task_title<'a>(
+    language: UiLanguage,
+    name: Option<&'a str>,
+    preview: Option<&'a str>,
+) -> &'a str {
+    crate::models::task_title(name, preview).unwrap_or_else(|| language.text("無題のタスク"))
+}
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum GroupKind {
@@ -118,7 +128,9 @@ impl Segment {
 #[cfg(test)]
 fn project(turn: &Turn) -> impl Iterator<Item = Segment> {
     let items = turn.items.as_deref().unwrap_or_default();
-    project_items(turn, items.len(), move |index| items[index].as_ref().into())
+    project_items(UiLanguage::Japanese, turn, items.len(), move |index| {
+        items[index].as_ref().into()
+    })
 }
 
 #[cfg(test)]
@@ -126,7 +138,12 @@ fn assert_work_starts_collapsed(turn: &Turn) {
     use conversation::{ConversationRowContent, activity_is_expanded, project_conversation};
     use std::sync::Arc;
     let rendered = project_conversation(
-        &crate::state::Snapshot::default().pane.navigation.draft_key,
+        crate::localization::UiLanguage::Japanese,
+        &crate::state::Snapshot::default()
+            .panes
+            .primary()
+            .navigation
+            .draft_key,
         &crate::state::Snapshot::default()
             .sessions
             .pending_submissions,
@@ -149,6 +166,7 @@ fn assert_work_starts_collapsed(turn: &Turn) {
 /// The accessor lets clients project interleaved pending input without cloning
 /// native item bodies. It must return the same item for an index throughout a call.
 fn project_items<'a>(
+    language: UiLanguage,
     turn: &'a Turn,
     count: usize,
     item: impl Fn(usize) -> ItemMetadata<'a> + 'a,
@@ -225,19 +243,34 @@ fn project_items<'a>(
         // time, and the work after each steer under a row that continues it. A
         // running turn names what its earlier segments did.
         segment.label = if segment.collapsible {
-            Some(if turn.status == TurnStatus::Running {
+            let activity = || {
                 activity_summary(
+                    language,
                     (start..end)
                         .filter(|&index| segment.role(index, item(index)) == Role::Activity)
                         .map(&item),
                 )
+            };
+            Some(if turn.status == TurnStatus::Running {
+                activity()
             } else if start == 0 {
-                work_summary(turn)
+                // A turn that failed or was stopped says what its last work did.
+                if segment.last
+                    && matches!(turn.status, TurnStatus::Failed | TurnStatus::Interrupted)
+                {
+                    localized_ui_format(
+                        language,
+                        "work.summary.detail".into(),
+                        vec![work_summary(language, turn), activity()],
+                    )
+                } else {
+                    work_summary(language, turn)
+                }
             } else {
-                "続けて作業しました".into()
+                language.text("続けて作業しました").into()
             })
         } else if segment.last && !completed {
-            Some(work_summary(turn))
+            Some(work_summary(language, turn))
         } else {
             None
         };
@@ -245,7 +278,10 @@ fn project_items<'a>(
         Some(segment)
     })
 }
-fn activity_summary<'a>(items: impl Iterator<Item = ItemMetadata<'a>>) -> String {
+fn activity_summary<'a>(
+    language: UiLanguage,
+    items: impl Iterator<Item = ItemMetadata<'a>>,
+) -> String {
     let (mut commands, mut files, mut tools) = (false, false, false);
     for item in items {
         match item.kind {
@@ -260,65 +296,63 @@ fn activity_summary<'a>(items: impl Iterator<Item = ItemMetadata<'a>>) -> String
         (tools, "ツールを使用しました"),
     ]
     .into_iter()
-    .filter_map(|(present, label)| present.then_some(label))
+    .filter(|(present, _)| *present)
+    .map(|(_, label)| language.text(label))
     .collect();
     if labels.is_empty() {
-        "作業の詳細".into()
+        return language.text("作業の詳細").into();
+    }
+    labels.join(if language == UiLanguage::Japanese {
+        "、"
     } else {
-        labels.join("、")
-    }
+        ", "
+    })
 }
 
-/// A duration as the conversation names it: `<1秒`, `12秒`, `1時間 3秒`.
-fn duration_text(ms: u64) -> String {
-    if ms < 1000 {
-        return "<1秒".into();
-    }
-    let seconds = ms / 1000;
-    [
-        (seconds / 3600, "時間"),
-        (seconds / 60 % 60, "分"),
-        (seconds % 60, "秒"),
-    ]
-    .into_iter()
-    .filter(|(value, _)| *value != 0)
-    .map(|(value, unit)| format!("{value}{unit}"))
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
-fn work_summary(turn: &Turn) -> String {
-    if turn.status == agent_protocol::execution::TurnStatus::Running {
-        return "作業中…".into();
+fn work_summary(language: UiLanguage, turn: &Turn) -> String {
+    if turn.status == TurnStatus::Running {
+        return language.text("作業中…").into();
     }
     let duration = turn
         .duration_ms
         .or_else(|| turn.completed_at_ms?.checked_sub(turn.started_at_ms?));
-    let mut summary = String::new();
-    if let Some(ms) = duration {
-        summary.push_str(&duration_text(ms));
-        summary.push_str(" 作業");
-    } else {
-        summary.push_str("作業");
+    let Some(ms) = duration else {
+        return language
+            .text(match turn.status {
+                TurnStatus::Interrupted => "作業を中断しました",
+                TurnStatus::Failed => "作業に失敗しました",
+                _ => "作業しました",
+            })
+            .into();
+    };
+    localized_ui_format(
+        language,
+        match turn.status {
+            TurnStatus::Interrupted => "work.interrupted.duration",
+            TurnStatus::Failed => "work.failed.duration",
+            _ => "work.completed.duration",
+        }
+        .into(),
+        vec![duration_text(language, ms)],
+    )
+}
+
+/// A duration as the conversation names it: `<1秒`, `12秒`, `1時間 3秒`.
+fn duration_text(language: UiLanguage, ms: u64) -> String {
+    if ms < 1000 {
+        return language.text("<1秒").into();
     }
-    summary.push_str(match turn.status {
-        TurnStatus::Interrupted => {
-            if duration.is_some() {
-                "した後に中断しました"
-            } else {
-                "を中断しました"
-            }
-        }
-        TurnStatus::Failed => {
-            if duration.is_some() {
-                "した後に失敗しました"
-            } else {
-                "に失敗しました"
-            }
-        }
-        _ => "しました",
-    });
-    summary
+    let seconds = ms / 1000;
+    [
+        (seconds / 3600, "duration.hours"),
+        (seconds / 60 % 60, "duration.minutes"),
+        (seconds % 60, "duration.seconds"),
+    ]
+    .into_iter()
+    .filter(|(value, _)| *value != 0)
+    .map(|(value, key)| localized_ui_format(language, key.into(), vec![value.to_string()]))
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 /// Place pending inputs after their saved native anchor. No anchor means before
@@ -334,33 +368,16 @@ fn source_order<'a>(
     if anchors.is_empty() {
         return (0..item_count).collect();
     }
-    // Small queues avoid hashing the whole history. A larger batch amortizes
-    // the index; unanchored inputs do not need a native lookup at all.
-    const INDEX_THRESHOLD: usize = 64;
-    let latest =
-        (anchors.iter().flatten().take(INDEX_THRESHOLD).count() == INDEX_THRESHOLD).then(|| {
-            (0..item_count)
-                .map(|index| (item_id(index), index + 1))
-                .collect::<std::collections::HashMap<_, _>>()
-        });
+    let latest: std::collections::HashMap<_, _> = (0..item_count)
+        .map(|index| (item_id(index), index + 1))
+        .collect();
     let mut positions: Vec<_> = anchors
         .into_iter()
         .enumerate()
         .map(|(pending, anchor)| {
             (
                 anchor.map_or(0, |anchor| {
-                    latest
-                        .as_ref()
-                        .map_or_else(
-                            || {
-                                (0..item_count)
-                                    .rev()
-                                    .find(|&index| item_id(index) == anchor)
-                                    .map(|index| index + 1)
-                            },
-                            |latest| latest.get(anchor).copied(),
-                        )
-                        .unwrap_or(item_count)
+                    latest.get(anchor).copied().unwrap_or(item_count)
                 }),
                 item_count + pending,
             )
@@ -388,6 +405,7 @@ pub struct ItemPresentation {
     pub collapsible: bool,
 }
 pub fn item_presentation(
+    language: UiLanguage,
     item: &Item,
     provider: Option<crate::session::ProviderKind>,
 ) -> ItemPresentation {
@@ -410,17 +428,21 @@ pub fn item_presentation(
             ),
             false,
         ),
-        ItemBody::Reasoning { .. } => ("reasoning", Some("作業の詳細".into()), true),
+        ItemBody::Reasoning { .. } => ("reasoning", Some(language.text("作業の詳細").into()), true),
         ItemBody::CommandExecution { command, .. } => {
             ("command", Some(compact_title(command)), true)
         }
         ItemBody::FileChange { changes, .. } => (
             "fileChange",
-            Some(format!("{}件のファイル変更", changes.len())),
+            Some(localized_ui_format(
+                language,
+                "{0}件のファイル変更".into(),
+                vec![changes.len().to_string()],
+            )),
             true,
         ),
         ItemBody::ImageGeneration { .. } => ("imageGeneration", None, false),
-        _ => ("unknown", Some(tool_title(item.body())), true),
+        _ => ("unknown", Some(tool_title(language, item.body())), true),
     };
     ItemPresentation {
         kind,
@@ -428,76 +450,99 @@ pub fn item_presentation(
         collapsible,
     }
 }
-fn tool_title(body: &ItemBody) -> String {
+fn tool_title(language: UiLanguage, body: &ItemBody) -> String {
     match body {
-        ItemBody::Attachment { kind, .. } => match kind {
-            AttachmentKind::HookResult => "フックの実行結果",
-            AttachmentKind::FileEdit => "ファイルの編集内容",
-            AttachmentKind::SessionUpdate => "セッションの更新情報",
-            AttachmentKind::Other => "会話の添付情報",
-        }
-        .into(),
-        ItemBody::Hook { .. } => "追加指示".into(),
-        ItemBody::Plan { .. } => "計画を更新しました".into(),
+        ItemBody::Attachment { kind, .. } => language
+            .text(match kind {
+                AttachmentKind::HookResult => "フックの実行結果",
+                AttachmentKind::FileEdit => "ファイルの編集内容",
+                AttachmentKind::SessionUpdate => "セッションの更新情報",
+                AttachmentKind::Other => "会話の添付情報",
+            })
+            .into(),
+        ItemBody::Hook { .. } => language.text("追加指示").into(),
+        ItemBody::Plan { .. } => language.text("計画を更新しました").into(),
         ItemBody::ToolCall {
             kind: ToolKind::Mcp,
             tool,
             server,
             ..
         } => match (server.as_deref().unwrap_or_default(), tool.as_str()) {
-            ("", "") => "MCPツールを実行しました".into(),
-            (server, "") => format!("{}の連携を使用しました", compact_title(server)),
+            ("", "") => language.text("MCPツールを実行しました").into(),
+            (server, "") => localized_ui_format(
+                language,
+                "{0}の連携を使用しました".into(),
+                vec![compact_title(server)],
+            ),
             ("", tool) => compact_title(tool),
-            (server, tool) => format!(
-                "{}の連携を使用しました · {}",
-                compact_title(server),
-                compact_title(tool)
+            (server, tool) => localized_ui_format(
+                language,
+                "{0}の連携を使用しました · {1}".into(),
+                vec![compact_title(server), compact_title(tool)],
             ),
         },
         ItemBody::ToolCall { tool, .. } => {
             if tool.is_empty() {
-                "ツールを実行しました".into()
+                language.text("ツールを実行しました").into()
             } else {
-                format!("{}を実行しました", compact_title(tool))
+                localized_ui_format(
+                    language,
+                    "{0}を実行しました".into(),
+                    vec![compact_title(tool)],
+                )
             }
         }
         ItemBody::Subagent { tool, .. } => {
             if tool.is_empty() {
-                "サブエージェントが作業しました".into()
+                language.text("サブエージェントが作業しました").into()
             } else {
-                format!("サブエージェント: {}", compact_title(tool))
+                localized_ui_format(
+                    language,
+                    "サブエージェント: {0}".into(),
+                    vec![compact_title(tool)],
+                )
             }
         }
         ItemBody::WebSearch { query, .. } => {
             if query.is_empty() {
-                "Webを検索しました".into()
+                language.text("Webを検索しました").into()
             } else {
-                format!("Webを検索: {}", compact_title(query))
+                localized_ui_format(
+                    language,
+                    "Webを検索: {0}".into(),
+                    vec![compact_title(query)],
+                )
             }
         }
         ItemBody::ImageView { path } => {
             if path.is_empty() {
-                "画像を確認しました".into()
+                language.text("画像を確認しました").into()
             } else {
-                format!("画像を確認: {}", compact_title(path))
+                localized_ui_format(
+                    language,
+                    "画像を確認: {0}".into(),
+                    vec![compact_title(path)],
+                )
             }
         }
-        ItemBody::Compaction {} => "コンテキストを圧縮しました".into(),
-        ItemBody::AutomaticApproval { status, .. } => match status {
-            ApprovalReviewStatus::Running => "承認を自動確認中",
-            ApprovalReviewStatus::Denied => "自動確認で拒否されました",
-            ApprovalReviewStatus::TimedOut => "自動確認がタイムアウトしました",
-            ApprovalReviewStatus::Aborted => "自動確認を中止しました",
-            _ => "承認を自動確認しました",
-        }
-        .into(),
-        ItemBody::Sleep {} => "待機しました".into(),
-        ItemBody::Review { entering, .. } => if *entering {
-            "レビューを開始しました"
-        } else {
-            "レビューを終了しました"
-        }
-        .into(),
+        ItemBody::Compaction {} => language.text("コンテキストを圧縮しました").into(),
+        ItemBody::AutomaticApproval { status, .. } => language
+            .text(match status {
+                ApprovalReviewStatus::Running => "承認を自動確認中",
+                ApprovalReviewStatus::Denied => "自動確認で拒否されました",
+                ApprovalReviewStatus::TimedOut => "自動確認がタイムアウトしました",
+                ApprovalReviewStatus::Aborted => "自動確認を中止しました",
+                _ => "承認を自動確認しました",
+            })
+            .into(),
+        ItemBody::Sleep {} => language.text("待機しました").into(),
+        ItemBody::Review { entering, .. } => language
+            .text(if *entering {
+                "レビューを開始しました"
+            } else {
+                "レビューを終了しました"
+            })
+            .into(),
         ItemBody::Custom { provider, kind, .. } => {
             format!("{provider:?} item ({})", compact_title(kind))
         }
@@ -524,6 +569,7 @@ mod presentation_tests {
             Role::Response
         );
         let presentation = item_presentation(
+            UiLanguage::Japanese,
             turn.items.as_ref().unwrap()[1].as_ref(),
             Some(crate::session::ProviderKind::Codex),
         );
@@ -633,7 +679,12 @@ mod presentation_tests {
         assert_eq!(parts[0].label.as_deref(), Some("24分 19秒 作業しました"));
         assert_eq!(parts[1].label.as_deref(), Some("続けて作業しました"));
         let rendered = conversation::project_conversation(
-            &crate::state::Snapshot::default().pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &crate::state::Snapshot::default()
+                .panes
+                .primary()
+                .navigation
+                .draft_key,
             &crate::state::Snapshot::default()
                 .sessions
                 .pending_submissions,
@@ -770,7 +821,8 @@ mod projection_tests {
                 }
             }
         };
-        let segments: Vec<_> = project_items(&turn, order.len(), item).collect();
+        let segments: Vec<_> =
+            project_items(UiLanguage::Japanese, &turn, order.len(), item).collect();
         let rows: Vec<_> = segments
             .iter()
             .flat_map(|s| (s.start..s.end).map(|index| (order[index], s.role(index, item(index)))))
@@ -780,22 +832,111 @@ mod projection_tests {
             [(0, Role::Response), (2, Role::User), (1, Role::Activity)]
         );
     }
+    #[rstest::rstest]
+    #[case(
+        TurnStatus::Completed,
+        Some(0),
+        "<1秒 作業しました",
+        "Worked for <1s · completed"
+    )]
+    #[case(
+        TurnStatus::Failed,
+        Some(61000),
+        "1分 1秒 作業した後に失敗しました",
+        "Worked for 1m 1s · failed"
+    )]
+    #[case(
+        TurnStatus::Interrupted,
+        Some(3600000),
+        "1時間 作業した後に中断しました",
+        "Worked for 1h · interrupted"
+    )]
+    #[case(
+        TurnStatus::Completed,
+        Some(3723000),
+        "1時間 2分 3秒 作業しました",
+        "Worked for 1h 2m 3s · completed"
+    )]
+    #[case(TurnStatus::Completed, None, "作業しました", "Work completed")]
+    #[case(TurnStatus::Failed, None, "作業に失敗しました", "Work failed")]
+    #[case(
+        TurnStatus::Interrupted,
+        None,
+        "作業を中断しました",
+        "You stopped this response"
+    )]
+    #[case(TurnStatus::Running, Some(1000), "作業中…", "Working…")]
+    fn work_summaries_format_the_duration_and_outcome(
+        #[case] status: TurnStatus,
+        #[case] duration_ms: Option<u64>,
+        #[case] japanese: &str,
+        #[case] english: &str,
+    ) {
+        let turn = Turn {
+            status,
+            duration_ms,
+            ..Default::default()
+        };
+        assert_eq!(work_summary(UiLanguage::Japanese, &turn), japanese);
+        assert_eq!(work_summary(UiLanguage::English, &turn), english);
+    }
+
+    #[test]
+    fn failed_work_combines_outcome_and_activity_copy_in_each_language() {
+        let turn = Turn {
+            status: TurnStatus::Failed,
+            duration_ms: Some(0),
+            ..Default::default()
+        };
+        let kinds = [
+            GroupKind::Command,
+            GroupKind::FileChange,
+            GroupKind::Activity,
+        ];
+        for (language, expected) in [
+            (
+                UiLanguage::Japanese,
+                "<1秒 作業した後に失敗しました・コマンドを実行しました、ファイルを変更しました、ツールを使用しました",
+            ),
+            (
+                UiLanguage::English,
+                "Worked for <1s · failed · Ran a command, Changed files, Used a tool",
+            ),
+        ] {
+            let segment = project_items(language, &turn, kinds.len(), |index| ItemMetadata {
+                kind: kinds[index],
+                ..Default::default()
+            })
+            .next()
+            .unwrap();
+            assert_eq!(segment.label.as_deref(), Some(expected));
+        }
+    }
+
     #[test]
     fn titles_keep_one_bounded_unicode_line() {
         let command: Item = serde_json::from_value(json!({"id":"command","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"commandExecution":{"command":"  cargo test\nsecret second line","cwd":null,"output":"","exitCode":null}}}}})).unwrap();
         assert_eq!(
-            item_presentation(&command, Some(crate::session::ProviderKind::Codex))
-                .title
-                .as_deref(),
+            item_presentation(
+                UiLanguage::Japanese,
+                &command,
+                Some(crate::session::ProviderKind::Codex)
+            )
+            .title
+            .as_deref(),
             Some("cargo test")
         );
         let command: Item = serde_json::from_value(
             json!({"id":"command","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"commandExecution":{"command":"日".repeat(121),"cwd":null,"output":"","exitCode":null}}}}}),
         )
         .unwrap();
-        let title = item_presentation(&command, Some(crate::session::ProviderKind::Codex))
-            .title
-            .unwrap();
+        let title = item_presentation(
+            UiLanguage::Japanese,
+            &command,
+            Some(crate::session::ProviderKind::Codex),
+        )
+        .title
+        .unwrap();
         assert_eq!(title.chars().count(), 121);
         assert!(title.ends_with('…'));
     }
@@ -822,6 +963,7 @@ mod deferred_item_tests {
                 },
             );
             let title = crate::presentation::item_presentation(
+                UiLanguage::Japanese,
                 &item,
                 Some(crate::session::ProviderKind::Codex),
             )
@@ -830,6 +972,7 @@ mod deferred_item_tests {
             item.defer();
             assert_eq!(
                 crate::presentation::item_presentation(
+                    UiLanguage::Japanese,
                     &item,
                     Some(crate::session::ProviderKind::Codex)
                 )

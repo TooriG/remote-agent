@@ -145,7 +145,7 @@ impl Dictation {
                 .enabled(move || {
                     !self.requesting.get()
                         && !connection.uploading()
-                        && connection.composer.with(|p| p.ready_for_input())
+                        && connection.composer.with(|p| p.can_dictate())
                 })
                 .style_when(
                     move || self.active.get(),

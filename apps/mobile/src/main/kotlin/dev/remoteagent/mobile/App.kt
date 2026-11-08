@@ -26,12 +26,18 @@ import dev.remoteagent.core.AgentStore
 import dev.remoteagent.core.ClientBuild
 import dev.remoteagent.core.ClientSession
 import dev.remoteagent.core.ClientSessions
+import dev.remoteagent.core.ConversationRowPolicy
+import dev.remoteagent.core.ConversationRows
+import dev.remoteagent.core.DevicePreferences
 import dev.remoteagent.core.ErrorScope
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ListSessions
 import dev.remoteagent.core.OperationKey
 import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.PanelScope
 import dev.remoteagent.core.Presentation
+import dev.remoteagent.core.ProgressRows
+import dev.remoteagent.core.RenderedConversation
 import dev.remoteagent.core.Snapshot
 import dev.remoteagent.core.ThreadList
 import dev.remoteagent.core.UploadAttachment
@@ -40,7 +46,6 @@ import dev.remoteagent.core.ticketIdentity
 import java.io.File
 import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -63,40 +68,37 @@ internal enum class Screen {
 /** Core presentations feed each surface; business changes are queued typed intents. */
 // The selected Store owns browser requests as well as conversation operations.
 @Suppress("TooManyFunctions")
-internal class AndroidAppModel(private val context: Context) : ViewModel() {
-    private val appPreferences = context.getSharedPreferences("bex-app", Context.MODE_PRIVATE)
-    var language by
-        mutableStateOf(
-            if (appPreferences.getString("language", "ja") == "en") dev.remoteagent.core.UiLanguage.ENGLISH
-            else dev.remoteagent.core.UiLanguage.JAPANESE
-        )
+internal class AndroidAppModel(private val context: Context, private val preferences: DevicePreferences) : ViewModel() {
+    var language by mutableStateOf(preferences.language())
         private set
 
     fun selectLanguage(value: dev.remoteagent.core.UiLanguage) {
-        appPreferences
-            .edit()
-            .putString("language", if (value == dev.remoteagent.core.UiLanguage.ENGLISH) "en" else "ja")
-            .apply()
+        preferences.selectLanguage(value)
+        updateLanguage(preferences.language())
+    }
+
+    private fun updateLanguage(value: dev.remoteagent.core.UiLanguage) {
+        if (language == value) return
         language = value
+        if (owner == null) publish(session?.presentation() ?: Presentation.empty(value))
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
-    private var publication = Presentation.empty()
-    @Volatile
-    var snapshot = Snapshot.empty()
+    @Volatile private var publication = Presentation.empty(language)
+    val snapshot: Snapshot
+        get() = publication.snapshot()
+
+    var settings by mutableStateOf(publication.settings())
         private set
 
-    var settings by mutableStateOf(Presentation.empty().settings())
+    var conversationContext by mutableStateOf(publication.conversationContext())
         private set
 
-    var conversationContext by mutableStateOf(Presentation.empty().conversationContext())
+    var composer by mutableStateOf(publication.composer())
         private set
 
-    var composer by mutableStateOf(Presentation.empty().composer())
-        private set
-
-    var files by mutableStateOf(Snapshot.empty().files())
+    var files by mutableStateOf(requireNotNull(snapshot.files("")))
         private set
 
     var terminals by mutableStateOf(dev.remoteagent.core.Terminals.empty())
@@ -111,7 +113,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var loadingThreads by mutableStateOf(false)
         private set
 
-    var listQuery by mutableStateOf(Snapshot.empty().listQuery())
+    var listQuery by mutableStateOf(snapshot.listQuery())
         private set
 
     var applicationNotices by mutableStateOf(emptyList<dev.remoteagent.core.ErrorNotice>())
@@ -120,7 +122,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var projectNotices by mutableStateOf(emptyList<dev.remoteagent.core.ErrorNotice>())
         private set
 
-    var conversation by mutableStateOf<ConversationProjection?>(null)
+    var conversation by mutableStateOf<ConversationRows?>(null)
         private set
 
     var profiles by mutableStateOf(emptyList<HostProfile>())
@@ -139,8 +141,6 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
             else connectionSelection.hostId?.let(connections::containsKey) == true
 
     var notice by mutableStateOf<String?>(null)
-    val loadingHistory: Boolean
-        get() = conversationContext.history()?.loading == true
 
     val shouldReconnect: Boolean
         get() =
@@ -152,12 +152,15 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     var list by mutableStateOf<ThreadList?>(null)
         private set
 
-    private val sessions = ClientSessions(true, ClientBuild(0uL, BuildConfig.BUILD_REVISION), repository.deviceName)
+    private val sessions =
+        ClientSessions(true, ClientBuild(0uL, BuildConfig.BUILD_REVISION), repository.deviceName, preferences)
     private var session: ClientSession? = null
-    private var owner: AgentStore? = null
+    // Observed so a browser pane follows the selected Host's Store.
+    private var owner by mutableStateOf<AgentStore?>(null)
 
     private val connections = mutableStateMapOf<String, Job>()
     private var pairingConnection by mutableStateOf<Job?>(null)
+    private var activityExpansion = emptyMap<String, String>()
     private var attachmentTransfers = 0
     private val observations = mutableMapOf<String, Job>()
     val draftKey
@@ -167,6 +170,12 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         get() = connectionSelection.hostId to draftKey
 
     init {
+        scope.launch {
+            while (isActive) {
+                preferences.nextLanguage(language)
+                updateLanguage(preferences.language())
+            }
+        }
         try {
             profiles = repository.profiles()
             val selection =
@@ -183,16 +192,9 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         }
     }
 
-    suspend fun browser(
-        expectedProfile: String?,
-        request: dev.remoteagent.core.BrowserRequest,
-    ): dev.remoteagent.core.BrowserFrame {
-        val store = owner ?: error("ホストに接続してください。")
-        check(connectionSelection.hostId == expectedProfile)
-        val frame = store.browser(request)
-        if (owner !== store || connectionSelection.hostId != expectedProfile) throw CancellationException()
-        return frame
-    }
+    /** The selected Host's Store, which owns its browser. */
+    val selectedStore: AgentStore?
+        get() = owner
 
     fun perform(intent: Intent, complete: (Result<Outcome>) -> Unit = {}) {
         val store = session
@@ -234,7 +236,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         connectionSelection = connectionSelection.copy(hostId = id)
         repository.selected = id
         notice = null
-        publish(Presentation.empty())
+        publish(Presentation.empty(language))
         selected.dispatch(Intent.ShowThreadList)
         publish(selected.presentation())
         observe(id, selected)
@@ -333,13 +335,15 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         if (!enabled) connections.remove(host)?.cancel()
         try {
             val receipt = selected.dispatch(Intent.SetConnectionEnabled(enabled))
-            connectionStates[host] = HostConnectionState(selected.snapshot())
+            val current = selected.snapshot()
+            connectionStates[host] = HostConnectionState(current.connectionEnabled(), current.connected())
             scope.launch {
                 try {
                     receipt.wait()
                     selected.flush()
                     if (profiles.none { it.id == host }) return@launch
-                    connectionStates[host] = HostConnectionState(selected.snapshot())
+                    val updated = selected.snapshot()
+                    connectionStates[host] = HostConnectionState(updated.connectionEnabled(), updated.connected())
                     if (enabled) profiles.firstOrNull { it.id == host }?.let { connect(it) }
                 } catch (error: AgentException) {
                     notice = error.displayMessage()
@@ -361,7 +365,7 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         if (connectionSelection.hostId == host) {
             session = null
             owner = null
-            publish(Presentation.empty())
+            publish(Presentation.empty(language))
         }
         connectionSelection =
             dev.remoteagent.core.resolveConnectionSelection(
@@ -444,10 +448,12 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
     }
 
     private fun receiveHost(next: Presentation, host: String, listChanged: Boolean) {
-        connectionStates[host] = HostConnectionState(next.snapshot())
-        updateProfile(next.snapshot(), host)
+        val current = next.snapshot()
+        connectionStates[host] = HostConnectionState(current.connectionEnabled(), current.connected())
+        updateProfile(current, host)
         if (connectionSelection.hostId == host) {
-            owner = session?.store()
+            // Each read returns a new binding wrapper; take the Store once it is ready.
+            if (owner == null) owner = session?.store()
             publish(next)
         } else if (connectionSelection.all && listChanged) updateTaskList()
     }
@@ -458,21 +464,44 @@ internal class AndroidAppModel(private val context: Context) : ViewModel() {
         if (!changes.changed) return
         if (changes.reconnected) notice = null
         if (changes.list) updateTaskList()
-        if (changes.context) conversationContext = value.conversationContext()
+        val context = if (changes.context) value.conversationContext() else conversationContext
+        val navigated = context.navigation().draftKey != draftKey
+        if (navigated) activityExpansion = emptyMap()
+        if (changes.context) conversationContext = context
         if (changes.composer) composer = value.composer()
-        if (changes.conversation) conversation = projectConversationRows(value.conversation(), conversation)
+        projectConversation(value.conversation(), next.panelScope(connectionSelection.hostId ?: "local", draftKey))
         publication = value
         if (changes.settings) settings = value.settings()
         isConnected = next.connected()
         loadingThreads = next.operationRunning(OperationKey.SessionList)
         listQuery = next.listQuery()
-        applicationNotices = next.errorNotices(ErrorScope.Application)
-        projectNotices = next.errorNotices(ErrorScope.Projects)
-        if (changes.groups.files || changes.groups.pane) files = next.files()
+        applicationNotices = next.errorNotices("", ErrorScope.Application)
+        projectNotices = next.errorNotices("", ErrorScope.Projects)
+        if (changes.groups.files || changes.groups.panes) files = requireNotNull(next.files(value.paneId()))
         if (changes.groups.terminals) terminals = next.terminals()
-        fileLocation = FileLocation(next.navigation().cwd, next.hostHomeDirectory())
-        snapshot = next
+        fileLocation = FileLocation(context.navigation().cwd, context.home())
         session?.persistenceError()?.let { notice = it }
+    }
+
+    private fun projectConversation(rendered: RenderedConversation?, scope: PanelScope) {
+        val next = rendered?.let {
+            ConversationRows.project(
+                it,
+                scope,
+                activityExpansion,
+                ConversationRowPolicy(requests = true, progress = ProgressRows.ALWAYS),
+                conversation,
+            )
+        }
+        if (next == null || conversation?.let(next::unchanged) != true) conversation = next
+    }
+
+    fun toggleActivity(id: String) {
+        val current = conversation ?: return
+        val change = current.toggleActivity(id) ?: return
+        activityExpansion = change.expansion
+        projectConversation(current.source(), current.scope())
+        change.loadItems?.let { perform(Intent.LoadTurnItems(it)) {} }
     }
 
     private fun updateProfile(next: Snapshot, host: String) {
@@ -559,12 +588,6 @@ internal fun AndroidAppModel.showThreads() {
 internal fun AndroidAppModel.showHosts() {
     screen = Screen.Hosts
     perform(Intent.ShowThreadList)
-}
-
-internal fun AndroidAppModel.older() {
-    if (loadingHistory) return
-    val id = snapshot.navigation().threadId ?: return
-    perform(Intent.ReadOlder(id))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -683,17 +706,13 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
         androidx.compose.foundation.layout.Row {
             FilesLauncher(model.files, model.fileLocation.cwd, model::perform)
             TerminalLauncher(model.terminals, model.conversationContext.navigation().cwd, model::perform)
-            BrowserLauncher(
-                model.conversationContext.navigation().threadId,
-                model.connectionSelection.hostId,
-                model::browser,
-            )
+            BrowserLauncher(model.conversationContext.navigation().threadId, model.selectedStore)
         }
         ThreadDetailScreen(
             model.conversationContext,
             model.conversation,
             model::perform,
-            if (model.loadingHistory) null else model::older,
+            model::toggleActivity,
             Modifier.weight(1f),
             scrollToTopRequest = scrollToTopRequest,
         ) { onSend ->
@@ -705,7 +724,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
                     ModelPickerDialog(model.settings, selected, model::perform, dismiss)
                 },
             ) { transferState ->
-                AttachmentButton(model.selectionKey, model::attach, transferState)
+                AttachmentButton(model.selectionKey, model::attach, model.composer.canAttach(), transferState)
             }
         }
     }

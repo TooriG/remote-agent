@@ -16,9 +16,7 @@ mod preview;
 pub use mobile::{
     MobileFileAction, MobileFileMenuItem, mobile_file_menu, mobile_file_open_request,
 };
-pub use preview::{
-    file_preview_mime_type, file_preview_truncation_notice, image_extension, is_image_file,
-};
+pub use preview::{file_preview_mime_type, image_extension, is_image_file};
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn mobile_file_icon(path: String) -> String {
@@ -46,7 +44,7 @@ pub fn file_reference_tooltip(path: &str, byte_length: Option<u64>) -> String {
 }
 pub use tree::{
     FileTreeAction, FileTreeKey, FileTreeRequest, FileTreeRow, FileTreeSurface, FileTreeView,
-    FileTrees, file_tree_path,
+    FileTrees, file_tree_path, file_tree_toggle_all_label,
 };
 
 /// The desktop client's composer file link, shared by menus and dragging.
@@ -164,13 +162,4 @@ mod tests {
 pub struct Files {
     pub(crate) resources: crate::state::Files,
     pub(crate) selection: std::sync::Arc<crate::state::WorkspaceLocation>,
-}
-#[cfg(feature = "bindings")]
-impl crate::state::Snapshot {
-    pub fn files_view(&self) -> std::sync::Arc<Files> {
-        std::sync::Arc::new(Files {
-            resources: self.files.clone(),
-            selection: self.pane.workspace.clone(),
-        })
-    }
 }

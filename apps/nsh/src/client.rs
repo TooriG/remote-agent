@@ -4,10 +4,12 @@ use crate::storage::{self, HandedKeys, Host, Storage, error};
 use agent_core::{
     client::{
         AgentError,
+        persistence::DevicePreferences,
         session::{ClientBuild, ClientSession, ClientSessions},
     },
     presentation::view::Presentation,
     state::Intent,
+    store::{BrowserSession, BrowserUpdate},
 };
 use agent_local_host::{LocalHostState, launch::HostScope};
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -44,6 +46,8 @@ pub(crate) struct Client {
     /// Cancelled once the client shuts down: its work ends.
     closing: CancellationToken,
     sessions: Arc<ClientSessions>,
+    /// The device's preferences every Host shares: models, editor and language.
+    pub device: Arc<DevicePreferences>,
     root: PathBuf,
     hosts: tokio::sync::Mutex<Vec<Host>>,
     /// This machine's Host, started from the app bundle when it is stopped.
@@ -71,6 +75,9 @@ impl Client {
     > {
         let runtime = tokio::runtime::Runtime::new().map_err(error)?;
         let (updates, incoming) = async_channel::unbounded();
+        let device = DevicePreferences::new(Arc::new(crate::storage::DeviceStorage {
+            root: root.clone(),
+        }));
         let client = Arc::new(Self {
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
@@ -85,7 +92,9 @@ impl Client {
                         .into(),
                 },
                 "Bex NSH".into(),
+                device.clone(),
             ),
+            device,
             root,
             hosts: Default::default(),
             local,
@@ -387,11 +396,12 @@ impl Client {
         });
     }
 
-    pub fn browser(
+    /// The view of `thread`'s tab in `host`'s browser, once its Host is ready.
+    pub fn browser_session(
         &self,
         host: String,
-        request: agent_protocol::browser::BrowserRequest,
-    ) -> async_channel::Receiver<Result<agent_protocol::browser::BrowserFrame, AgentError>> {
+        thread: agent_protocol::session::SessionRef,
+    ) -> async_channel::Receiver<Result<Arc<BrowserSession>, AgentError>> {
         let session = self.sessions.session(host);
         let closing = self.closing.is_cancelled();
         let (send, receive) = async_channel::bounded(1);
@@ -404,10 +414,23 @@ impl Client {
                     .ok_or_else(|| error(tr("接続先が選択されていません")))?
                     .ready()
                     .await?;
-                store.browser(request).await
+                Ok(store.browser_session(thread))
             }
             .await;
             let _ = send.send(result).await;
+        });
+        receive
+    }
+
+    /// The browser's next update, which Core reads on this client's runtime;
+    /// none once the view is hidden.
+    pub fn browser_next(
+        &self,
+        browser: Arc<BrowserSession>,
+    ) -> async_channel::Receiver<Option<BrowserUpdate>> {
+        let (send, receive) = async_channel::bounded(1);
+        self.spawn(async move {
+            let _ = send.send(browser.next().await).await;
         });
         receive
     }
@@ -652,10 +675,7 @@ async fn local_profile(scope: &HostScope) -> Result<Host, AgentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_core::{
-        client::persistence::{ClientStorage, StorageKey},
-        state::Snapshot,
-    };
+    use agent_core::{client::persistence::ClientStorage, state::Snapshot};
     use std::time::Duration;
 
     pub(super) fn saved_host(root: &std::path::Path) -> Host {
@@ -673,10 +693,7 @@ mod tests {
         let mut snapshot = Snapshot::default();
         snapshot.connection.connection_disabled = true;
         storage
-            .save(
-                StorageKey::LocalState,
-                agent_core::persistence::encode(&snapshot).unwrap(),
-            )
+            .save(agent_core::persistence::encode(&snapshot).unwrap())
             .unwrap();
         agent_local_host::save_private_json(&root.join("hosts.json"), &vec![host.clone()]).unwrap();
         host
@@ -720,10 +737,7 @@ mod tests {
             host: local.clone(),
             handed: Default::default(),
         }
-        .save(
-            StorageKey::LocalState,
-            agent_core::persistence::encode(&snapshot).unwrap(),
-        )
+        .save(agent_core::persistence::encode(&snapshot).unwrap())
         .unwrap();
         let mut stale = local.clone();
         stale.name = "Old derived local".into();
@@ -1012,7 +1026,7 @@ mod tests {
         let host = saved_host(directory.path());
         let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let initial = runtime.block_on(publication(&incoming, ""));
-        let key = initial.snapshot.pane.navigation.draft_key.clone();
+        let key = initial.pane().navigation.draft_key.clone();
         client.dispatch(
             &host.id,
             None,
@@ -1032,7 +1046,7 @@ mod tests {
         drop(runtime);
         let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
         let restored = runtime.block_on(publication(&incoming, "終了直前の日本語 👋"));
-        assert_eq!(restored.snapshot.pane.navigation.draft_key, key);
+        assert_eq!(restored.pane().navigation.draft_key, key);
         runtime.block_on(client.shutdown()).unwrap();
     }
 
@@ -1046,7 +1060,7 @@ mod tests {
             &host.id,
             None,
             Intent::SetDraftText {
-                thread_id: initial.snapshot.pane.navigation.draft_key.clone(),
+                thread_id: initial.pane().navigation.draft_key.clone(),
                 text: "保持する入力".into(),
             },
         );
@@ -1125,10 +1139,14 @@ mod tests {
                         Update::Presentation { value, .. }
                             if value
                                 .snapshot
-                                .operation_error(op::OperationKey::File)
+                                .operation_error(op::OperationKey::File {
+                                    pane: value.pane_id.clone(),
+                                })
                                 .is_some() =>
                         {
-                            let notices = value.snapshot.error_notices(ErrorScope::Workspace);
+                            let notices = value
+                                .snapshot
+                                .error_notices(&value.pane_id, ErrorScope::Workspace);
                             assert_eq!(notices.len(), 1);
                             client.dispatch(
                                 &host.id,
@@ -1148,7 +1166,7 @@ mod tests {
                         Update::Presentation { value, .. }
                             if value
                                 .snapshot
-                                .error_notices(ErrorScope::Workspace)
+                                .error_notices(&value.pane_id, ErrorScope::Workspace)
                                 .is_empty() =>
                         {
                             break;

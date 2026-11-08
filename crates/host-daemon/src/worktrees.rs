@@ -2,7 +2,7 @@ use agent_protocol::models::{Worktree, WorktreeSettings};
 use anyhow::{Context as _, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     io::Write,
     path::{Component, Path, PathBuf},
@@ -378,155 +378,6 @@ impl Worktrees {
     }
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub(crate) struct StatusSource {
-    pub cwd: String,
-    pub checkout: Option<String>,
-    pub repository: Option<String>,
-    pub branch: Option<String>,
-}
-
-/// Inspect visible workspaces without caching Git state. Saved native branch
-/// metadata resolves history only after the managed checkout has been deleted.
-pub(crate) async fn directory_statuses(
-    sources: HashSet<StatusSource>,
-) -> Result<HashMap<StatusSource, agent_protocol::models::WorktreeStatus>> {
-    use futures_util::{StreamExt, TryStreamExt};
-    // Bound process fan-out while avoiding a serial Git round trip for every
-    // visible conversation. Recompute on every request so new commits stay fresh.
-    let results: Vec<_> = futures_util::stream::iter(sources)
-        .map(|source| async move {
-            tokio::task::spawn_blocking(move || {
-                directory_status(
-                    Path::new(&source.cwd),
-                    source.checkout.as_deref(),
-                    source.repository.as_deref(),
-                    source.branch.as_deref(),
-                )
-                .ok()
-                .flatten()
-                .map(|status| (source, status))
-            })
-            .await
-        })
-        .buffer_unordered(4)
-        .try_collect()
-        .await?;
-    Ok(results.into_iter().flatten().collect())
-}
-
-fn directory_status(
-    cwd: &Path,
-    checkout: Option<&str>,
-    repository: Option<&str>,
-    saved_branch: Option<&str>,
-) -> Result<Option<agent_protocol::models::WorktreeStatus>> {
-    match fs::metadata(cwd) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let (Some(checkout), Some(repository), Some(saved_branch)) =
-                (checkout, repository, saved_branch)
-            else {
-                return Ok(None);
-            };
-            // A missing subdirectory of an existing checkout has no inspectable
-            // working tree; do not turn its old metadata into a merge marker.
-            match fs::symlink_metadata(checkout) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-                Ok(_) => return Ok(None),
-            }
-            if saved_branch.is_empty() || saved_branch == "main" || saved_branch == "HEAD" {
-                return Ok(None);
-            }
-            let branch = format!("refs/heads/{saved_branch}");
-            let repository = Path::new(repository);
-            let head = crate::git::text(
-                repository,
-                &["rev-parse", "--verify", "--end-of-options", &branch],
-            )?;
-            return branch_status(repository, head.trim(), &branch, false);
-        }
-        Err(error) => return Err(error.into()),
-        Ok(_) => {}
-    }
-    let identity = crate::git::text(
-        cwd,
-        &[
-            "rev-parse",
-            "--absolute-git-dir",
-            "--path-format=absolute",
-            "--git-common-dir",
-            "HEAD",
-            "--symbolic-full-name",
-            "HEAD",
-        ],
-    )?;
-    let mut fields = identity.lines();
-    let (Some(git_dir), Some(common_dir), Some(head), Some(branch)) =
-        (fields.next(), fields.next(), fields.next(), fields.next())
-    else {
-        return Ok(None);
-    };
-    if git_dir == common_dir || branch == "refs/heads/main" || !branch.starts_with("refs/heads/") {
-        return Ok(None);
-    }
-    let dirty = !crate::git::output(
-        cwd,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-    )?
-    .stdout
-    .is_empty();
-    branch_status(cwd, head, branch, dirty)
-}
-
-fn branch_status(
-    repository: &Path,
-    head: &str,
-    branch: &str,
-    dirty: bool,
-) -> Result<Option<agent_protocol::models::WorktreeStatus>> {
-    let contained = crate::git::text(
-        repository,
-        &[
-            "rev-list",
-            "--max-count=1",
-            head,
-            "--not",
-            "refs/heads/main",
-        ],
-    )?
-    .is_empty();
-    // Commit ancestry alone also counts empty commits and reverted work. Inspect
-    // this branch's net file changes without counting changes made only on main.
-    let unmerged_changes = !contained
-        && !dirty
-        && !crate::git::output(
-            repository,
-            &[
-                "diff",
-                "--no-ext-diff",
-                "--no-relative",
-                "--name-only",
-                "-z",
-                &format!("refs/heads/main...{branch}"),
-                "--",
-            ],
-        )?
-        .stdout
-        .is_empty();
-    let history = (contained && !dirty)
-        .then(|| crate::git::text(repository, &["reflog", "show", "--format=%H", branch]))
-        .transpose()?;
-    Ok(agent_protocol::models::worktree_branch_status(
-        dirty,
-        unmerged_changes,
-        history
-            .as_deref()
-            .and_then(|history| history.lines().last())
-            .is_some_and(|initial| initial != head),
-    ))
-}
-
 fn worktree_path(entry: &str) -> Option<&Path> {
     entry
         .split('\0')
@@ -628,12 +479,13 @@ fn create_checkout(
     copy_paths: &[String],
     relative_cwd: &Path,
 ) -> Result<PathBuf> {
+    let base = crate::workspace_review::comparison::source_ref(source, base)?;
     let destination_text = destination.to_str().context("worktree path is not UTF-8")?;
     if let Some(parent) = destination.parent() {
         agent_local_host::create_state_directory(parent)?;
     }
     agent_local_host::create_state_directory(destination)?;
-    if let Err(error) = crate::git::text(source, &["branch", branch, base]) {
+    if let Err(error) = crate::git::text(source, &["branch", branch, &base]) {
         let _ = fs::remove_dir(destination);
         return Err(error);
     }
@@ -650,6 +502,14 @@ fn create_checkout(
         });
     }
     let prepared = (|| {
+        crate::git::text(
+            source,
+            &[
+                "config",
+                &crate::workspace_review::comparison::base_key(branch),
+                &base,
+            ],
+        )?;
         for entry in copy_paths {
             let relative = relative_path(entry)?;
             let path = source.join(relative);

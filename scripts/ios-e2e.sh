@@ -25,7 +25,7 @@ if [[ $# == 0 ]]; then
         testSimulatorNativeTerminalRetainsShellAfterReopening \
         testSimulatorNativeTerminalPastesMultilineText \
         testSimulatorNativeTerminalDoesNotDuplicateQueryResponses \
-        testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus \
+        testSimulatorShowsChangesMarkToTheRightOfRunningStatus \
         testSimulatorEditsHostWorktreeSettingsFromTaskMenu \
         testSimulatorSearchesFromBottomBarAndCreatesInCollapsedProject \
         testSimulatorLoadsLatestFiveTitlesPerProjectAndExpandsOneProject \

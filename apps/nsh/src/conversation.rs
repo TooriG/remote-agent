@@ -277,9 +277,12 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             },
         ))
         .child(text(move || {
-            connection
-                .context
-                .with(|p| p.history_notice().map(localized).unwrap_or_default())
+            connection.conversation.with(|conversation| {
+                conversation
+                    .as_ref()
+                    .and_then(|conversation| conversation.history_notice())
+                    .unwrap_or_default()
+            })
         }))
         .child(
             virtual_list(
@@ -306,6 +309,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                     .map(|progress| {
                                         localized(
                                             progress.label(
+                                                crate::l10n::language(),
                                                 clock
                                                     .get()
                                                     .duration_since(std::time::UNIX_EPOCH)
@@ -989,6 +993,7 @@ mod tests {
         .unwrap();
         let key = source.id.as_ref().unwrap().into();
         let conversation = agent_core::presentation::conversation::project_conversation(
+            agent_core::localization::UiLanguage::Japanese,
             &key,
             &Default::default(),
             std::sync::Arc::new(source),

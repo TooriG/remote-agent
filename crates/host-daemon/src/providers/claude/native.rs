@@ -14,29 +14,10 @@ pub(super) fn parse_models(entries: &[Value]) -> Result<Vec<Model>, String> {
     // Native aliases such as default and opus can resolve to the same model.
     // Keep the SDK's ordering, with one selectable row per execution identity.
     let mut models: Vec<Model> = Vec::new();
-    let mut identities = None;
-    for (index, entry) in entries.iter().enumerate() {
+    let mut identities = BTreeSet::new();
+    for entry in entries {
         let model = parse_model(entry)?;
-        // Cloning lookup keys pays off only with enough remaining comparisons.
-        if identities.is_none() && models.len() >= 64 && entries.len() - index >= 256 {
-            identities = Some(
-                models
-                    .iter()
-                    .map(|model| model.model.clone())
-                    .collect::<BTreeSet<_>>(),
-            );
-        }
-        let unique = match &mut identities {
-            Some(identities) => {
-                if identities.contains(&model.model) {
-                    false
-                } else {
-                    identities.insert(model.model.clone())
-                }
-            }
-            None => models.iter().all(|existing| existing.model != model.model),
-        };
-        if unique {
+        if identities.insert(model.model.clone()) {
             models.push(model);
         }
     }

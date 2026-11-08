@@ -1,7 +1,6 @@
 import AgentCore
 import Foundation
 import Observation
-import UniformTypeIdentifiers
 
 /// One pane owns its native presentation and input. The Host session owns transport and persistence.
 @MainActor
@@ -10,14 +9,17 @@ final class ConversationModel {
     let host: String
     @ObservationIgnored let session: ClientSession
     @ObservationIgnored let pane: AgentPane?
-    @ObservationIgnored private(set) var publication = Presentation.empty()
-    @ObservationIgnored private(set) var snapshot = AgentCore.Snapshot.empty()
-    private(set) var settings = Presentation.empty().settings()
+    @ObservationIgnored private(set) var publication: Presentation
+    var snapshot: AgentCore.Snapshot {
+        publication.snapshot()
+    }
+
+    private(set) var settings: SettingsPresentation
     private(set) var isConnected = false
-    private(set) var conversationContext = Presentation.empty().conversationContext()
-    private(set) var composer = Presentation.empty().composer()
-    private(set) var composerControls = Presentation.empty().composer().controls()
-    private(set) var files = AgentCore.Snapshot.empty().files()
+    private(set) var conversationContext: ConversationContext
+    private(set) var composer: ComposerPresentation
+    private(set) var composerControls: ComposerControls
+    private(set) var files: AgentCore.Files
     private(set) var terminals = Terminals.empty()
     private(set) var conversation: ConversationPresentation?
     private(set) var agents: [AgentSummary] = []
@@ -33,6 +35,8 @@ final class ConversationModel {
     @ObservationIgnored private var presentationTask: Task<Void, Never>?
     @ObservationIgnored private var pendingPresentation: ProjectionInput?
     @ObservationIgnored private var recentConversations: [ConversationPresentation] = []
+    @ObservationIgnored private var visibleProjection: ConversationRows?
+    @ObservationIgnored private var visibleRows: [ThreadConversationRow] = []
 
     var store: AgentStore? {
         session.store()
@@ -42,6 +46,14 @@ final class ConversationModel {
         self.host = host
         self.session = session
         self.pane = pane
+        let empty = Presentation.empty(language: session.snapshot().uiLanguage())
+        let composer = empty.composer()
+        publication = empty
+        settings = empty.settings()
+        conversationContext = empty.conversationContext()
+        self.composer = composer
+        composerControls = composer.controls()
+        files = empty.snapshot().files(paneId: "")!
         if let value = try? currentPresentation() {
             publish(value)
         }
@@ -95,8 +107,8 @@ final class ConversationModel {
 
     func publish(_ value: Presentation) {
         let changes = value.changes(previous: publication)
-        guard changes.changed else { return }
         let next = value.snapshot()
+        guard changes.changed, let nextFiles = next.files(paneId: value.paneId()) else { return }
         migrateWorkbench(to: next)
         publication = value
         if changes.settings {
@@ -114,14 +126,12 @@ final class ConversationModel {
         if changes.agents {
             agents = value.agents()
         }
-        let nextFiles = next.files()
         if changes.groups.terminals {
             terminals = next.terminals()
         }
         if !nextFiles.unchanged(other: files) {
             files = nextFiles
         }
-        snapshot = next
         if isConnected != next.connected() {
             isConnected = next.connected()
         }
@@ -233,10 +243,6 @@ extension ConversationModel {
         perform(.discardUnknownSubmission(clientUserMessageId: id)) { [weak self] _ in self?.persist() }
     }
 
-    func removeAttachment(_ id: Int) {
-        perform(.removeAttachment(draftKey: coreDraftKey, index: UInt32(id))) { [weak self] _ in self?.persist() }
-    }
-
     func transcribe(_ audio: Data, draftKey key: DraftIdentity, sendImmediately: Bool,
                     preparation: DictationPreparation?) {
         guard !transcribing, key == draftKey else { return }
@@ -253,33 +259,6 @@ extension ConversationModel {
         }
     }
 
-    func interrupt(_ turnId: String) {
-        guard let threadId = navigation.threadId else { return }
-        perform(.interrupt(Interrupt(threadId: threadId, turnId: turnId)))
-    }
-
-    func attach(_ url: URL, temporaryDirectory: URL? = nil) async throws {
-        let access = url.startAccessingSecurityScopedResource()
-        transferring = true
-        transferError = nil
-        defer {
-            persist()
-            if access {
-                url.stopAccessingSecurityScopedResource()
-            }
-            if let temporaryDirectory {
-                try? FileManager.default.removeItem(at: temporaryDirectory)
-            }
-            transferring = false
-        }
-        let attachment = Attachment(path: url.path, name: url.lastPathComponent,
-                                    isImage: UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true)
-        _ = try await outcome(for: .uploadAttachment(UploadAttachment(
-            draftKey: coreDraftKey,
-            attachment: attachment
-        )))
-    }
-
     func respond(_ requestId: String, _ answer: Answer) {
         perform(.respond(Respond(requestId: requestId, answer: answer)))
     }
@@ -289,7 +268,7 @@ extension ConversationModel {
     }
 
     var dockedRequest: Request? {
-        composerControls.request
+        conversationContext.dockedRequest()
     }
 
     func answerQuestion(_ requestId: String, _ action: QuestionAction) {
@@ -332,33 +311,58 @@ extension ConversationModel {
         }
     }
 
+    /// The view owns expansion choices; this owner memoizes the pure Rust result.
+    func conversationRows(_ conversation: ConversationPresentation, expansion: [String: String])
+        -> (rows: [ThreadConversationRow], sourceItemCount: UInt32) {
+        let next = ConversationRows.project(
+            source: conversation.projection, scope: conversation.scope, expansion: expansion,
+            policy: ConversationRowPolicy(requests: false, progress: .hidden), previous: visibleProjection
+        )
+        if let previous = visibleProjection, next.unchanged(other: previous) {
+            return (visibleRows, next.sourceItemCount())
+        }
+        visibleProjection = next
+        visibleRows = conversation.rows(next.rows())
+        return (visibleRows, next.sourceItemCount())
+    }
+
+    func activityExpansion(_ id: String, in conversation: ConversationPresentation,
+                           expansion: [String: String]) -> ActivityExpansionChange? {
+        guard conversation.scope == snapshot.panelScope(host: host, draft: coreDraftKey) else { return nil }
+        _ = conversationRows(conversation, expansion: expansion)
+        return visibleProjection?.toggleActivity(id: id)
+    }
+
     private func projectConversation(_ rendered: RenderedConversation?) {
         guard let rendered else {
             conversation = nil
             pendingPresentation = nil
+            visibleProjection = nil
+            visibleRows = []
             return
         }
-        let id = rendered.source().id()
-        if conversation?.id != id {
-            conversation = recentConversations.first { $0.id == id }
+        let scope = snapshot.panelScope(host: host, draft: coreDraftKey)
+        if conversation?.scope != scope {
+            conversation = recentConversations.first { $0.scope == scope }
         }
         pendingPresentation = ProjectionInput(
             rendered: rendered,
-            key: coreDraftKey,
+            scope: scope,
             connection: snapshot.connectionGeneration()
         )
         guard presentationTask == nil else { return }
         presentationTask = Task { [weak self] in
             while let self, let input = pendingPresentation {
                 pendingPresentation = nil
-                let previous = conversation
-                let rendered = await Task.detached(priority: .userInitiated) {
-                    ConversationPresentation.project(input.rendered, previous: previous)
+                let rendered = await Task.detached(priority: .userInitiated) { [previous = conversation] in
+                    ConversationPresentation.project(input.rendered, scope: input.scope, previous: previous)
                 }.value
-                if coreDraftKey == input.key, snapshot.connectionGeneration() == input.connection {
+                if snapshot.panelScope(host: host, draft: coreDraftKey) == input.scope,
+                   snapshot.connectionGeneration() == input.connection,
+                   snapshot.uiLanguage() == input.rendered.language() {
                     conversation = rendered
                     if rendered.id != nil {
-                        recentConversations.removeAll { $0.id == rendered.id }
+                        recentConversations.removeAll { $0.scope == rendered.scope }
                         recentConversations.insert(rendered, at: 0)
                         if recentConversations.count > 3 {
                             recentConversations.removeLast()
@@ -373,6 +377,6 @@ extension ConversationModel {
 
 private struct ProjectionInput {
     let rendered: RenderedConversation
-    let key: DraftKey
+    let scope: PanelScope
     let connection: UInt64
 }

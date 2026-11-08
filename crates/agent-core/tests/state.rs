@@ -25,6 +25,7 @@ fn fixture_change(previous: &Snapshot, params: Value) -> (Snapshot, Vec<Effect>)
         Arc::make_mut(&mut next.sessions.subscriptions).insert(id.clone(), subscription);
         (next, effects) = reduce(
             &next,
+            "",
             Event::SessionUpdate(Box::new(agent_protocol::session::SessionUpdate {
                 subscription_id: subscription,
                 change: change.clone(),
@@ -59,6 +60,7 @@ fn fixture_change(previous: &Snapshot, params: Value) -> (Snapshot, Vec<Effect>)
     }
     let (updated, changes) = reduce(
         &next,
+        "",
         Event::Notification(agent_protocol::protocol::Notification::Activity {
             session: id,
             active,
@@ -67,6 +69,7 @@ fn fixture_change(previous: &Snapshot, params: Value) -> (Snapshot, Vec<Effect>)
     effects.extend(changes);
     let (updated, changes) = reduce(
         &updated,
+        "",
         Event::Notification(agent_protocol::protocol::Notification::TaskActivity {
             state: agent_protocol::live_activity::TaskActivityState {
                 waiting: Vec::new(),
@@ -104,7 +107,7 @@ fn applied<O: Operation>(
     output: O::Output,
 ) -> (Snapshot, Vec<Effect>) {
     let mut next = previous.clone();
-    let effects = operation.apply(&mut next, output);
+    let effects = operation.apply(&mut next, "", output);
     (next, effects)
 }
 fn reply(thread: Thread) -> agent_protocol::session::OpenedSession {
@@ -139,18 +142,19 @@ fn snapshot_preserves_history_drafts_and_navigation() {
             ..Default::default()
         }),
     )]));
-    Arc::make_mut(&mut snapshot.pane).navigation = Arc::new(agent_core::state::Navigation {
-        thread_id: Some(SessionRef {
-            provider: ProviderKind::Codex,
-            id: "thread".into(),
-        }),
-        cwd: "/fixture".into(),
-        draft_key: SessionRef {
-            provider: ProviderKind::Codex,
-            id: "thread".into(),
-        }
-        .into(),
-    });
+    Arc::make_mut(snapshot.panes.primary_mut()).navigation =
+        Arc::new(agent_core::state::Navigation {
+            thread_id: Some(SessionRef {
+                provider: ProviderKind::Codex,
+                id: "thread".into(),
+            }),
+            cwd: "/fixture".into(),
+            draft_key: SessionRef {
+                provider: ProviderKind::Codex,
+                id: "thread".into(),
+            }
+            .into(),
+        });
     snapshot.sessions.pending_submissions = Arc::new(BTreeMap::from([(
         "sent".into(),
         Arc::new(agent_core::state::PendingSubmission {
@@ -209,18 +213,22 @@ fn selected_folder_preserves_explicit_scope_without_losing_the_execution_directo
         let restored: Snapshot =
             serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
         for snapshot in [&snapshot, &restored] {
-            assert_eq!(snapshot.pane.navigation.cwd, "/workspace");
-            assert_eq!(snapshot.selected_directory(), selected);
+            assert_eq!(snapshot.panes.primary().navigation.cwd, "/workspace");
             assert_eq!(
-                snapshot.pane.workspace.review_cwd.as_deref(),
+                snapshot.selected_directory(snapshot.panes.primary()),
+                selected
+            );
+            assert_eq!(
+                snapshot.panes.primary().workspace.review_cwd.as_deref(),
                 (!selected.is_empty()).then_some("/workspace")
             );
             for cwd in ["", "/another-project"] {
                 let (next, _) = reduce(
                     snapshot,
+                    "",
                     Event::Intent(agent_core::state::Intent::NewChat { cwd: cwd.into() }),
                 );
-                assert_eq!(next.selected_directory(), cwd);
+                assert_eq!(next.selected_directory(next.panes.primary()), cwd);
             }
         }
     }
@@ -238,6 +246,7 @@ fn pending_submission_reconciles_both_reply_and_echo_orders() {
         );
         let (pending, _) = reduce(
             &previous,
+            "",
             Event::Intent(Intent::Submit {
                 thread_id: Some(SessionRef {
                     provider: ProviderKind::Codex,
@@ -261,6 +270,7 @@ fn pending_submission_reconciles_both_reply_and_echo_orders() {
                 }
                 .apply(
                     &mut finished,
+                    "",
                     op::SubmissionProgress::Sent(Some("turn".into())),
                 );
             }
@@ -286,6 +296,7 @@ fn submission_acknowledgement_moves_to_the_returned_turn() {
     );
     let (mut pending, _) = reduce(
         &previous,
+        "",
         Event::Intent(Intent::Submit {
             thread_id: Some(SessionRef {
                 provider: ProviderKind::Codex,
@@ -316,6 +327,7 @@ fn submission_acknowledgement_moves_to_the_returned_turn() {
     }
     .apply(
         &mut pending,
+        "",
         op::SubmissionProgress::Sent(Some("new".into())),
     );
     assert_eq!(
@@ -372,6 +384,7 @@ fn model_settings_corpus() {
             previous.catalog.models = Arc::new(models);
             reduce(
                 &previous,
+                "",
                 Event::Intent(Intent::SelectModel {
                     thread_id: SessionRef {
                         provider: ProviderKind::Codex,
@@ -420,7 +433,7 @@ fn event_corpus() {
         for event in case["events"].as_array().unwrap() {
             let (next, effects) = fixture_change(&state, event.clone());
             assert!(effects.is_empty());
-            assert_eq!(next.pane.error, None, "{}", case["name"]);
+            assert_eq!(next.panes.primary().error, None, "{}", case["name"]);
             state = next;
         }
         assert_eq!(
@@ -530,7 +543,7 @@ fn activity_corpus_applies_even_without_a_loaded_conversation() {
     let cases: Vec<Value> = serde_json::from_str(include_str!("fixtures/activity.json")).unwrap();
     for case in cases {
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
             case["visible"].as_str().map(|id| SessionRef {
                 provider: ProviderKind::Codex,
                 id: id.into(),
@@ -572,6 +585,7 @@ fn new_chat_selects_catalog_defaults_in_either_load_order() {
         let mut current = Snapshot::default();
         op::ListAccounts {}.apply(
             &mut current,
+            "",
             serde_json::from_value(json!({
                 "accounts":[{"id":"account","provider":"codex"}], "selected":{"codex":"account"}
             }))
@@ -586,6 +600,7 @@ fn new_chat_selects_catalog_defaults_in_either_load_order() {
             } else {
                 current = reduce(
                     &current,
+                    "",
                     Event::Intent(Intent::NewChat {
                         cwd: "/fixture".into(),
                     }),
@@ -596,7 +611,7 @@ fn new_chat_selects_catalog_defaults_in_either_load_order() {
         let draft = current
             .input
             .drafts
-            .get(&current.pane.navigation.draft_key)
+            .get(&current.panes.primary().navigation.draft_key)
             .expect("new chat draft");
         assert_eq!(
             draft.model.as_ref(),
@@ -609,20 +624,22 @@ fn new_chat_selects_catalog_defaults_in_either_load_order() {
         assert_eq!(draft.service_tier.as_deref(), Some("priority"));
         let (edited, _) = reduce(
             &current,
+            "",
             Event::Intent(Intent::SetDraftText {
-                thread_id: current.pane.navigation.draft_key.clone(),
+                thread_id: current.panes.primary().navigation.draft_key.clone(),
                 text: "keep".into(),
             }),
         );
         let (returned, _) = reduce(
             &edited,
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/fixture".into(),
             }),
         );
         assert!(Arc::ptr_eq(&edited.input.drafts, &returned.input.drafts));
         assert_eq!(
-            returned.input.drafts[&returned.pane.navigation.draft_key].text,
+            returned.input.drafts[&returned.panes.primary().navigation.draft_key].text,
             "keep"
         );
     }
@@ -660,19 +677,21 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
             }),
             ..Default::default()
         },
-        pane: std::sync::Arc::new(agent_core::state::PaneState {
-            workspace: Arc::new(agent_core::state::WorkspaceLocation {
-                file: Some(file.clone()),
-                review: Some(review.clone()),
-                review_cwd: Some("/old".into()),
+        panes: agent_core::state::PaneStates::with_primary(std::sync::Arc::new(
+            agent_core::state::PaneState {
+                workspace: Arc::new(agent_core::state::WorkspaceLocation {
+                    file: Some(file.clone()),
+                    review: Some(review.clone()),
+                    review_cwd: Some("/old".into()),
+                    ..Default::default()
+                }),
+                navigation: Arc::new(Navigation {
+                    cwd: "/old".into(),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            navigation: Arc::new(Navigation {
-                cwd: "/old".into(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
+            },
+        )),
         ..Default::default()
     };
     for cwd in ["/old", "/new"] {
@@ -685,6 +704,7 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
                 })
                 .apply(
                     &mut next,
+                    "",
                     reply(
                         serde_json::from_value(
                             json!({"id":{"provider":"codex","id":"thread"}, "cwd":cwd}),
@@ -696,6 +716,7 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
             } else {
                 reduce(
                     &previous,
+                    "",
                     Event::Intent(Intent::NewChat { cwd: cwd.into() }),
                 )
                 .0
@@ -707,11 +728,11 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
             assert!(next.files.workspace.settings.is_some());
             // A different conversation owns its selections even in the same directory.
             assert!(
-                next.pane.workspace.file.is_none(),
+                next.panes.primary().workspace.file.is_none(),
                 "old file remains after navigation"
             );
-            assert!(next.pane.workspace.review.is_none());
-            assert!(next.pane.workspace.review_cwd.is_none());
+            assert!(next.panes.primary().workspace.review.is_none());
+            assert!(next.panes.primary().workspace.review_cwd.is_none());
         }
     }
     let mut unassigned = previous.clone();
@@ -719,7 +740,7 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
         json!({"thread":{"id":{"provider":"codex","id":"chat"},"cwd":"/old","projectId":null}}),
     )
     .unwrap();
-    Arc::make_mut(&mut Arc::make_mut(&mut unassigned.pane).navigation).thread_id =
+    Arc::make_mut(&mut Arc::make_mut(unassigned.panes.primary_mut()).navigation).thread_id =
         Some(SessionRef {
             provider: ProviderKind::Codex,
             id: "chat".into(),
@@ -737,9 +758,9 @@ fn changing_workspace_clears_content_and_preserves_file_drafts() {
         provider: ProviderKind::Codex,
         id: "chat".into(),
     })
-    .apply(&mut unassigned, reply(chat.thread));
-    assert!(unassigned.pane.workspace.review.is_none());
-    assert!(unassigned.pane.workspace.review_cwd.is_none());
+    .apply(&mut unassigned, "", reply(chat.thread));
+    assert!(unassigned.panes.primary().workspace.review.is_none());
+    assert!(unassigned.panes.primary().workspace.review_cwd.is_none());
     assert_eq!(previous.files.file_drafts, unassigned.files.file_drafts);
 }
 
@@ -751,7 +772,7 @@ fn file_change_delta_appends_to_output_without_inventing_a_diff() {
             &previous,
             json!({"session":{"provider":"codex","id":"thread"},"change":{"type":"text","turnId":"turn","itemId":"file","delta":"tail","field":"fileOutput"}}),
         );
-        assert_eq!(next.pane.error, None);
+        assert_eq!(next.panes.primary().error, None);
         let item = &next.sessions.conversations[&SessionRef {
             provider: ProviderKind::Codex,
             id: "thread".into(),
@@ -786,26 +807,31 @@ fn leaving_conversation_retains_draft_and_marks_later_completion_unread() {
             )])),
             ..Default::default()
         },
-        pane: std::sync::Arc::new(agent_core::state::PaneState {
-            navigation: Arc::new(Navigation {
-                thread_id: Some(SessionRef {
-                    provider: ProviderKind::Codex,
-                    id: "thread".into(),
+        panes: agent_core::state::PaneStates::with_primary(std::sync::Arc::new(
+            agent_core::state::PaneState {
+                navigation: Arc::new(Navigation {
+                    thread_id: Some(SessionRef {
+                        provider: ProviderKind::Codex,
+                        id: "thread".into(),
+                    }),
+                    draft_key: SessionRef {
+                        provider: ProviderKind::Codex,
+                        id: "thread".into(),
+                    }
+                    .into(),
+                    ..Default::default()
                 }),
-                draft_key: SessionRef {
-                    provider: ProviderKind::Codex,
-                    id: "thread".into(),
-                }
-                .into(),
                 ..Default::default()
-            }),
-            ..Default::default()
-        }),
+            },
+        )),
         ..Default::default()
     };
-    let (listed, effects) = reduce(&previous, Event::Intent(Intent::ShowThreadList));
-    assert!(listed.pane.navigation.thread_id.is_none());
-    assert_eq!(listed.pane.epoch, previous.pane.epoch + 1);
+    let (listed, effects) = reduce(&previous, "", Event::Intent(Intent::ShowThreadList));
+    assert!(listed.panes.primary().navigation.thread_id.is_none());
+    assert_eq!(
+        listed.panes.primary().epoch,
+        previous.panes.primary().epoch + 1
+    );
     assert_eq!(listed.connection.epoch, previous.connection.epoch);
     assert!(Arc::ptr_eq(&listed.input.drafts, &previous.input.drafts));
     assert!(listed.sessions.subscriptions.is_empty());
@@ -861,7 +887,7 @@ fn serialized_events_preserve_operation_inputs_and_replay_state() {
         events
             .into_iter()
             .fold(Snapshot::default(), |snapshot, event| {
-                reduce(&snapshot, event).0
+                reduce(&snapshot, "", event).0
             })
     };
     assert_eq!(replay(events.clone()), replay(decoded));
@@ -875,6 +901,7 @@ fn serialized_events_preserve_operation_inputs_and_replay_state() {
 fn durable_upload_and_pairing_results_survive_navigation() {
     let mut snapshot = reduce(
         &Snapshot::default(),
+        "",
         Event::Intent(agent_core::state::Intent::NewChat { cwd: "/new".into() }),
     )
     .0;
@@ -886,7 +913,7 @@ fn durable_upload_and_pairing_results_survive_navigation() {
             is_image: true,
         },
     }
-    .stale(&mut snapshot, "/uploaded".into());
+    .stale(&mut snapshot, "", "/uploaded".into());
     assert_eq!(
         snapshot.input.drafts[&DraftKey::from("old")].attachments[0].path,
         "/uploaded"
@@ -902,6 +929,7 @@ fn durable_upload_and_pairing_results_survive_navigation() {
         }
         .stale(
             &mut snapshot,
+            "",
             serde_json::from_value(json!({
                 "id":"remote", "name":name, "ticket":"unused"
             }))
@@ -910,21 +938,22 @@ fn durable_upload_and_pairing_results_survive_navigation() {
         assert_eq!(snapshot.connection.management.remotes.len(), 1);
         assert_eq!(snapshot.connection.management.remotes[0].name, name);
     }
-    assert_eq!(snapshot.pane.navigation.cwd, "/new");
-    assert!(snapshot.pane.error.is_none());
+    assert_eq!(snapshot.panes.primary().navigation.cwd, "/new");
+    assert!(snapshot.panes.primary().error.is_none());
 }
 
 #[test]
 fn disconnected_catalog_reads_do_not_apply_or_retry_stale_responses() {
     let mut state = Snapshot::default();
     let before = state.clone();
-    assert!(op::LoadModels { provider: agent_protocol::session::ProviderKind::Codex }.stale(&mut state, serde_json::from_value(json!({
+    assert!(op::LoadModels { provider: agent_protocol::session::ProviderKind::Codex }.stale(&mut state, "", serde_json::from_value(json!({
         "data":[{"id":"old","model":{"provider": "codex", "id": "old"},"displayName":"Old", "settings": { "defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}]
     })).unwrap()).is_empty());
     assert!(
         op::ListAccounts {}
             .stale(
                 &mut state,
+                "",
                 serde_json::from_value(json!({
                     "accounts":[{"provider":"codex","id":"old"}],"selected":{"codex":"old"}
                 }))
@@ -935,8 +964,15 @@ fn disconnected_catalog_reads_do_not_apply_or_retry_stale_responses() {
     assert_eq!(state, before);
 }
 
-#[test]
-fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_drafts() {
+#[tokio::test]
+async fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_drafts() {
+    async fn accepted(state: Snapshot, intent: Intent) -> Snapshot {
+        let store = agent_core::store::Store::offline(state, None);
+        store.dispatch(intent).await.unwrap();
+        let next = store.snapshot().as_ref().clone();
+        store.close().await.unwrap();
+        next
+    }
     use agent_core::state::{Draft, Intent};
     for (restored, failed) in [(false, false), (true, false), (false, true), (true, true)] {
         let draft = Draft {
@@ -966,6 +1002,7 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         };
         op::ListAccounts {}.apply(
             &mut state,
+            "",
             serde_json::from_value(json!({
                 "accounts":[{"id":"account","provider":"codex"}], "selected":{"codex":"account"}
             }))
@@ -981,7 +1018,13 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         );
         assert_eq!(*state.input.drafts[&DraftKey::from("saved")], draft);
         assert_eq!(
-            state.model_error_messages(None),
+            agent_core::presentation::view::Presentation::from_snapshot(
+                Arc::new(state.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
+            .model_error_messages(None),
             if failed {
                 vec!["エラーが発生しました。\ncodex: offline"]
             } else {
@@ -990,46 +1033,48 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         );
         state = reduce(
             &state,
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/fresh".into(),
             }),
         )
         .0;
-        let automatic = state.pane.navigation.draft_key.clone();
+        let automatic = state.panes.primary().navigation.draft_key.clone();
         assert_eq!(state.input.drafts[&automatic].model, None);
         let claude = agent_protocol::models::ModelRef {
             provider: agent_protocol::session::ProviderKind::Claude,
             id: "default".into(),
         };
-        state = reduce(
-            &state,
-            Event::Intent(Intent::SelectModel {
+        state = accepted(
+            state,
+            Intent::SelectModel {
                 thread_id: "chosen".into(),
                 model: claude.clone(),
-            }),
+            },
         )
-        .0;
+        .await;
         state = reduce(
             &state,
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/explicit".into(),
             }),
         )
         .0;
         assert_eq!(
-            state.input.drafts[&state.pane.navigation.draft_key]
+            state.input.drafts[&state.panes.primary().navigation.draft_key]
                 .model
                 .as_ref(),
             Some(&claude)
         );
-        state = reduce(
-            &state,
-            Event::Intent(Intent::SelectEffort {
+        state = accepted(
+            state,
+            Intent::SelectEffort {
                 thread_id: "saved".into(),
                 effort: "high".into(),
-            }),
+            },
         )
-        .0;
+        .await;
         assert_eq!(*state.input.drafts[&DraftKey::from("saved")], draft);
         let catalog = serde_json::from_value(json!({"data":[{
             "id":"codex-model","model":{"provider": "codex", "id": "codex-model"},"displayName":"Codex", "settings": {
@@ -1039,9 +1084,10 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         test_models::apply_catalog(&mut state, catalog);
         assert_eq!(*state.input.drafts[&DraftKey::from("saved")], draft);
         assert!(state.input.drafts[&automatic].model.is_none());
-        let explicit = state.pane.navigation.draft_key.clone();
+        let explicit = state.panes.primary().navigation.draft_key.clone();
         state = reduce(
             &state,
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/fresh".into(),
             }),
@@ -1083,7 +1129,13 @@ fn terminal_presentation_only_shows_loading_or_exceptional_status() {
                 sequence: 0,
             }),
         );
-        let view = snapshot.terminal_view("test".into()).unwrap();
+        let view = snapshot
+            .terminals()
+            .view(
+                agent_core::localization::UiLanguage::Japanese,
+                "test".into(),
+            )
+            .unwrap();
         assert_eq!(view.loading, loading);
         assert_eq!(view.status.as_deref(), status);
     }
@@ -1102,22 +1154,37 @@ fn terminal_disconnect_keeps_resumption_and_host_switch_drops_old_handles() {
     };
     let (starting, _) = reduce(
         &snapshot,
+        "",
         Event::Intent(Intent::StartTerminal(op::StartTerminal {
             handle: "test".into(),
             cwd: "/fixture".into(),
             size: agent_protocol::operations::TerminalSize { cols: 80, rows: 24 },
         })),
     );
-    assert!(starting.terminal_view("test".into()).unwrap().accepts_input);
-    let (disconnected, _) = reduce(&starting, Event::Disconnected);
+    assert!(
+        starting
+            .terminals()
+            .view(
+                agent_core::localization::UiLanguage::Japanese,
+                "test".into()
+            )
+            .unwrap()
+            .accepts_input
+    );
+    let (disconnected, _) = reduce(&starting, "", Event::Disconnected);
     assert!(
         !disconnected
-            .terminal_view("test".into())
+            .terminals()
+            .view(
+                agent_core::localization::UiLanguage::Japanese,
+                "test".into()
+            )
             .unwrap()
             .accepts_input
     );
     let (late_failure, _) = reduce(
         &disconnected,
+        "",
         Event::TerminalFailed {
             handle: "test".into(),
             reason: "cancelled".into(),
@@ -1127,7 +1194,7 @@ fn terminal_disconnect_keeps_resumption_and_host_switch_drops_old_handles() {
         late_failure.terminals["test"].phase,
         TerminalPhase::Suspended
     );
-    let (other_host, _) = reduce(&late_failure, Event::StorageScope("other-host".into()));
+    let (other_host, _) = reduce(&late_failure, "", Event::StorageScope("other-host".into()));
     assert!(other_host.terminals.is_empty());
 }
 
@@ -1146,30 +1213,35 @@ fn project_registration_navigates_only_while_current() {
     };
     let (pending, _) = reduce(
         &previous,
+        "",
         Event::Intent(Intent::AddProject(operation.clone())),
     );
-    assert_eq!(pending.pane.navigation, previous.pane.navigation);
-    let (opened, effects) = applied(&pending, operation.clone(), "/resolved-project".into());
-    assert_eq!(opened.pane.navigation.cwd, "/resolved-project");
     assert_eq!(
-        opened.pane.navigation.draft_key,
+        pending.panes.primary().navigation,
+        previous.panes.primary().navigation
+    );
+    let (opened, effects) = applied(&pending, operation.clone(), "/resolved-project".into());
+    assert_eq!(opened.panes.primary().navigation.cwd, "/resolved-project");
+    assert_eq!(
+        opened.panes.primary().navigation.draft_key,
         DraftKey::from("new:/resolved-project")
     );
     assert_eq!(effects.len(), 2); // Workspace review and project-list refresh.
     let (mut elsewhere, _) = reduce(
         &pending,
+        "",
         Event::Intent(Intent::NewChat {
             cwd: "/elsewhere".into(),
         }),
     );
-    let navigation = elsewhere.pane.navigation.clone();
+    let navigation = elsewhere.panes.primary().navigation.clone();
     assert_eq!(
         operation
-            .stale(&mut elsewhere, "/resolved-project".into())
+            .stale(&mut elsewhere, "", "/resolved-project".into())
             .len(),
         1
     );
-    assert_eq!(elsewhere.pane.navigation, navigation);
+    assert_eq!(elsewhere.panes.primary().navigation, navigation);
 }
 
 #[test]
@@ -1195,6 +1267,7 @@ fn failed_submission_restores_text_and_attachments_without_losing_new_input() {
     );
     let (mut snapshot, _) = reduce(
         &snapshot,
+        "",
         Event::Intent(Intent::Submit {
             thread_id: Some(SessionRef {
                 provider: ProviderKind::Codex,
@@ -1235,7 +1308,7 @@ fn failed_submission_restores_text_and_attachments_without_losing_new_input() {
             ..Default::default()
         }),
     );
-    let (snapshot, _) = reduce(&snapshot, Event::SubmissionFailed("pending".into()));
+    let (snapshot, _) = reduce(&snapshot, "", Event::SubmissionFailed("pending".into()));
     assert!(snapshot.sessions.pending_submissions.is_empty());
     let restored = &snapshot.input.drafts[&DraftKey::from(SessionRef {
         provider: ProviderKind::Codex,
@@ -1310,6 +1383,7 @@ fn unknown_submission_can_be_restored_or_discarded() {
 
     let (snapshot, effects) = reduce(
         &snapshot,
+        "",
         Event::Intent(Intent::RestoreUnknownSubmission {
             client_user_message_id: "restore".into(),
         }),
@@ -1345,6 +1419,7 @@ fn unknown_submission_can_be_restored_or_discarded() {
 
     let (snapshot, effects) = reduce(
         &snapshot,
+        "",
         Event::Intent(Intent::DiscardUnknownSubmission {
             client_user_message_id: "discard".into(),
         }),
@@ -1405,7 +1480,7 @@ fn unresolved_submission_actions_ignore_known_delivery_states() {
             client_user_message_id: "sending".into(),
         },
     ] {
-        let (next, effects) = reduce(&snapshot, Event::Intent(intent));
+        let (next, effects) = reduce(&snapshot, "", Event::Intent(intent));
         assert!(effects.is_empty());
         assert_eq!(next, snapshot);
     }
@@ -1416,29 +1491,38 @@ fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
     for path in ["", "nested", "../", "~other/project"] {
         let (snapshot, effects) = reduce(
             &Snapshot::default(),
+            "",
             Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles {
                 path: path.into(),
             })),
         );
         assert!(effects.is_empty(), "sent an invalid path: {path:?}");
-        assert!(snapshot.pane.error.is_none());
+        assert!(snapshot.panes.primary().error.is_none());
         assert_eq!(
             snapshot
-                .operation_error(op::OperationKey::Directory)
+                .operation_error(op::OperationKey::Directory {
+                    pane: ("").to_owned()
+                })
                 .map(|error| error.message)
                 .as_deref(),
             Some("絶対パスを入力してください。")
         );
     }
     for path in [
-        "~/project".to_owned(),
-        std::env::temp_dir().to_string_lossy().into_owned(),
+        "~",
+        "~/project",
+        "/workspace",
+        "C:/Users/host",
+        r"\\server\share",
     ] {
         let (snapshot, effects) = reduce(
             &Snapshot::default(),
-            Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles { path })),
+            "",
+            Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles {
+                path: path.into(),
+            })),
         );
-        assert!(snapshot.pane.error.is_none());
+        assert!(snapshot.panes.primary().error.is_none());
         assert_eq!(effects.len(), 1);
     }
 }
@@ -1470,6 +1554,7 @@ fn editing_a_file_shares_other_drafts_and_preserves_previous_snapshots() {
     };
     let (edited, effects) = reduce(
         &original,
+        "",
         Event::Intent(op::Intent::SetFileDraft {
             path: "/edited".into(),
             text: "after".into(),
@@ -1516,6 +1601,7 @@ fn host_delivery_replay_resolves_unknown_input_without_overwriting_new_draft() {
         );
         let (pending, _) = reduce(
             &original,
+            "",
             Event::Intent(Intent::Submit {
                 thread_id: Some(SessionRef {
                     provider: ProviderKind::Codex,
@@ -1524,9 +1610,10 @@ fn host_delivery_replay_resolves_unknown_input_without_overwriting_new_draft() {
                 client_user_message_id: "input".into(),
             }),
         );
-        let (pending, _) = reduce(&pending, Event::SubmissionUnknown("input".into()));
+        let (pending, _) = reduce(&pending, "", Event::SubmissionUnknown("input".into()));
         let (mut pending, _) = reduce(
             &pending,
+            "",
             Event::Intent(Intent::SetDraftText {
                 thread_id: SessionRef {
                     provider: ProviderKind::Codex,
@@ -1546,7 +1633,7 @@ fn host_delivery_replay_resolves_unknown_input_without_overwriting_new_draft() {
             provider: ProviderKind::Codex,
             id: "thread".into(),
         })
-        .apply(&mut pending, reply(thread));
+        .apply(&mut pending, "", reply(thread));
         if delivery == SubmissionDelivery::Rejected {
             assert!(pending.sessions.pending_submissions.is_empty());
             assert_eq!(
@@ -1573,7 +1660,8 @@ fn host_delivery_replay_resolves_unknown_input_without_overwriting_new_draft() {
                 "new text"
             );
             if matches!(delivery, SubmissionDelivery::Accepted { .. }) {
-                let (lost_reply, _) = reduce(&pending, Event::SubmissionUnknown("input".into()));
+                let (lost_reply, _) =
+                    reduce(&pending, "", Event::SubmissionUnknown("input".into()));
                 assert!(
                     !lost_reply.sessions.pending_submissions["input"].delivery_unknown,
                     "a lost RPC reply cannot override Host acceptance already received through the subscription"
@@ -1599,22 +1687,28 @@ fn empty_directory_chat_keeps_its_draft_separate_from_the_list() {
     let previous = Snapshot::default();
     let (opened, _) = reduce(
         &previous,
+        "",
         Event::Intent(op::Intent::NewChat { cwd: String::new() }),
     );
-    let key = opened.pane.navigation.draft_key.clone();
-    assert_ne!(key, Snapshot::default().pane.navigation.draft_key);
+    let key = opened.panes.primary().navigation.draft_key.clone();
+    assert_ne!(
+        key,
+        Snapshot::default().panes.primary().navigation.draft_key
+    );
     let (edited, _) = reduce(
         &opened,
+        "",
         Event::Intent(op::Intent::SetDraftText {
             thread_id: key.clone(),
             text: "keep".into(),
         }),
     );
-    let (listed, _) = reduce(&edited, Event::Intent(op::Intent::ShowThreadList));
+    let (listed, _) = reduce(&edited, "", Event::Intent(op::Intent::ShowThreadList));
     let (reopened, _) = reduce(
         &listed,
+        "",
         Event::Intent(op::Intent::NewChat { cwd: String::new() }),
     );
-    assert_eq!(reopened.pane.navigation.draft_key, key);
+    assert_eq!(reopened.panes.primary().navigation.draft_key, key);
     assert_eq!(reopened.input.drafts[&key].text, "keep");
 }

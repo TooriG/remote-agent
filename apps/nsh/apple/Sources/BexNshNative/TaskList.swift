@@ -40,7 +40,7 @@ struct TaskRow: Decodable, Identifiable {
 
     struct Indicators: Decodable {
         let activity: String?
-        let worktree: String?
+        let changes: Bool
     }
 
     let id: String
@@ -219,9 +219,8 @@ private struct TaskStatus: View {
             case "unread": Image(systemName: "circle.fill").resizable().frame(width: 8, height: 8)
             default: EmptyView()
             }
-            if let worktree = indicators?.worktree {
-                Image(worktree == "unmerged" ? "GitDiff" : "GitMerge").resizable().frame(width: 18, height: 18)
-                    .foregroundStyle(worktree == "unmerged" ? .orange : .purple)
+            if indicators?.changes == true {
+                Image("GitDiff").resizable().frame(width: 18, height: 18).foregroundStyle(.orange)
             }
         }.accessibilityHidden(true)
     }

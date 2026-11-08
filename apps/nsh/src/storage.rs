@@ -1,7 +1,7 @@
 //! Only OS storage. Core owns restoration, persistence scheduling and recovery.
 use agent_core::client::{
     AgentError,
-    persistence::{ClientStorage, StorageKey},
+    persistence::{ClientStorage, PreferenceKey, PreferenceStorage},
     session::ClientPlatform,
 };
 use serde::{Deserialize, Serialize};
@@ -58,12 +58,8 @@ impl Storage {
             uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, self.host.id.as_bytes()).to_string(),
         )
     }
-    fn path(&self, key: StorageKey) -> PathBuf {
-        match key {
-            StorageKey::LocalState => self.host_directory().join("state.json"),
-            StorageKey::ModelPreferences => self.root.join("model-preferences.json"),
-            StorageKey::EditorPreferences => self.root.join("editor-preferences.json"),
-        }
+    fn state(&self) -> PathBuf {
+        self.host_directory().join("state.json")
     }
 
     /// Forgets a removed Host on this device: its state, conversations and
@@ -87,10 +83,35 @@ pub(crate) fn read(path: &std::path::Path) -> Result<Vec<u8>, AgentError> {
 }
 
 impl ClientStorage for Storage {
-    fn load(&self, key: StorageKey) -> Result<Vec<u8>, AgentError> {
+    fn load(&self) -> Result<Vec<u8>, AgentError> {
+        read(&self.state())
+    }
+    fn save(&self, bytes: Vec<u8>) -> Result<(), AgentError> {
+        agent_local_host::save_private_bytes(&self.state(), &bytes).map_err(error)
+    }
+}
+
+/// The device's own preferences, shared by its Hosts: models, the editor and
+/// the UI language, each in a file of the app's data directory.
+pub(crate) struct DeviceStorage {
+    pub root: PathBuf,
+}
+
+impl DeviceStorage {
+    fn path(&self, key: PreferenceKey) -> PathBuf {
+        self.root.join(match key {
+            PreferenceKey::Models => "model-preferences.json",
+            PreferenceKey::Editor => "editor-preferences.json",
+            PreferenceKey::Language => "language.json",
+        })
+    }
+}
+
+impl PreferenceStorage for DeviceStorage {
+    fn load(&self, key: PreferenceKey) -> Result<Vec<u8>, AgentError> {
         read(&self.path(key))
     }
-    fn save(&self, key: StorageKey, bytes: Vec<u8>) -> Result<(), AgentError> {
+    fn save(&self, key: PreferenceKey, bytes: Vec<u8>) -> Result<(), AgentError> {
         agent_local_host::save_private_bytes(&self.path(key), &bytes).map_err(error)
     }
 }

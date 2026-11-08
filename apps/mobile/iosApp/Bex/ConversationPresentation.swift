@@ -5,79 +5,76 @@ struct ThreadConversationRow: Identifiable, Sendable {
     let content: Content
     enum Content: Sendable {
         case historyNotice(String)
-        case native(ConversationRow, ConversationItem?), queued(ConversationItem)
+        case native(VisibleConversationRow, ConversationItem?)
     }
 }
 
 /// Immutable native render values; Rust owns projection policy.
 struct ConversationPresentation: Sendable {
-    let source: AgentCore.Thread
     let id: SessionRef?
-    let title: String
-    let rows: [ThreadConversationRow]
+    let scope: PanelScope
     private struct CachedTurn: Sendable {
         let source: RenderedTurn
-        let rows: [ThreadConversationRow]
         let items: [String: ConversationItem]
     }
 
     private let turns: [String: CachedTurn]
-    private let projection: RenderedConversation
+    let projection: RenderedConversation
     private let queued: [String: ConversationItem]
 
-    static func project(_ rendered: RenderedConversation, previous: Self?) -> Self {
-        let source = rendered.source()
-        if let previous, rendered.unchanged(other: previous.projection) {
+    static func project(_ rendered: RenderedConversation, scope: PanelScope, previous: Self?) -> Self {
+        if let previous, previous.scope == scope, rendered.unchanged(other: previous.projection) {
             return previous
         }
         var next: [String: CachedTurn] = [:]
-        var rows: [ThreadConversationRow] = []
-        if let notice = source.historyNotice() {
-            rows.append(.init(id: "history-read-state", content: .historyNotice(notice)))
-        }
         for turn in rendered.turns() {
-            let id = turn.id()
+            let id = turn.key()
             if let cached = previous?.turns[id], turn.unchanged(other: cached.source) {
-                next[id] = cached; rows += cached.rows
+                next[id] = cached
                 continue
             }
             let cached = previous?.turns[id]?.items ?? [:]
             var items: [String: ConversationItem] = [:]
-            let projected = turn.conversationRows().map { row in
-                let item: ConversationItem? = switch row.content {
+            for row in turn.conversationRows() {
+                switch row.content {
                 case let .user(source), let .response(source, _, _), let .activity(source, _):
-                    Self.item(source, id: row.id, previous: cached, next: &items)
-                default: nil
+                    items[row.id] = Self.item(source, previous: cached[row.id])
+                default: break
                 }
-                return ThreadConversationRow(id: row.id, content: .native(row, item))
             }
-            next[id] = CachedTurn(source: turn, rows: projected, items: items)
-            rows += projected
+            next[id] = CachedTurn(source: turn, items: items)
         }
         var nextQueued: [String: ConversationItem] = [:]
-        rows += rendered.queued().map {
-            let item = Self.item($0, id: $0.id(), previous: previous?.queued ?? [:], next: &nextQueued)
-            return ThreadConversationRow(id: item.data.id, content: .queued(item))
-        }
-        rows += rendered.sessionRows().map { row in
-            ThreadConversationRow(id: row.id, content: .native(row, nil))
+        for item in rendered.queued() {
+            nextQueued[item.id()] = Self.item(item, previous: previous?.queued[item.id()])
         }
         return Self(
-            source: source,
-            id: source.id(),
-            title: source.title(),
-            rows: rows, turns: next, projection: rendered, queued: nextQueued
+            id: rendered.id(),
+            scope: scope, turns: next, projection: rendered, queued: nextQueued
         )
     }
 
-    private static func item(_ source: RenderedItem, id: String, previous: [String: ConversationItem],
-                             next: inout [String: ConversationItem]) -> ConversationItem {
-        let result: ConversationItem = if let cached = previous[id], source.unchanged(other: cached.source) {
-            cached
-        } else {
-            ConversationItem(source)
+    func rows(_ projected: [VisibleConversationRow]) -> [ThreadConversationRow] {
+        let notice = projection.historyNotice().map {
+            [ThreadConversationRow(id: "history-read-state", content: .historyNotice($0))]
+        } ?? []
+        return notice + projected.map { row in
+            ThreadConversationRow(id: row.id(), content: .native(row, item(for: row)))
         }
-        next[id] = result
-        return result
+    }
+
+    private func item(for row: VisibleConversationRow) -> ConversationItem? {
+        switch row.origin() {
+        case let .turn(key, _, _, _): turns[key]?.items[row.sourceId()]
+        case .queued: queued[row.sourceId()]
+        case .session: nil
+        }
+    }
+
+    private static func item(_ source: RenderedItem, previous: ConversationItem?) -> ConversationItem {
+        if let previous, source.unchanged(other: previous.source) {
+            return previous
+        }
+        return ConversationItem(source)
     }
 }

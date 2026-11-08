@@ -14,7 +14,7 @@ final class SideChatRequest {
     @ObservationIgnored private let provider: ProviderKind?
     private(set) var chat: ConversationModel?
     private(set) var preparing = false
-    private(set) var error: ErrorText?
+    private(set) var error: String?
 
     init(text: String, host: String, originalThreadId: SessionRef, cwd: String,
          session: ClientSession, provider: ProviderKind?) {
@@ -44,7 +44,7 @@ final class SideChatRequest {
             chat?.composerFocusRequest = UUID()
         } catch {
             if !Task.isCancelled {
-                self.error = errorText(error: error.localizedDescription)
+                self.error = error.localizedDescription
             }
         }
     }
@@ -84,7 +84,7 @@ struct ConversationSideChat: View {
                 ProgressView("サイドチャットを準備中…")
             } else if let error = request.error {
                 VStack(spacing: 16) {
-                    ErrorTextView(text: error).foregroundStyle(.red)
+                    ErrorTextView(source: error).foregroundStyle(.red)
                     Button("再試行") { Task { await request.prepare() } }
                 }.padding()
             } else if let chat = request.chat {

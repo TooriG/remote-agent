@@ -34,10 +34,23 @@ pub struct FileTreeView {
     pub pending: bool,
     pub refreshing: bool,
     pub all_expanded: bool,
-    pub toggle_all_label: String,
+    pub collapse_all: bool,
     pub can_expand_all: bool,
     pub truncated: bool,
-    pub error: Option<crate::presentation::error::ErrorText>,
+    pub error: Option<String>,
+}
+
+pub fn file_tree_toggle_all_label(
+    language: crate::localization::UiLanguage,
+    collapse_all: bool,
+) -> String {
+    language
+        .text(if collapse_all {
+            "すべてのフォルダを折りたたむ"
+        } else {
+            "すべてのフォルダを展開"
+        })
+        .into()
 }
 
 #[derive(Clone, Copy)]
@@ -171,12 +184,7 @@ impl Tree {
                 .is_some_and(|directory| directory.entries.is_some())
                 && (self.running.contains("") || self.queue.iter().any(|path| path.is_empty())),
             all_expanded,
-            toggle_all_label: if self.expand_all || all_expanded {
-                "すべてのフォルダを折りたたむ"
-            } else {
-                "すべてのフォルダを展開"
-            }
-            .into(),
+            collapse_all: self.expand_all || all_expanded,
             truncated: searching
                 && self
                     .search
@@ -192,7 +200,7 @@ impl Tree {
                         .and_then(|search| search.as_ref().err())
                         .map(String::as_str)
                 })
-                .map(crate::presentation::error::error_text),
+                .map(crate::presentation::error::error_source),
         }
     }
     fn rows(
@@ -202,20 +210,8 @@ impl Tree {
         visible: &BTreeSet<&str>,
         collator: Option<&CollatorBorrowed<'_>>,
     ) -> Vec<FileTreeRow> {
-        // Keep the common small selection allocation-free. Large selections
-        // must not rescan every selected path for every visible row.
-        let selected = (self.selected.len() >= 64).then(|| {
-            self.selected
-                .iter()
-                .map(String::as_str)
-                .collect::<HashSet<_>>()
-        });
-        let queued = (self.queue.len() >= 64).then(|| {
-            self.queue
-                .iter()
-                .map(String::as_str)
-                .collect::<HashSet<_>>()
-        });
+        let selected: HashSet<_> = self.selected.iter().map(String::as_str).collect();
+        let queued: HashSet<_> = self.queue.iter().map(String::as_str).collect();
         let visible = searching.then_some(visible);
         let mut pending =
             ordered_children(children.remove("").unwrap_or_default(), collator, visible)
@@ -245,16 +241,9 @@ impl Tree {
                 kind: entry.kind,
                 depth,
                 expanded,
-                selected: selected.as_ref().map_or_else(
-                    || self.selected.iter().any(|path| path == entry.path),
-                    |selected| selected.contains(entry.path),
-                ),
+                selected: selected.contains(entry.path),
                 ignored: entry.ignored,
-                loading: self.running.contains(entry.path)
-                    || queued.as_ref().map_or_else(
-                        || self.queue.iter().any(|path| path == entry.path),
-                        |queued| queued.contains(entry.path),
-                    ),
+                loading: self.running.contains(entry.path) || queued.contains(entry.path),
             });
             if entry.kind == EntryKind::Directory
                 && (expanded || searching)

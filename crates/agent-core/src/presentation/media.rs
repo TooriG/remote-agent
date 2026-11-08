@@ -148,15 +148,18 @@ mod tests {
         ]);
         assert_eq!(sources, ["/tmp/one.png", "data:image/png;base64,aGk="]);
         assert_eq!(
-            crate::presentation::body::item_body(&crate::models::Item::new(
-                "image".into(),
-                crate::models::ItemStatus::Completed,
-                crate::models::ItemBody::ImageGeneration {
-                    saved_path: None,
-                    data: Some("aGk=".into()),
-                    revised_prompt: None,
-                },
-            ))
+            crate::presentation::body::item_body(
+                crate::localization::UiLanguage::Japanese,
+                &crate::models::Item::new(
+                    "image".into(),
+                    crate::models::ItemStatus::Completed,
+                    crate::models::ItemBody::ImageGeneration {
+                        saved_path: None,
+                        data: Some("aGk=".into()),
+                        revised_prompt: None,
+                    },
+                )
+            )
             .images,
             [sources[1].clone()],
             "a thumbnail's source is its image's in the conversation",

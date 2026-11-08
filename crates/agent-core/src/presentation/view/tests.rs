@@ -15,7 +15,7 @@ fn session(id: &str) -> SessionRef {
 
 fn snapshot() -> Snapshot {
     let mut state = Snapshot::default();
-    Arc::make_mut(&mut state.pane).navigation = Arc::new(Navigation {
+    Arc::make_mut(state.panes.primary_mut()).navigation = Arc::new(Navigation {
         thread_id: Some(session("a")),
         draft_key: session("a").into(),
         cwd: "/a".into(),
@@ -76,16 +76,16 @@ async fn navigation_and_cancellation_do_not_wait_for_transcript_projection() {
         let (writer, snapshots) = watch::channel(Arc::new(snapshot()));
         let stop = CancellationToken::new();
         let mut views = observe(
-            snapshots,
-            String::new(),
+            snapshots.clone(),
+            Presentation::pending(snapshots.borrow().clone(), "").unwrap(),
             stop.clone(),
-            move |snapshot, previous| {
+            move |snapshot, pane_id, previous| {
                 if let Some(gate) = gate.lock().unwrap().take() {
                     started.lock().unwrap().take().unwrap().send(()).unwrap();
                     // Dropping release on test failure also releases this worker.
                     let _ = gate.recv();
                 }
-                Presentation::project(snapshot, previous)
+                Presentation::project(snapshot, pane_id, previous)
             },
         );
         tokio::time::timeout(Duration::from_secs(2), waiting)
@@ -93,7 +93,7 @@ async fn navigation_and_cancellation_do_not_wait_for_transcript_projection() {
             .unwrap()
             .unwrap();
         let mut next = snapshot();
-        Arc::make_mut(&mut next.pane).navigation = Arc::new(Navigation {
+        Arc::make_mut(next.panes.primary_mut()).navigation = Arc::new(Navigation {
             thread_id: Some(session("b")),
             draft_key: session("b").into(),
             cwd: "/b".into(),
@@ -101,14 +101,14 @@ async fn navigation_and_cancellation_do_not_wait_for_transcript_projection() {
         writer.send_replace(Arc::new(next));
         let acknowledged = tokio::time::timeout(
             Duration::from_secs(2),
-            views.wait_for(|view| view.snapshot.pane.navigation.cwd == "/b"),
+            views.wait_for(|view| view.snapshot.panes.primary().navigation.cwd == "/b"),
         )
         .await
         .expect("navigation must not wait for transcript projection")
         .unwrap()
         .clone();
         assert_eq!(
-            acknowledged.snapshot.pane.navigation.thread_id,
+            acknowledged.snapshot.panes.primary().navigation.thread_id,
             Some(session("b"))
         );
         assert!(
@@ -140,7 +140,7 @@ async fn navigation_and_cancellation_do_not_wait_for_transcript_projection() {
         .expect("the worker must catch up to the acknowledged navigation")
         .unwrap()
         .clone();
-        assert_eq!(rendered.snapshot.pane.navigation.cwd, "/b");
+        assert_eq!(rendered.snapshot.panes.primary().navigation.cwd, "/b");
         assert!(
             tokio::time::timeout(Duration::from_millis(30), views.changed())
                 .await
@@ -153,7 +153,7 @@ async fn navigation_and_cancellation_do_not_wait_for_transcript_projection() {
 
 #[test]
 fn conversation_chrome_uses_current_titles_without_waiting_for_transcript_projection() {
-    let initial = Presentation::project(Arc::new(snapshot()), None);
+    let initial = Presentation::project(Arc::new(snapshot()), "", None).unwrap();
     assert_eq!(initial.context.title().as_deref(), Some("Title"));
     let mut next = (*initial.snapshot).clone();
     Arc::make_mut(
@@ -169,7 +169,7 @@ fn conversation_chrome_uses_current_titles_without_waiting_for_transcript_projec
             name: Some("Listed title".into()),
             ..Default::default()
         });
-    let current = Presentation::current(Arc::new(next), &initial);
+    let current = Presentation::current(Arc::new(next), &initial).unwrap();
     assert_eq!(current.context.title().as_deref(), Some("Listed title"));
     assert!(current.changes(initial.clone()).context);
     assert!(Arc::ptr_eq(
@@ -180,7 +180,7 @@ fn conversation_chrome_uses_current_titles_without_waiting_for_transcript_projec
 
 #[test]
 fn body_deltas_reuse_the_list_but_shortcut_metadata_updates_it() {
-    let initial = Presentation::project(Arc::new(snapshot()), None);
+    let initial = Presentation::project(Arc::new(snapshot()), "", None).unwrap();
     let mut state = initial.snapshot.as_ref().clone();
     Arc::make_mut(
         Arc::make_mut(&mut state.sessions.conversations)
@@ -188,12 +188,18 @@ fn body_deltas_reuse_the_list_but_shortcut_metadata_updates_it() {
             .unwrap(),
     )
     .turns = Some(Vec::new());
-    let streamed = Presentation::project(Arc::new(state), Some(&initial));
+    let streamed = Presentation::project(Arc::new(state), "", Some(&initial)).unwrap();
     let changes = streamed.changes(initial.clone());
     assert!(changes.conversation);
     assert!(!changes.composer_controls);
-    assert!(!changes.attachments);
-    assert!(!changes.sources);
+    assert_eq!(
+        streamed.composer.draft.attachments,
+        initial.composer.draft.attachments
+    );
+    assert!(Arc::ptr_eq(
+        &streamed.conversation.as_ref().unwrap().source_paths,
+        &initial.conversation.as_ref().unwrap().source_paths,
+    ));
     assert!(Arc::ptr_eq(&streamed.composer, &initial.composer));
     assert!(Arc::ptr_eq(&streamed.context, &initial.context));
     assert!(Arc::ptr_eq(
@@ -211,7 +217,7 @@ fn body_deltas_reuse_the_list_but_shortcut_metadata_updates_it() {
             .unwrap(),
     )
     .name = Some("Renamed".into());
-    let renamed = Presentation::project(Arc::new(state), Some(&streamed));
+    let renamed = Presentation::project(Arc::new(state), "", Some(&streamed)).unwrap();
     assert!(!Arc::ptr_eq(
         renamed.list.as_ref().unwrap(),
         streamed.list.as_ref().unwrap()
@@ -229,9 +235,9 @@ fn body_deltas_reuse_the_list_but_shortcut_metadata_updates_it() {
 #[test]
 fn draft_attachments_model_controls_and_transcript_sources_have_distinct_subjects() {
     use agent_protocol::items::{ItemBody, MessagePart};
-    let initial = Presentation::project(Arc::new(snapshot()), None);
+    let initial = Presentation::project(Arc::new(snapshot()), "", None).unwrap();
     let mut state = (*initial.snapshot).clone();
-    let key = state.pane.navigation.draft_key.clone();
+    let key = state.panes.primary().navigation.draft_key.clone();
     Arc::make_mut(&mut state.input.drafts).insert(
         key.clone(),
         Arc::new(crate::state::Draft {
@@ -243,12 +249,18 @@ fn draft_attachments_model_controls_and_transcript_sources_have_distinct_subject
             ..Default::default()
         }),
     );
-    let attached = Presentation::project(Arc::new(state.clone()), Some(&initial));
-    let changes = attached.changes(initial);
-    assert!(changes.attachments);
+    let attached = Presentation::project(Arc::new(state.clone()), "", Some(&initial)).unwrap();
+    let changes = attached.changes(initial.clone());
+    assert_ne!(
+        attached.composer.draft.attachments,
+        initial.composer.draft.attachments
+    );
     assert!(changes.composer);
     assert!(!changes.composer_controls);
-    assert!(!changes.sources);
+    assert!(Arc::ptr_eq(
+        &attached.conversation.as_ref().unwrap().source_paths,
+        &initial.conversation.as_ref().unwrap().source_paths,
+    ));
     Arc::make_mut(
         Arc::make_mut(&mut state.input.drafts)
             .get_mut(&key)
@@ -258,11 +270,17 @@ fn draft_attachments_model_controls_and_transcript_sources_have_distinct_subject
         provider: ProviderKind::Codex,
         id: "chosen".into(),
     });
-    let chosen = Presentation::project(Arc::new(state.clone()), Some(&attached));
-    let changes = chosen.changes(attached);
+    let chosen = Presentation::project(Arc::new(state.clone()), "", Some(&attached)).unwrap();
+    let changes = chosen.changes(attached.clone());
     assert!(changes.composer_controls);
-    assert!(!changes.attachments);
-    assert!(!changes.sources);
+    assert_eq!(
+        chosen.composer.draft.attachments,
+        attached.composer.draft.attachments
+    );
+    assert!(Arc::ptr_eq(
+        &chosen.conversation.as_ref().unwrap().source_paths,
+        &attached.conversation.as_ref().unwrap().source_paths,
+    ));
     let file = Arc::new(crate::models::Item::new(
         "file".into(),
         Default::default(),
@@ -283,9 +301,11 @@ fn draft_attachments_model_controls_and_transcript_sources_have_distinct_subject
         items: Some(vec![file]),
         ..Default::default()
     })]);
-    let sourced = Presentation::project(Arc::new(state), Some(&chosen));
-    let changes = sourced.changes(chosen);
-    assert!(changes.sources);
+    let sourced = Presentation::project(Arc::new(state), "", Some(&chosen)).unwrap();
+    assert!(!Arc::ptr_eq(
+        &sourced.conversation.as_ref().unwrap().source_paths,
+        &chosen.conversation.as_ref().unwrap().source_paths,
+    ));
     assert_eq!(
         sourced
             .conversation
@@ -299,14 +319,14 @@ fn draft_attachments_model_controls_and_transcript_sources_have_distinct_subject
 
 #[test]
 fn only_the_selected_draft_changes_its_composer() {
-    let initial = Presentation::project(Arc::new(snapshot()), None);
+    let initial = Presentation::project(Arc::new(snapshot()), "", None).unwrap();
     let mut state = initial.snapshot.as_ref().clone();
     crate::state::set_draft_text(&mut state, session("b").into(), "other pane".into());
-    let other = Presentation::project(Arc::new(state.clone()), Some(&initial));
+    let other = Presentation::project(Arc::new(state.clone()), "", Some(&initial)).unwrap();
     assert!(Arc::ptr_eq(&other.composer, &initial.composer));
     assert!(Arc::ptr_eq(&other.context, &initial.context));
     crate::state::set_draft_text(&mut state, session("a").into(), "this pane".into());
-    let selected = Presentation::project(Arc::new(state), Some(&other));
+    let selected = Presentation::project(Arc::new(state), "", Some(&other)).unwrap();
     assert!(!Arc::ptr_eq(&selected.composer, &other.composer));
     assert!(Arc::ptr_eq(&selected.context, &other.context));
     assert!(Arc::ptr_eq(
@@ -318,10 +338,10 @@ fn only_the_selected_draft_changes_its_composer() {
 
 #[test]
 fn rebasing_retains_a_stream_prefix_and_drops_another_selection_or_host() {
-    let initial = Presentation::project(Arc::new(snapshot()), None);
+    let initial = Presentation::project(Arc::new(snapshot()), "", None).unwrap();
     let mut state = initial.snapshot.as_ref().clone();
     crate::state::set_draft_text(&mut state, session("a").into(), "typed".into());
-    let current = Presentation::current(Arc::new(state.clone()), &initial);
+    let current = Presentation::current(Arc::new(state.clone()), &initial).unwrap();
     assert_eq!(
         current.snapshot.input.drafts[&DraftKey::from(session("a"))].text,
         "typed"
@@ -330,16 +350,18 @@ fn rebasing_retains_a_stream_prefix_and_drops_another_selection_or_host() {
         current.conversation.as_ref().unwrap(),
         initial.conversation.as_ref().unwrap()
     ));
-    Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = Some(session("b"));
+    Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id =
+        Some(session("b"));
     assert!(
         Presentation::current(Arc::new(state.clone()), &initial)
+            .unwrap()
             .conversation
             .is_none()
     );
     assert!(!initial.same_context(&state));
     state = initial.snapshot.as_ref().clone();
     state.connection.storage_scope = "another host".into();
-    let replaced = Presentation::current(Arc::new(state), &initial);
+    let replaced = Presentation::current(Arc::new(state), &initial).unwrap();
     assert!(replaced.list.is_none() && replaced.conversation.is_none());
 }
 
@@ -364,7 +386,7 @@ async fn presented(store: &Store, id: &SessionRef) -> Arc<Presentation> {
 
 #[tokio::test]
 async fn the_native_stream_keeps_acknowledgments_and_selected_history_consistent() {
-    let store = Store::offline(snapshot());
+    let store = Store::offline(snapshot(), None);
     let initial = presented(&store, &session("a")).await;
     store
         .dispatch(Intent::SetDraftText {
@@ -390,7 +412,7 @@ async fn the_native_stream_keeps_acknowledgments_and_selected_history_consistent
     );
     let immediate = store.presentation();
     assert_eq!(
-        immediate.snapshot.pane.navigation.thread_id,
+        immediate.snapshot.panes.primary().navigation.thread_id,
         Some(session("b"))
     );
     assert!(
@@ -401,7 +423,7 @@ async fn the_native_stream_keeps_acknowledgments_and_selected_history_consistent
     );
     let selected = presented(&store, &session("b")).await;
     assert_eq!(
-        selected.snapshot.pane.navigation.thread_id,
+        selected.snapshot.panes.primary().navigation.thread_id,
         Some(session("b"))
     );
     assert_eq!(
@@ -409,4 +431,117 @@ async fn the_native_stream_keeps_acknowledgments_and_selected_history_consistent
         "latest draft"
     );
     store.close().await.unwrap();
+}
+
+#[test]
+fn language_changes_replace_localized_content_and_reject_old_projection_context() {
+    use crate::{localization::UiLanguage, presentation::conversation::ConversationRowContent};
+    let mut state = snapshot();
+    let thread = Arc::make_mut(&mut state.sessions.conversations)
+        .get_mut(&session("a"))
+        .unwrap();
+    Arc::make_mut(thread).turns = Some(vec![Arc::new(crate::models::Turn {
+        id: "work".into(),
+        status: crate::models::TurnStatus::Completed,
+        items: Some(vec![Arc::new(crate::models::Item::new(
+            "answer".into(),
+            crate::models::ItemStatus::Completed,
+            crate::models::ItemBody::AssistantText {
+                text: "answer".into(),
+                phase: crate::models::AssistantPhase::Final,
+            },
+        ))]),
+        items_summary: true,
+        duration_ms: Some(1000),
+        ..Default::default()
+    })]);
+    let japanese = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
+    state.catalog.ui_language = UiLanguage::English;
+    assert!(
+        !japanese.same_context(&state),
+        "a background result in the previous language must not be published"
+    );
+    let english = Presentation::project(Arc::new(state), "", Some(&japanese)).unwrap();
+    let conversation = english.conversation.as_ref().unwrap();
+    assert_eq!(
+        conversation.turns[0]
+            .rows
+            .iter()
+            .find_map(|row| match &row.content {
+                ConversationRowContent::ActivityHeader { activity } =>
+                    Some(activity.activity_summary.as_str()),
+                _ => None,
+            }),
+        Some("Worked for 1s · completed")
+    );
+    let unchanged = Presentation::project(english.snapshot.clone(), "", Some(&english)).unwrap();
+    assert!(Arc::ptr_eq(
+        conversation,
+        unchanged.conversation.as_ref().unwrap()
+    ));
+}
+
+#[test]
+fn language_changes_refresh_lazy_settings_and_composer_copy_without_host_data() {
+    use crate::localization::UiLanguage;
+    let japanese = Presentation::empty(UiLanguage::Japanese);
+    let mut next = japanese.snapshot.as_ref().clone();
+    next.catalog.ui_language = UiLanguage::English;
+    let english = Presentation::project(Arc::new(next), "", Some(&japanese)).unwrap();
+    let changes = english.changes(japanese.clone());
+    assert!(changes.settings && changes.composer);
+    assert_eq!(english.settings.connection_status_label(), "Disconnected");
+    assert_eq!(english.settings.permission.label, "No agent selected");
+    assert_eq!(
+        english
+            .composer
+            .composer_suggestions("/".into(), 1)
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("Loading suggestions…")
+    );
+    assert_eq!(japanese.settings.connection_status_label(), "未接続");
+    assert_eq!(
+        japanese
+            .composer
+            .composer_suggestions("/".into(), 1)
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("候補を読み込み中…")
+    );
+    let unchanged = Presentation::project(english.snapshot.clone(), "", Some(&english)).unwrap();
+    assert!(Arc::ptr_eq(&english.settings, &unchanged.settings));
+    assert!(Arc::ptr_eq(&english.composer, &unchanged.composer));
+}
+
+#[test]
+fn another_panes_navigation_reuses_the_held_conversation_and_controls() {
+    let mut state = snapshot();
+    state.open_pane("side".into(), "/b".into());
+    Arc::make_mut(state.panes.get_mut("side").unwrap()).navigation = Arc::new(Navigation {
+        thread_id: Some(session("b")),
+        draft_key: session("b").into(),
+        cwd: "/b".into(),
+    });
+    let first = Presentation::project(Arc::new(state.clone()), "side", None).unwrap();
+    let (next, _) = crate::state::reduce(
+        &state,
+        "",
+        crate::state::Event::Intent(Intent::NewChat {
+            cwd: "/other".into(),
+        }),
+    );
+    let second = Presentation::project(Arc::new(next), "side", Some(&first)).unwrap();
+    assert!(Arc::ptr_eq(first.pane(), second.pane()));
+    assert!(Arc::ptr_eq(
+        first.conversation.as_ref().unwrap(),
+        second.conversation.as_ref().unwrap()
+    ));
+    assert!(Arc::ptr_eq(&first.composer, &second.composer));
+    assert!(Arc::ptr_eq(&first.context, &second.context));
+    assert!(Arc::ptr_eq(&first.agents, &second.agents));
+    assert!(Arc::ptr_eq(&first.settings, &second.settings));
+    assert!(!second.changes(first).groups.panes);
 }

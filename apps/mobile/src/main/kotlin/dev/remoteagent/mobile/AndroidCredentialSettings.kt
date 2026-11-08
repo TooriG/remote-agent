@@ -75,7 +75,7 @@ private fun CredentialActions(
     val language = LocalUiLanguage.current
     var key by remember(selected.provider) { mutableStateOf("") }
     val openLink = rememberExternalLinkOpener()
-    Text(LocalUiLanguage.current.text(selected.status))
+    Text(selected.status)
     TextButton(onClick = { openLink(selected.keyUrl) }) { Text(language.text("APIキーを取得")) }
     OutlinedTextField(
         value = key,

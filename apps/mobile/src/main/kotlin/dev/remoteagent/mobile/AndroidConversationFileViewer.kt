@@ -28,7 +28,6 @@ import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ReadFile
 import dev.remoteagent.core.fileHostPath
 import dev.remoteagent.core.filePreviewMimeType
-import dev.remoteagent.core.filePreviewTruncationNotice
 import dev.remoteagent.core.mobileFileOpenRequest
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -136,8 +135,8 @@ private fun FileViewerBody(
     else
         Column(Modifier.heightIn(max = 480.dp)) {
             SelectionContainer { Text(path) }
-            if (file.truncated) Text(LocalUiLanguage.current.text(filePreviewTruncationNotice()))
-            error?.let { Text(it) }
+            if (file.truncated) Text(LocalUiLanguage.current.text("file.preview.truncated"))
+            error?.let { Text(dev.remoteagent.core.localizedErrorMessage(LocalUiLanguage.current, it)) }
             if (file.truncated || error != null) {
                 TextButton(onClick = download) { Text(LocalUiLanguage.current.text("ダウンロード")) }
             }

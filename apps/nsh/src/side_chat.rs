@@ -7,7 +7,9 @@ use nsh_core::prelude::*;
 pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
     let parent = use_context::<Connection>().unwrap();
     let host = stored(host);
-    let empty = stored(Shared(Presentation::empty()));
+    let empty = stored(Shared(Presentation::empty(
+        agent_core::localization::UiLanguage::default(),
+    )));
     let publication = computed(move || {
         parent.state.with(|state| {
             state

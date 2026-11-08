@@ -56,7 +56,13 @@ mod tests {
         let usage = a
             .read(async {
                 Ok(vec![
-                    UsageWindow::from_used("5時間枠".into(), 20., None).unwrap(),
+                    UsageWindow::from_used(
+                        agent_protocol::operations::UsagePeriod::Minutes { minutes: 300 },
+                        None,
+                        20.,
+                        None,
+                    )
+                    .unwrap(),
                 ])
             })
             .await;

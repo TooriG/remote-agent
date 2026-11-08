@@ -1,9 +1,6 @@
 //! Permission menu copy and provider selection shared by clients.
 use crate::state::Snapshot;
-use agent_protocol::{
-    permissions::{PermissionMode, ReadPermissionSettings},
-    session::ProviderKind,
-};
+use agent_protocol::{permissions::PermissionMode, session::ProviderKind};
 
 pub const PERMISSION_CHOICES: [(PermissionMode, &str, &str); 3] = [
     (
@@ -23,19 +20,20 @@ pub const PERMISSION_CHOICES: [(PermissionMode, &str, &str); 3] = [
     ),
 ];
 
-pub struct PermissionControl<'a> {
+#[derive(Clone, PartialEq)]
+pub struct PermissionControl {
     pub provider: Option<ProviderKind>,
     /// The menu's heading: whose approval mode it changes.
     pub title: &'static str,
-    pub load_request: Option<ReadPermissionSettings>,
+    pub load_provider: Option<ProviderKind>,
     pub label: &'static str,
     pub mode: Option<PermissionMode>,
-    pub version: Option<&'a str>,
+    pub version: Option<String>,
     pub loading: bool,
-    pub error: Option<&'a str>,
+    pub error: Option<String>,
 }
 impl Snapshot {
-    pub fn permission_control(&self, draft_key: &crate::state::DraftKey) -> PermissionControl<'_> {
+    pub fn permission_control(&self, draft_key: &crate::state::DraftKey) -> PermissionControl {
         let provider = self.model_provider_for_draft(draft_key.clone());
         let state = provider.and_then(|provider| self.catalog.permission_settings.get(&provider));
         let result = state.and_then(|state| state.result.as_ref());
@@ -43,16 +41,14 @@ impl Snapshot {
         let mode = settings.and_then(|settings| settings.mode);
         PermissionControl {
             provider,
-            title: match provider {
+            title: self.catalog.ui_language.text(match provider {
                 Some(ProviderKind::Codex) => "Codex の承認方法",
                 Some(ProviderKind::Claude) => "Claude の承認方法",
                 Some(ProviderKind::DeepSeek) => "DeepSeek Harness の承認方法",
                 None => "エージェント未選択",
-            },
-            load_request: provider
-                .filter(|_| self.connection.connected && state.is_none())
-                .map(|provider| ReadPermissionSettings { provider }),
-            label: match mode {
+            }),
+            load_provider: provider.filter(|_| self.connection.connected && state.is_none()),
+            label: self.catalog.ui_language.text(match mode {
                 Some(mode) => {
                     PERMISSION_CHOICES
                         .iter()
@@ -64,11 +60,11 @@ impl Snapshot {
                 None if settings.is_some() => "カスタム・未設定",
                 None if result.is_some() => "取得できません",
                 None => "読み込み中…",
-            },
+            }),
             mode,
-            version: settings.map(|settings| settings.version.as_str()),
+            version: settings.map(|settings| settings.version.clone()),
             loading: state.is_some() && result.is_none(),
-            error: result.and_then(|result| result.as_ref().err().map(String::as_str)),
+            error: result.and_then(|result| result.as_ref().err().cloned()),
         }
     }
 }
@@ -86,14 +82,14 @@ mod tests {
         assert!(
             snapshot
                 .permission_control(&crate::state::DraftKey::from("draft"))
-                .load_request
+                .load_provider
                 .is_none()
         );
         snapshot.connection.connected = true;
         assert!(
             snapshot
                 .permission_control(&"draft".into())
-                .load_request
+                .load_provider
                 .is_none()
         );
         Arc::make_mut(&mut snapshot.input.drafts).insert(
@@ -109,9 +105,8 @@ mod tests {
         assert_eq!(
             snapshot
                 .permission_control(&crate::state::DraftKey::from("draft"))
-                .load_request
-                .unwrap()
-                .provider,
+                .load_provider
+                .unwrap(),
             ProviderKind::Codex
         );
         snapshot.catalog.permission_settings = Arc::new(
@@ -124,7 +119,7 @@ mod tests {
         assert!(
             snapshot
                 .permission_control(&crate::state::DraftKey::from("draft"))
-                .load_request
+                .load_provider
                 .is_none()
         );
         Arc::make_mut(
@@ -136,7 +131,7 @@ mod tests {
         assert!(
             snapshot
                 .permission_control(&crate::state::DraftKey::from("draft"))
-                .load_request
+                .load_provider
                 .is_none()
         );
         assert_eq!(
@@ -158,9 +153,8 @@ mod tests {
         assert_eq!(
             snapshot
                 .permission_control(&crate::state::DraftKey::from("draft"))
-                .load_request
-                .unwrap()
-                .provider,
+                .load_provider
+                .unwrap(),
             ProviderKind::Claude
         );
     }

@@ -39,6 +39,7 @@ fn waiting_membership_keeps_provider_identity_duplicates_and_absent_rows_at_ever
         ]);
         for waiting in [waiting.as_slice(), &[]] {
             let summaries = thread_summaries(
+                crate::localization::UiLanguage::Japanese,
                 rows.iter(),
                 &BTreeMap::new(),
                 &BTreeSet::new(),
@@ -54,6 +55,7 @@ fn waiting_membership_keeps_provider_identity_duplicates_and_absent_rows_at_ever
         }
         assert!(
             thread_summaries(
+                crate::localization::UiLanguage::Japanese,
                 std::iter::empty(),
                 &BTreeMap::new(),
                 &BTreeSet::new(),

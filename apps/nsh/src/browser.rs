@@ -6,12 +6,12 @@ use crate::{
     shared::Shared,
     workbench::{Reveal, Workbench},
 };
-use agent_core::state::DraftKey;
+use agent_core::{state::DraftKey, store::BrowserUpdate};
 use agent_protocol::{browser::*, session::SessionRef};
 use base64::Engine;
 use nsh_core::{AutoCapitalize, KeyboardType, element::input, prelude::*};
 use serde_json::json;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 /// The Mac's WebKit pages live in this hidden container while no viewer shows
 /// them. Windows shows the Host's rendered pages and renders none itself.
@@ -85,31 +85,41 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
     });
     let accepts_input =
         computed(move || ready.get() && native::shown() && connection_failure.get().is_none());
-    let request = move |action| {
-        frame.with_untracked(|frame| BrowserRequest {
-            thread_id: thread.get(),
-            tab_id: frame.tab_id.clone(),
-            image_id: frame.image_id.clone(),
-            generation: frame.generation,
-            renderer_id: renderer.get_untracked(),
-            action,
-        })
-    };
-    let (outgoing, incoming) = async_channel::bounded(64);
-    let outgoing = stored(outgoing);
-    let incoming = stored(incoming);
+    // Core orders the tab's actions and reads the page between them.
+    let browser = signal(None::<Shared<agent_core::store::BrowserSession>>);
+    {
+        let opened = connection
+            .client
+            .with(|client| client.browser_session(host.get(), thread.get()));
+        spawn(async move {
+            match opened.recv().await {
+                Ok(Ok(session)) => browser.set(Some(Shared(session))),
+                Ok(Err(reason)) => connection_failure.set(Some(reason.to_string())),
+                Err(_) => {}
+            }
+        });
+    }
+    effect(move || {
+        let renderer = renderer.get();
+        browser.with(|browser| {
+            if let Some(browser) = browser {
+                browser.set_renderer(renderer);
+            }
+        });
+    });
     let send = move |action: BrowserAction| {
         if !accepts_input.get_untracked() {
             return false;
         }
+        let Some(session) = browser.get_untracked() else {
+            return false;
+        };
         let dialog = matches!(action, BrowserAction::Dialog { .. });
         let importing = matches!(
             action,
             BrowserAction::ImportCookies { .. } | BrowserAction::ImportPasswords { .. }
         );
-        if outgoing.with(|queue| queue.try_send(request(action)).is_err()) {
-            return false;
-        }
+        session.send(action);
         if dialog {
             answering.set(true);
         }
@@ -119,23 +129,30 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
         true
     };
     effect(move || {
-        if !native::shown() {
-            while incoming.with(|queue| queue.try_recv().is_ok()) {}
+        let Some(session) = browser.get() else {
+            return;
+        };
+        let shown = native::shown();
+        session.set_active(shown);
+        if !shown {
+            session.clear();
             answering.set(false);
             set_keyboard(false);
             return;
         }
         spawn(async move {
             loop {
-                let request = incoming
-                    .with(|queue| queue.try_recv())
-                    .unwrap_or_else(|_| request(BrowserAction::Read));
-                let action = request.action.clone();
-                let reply = connection
+                let next = connection
                     .client
-                    .with(|client| client.browser(host.get(), request));
-                match reply.recv().await {
-                    Ok(Ok(mut result)) => {
+                    .with(|client| client.browser_next(session.0.clone()));
+                let Ok(Some(update)) = next.recv().await else {
+                    return;
+                };
+                let action = match update {
+                    BrowserUpdate::Frame {
+                        frame: mut result,
+                        action,
+                    } => {
                         if frame.with_untracked(|f| f.input_kind) != result.input_kind {
                             composing.set(false);
                             input_text.set(String::new());
@@ -170,27 +187,20 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                         frame.set(Shared(Arc::new(result)));
                         ready.set(true);
                         connection_failure.set(None);
+                        action
                     }
-                    Ok(Err(reason)) => {
-                        if matches!(action, BrowserAction::Read) {
-                            connection_failure.set(Some(reason.to_string()));
-                        } else {
-                            failure.set(Some(reason.to_string()));
-                        }
+                    BrowserUpdate::ReadFailed { message } => {
+                        connection_failure.set(Some(message));
+                        BrowserAction::Read
                     }
-                    Err(_) => return,
-                }
+                    BrowserUpdate::ActionFailed { action, message } => {
+                        failure.set(Some(message));
+                        action
+                    }
+                };
                 if matches!(action, BrowserAction::Dialog { .. }) {
                     answering.set(false);
                 }
-                timer(Duration::from_millis(
-                    if connection_failure.get_untracked().is_some() {
-                        1500
-                    } else {
-                        150
-                    },
-                ))
-                .await;
             }
         });
     });

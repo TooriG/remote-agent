@@ -48,7 +48,7 @@ impl Operation for ReadHistory {
         })
     }
     type Input = Option<uuid::Uuid>;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         Ok(snapshot.sessions.subscriptions.get(&self.session).copied())
     }
     type Output = (agent_protocol::session::HistoryPage, Option<uuid::Uuid>);
@@ -59,7 +59,12 @@ impl Operation for ReadHistory {
     ) -> Result<Self::Output, PeerError> {
         Ok((context.call(self).await?, subscription))
     }
-    fn apply(self, snapshot: &mut Snapshot, (page, subscription): Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        (page, subscription): Self::Output,
+    ) -> Vec<Effect> {
         if subscription != snapshot.sessions.subscriptions.get(&self.session).copied()
             || snapshot
                 .sessions
@@ -133,7 +138,7 @@ impl Operation for ReadItem {
         Some(OperationKey::Item { item: self.clone() })
     }
     type Input = (Option<Arc<Item>>, Option<uuid::Uuid>);
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         Ok((
             item_source(self, snapshot).cloned(),
             snapshot
@@ -173,6 +178,7 @@ impl Operation for ReadItem {
     fn complete(
         self,
         snapshot: &mut Snapshot,
+        _pane_id: &str,
         output: Self::Output,
         current_epoch: bool,
     ) -> Result<Vec<Effect>, PeerError> {
@@ -295,6 +301,7 @@ impl Operation for ReadThread {
     fn navigation_bound(&self) -> bool {
         self.open
     }
+
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::History {
             session: self.thread_id.clone(),
@@ -302,7 +309,7 @@ impl Operation for ReadThread {
     }
     /// A held window's version, when it has the requested size.
     type Input = Option<u64>;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         Ok(snapshot
             .sessions
             .conversations
@@ -328,18 +335,23 @@ impl Operation for ReadThread {
     fn invalidates(&self) -> bool {
         self.open
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, pane_id: &str) -> Result<(), String> {
         if self.open {
             let cwd = snapshot
                 .thread_metadata(&self.thread_id)
                 .and_then(|thread| thread.cwd.as_ref())
                 .cloned()
                 .unwrap_or_default();
-            select_thread(snapshot, self.thread_id.clone(), cwd);
+            select_thread(snapshot, pane_id, self.thread_id.clone(), cwd);
         }
         Ok(())
     }
-    fn apply(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        pane_id: &str,
+        mut output: Self::Output,
+    ) -> Vec<Effect> {
         held_window(snapshot, &self.thread_id, &mut output);
         if output
             .response
@@ -372,13 +384,14 @@ impl Operation for ReadThread {
         let mut effects = if self.open {
             open_thread(
                 snapshot,
+                pane_id,
                 output.response.thread,
                 output.response.model,
                 output.response.effort,
                 output.response.service_tier,
             )
         } else {
-            refresh_thread(snapshot, output.response.thread);
+            refresh_thread(snapshot, pane_id, output.response.thread);
             Vec::new()
         };
         effects.extend(item_details(
@@ -394,7 +407,12 @@ impl Operation for ReadThread {
             .insert(self.thread_id, output.subscription_id);
         effects
     }
-    fn stale(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {
+    fn stale(
+        self,
+        snapshot: &mut Snapshot,
+        pane_id: &str,
+        mut output: Self::Output,
+    ) -> Vec<Effect> {
         held_window(snapshot, &self.thread_id, &mut output);
         // A late navigation result can warm the cache, but must never replace
         // an already subscribed, more recent view or change the selected draft.
@@ -403,13 +421,18 @@ impl Operation for ReadThread {
             .subscriptions
             .contains_key(&self.thread_id)
         {
-            refresh_thread(snapshot, output.response.thread);
+            refresh_thread(snapshot, pane_id, output.response.thread);
         }
         Vec::new()
     }
 }
 
-fn select_thread(snapshot: &mut Snapshot, id: crate::session::SessionRef, cwd: String) {
+fn select_thread(
+    snapshot: &mut Snapshot,
+    pane_id: &str,
+    id: crate::session::SessionRef,
+    cwd: String,
+) {
     let key: DraftKey = id.clone().into();
     let previous = snapshot.input.drafts.get(&key).cloned().unwrap_or_default();
     let mut draft = previous.clone();
@@ -441,6 +464,7 @@ fn select_thread(snapshot: &mut Snapshot, id: crate::session::SessionRef, cwd: S
     }
     navigate(
         snapshot,
+        pane_id,
         Navigation {
             thread_id: Some(id.clone()),
             draft_key: id.into(),
@@ -451,6 +475,7 @@ fn select_thread(snapshot: &mut Snapshot, id: crate::session::SessionRef, cwd: S
 
 pub(super) fn open_thread(
     snapshot: &mut Snapshot,
+    pane_id: &str,
     thread: Thread,
     model: Option<crate::models::ModelRef>,
     effort: Option<String>,
@@ -458,7 +483,7 @@ pub(super) fn open_thread(
 ) -> Vec<Effect> {
     let id = thread.id.clone();
     let cwd = thread.cwd.clone().unwrap_or_default();
-    refresh_thread(snapshot, thread);
+    refresh_thread(snapshot, pane_id, thread);
     if let Some(id) = id {
         let key = DraftKey::from(id.clone());
         let previous = snapshot.input.drafts.get(&key).cloned().unwrap_or_default();
@@ -510,6 +535,7 @@ pub(super) fn open_thread(
 
         navigate(
             snapshot,
+            pane_id,
             Navigation {
                 thread_id: Some(id.clone()),
                 draft_key: id.clone().into(),
@@ -517,12 +543,14 @@ pub(super) fn open_thread(
             },
         );
     }
-    review_workspace(snapshot).into_iter().collect()
+    review_workspace(snapshot, pane_id).into_iter().collect()
 }
 
-pub(super) fn refresh_thread(snapshot: &mut Snapshot, incoming: Thread) {
+pub(super) fn refresh_thread(snapshot: &mut Snapshot, pane_id: &str, incoming: Thread) {
     let Some(id) = incoming.id.clone().filter(|id| id.validate().is_ok()) else {
-        Arc::make_mut(&mut snapshot.pane).error = Some("thread ID is missing".into());
+        if let Some(pane) = snapshot.panes.get_mut(pane_id) {
+            Arc::make_mut(pane).error = Some("thread ID is missing".into());
+        }
         return;
     };
     let mut thread = incoming;
@@ -591,7 +619,7 @@ impl Operation for ForkSession {
     fn invalidates(&self) -> bool {
         true
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
         let id = output.thread.id.clone().expect("validated thread ID");
         let draft = snapshot
             .input
@@ -605,6 +633,7 @@ impl Operation for ForkSession {
         }
         let mut effects = open_thread(
             snapshot,
+            pane_id,
             output.thread,
             output.model,
             output.effort,
@@ -613,8 +642,8 @@ impl Operation for ForkSession {
         effects.push(Effect::execute(ReadThread::new(id)));
         effects
     }
-    fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        refresh_thread(snapshot, output.thread);
+    fn stale(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
+        refresh_thread(snapshot, pane_id, output.thread);
         Vec::new()
     }
     fn outcome(output: &mut Self::Output) -> Outcome {
@@ -640,21 +669,22 @@ impl Operation for CreateSession {
     // unrelated application notice behind after the user successfully retries.
     const REPORT_ERROR: bool = false;
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.sessions.subscriptions)
             .insert(output.session, output.subscription_id);
         open_thread(
             snapshot,
+            pane_id,
             output.response.thread,
             output.response.model,
             output.response.effort,
             output.response.service_tier,
         )
     }
-    fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn stale(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.sessions.subscriptions)
             .insert(output.session, output.subscription_id);
-        refresh_thread(snapshot, output.response.thread);
+        refresh_thread(snapshot, pane_id, output.response.thread);
         Vec::new()
     }
     fn outcome(output: &mut Self::Output) -> Outcome {
@@ -698,11 +728,11 @@ impl Operation for OpenRequest {
             })
             .await
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        ReadThread::new(output.session.clone()).apply(snapshot, output)
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
+        ReadThread::new(output.session.clone()).apply(snapshot, pane_id, output)
     }
-    fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        ReadThread::new(output.session.clone()).stale(snapshot, output)
+    fn stale(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
+        ReadThread::new(output.session.clone()).stale(snapshot, pane_id, output)
     }
 }
 
@@ -730,14 +760,15 @@ mod tests {
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.sessions.conversations).insert(id.clone(), Arc::new(held));
         let open = ReadThread::open(id.clone());
-        assert_eq!(open.capture(&snapshot).unwrap(), Some(5));
+        assert_eq!(open.capture(&snapshot, "").unwrap(), Some(5));
         let other_size = ReadThread {
             limit: 5,
             ..ReadThread::open(id.clone())
         };
-        assert_eq!(other_size.capture(&snapshot).unwrap(), None);
+        assert_eq!(other_size.capture(&snapshot, "").unwrap(), None);
         open.apply(
             &mut snapshot,
+            "",
             crate::session::OpenedSession {
                 session: id.clone(),
                 subscription_id: uuid::Uuid::new_v4(),
@@ -804,15 +835,21 @@ mod tests {
             history_read_state: Some(source_state.clone()),
             ..Default::default()
         };
-        refresh_thread(&mut snapshot, incoming.clone());
+        refresh_thread(&mut snapshot, "", incoming.clone());
         let retained = &snapshot.sessions.conversations[&id];
         assert_eq!(retained.turns.as_ref().unwrap().len(), 3);
         assert!(retained.history_cursor.is_none());
         assert_eq!(retained.history_read_state.as_ref(), Some(&source_state));
-        assert!(history_notice(retained).is_some());
+        assert!(history_notice(crate::localization::UiLanguage::Japanese, retained).is_some());
         incoming.history_read_state = Some(HistoryReadState::new(HistoryReadKind::Partial, vec![]));
-        refresh_thread(&mut snapshot, incoming);
-        assert_eq!(history_notice(&snapshot.sessions.conversations[&id]), None);
+        refresh_thread(&mut snapshot, "", incoming);
+        assert_eq!(
+            history_notice(
+                crate::localization::UiLanguage::Japanese,
+                &snapshot.sessions.conversations[&id]
+            ),
+            None
+        );
     }
 
     #[test]
@@ -848,6 +885,7 @@ mod tests {
             );
             ReadThread::new(id.clone()).apply(
                 &mut snapshot,
+                "",
                 crate::session::OpenedSession {
                     session: id.clone(),
                     subscription_id: uuid::Uuid::new_v4(),
@@ -898,6 +936,7 @@ mod tests {
         );
         open_thread(
             &mut snapshot,
+            "",
             Thread {
                 id: Some(id.clone()),
                 ..Default::default()
@@ -935,6 +974,7 @@ mod tests {
         let mut snapshot = Snapshot::default();
         open_thread(
             &mut snapshot,
+            "",
             Thread {
                 id: Some(id.clone()),
                 ..Default::default()
@@ -945,6 +985,7 @@ mod tests {
         );
         let (snapshot, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::SelectEffort {
                 thread_id: key.clone(),
                 effort: "high".into(),
@@ -952,6 +993,7 @@ mod tests {
         );
         let (snapshot, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::SetDraftText {
                 thread_id: key.clone(),
                 text: "Continue".into(),
@@ -959,6 +1001,7 @@ mod tests {
         );
         let (mut snapshot, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::Submit {
                 thread_id: Some(id.clone()),
                 client_user_message_id: "input".into(),
@@ -967,6 +1010,7 @@ mod tests {
         if edited_during_send {
             snapshot = reduce_intent(
                 &snapshot,
+                "",
                 Intent::SelectEffort {
                     thread_id: key.clone(),
                     effort: "max".into(),
@@ -980,9 +1024,13 @@ mod tests {
                 client_user_message_id: "input".into(),
                 draft: snapshot.sessions.pending_submissions["input"].draft.clone(),
             }
-            .apply(&mut snapshot, SubmissionProgress::Sent(Some("turn".into())));
+            .apply(
+                &mut snapshot,
+                "",
+                SubmissionProgress::Sent(Some("turn".into())),
+            );
         } else {
-            snapshot = reduce(&snapshot, Event::SubmissionFailed("input".into())).0;
+            snapshot = reduce(&snapshot, "", Event::SubmissionFailed("input".into())).0;
             assert_eq!(snapshot.input.drafts[&key].text, "Continue");
         }
         // Persistence must retain an unsent choice, including one made while
@@ -991,6 +1039,7 @@ mod tests {
             crate::persistence::decode(&crate::persistence::encode(&snapshot).unwrap()).unwrap();
         open_thread(
             &mut snapshot,
+            "",
             Thread {
                 id: Some(id),
                 ..Default::default()
@@ -1038,6 +1087,7 @@ mod tests {
         if cached {
             refresh_thread(
                 &mut snapshot,
+                "",
                 Thread {
                     id: Some(id.clone()),
                     ..Default::default()
@@ -1058,12 +1108,12 @@ mod tests {
             );
         }
         if catalog_at == "before" {
-            LoadModels { provider }.apply(&mut snapshot, models());
+            LoadModels { provider }.apply(&mut snapshot, "", models());
         }
         let mut open = ReadThread::open(id.clone());
-        open.prepare(&mut snapshot).unwrap();
+        open.prepare(&mut snapshot, "").unwrap();
         if catalog_at == "during" {
-            LoadModels { provider }.apply(&mut snapshot, models());
+            LoadModels { provider }.apply(&mut snapshot, "", models());
         }
         let model = crate::models::ModelRef {
             provider,
@@ -1071,6 +1121,7 @@ mod tests {
         };
         open.apply(
             &mut snapshot,
+            "",
             crate::session::OpenedSession {
                 session: id.clone(),
                 subscription_id: uuid::Uuid::new_v4(),
@@ -1087,7 +1138,7 @@ mod tests {
             },
         );
         if catalog_at == "after" {
-            LoadModels { provider }.apply(&mut snapshot, models());
+            LoadModels { provider }.apply(&mut snapshot, "", models());
         }
         let draft = &snapshot.input.drafts[&key];
         assert_eq!(draft.model.as_ref(), Some(&model));
@@ -1099,6 +1150,7 @@ mod tests {
         assert!(controls.fast);
         let (snapshot, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::SetDraftText {
                 thread_id: key,
                 text: "Continue".into(),
@@ -1106,6 +1158,7 @@ mod tests {
         );
         let (submitted, effects) = reduce_intent(
             &snapshot,
+            "",
             Intent::Submit {
                 thread_id: Some(id),
                 client_user_message_id: "next".into(),
@@ -1142,6 +1195,7 @@ mod tests {
         Arc::make_mut(&mut snapshot.input.drafts).insert(key.clone(), draft.clone());
         open_thread(
             &mut snapshot,
+            "",
             Thread {
                 id: Some(id.clone()),
                 ..Default::default()
@@ -1154,7 +1208,10 @@ mod tests {
             None,
         );
         assert_eq!(snapshot.input.drafts[&key], draft);
-        assert_eq!(snapshot.pane.navigation.thread_id.as_ref(), Some(&id));
+        assert_eq!(
+            snapshot.panes.primary().navigation.thread_id.as_ref(),
+            Some(&id)
+        );
     }
 
     #[test]
@@ -1182,6 +1239,7 @@ mod tests {
         );
         refresh_thread(
             &mut snapshot,
+            "",
             Thread {
                 id: Some(id.clone()),
                 active_provider: Some(ProviderKind::Claude),
@@ -1231,10 +1289,13 @@ mod tests {
                 ..Default::default()
             }),
         );
-        select_thread(&mut snapshot, id.clone(), "/workspace".into());
+        select_thread(&mut snapshot, "", id.clone(), "/workspace".into());
         assert_eq!(snapshot.input.drafts[&key].model.as_ref(), Some(&model));
         assert_eq!(snapshot.input.drafts[&key].text, "continue with Claude");
-        assert_eq!(snapshot.pane.navigation.thread_id.as_ref(), Some(&id));
+        assert_eq!(
+            snapshot.panes.primary().navigation.thread_id.as_ref(),
+            Some(&id)
+        );
     }
 
     #[test]
@@ -1257,10 +1318,18 @@ mod tests {
             },
             ..Default::default()
         };
-        ReadThread::open(id.clone()).prepare(&mut snapshot).unwrap();
-        assert_eq!(snapshot.pane.navigation.thread_id.as_ref(), Some(&id));
-        assert_eq!(snapshot.pane.navigation.cwd, "/old-project");
-        assert_eq!(snapshot.selected_directory(), "/old-project");
+        ReadThread::open(id.clone())
+            .prepare(&mut snapshot, "")
+            .unwrap();
+        assert_eq!(
+            snapshot.panes.primary().navigation.thread_id.as_ref(),
+            Some(&id)
+        );
+        assert_eq!(snapshot.panes.primary().navigation.cwd, "/old-project");
+        assert_eq!(
+            snapshot.selected_directory(snapshot.panes.primary()),
+            "/old-project"
+        );
         assert_eq!(
             snapshot
                 .thread_metadata(&id)
@@ -1268,7 +1337,7 @@ mod tests {
                 .can_accept_direct_input,
             Some(false)
         );
-        let (disconnected, _) = reduce(&snapshot, Event::Disconnected);
+        let (disconnected, _) = reduce(&snapshot, "", Event::Disconnected);
         assert_eq!(
             disconnected.thread_metadata(&id).unwrap().status,
             crate::models::SessionStatus::Unknown
@@ -1319,10 +1388,11 @@ mod tests {
             }),
         );
         ReadThread::open(session.clone())
-            .prepare(&mut snapshot)
+            .prepare(&mut snapshot, "")
             .unwrap();
         open_thread(
             &mut snapshot,
+            "",
             Thread {
                 id: Some(session.clone()),
                 ..Default::default()
@@ -1338,6 +1408,7 @@ mod tests {
         );
         let (submitted, effects) = reduce_intent(
             &snapshot,
+            "",
             Intent::Submit {
                 thread_id: Some(session),
                 client_user_message_id: "gateway-input".into(),
@@ -1382,7 +1453,7 @@ mod tests {
             provider_errors: None,
         };
         if catalog_at == "before" {
-            LoadModels { provider }.apply(&mut snapshot, catalog());
+            LoadModels { provider }.apply(&mut snapshot, "", catalog());
         }
         if existing_draft {
             Arc::make_mut(&mut snapshot.input.drafts).insert(
@@ -1400,13 +1471,14 @@ mod tests {
             );
         }
         ReadThread::open(session.clone())
-            .prepare(&mut snapshot)
+            .prepare(&mut snapshot, "")
             .unwrap();
         if catalog_at == "during" {
-            LoadModels { provider }.apply(&mut snapshot, catalog());
+            LoadModels { provider }.apply(&mut snapshot, "", catalog());
         }
         open_thread(
             &mut snapshot,
+            "",
             Thread {
                 id: Some(session),
                 ..Default::default()
@@ -1419,7 +1491,7 @@ mod tests {
             None,
         );
         if catalog_at == "after" {
-            LoadModels { provider }.apply(&mut snapshot, catalog());
+            LoadModels { provider }.apply(&mut snapshot, "", catalog());
         }
         let draft = &snapshot.input.drafts[&key];
         assert_eq!(draft.text, if existing_draft { "Unsent input" } else { "" });
@@ -1449,6 +1521,7 @@ mod tests {
         let expected_model = draft.model.clone();
         let (snapshot, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::SetDraftText {
                 thread_id: key,
                 text: "Next input".into(),
@@ -1456,6 +1529,7 @@ mod tests {
         );
         let (submitted, effects) = reduce_intent(
             &snapshot,
+            "",
             Intent::Submit {
                 thread_id: None,
                 client_user_message_id: "next-input".into(),
@@ -1511,7 +1585,7 @@ mod item_read_tests {
         .as_mut()
         .unwrap()
         .push(latest.clone());
-        let captured = request.capture(&snapshot).unwrap();
+        let captured = request.capture(&snapshot, "").unwrap();
         assert!(
             captured.0.is_some(),
             "the requested older item must be captured"
@@ -1520,7 +1594,7 @@ mod item_read_tests {
         assert!(
             request
                 .clone()
-                .complete(&mut snapshot, response, true)
+                .complete(&mut snapshot, "", response, true)
                 .unwrap()
                 .is_empty()
         );
@@ -1581,12 +1655,13 @@ mod item_read_tests {
         let subscription_id = snapshot.sessions.subscriptions[&session];
         let (next, effects) = crate::state::reduce(
             snapshot,
+            "",
             crate::state::Event::SessionUpdate(Box::new(crate::session::SessionUpdate {
                 subscription_id,
                 change,
             })),
         );
-        if next.pane.error.is_some() {
+        if next.panes.primary().error.is_some() {
             assert_eq!(effects.len(), 1);
             assert!(!next.sessions.subscriptions.contains_key(&session));
         }
@@ -1600,7 +1675,7 @@ mod item_read_tests {
         let current = snapshot.sessions.conversations.clone();
         assert!(
             request
-                .complete(&mut snapshot, old, true)
+                .complete(&mut snapshot, "", old, true)
                 .unwrap()
                 .is_empty()
         );
@@ -1631,14 +1706,17 @@ mod item_read_tests {
                     },
                 );
             }
-            assert!(snapshot.pane.error.is_none());
+            assert!(snapshot.panes.primary().error.is_none());
             assert!(
                 snapshot
                     .sessions
                     .subscriptions
                     .contains_key(&request.thread_id)
             );
-            let effects = request.clone().complete(&mut snapshot, old, true).unwrap();
+            let effects = request
+                .clone()
+                .complete(&mut snapshot, "", old, true)
+                .unwrap();
             assert_eq!(effects.len(), 1);
             assert!(item_source(&request, &snapshot).unwrap().is_deferred());
             assert_ne!(
@@ -1661,7 +1739,7 @@ mod item_read_tests {
                     },
                 );
             }
-            let result = request.complete(&mut snapshot, old, deleted);
+            let result = request.complete(&mut snapshot, "", old, deleted);
             if deleted {
                 assert!(result.is_err());
             } else {
@@ -1701,7 +1779,7 @@ mod item_read_tests {
                     },
                 );
             }
-            let result = request.clone().complete(&mut snapshot, old, true);
+            let result = request.clone().complete(&mut snapshot, "", old, true);
             if changed {
                 assert_eq!(result.unwrap().len(), 1);
             } else {

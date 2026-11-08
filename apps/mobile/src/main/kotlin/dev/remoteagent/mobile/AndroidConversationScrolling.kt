@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -12,15 +14,20 @@ import dev.remoteagent.core.shouldLoadHistory
 @Composable
 internal fun ObserveFollowing(
     listState: androidx.compose.foundation.lazy.LazyListState,
-    projection: ConversationProjection?,
+    projection: dev.remoteagent.core.ConversationRows?,
     following: Boolean,
     follow: (Boolean) -> Unit,
 ) {
+    var previous by remember { mutableStateOf<dev.remoteagent.core.RenderedConversation?>(null) }
     LaunchedEffect(projection) {
-        if (following) {
+        val source = projection?.source()
+        val before = previous
+        if (source != null && before != null && source.unchanged(before)) return@LaunchedEffect
+        if (source != null && following) {
             withFrameNanos {}
             listState.scrollToLatest()
         }
+        previous = source
     }
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress to !listState.canScrollForward }
@@ -31,17 +38,18 @@ internal fun ObserveFollowing(
 @Composable
 internal fun ObserveHistoryPrefetch(
     listState: androidx.compose.foundation.lazy.LazyListState,
+    threadId: dev.remoteagent.core.SessionRef?,
     history: dev.remoteagent.core.HistoryControl?,
     following: Boolean,
-    older: (() -> Unit)?,
+    perform: (dev.remoteagent.core.Intent, (Result<dev.remoteagent.core.Outcome>) -> Unit) -> Unit,
 ) {
-    LaunchedEffect(history, following, older) {
+    LaunchedEffect(threadId, history, following, perform) {
         val hasMore = history?.hasMore == true
         snapshotFlow {
             val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
             shouldLoadHistory(
                 hasMore,
-                older == null || history?.error != null,
+                threadId == null || history?.loading == true || history?.error != null,
                 viewportHeight > 0 &&
                     listState.firstVisibleItemIndex == 0 &&
                     listState.firstVisibleItemScrollOffset < viewportHeight * HISTORY_PREFETCH_FRACTION,
@@ -49,7 +57,9 @@ internal fun ObserveHistoryPrefetch(
                 following,
             )
         }
-            .collect { needed -> if (needed) older?.invoke() }
+            .collect { needed ->
+                if (needed && threadId != null) perform(dev.remoteagent.core.Intent.ReadOlder(threadId)) {}
+            }
     }
 }
 

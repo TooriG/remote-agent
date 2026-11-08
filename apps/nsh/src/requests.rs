@@ -29,8 +29,8 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
         .child(each(
             move || {
                 connection
-                    .composer
-                    .with(|p| p.controls.request.clone().into_iter().collect::<Vec<_>>())
+                    .context
+                    .with(|p| p.docked_request().into_iter().collect::<Vec<_>>())
             },
             |request: &Request| request.id.clone(),
             move |request, _| request_card(connection, following, request),
@@ -50,7 +50,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
 fn sending(connection: Connection, id: RequestId) -> bool {
     connection.publication.with(|p| {
         matches!(
-            p.composer.request_phase(id),
+            p.context.request_phase(id),
             Some(op::OperationPhase::Running)
         )
     })
@@ -59,7 +59,7 @@ fn sending(connection: Connection, id: RequestId) -> bool {
 /// The failure of the request's last answer, below its card.
 fn request_error(connection: Connection, id: impl Fn() -> RequestId + 'static) -> impl IntoElement {
     text(move || {
-        connection.composer.with(|p| {
+        connection.context.with(|p| {
             p.request_error(id())
                 .map(|error| localized(error.to_string()))
                 .unwrap_or_default()

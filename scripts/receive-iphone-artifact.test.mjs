@@ -29,7 +29,7 @@ if (args[0] === 'api' && mode === 'unauthorized') {
 if (args[0] === 'api' && ['transient', 'network-outage'].includes(mode)) {
   const calls = fs.readFileSync(process.env.ARTIFACT_TEST_LOG, 'utf8').trim().split('\\n').map(JSON.parse);
   if (mode === 'network-outage' || calls.filter(call => call[1] === args[1]).length === 1) {
-    console.error('net/http: TLS handshake timeout');
+    console.error(process.env.ARTIFACT_TEST_CONNECTION_ERROR ?? 'net/http: TLS handshake timeout');
     process.exit(17);
   }
 }
@@ -128,12 +128,20 @@ test('artifact lookup reads all pages and ignores unrelated artifacts', async t 
 });
 
 test('transient jobs and artifact metadata connection failures recover within one reception', async t => {
-  const f = fixture(t, 'transient');
-  const result = await f.start({}, '20').completed;
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFileSync(f.output, 'utf8'), 'current build');
-  assert.equal(f.commands().filter(args => args[0] === 'api').length, 4);
-  assert.equal(f.commands().filter(args => args[0] === 'run').length, 1);
+  for (const error of [
+    'net/http: TLS handshake timeout',
+    'Get "https://api.github.com/repos/fixture/repo/actions/runs/123/jobs": EOF',
+    'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com',
+  ]) {
+    await t.test(error, async t => {
+      const f = fixture(t, 'transient');
+      const result = await f.start({ ARTIFACT_TEST_CONNECTION_ERROR: error }, '20').completed;
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(f.output, 'utf8'), 'current build');
+      assert.equal(f.commands().filter(args => args[0] === 'api').length, 4);
+      assert.equal(f.commands().filter(args => args[0] === 'run').length, 1);
+    });
+  }
 });
 
 test('metadata authentication failures are reported without retrying', async t => {
@@ -183,7 +191,7 @@ test('queued producers wait for an execution, while a started producer must iden
   for (const mode of ['queued', 'invalid-start']) {
     await t.test(mode, async t => {
       const f = fixture(t, mode);
-      const result = await f.start({}, '1').completed;
+      const result = await f.start({}, mode === 'queued' ? '1' : '10').completed;
       assert.equal(result.status, 1, result.stderr);
       assert.match(result.stderr, mode === 'queued' ? /Timed out waiting/ : /did not identify its start time/);
       assert.ok(f.commands().every(args => args[1].includes('/jobs?')));

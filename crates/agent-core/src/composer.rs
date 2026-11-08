@@ -1,4 +1,4 @@
-use crate::state::Snapshot;
+use crate::localization::UiLanguage;
 use agent_protocol::composer::*;
 
 /// Keep selected lines quoted and leave room for the user's question.
@@ -57,22 +57,8 @@ pub struct ComposerSuggestions {
     pub status: Option<String>,
 }
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
-impl Snapshot {
-    pub fn composer_suggestions(&self, text: String, cursor: u32) -> Option<ComposerSuggestions> {
-        suggestions(
-            self.catalog
-                .composer_catalogs
-                .get(&self.pane.navigation.cwd)
-                .map(AsRef::as_ref),
-            self.model_provider_for_draft(self.pane.navigation.draft_key.clone()),
-            text,
-            cursor,
-        )
-    }
-}
-
 pub(crate) fn suggestions(
+    language: UiLanguage,
     catalog: Option<&agent_protocol::composer::ComposerCatalog>,
     provider: Option<agent_protocol::session::ProviderKind>,
     text: String,
@@ -93,8 +79,10 @@ pub(crate) fn suggestions(
         .cloned()
         .collect();
     let status = match catalog {
-        None => Some("候補を読み込み中…".into()),
-        Some(c) if c.loading && candidates.is_empty() => Some("候補を読み込み中…".into()),
+        None => Some(language.text("候補を読み込み中…").into()),
+        Some(c) if c.loading && candidates.is_empty() => {
+            Some(language.text("候補を読み込み中…").into())
+        }
         Some(c)
             if provider
                 .and_then(|provider| c.errors.get(&provider))
@@ -102,7 +90,7 @@ pub(crate) fn suggestions(
         {
             Some(c.errors[&provider.unwrap()].join("\n"))
         }
-        Some(_) if candidates.is_empty() => Some("該当する候補がありません".into()),
+        Some(_) if candidates.is_empty() => Some(language.text("該当する候補がありません").into()),
         _ => None,
     };
     Some(ComposerSuggestions { candidates, status })
@@ -161,7 +149,7 @@ pub fn completion_key(key: &str, highlighted: usize, count: usize) -> Option<Com
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Draft, Event, Intent, reduce};
+    use crate::state::{Draft, Event, Intent, Snapshot, reduce};
 
     #[rstest::rstest]
     #[case("down", 0, 3, Some(CompletionKey::Highlight(1)))]
@@ -226,6 +214,7 @@ mod tests {
         };
         let (snapshot, _) = reduce(
             &Snapshot::default(),
+            "",
             Event::Intent(Intent::SetDraft {
                 thread_id: "origin".into(),
                 draft: draft.clone(),
@@ -233,6 +222,7 @@ mod tests {
         );
         let (snapshot, _) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::SetDraftText {
                 thread_id: "other".into(),
                 text: "別の下書き".into(),
@@ -240,12 +230,14 @@ mod tests {
         );
         let (snapshot, _) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/other".into(),
             }),
         );
         let (next, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::QuoteSelection {
                 storage_scope: String::new(),
                 thread_id: "origin".into(),
@@ -268,10 +260,14 @@ mod tests {
             next.input.drafts[&"other".into()],
             snapshot.input.drafts[&"other".into()]
         );
-        assert_eq!(next.pane.navigation, snapshot.pane.navigation);
+        assert_eq!(
+            next.panes.primary().navigation,
+            snapshot.panes.primary().navigation
+        );
         assert!(effects.is_empty());
         let (stale, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::QuoteSelection {
                 storage_scope: "previous-account".into(),
                 thread_id: "origin".into(),
@@ -359,6 +355,7 @@ mod tests {
         for text in ["plain text", "$review-other", "prefix$review", ""] {
             let (next, _) = reduce(
                 &snapshot,
+                "",
                 Event::Intent(Intent::SetDraftText {
                     thread_id: "chat".into(),
                     text: text.into(),
@@ -412,27 +409,41 @@ mod tests {
         };
         std::sync::Arc::make_mut(
             std::sync::Arc::make_mut(&mut snapshot.input.drafts)
-                .entry(snapshot.pane.navigation.draft_key.clone())
+                .entry(snapshot.panes.primary().navigation.draft_key.clone())
                 .or_default(),
         )
         .model = Some(agent_protocol::models::ModelRef {
             provider: ProviderKind::Codex,
             id: "model".into(),
         });
-        let suggestions = snapshot.composer_suggestions("/".into(), 1).unwrap();
+        let suggestions = crate::presentation::view::Presentation::from_snapshot(
+            std::sync::Arc::new(snapshot.clone()),
+            "".into(),
+        )
+        .unwrap()
+        .composer()
+        .composer_suggestions("/".into(), 1)
+        .unwrap();
         assert_eq!(suggestions.candidates[0].invocation, codex);
         assert_eq!(suggestions.candidates.len(), 1);
         assert!(suggestions.status.is_none());
         std::sync::Arc::make_mut(
             std::sync::Arc::make_mut(&mut snapshot.input.drafts)
-                .entry(snapshot.pane.navigation.draft_key.clone())
+                .entry(snapshot.panes.primary().navigation.draft_key.clone())
                 .or_default(),
         )
         .model = Some(agent_protocol::models::ModelRef {
             provider: ProviderKind::Claude,
             id: "model".into(),
         });
-        let suggestions = snapshot.composer_suggestions("/".into(), 1).unwrap();
+        let suggestions = crate::presentation::view::Presentation::from_snapshot(
+            std::sync::Arc::new(snapshot.clone()),
+            "".into(),
+        )
+        .unwrap()
+        .composer()
+        .composer_suggestions("/".into(), 1)
+        .unwrap();
         assert_eq!(suggestions.candidates[0].invocation, claude);
         assert_eq!(suggestions.candidates.len(), 1);
         assert_eq!(suggestions.status.as_deref(), Some("Claude unavailable"));
@@ -476,7 +487,7 @@ mod tests {
         };
         Arc::make_mut(
             Arc::make_mut(&mut snapshot.input.drafts)
-                .entry(snapshot.pane.navigation.draft_key.clone())
+                .entry(snapshot.panes.primary().navigation.draft_key.clone())
                 .or_default(),
         )
         .model = Some(agent_protocol::models::ModelRef {
@@ -490,9 +501,14 @@ mod tests {
             ("/istanbul", vec![]),
             ("@", vec![4]),
         ] {
-            let result = snapshot
-                .composer_suggestions(text.into(), text.len() as u32)
-                .unwrap();
+            let result = crate::presentation::view::Presentation::from_snapshot(
+                std::sync::Arc::new(snapshot.clone()),
+                "".into(),
+            )
+            .unwrap()
+            .composer()
+            .composer_suggestions(text.into(), text.len() as u32)
+            .unwrap();
             assert_eq!(
                 result.candidates,
                 expected
@@ -513,7 +529,7 @@ mod tests {
             snapshot
                 .catalog
                 .composer_catalogs
-                .get(&snapshot.pane.navigation.cwd)
+                .get(&snapshot.panes.primary().navigation.cwd)
                 .unwrap()
                 .candidates,
             candidates
@@ -529,9 +545,10 @@ mod tests {
             },
             ..Default::default()
         };
-        let key = snapshot.pane.navigation.draft_key.clone();
+        let key = snapshot.panes.primary().navigation.draft_key.clone();
         let (snapshot, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::EditComposer {
                 thread_id: key.clone(),
                 text: "/".into(),
@@ -543,12 +560,13 @@ mod tests {
             snapshot
                 .catalog
                 .composer_catalogs
-                .get(&snapshot.pane.navigation.cwd)
+                .get(&snapshot.panes.primary().navigation.cwd)
                 .unwrap()
                 .loading
         );
         let (snapshot, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::EditComposer {
                 thread_id: key.clone(),
                 text: "/rev suffix".into(),
@@ -564,6 +582,7 @@ mod tests {
         draft.effort = Some("high".into());
         let snapshot = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::SetDraft {
                 thread_id: key.clone(),
                 draft,
@@ -572,6 +591,7 @@ mod tests {
         .0;
         let snapshot = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::InsertInvocation {
                 thread_id: key.clone(),
                 text: "$review suffix".into(),
@@ -594,6 +614,7 @@ mod tests {
     fn prefetch_follows_connection_directory_and_provider() {
         let (offline, _) = reduce(
             &Snapshot::default(),
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/project".into(),
             }),
@@ -602,21 +623,22 @@ mod tests {
             offline
                 .catalog
                 .composer_catalogs
-                .get(&offline.pane.navigation.cwd)
+                .get(&offline.panes.primary().navigation.cwd)
                 .is_none()
         );
-        let (connected, _) = reduce(&offline, Event::Connected);
+        let (connected, _) = reduce(&offline, "", Event::Connected);
         let catalog = connected
             .catalog
             .composer_catalogs
-            .get(&connected.pane.navigation.cwd)
+            .get(&connected.panes.primary().navigation.cwd)
             .unwrap();
         assert_eq!(catalog.cwd, "/project");
         assert!(catalog.loading);
         let (edited, effects) = reduce(
             &connected,
+            "",
             Event::Intent(Intent::EditComposer {
-                thread_id: connected.pane.navigation.draft_key.clone(),
+                thread_id: connected.panes.primary().navigation.draft_key.clone(),
                 text: "/".into(),
                 cursor: 1,
             }),
@@ -630,11 +652,12 @@ mod tests {
             edited
                 .catalog
                 .composer_catalogs
-                .get(&edited.pane.navigation.cwd)
+                .get(&edited.panes.primary().navigation.cwd)
                 .unwrap()
         ));
         let (other, _) = reduce(
             &edited,
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/other".into(),
             }),
@@ -643,7 +666,7 @@ mod tests {
             other
                 .catalog
                 .composer_catalogs
-                .get(&other.pane.navigation.cwd)
+                .get(&other.panes.primary().navigation.cwd)
                 .unwrap()
                 .cwd,
             "/other"
@@ -652,25 +675,25 @@ mod tests {
             other
                 .catalog
                 .composer_catalogs
-                .get(&other.pane.navigation.cwd)
+                .get(&other.panes.primary().navigation.cwd)
                 .unwrap()
                 .candidates
                 .is_empty()
         );
-        let (disconnected, _) = reduce(&other, Event::Disconnected);
+        let (disconnected, _) = reduce(&other, "", Event::Disconnected);
         assert!(
             disconnected
                 .catalog
                 .composer_catalogs
-                .get(&disconnected.pane.navigation.cwd)
+                .get(&disconnected.panes.primary().navigation.cwd)
                 .is_none()
         );
-        let (reconnected, _) = reduce(&disconnected, Event::Connected);
+        let (reconnected, _) = reduce(&disconnected, "", Event::Connected);
         assert_eq!(
             reconnected
                 .catalog
                 .composer_catalogs
-                .get(&reconnected.pane.navigation.cwd)
+                .get(&reconnected.panes.primary().navigation.cwd)
                 .unwrap()
                 .cwd,
             "/other"
@@ -678,22 +701,31 @@ mod tests {
         let mut claude = offline;
         std::sync::Arc::make_mut(
             std::sync::Arc::make_mut(&mut claude.input.drafts)
-                .get_mut(&claude.pane.navigation.draft_key)
+                .get_mut(&claude.panes.primary().navigation.draft_key)
                 .unwrap(),
         )
         .model = Some(agent_protocol::models::ModelRef {
             provider: agent_protocol::session::ProviderKind::Claude,
             id: "claude".into(),
         });
-        let (claude, _) = reduce(&claude, Event::Connected);
+        let (claude, _) = reduce(&claude, "", Event::Connected);
         assert!(
             claude
                 .catalog
                 .composer_catalogs
-                .get(&claude.pane.navigation.cwd)
+                .get(&claude.panes.primary().navigation.cwd)
                 .is_some()
         );
-        assert!(claude.composer_suggestions("/".into(), 1).is_some());
+        assert!(
+            crate::presentation::view::Presentation::from_snapshot(
+                std::sync::Arc::new(claude.clone()),
+                "".into()
+            )
+            .unwrap()
+            .composer()
+            .composer_suggestions("/".into(), 1)
+            .is_some()
+        );
     }
 
     proptest::proptest! {
@@ -710,17 +742,17 @@ mod tests {
                 },
                 ..Default::default()
             };
-            std::sync::Arc::make_mut(&mut snapshot.input.drafts).insert(snapshot.pane.navigation.draft_key.clone(), std::sync::Arc::new(crate::state::Draft {
+            std::sync::Arc::make_mut(&mut snapshot.input.drafts).insert(snapshot.panes.primary().navigation.draft_key.clone(), std::sync::Arc::new(crate::state::Draft {
                 model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "model".into() }),
                 ..Default::default()
             }));
-            crate::state::operations::LoadComposerCatalog { cwd: String::new() }.prepare(&mut snapshot).unwrap();
+            crate::state::operations::LoadComposerCatalog { cwd: String::new() }.prepare(&mut snapshot, "").unwrap();
             let text = format!("/{filter}");
-            let suggestions = snapshot.composer_suggestions(text.clone(), text.len() as u32).unwrap();
+            let suggestions = crate::presentation::view::Presentation::from_snapshot(std::sync::Arc::new(snapshot.clone()), "".into()).unwrap().composer().composer_suggestions(text.clone(), text.len() as u32).unwrap();
             let matches = "review".contains(&filter) || "review code".contains(&filter);
             proptest::prop_assert_eq!(suggestions.candidates.len(), usize::from(matches));
             proptest::prop_assert_eq!(suggestions.status.as_deref(), if matches { None } else { Some("候補を読み込み中…") });
-            proptest::prop_assert_eq!(&snapshot.catalog.composer_catalogs.get(&snapshot.pane.navigation.cwd).unwrap().candidates[0].invocation, &skill());
+            proptest::prop_assert_eq!(&snapshot.catalog.composer_catalogs.get(&snapshot.panes.primary().navigation.cwd).unwrap().candidates[0].invocation, &skill());
         }
     }
 
@@ -749,6 +781,7 @@ mod tests {
             .unwrap();
             snapshot = reduce(
                 &snapshot,
+                "",
                 Event::Intent(Intent::InsertInvocation {
                     thread_id: "chat".into(),
                     text: insertion.text,

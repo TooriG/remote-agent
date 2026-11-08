@@ -81,22 +81,6 @@
         }
       }
     },
-    "先頭1 MiBだけ表示しています。全文はダウンロードできます。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "先頭1 MiBだけ表示しています。全文はダウンロードできます。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Showing only the first 1 MiB. Download the file to read it in full."
-          }
-        }
-      }
-    },
     "開始中…": {
       "localizations": {
         "en": {
@@ -209,22 +193,6 @@
         }
       }
     },
-    "ファイルを開けません: {0}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ファイルを開けません: {0}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not open file: {0}"
-          }
-        }
-      }
-    },
     "ファイルを開けません: 通常のファイルではありません": {
       "localizations": {
         "ja": {
@@ -257,38 +225,6 @@
         }
       }
     },
-    "一時ファイルを作成できません: {0}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "一時ファイルを作成できません: {0}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not create temporary file: {0}"
-          }
-        }
-      }
-    },
-    "保存先を選択できません: {0}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存先を選択できません: {0}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not choose a destination: {0}"
-          }
-        }
-      }
-    },
     "\n提案された変更:\n{0}": {
       "localizations": {
         "ja": {
@@ -317,86 +253,6 @@
           "stringUnit": {
             "state": "translated",
             "value": " work"
-          }
-        }
-      }
-    },
-    "%@ にサインイン": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ にサインイン"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign in to %@"
-          }
-        }
-      }
-    },
-    "%@ にサインインして利用を開始できます。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ にサインインして利用を開始できます。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign in to %@ to get started."
-          }
-        }
-      }
-    },
-    "%@で新しいタスク": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@で新しいタスク"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New task in %@"
-          }
-        }
-      }
-    },
-    "%@をダウンロード": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@をダウンロード"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Download %@"
-          }
-        }
-      }
-    },
-    "%@を外す": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@を外す"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remove %@"
           }
         }
       }
@@ -477,22 +333,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "You stopped after <1s"
-          }
-        }
-      }
-    },
-    "<1秒 作業した後に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "<1秒 作業した後に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Worked for <1s · failed"
           }
         }
       }
@@ -1265,38 +1105,6 @@
         }
       }
     },
-    "main にマージ済み": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "main にマージ済み"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Merged into main"
-          }
-        }
-      }
-    },
-    "main に未反映の変更あり": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "main に未反映の変更あり"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Changes not merged into main"
-          }
-        }
-      }
-    },
     "{0} → {1} に切り替えました": {
       "localizations": {
         "ja": {
@@ -1537,38 +1345,6 @@
         }
       }
     },
-    "{0}作業中 · {1}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}作業中 · {1}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Working for {0} · {1}"
-          }
-        }
-      }
-    },
-    "{0}作業中…": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}作業中…"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Working for {0}…"
-          }
-        }
-      }
-    },
     "{0}分 {1}秒 作業した後に中断しました": {
       "localizations": {
         "ja": {
@@ -1581,22 +1357,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "You stopped after {0}m {1}s"
-          }
-        }
-      }
-    },
-    "{0}分 {1}秒 作業した後に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}分 {1}秒 作業した後に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Worked for {0}m {1}s · failed"
           }
         }
       }
@@ -1633,22 +1393,6 @@
         }
       }
     },
-    "{0}分 作業した後に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}分 作業した後に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Worked for {0}m · failed"
-          }
-        }
-      }
-    },
     "{0}分 作業しました": {
       "localizations": {
         "ja": {
@@ -1677,22 +1421,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "You stopped after {0}h {1}m {2}s"
-          }
-        }
-      }
-    },
-    "{0}時間 {1}分 {2}秒 作業した後に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}時間 {1}分 {2}秒 作業した後に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Worked for {0}h {1}m {2}s · failed"
           }
         }
       }
@@ -1729,22 +1457,6 @@
         }
       }
     },
-    "{0}時間 {1}分 作業した後に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}時間 {1}分 作業した後に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Worked for {0}h {1}m · failed"
-          }
-        }
-      }
-    },
     "{0}時間 {1}分 作業しました": {
       "localizations": {
         "ja": {
@@ -1773,22 +1485,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "You stopped after {0}h {1}s"
-          }
-        }
-      }
-    },
-    "{0}時間 {1}秒 作業した後に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}時間 {1}秒 作業した後に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Worked for {0}h {1}s · failed"
           }
         }
       }
@@ -1825,22 +1521,6 @@
         }
       }
     },
-    "{0}時間 作業した後に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}時間 作業した後に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Worked for {0}h · failed"
-          }
-        }
-      }
-    },
     "{0}時間 作業しました": {
       "localizations": {
         "ja": {
@@ -1853,22 +1533,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Worked for {0}h"
-          }
-        }
-      }
-    },
-    "{0}秒 ": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}秒 "
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}s "
           }
         }
       }
@@ -1889,22 +1553,6 @@
         }
       }
     },
-    "{0}秒 作業した後に失敗しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}秒 作業した後に失敗しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Worked for {0}s · failed"
-          }
-        }
-      }
-    },
     "{0}秒 作業しました": {
       "localizations": {
         "ja": {
@@ -1917,38 +1565,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Worked for {0}s"
-          }
-        }
-      }
-    },
-    "{0}秒 作業中 · {1}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}秒 作業中 · {1}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Working for {0}s · {1}"
-          }
-        }
-      }
-    },
-    "{0}秒 作業中…": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0}秒 作業中…"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Working for {0}s…"
           }
         }
       }
@@ -2317,22 +1933,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Saved in this environment and applied to new conversations."
-          }
-        }
-      }
-    },
-    "この環境の%@で使用します。同じ環境を使う端末にも反映されます。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "この環境の%@で使用します。同じ環境を使う端末にも反映されます。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Used by %@ in this environment. Also applies to devices using the same environment."
           }
         }
       }
@@ -3057,22 +2657,6 @@
         }
       }
     },
-    "エラーログを保存できません: {0}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エラーログを保存できません: {0}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not save the error log: {0}"
-          }
-        }
-      }
-    },
     "エージェント": {
       "localizations": {
         "ja": {
@@ -3389,54 +2973,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ran a command"
-          }
-        }
-      }
-    },
-    "コマンドを実行しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コマンドを実行しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ran a command, Used a tool"
-          }
-        }
-      }
-    },
-    "コマンドを実行しました、ファイルを変更しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コマンドを実行しました、ファイルを変更しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ran a command, Changed files"
-          }
-        }
-      }
-    },
-    "コマンドを実行しました、ファイルを変更しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コマンドを実行しました、ファイルを変更しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ran a command, Changed files, Used a tool"
           }
         }
       }
@@ -4561,22 +4097,6 @@
         }
       }
     },
-    "ファイルを変更しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ファイルを変更しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Changed files, Used a tool"
-          }
-        }
-      }
-    },
     "ファイルを添付": {
       "localizations": {
         "ja": {
@@ -4721,22 +4241,6 @@
         }
       }
     },
-    "フォルダ: %@": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "フォルダ: %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Folder: %@"
-          }
-        }
-      }
-    },
     "フォルダ: {0}": {
       "localizations": {
         "ja": {
@@ -4845,22 +4349,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Open in File Explorer"
-          }
-        }
-      }
-    },
-    "フォルダを開けません: {0}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "フォルダを開けません: {0}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not open folder: {0}"
           }
         }
       }
@@ -5985,22 +5473,6 @@
         }
       }
     },
-    "リンクを開けません: {0}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "リンクを開けません: {0}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not open link: {0}"
-          }
-        }
-      }
-    },
     "レビューする": {
       "localizations": {
         "ja": {
@@ -6833,118 +6305,6 @@
         }
       }
     },
-    "作業に失敗しました・コマンドを実行しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業に失敗しました・コマンドを実行しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work failed · Ran a command"
-          }
-        }
-      }
-    },
-    "作業に失敗しました・コマンドを実行しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業に失敗しました・コマンドを実行しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work failed · Ran a command, Used a tool"
-          }
-        }
-      }
-    },
-    "作業に失敗しました・コマンドを実行しました、ファイルを変更しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業に失敗しました・コマンドを実行しました、ファイルを変更しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work failed · Ran a command, Changed files"
-          }
-        }
-      }
-    },
-    "作業に失敗しました・コマンドを実行しました、ファイルを変更しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業に失敗しました・コマンドを実行しました、ファイルを変更しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work failed · Ran a command, Changed files, Used a tool"
-          }
-        }
-      }
-    },
-    "作業に失敗しました・ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業に失敗しました・ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work failed · Used a tool"
-          }
-        }
-      }
-    },
-    "作業に失敗しました・ファイルを変更しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業に失敗しました・ファイルを変更しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work failed · Changed files"
-          }
-        }
-      }
-    },
-    "作業に失敗しました・ファイルを変更しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業に失敗しました・ファイルを変更しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work failed · Changed files, Used a tool"
-          }
-        }
-      }
-    },
     "作業の詳細": {
       "localizations": {
         "ja": {
@@ -6973,118 +6333,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "You stopped this response"
-          }
-        }
-      }
-    },
-    "作業を中断しました・コマンドを実行しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業を中断しました・コマンドを実行しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work interrupted · Ran a command"
-          }
-        }
-      }
-    },
-    "作業を中断しました・コマンドを実行しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業を中断しました・コマンドを実行しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work interrupted · Ran a command, Used a tool"
-          }
-        }
-      }
-    },
-    "作業を中断しました・コマンドを実行しました、ファイルを変更しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業を中断しました・コマンドを実行しました、ファイルを変更しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work interrupted · Ran a command, Changed files"
-          }
-        }
-      }
-    },
-    "作業を中断しました・コマンドを実行しました、ファイルを変更しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業を中断しました・コマンドを実行しました、ファイルを変更しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work interrupted · Ran a command, Changed files, Used a tool"
-          }
-        }
-      }
-    },
-    "作業を中断しました・ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業を中断しました・ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work interrupted · Used a tool"
-          }
-        }
-      }
-    },
-    "作業を中断しました・ファイルを変更しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業を中断しました・ファイルを変更しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work interrupted · Changed files"
-          }
-        }
-      }
-    },
-    "作業を中断しました・ファイルを変更しました、ツールを使用しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "作業を中断しました・ファイルを変更しました、ツールを使用しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Work interrupted · Changed files, Used a tool"
           }
         }
       }
@@ -7249,22 +6497,6 @@
         }
       }
     },
-    "保存した入力状態を読み込めません: {0}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存した入力状態を読み込めません: {0}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not read saved input state: {0}"
-          }
-        }
-      }
-    },
     "保存した接続を削除": {
       "localizations": {
         "ja": {
@@ -7341,22 +6573,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Retry saving"
-          }
-        }
-      }
-    },
-    "保存パスワード · %@": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存パスワード · %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saved passwords · %@"
           }
         }
       }
@@ -10273,22 +9489,6 @@
         }
       }
     },
-    "残り %u%%": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "残り %u%%"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%u%% remaining"
-          }
-        }
-      }
-    },
     "残り {0} 行を表示": {
       "localizations": {
         "ja": {
@@ -10513,22 +9713,6 @@
         }
       }
     },
-    "環境: %@": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "環境: %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Environment: %@"
-          }
-        }
-      }
-    },
     "環境を選択": {
       "localizations": {
         "ja": {
@@ -10701,22 +9885,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Could not display image"
-          }
-        }
-      }
-    },
-    "画像を表示できません: %@": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "画像を表示できません: %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not display image: %@"
           }
         }
       }
@@ -11149,22 +10317,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Copy table"
-          }
-        }
-      }
-    },
-    "表示できません: %@": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "表示できません: %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not display: %@"
           }
         }
       }
@@ -12033,22 +11185,6 @@
         }
       }
     },
-    "週間残量 %u%%": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "週間残量 %u%%"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Weekly remaining: %u%%"
-          }
-        }
-      }
-    },
     "適用範囲": {
       "localizations": {
         "ja": {
@@ -12513,22 +11649,6 @@
         }
       }
     },
-    "音声入力：%@（文字起こし）": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "音声入力：%@（文字起こし）"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice input: %@ (transcription)"
-          }
-        }
-      }
-    },
     "音声認識アプリが見つかりません。端末の音声入力を設定してください。": {
       "localizations": {
         "ja": {
@@ -12573,22 +11693,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fast"
-          }
-        }
-      }
-    },
-    "（保存済み・未確認）": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "（保存済み・未確認）"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "(saved · unverified)"
           }
         }
       }
@@ -12673,38 +11777,6 @@
         }
       }
     },
-    "対応するブラウザーやアプリを確認してください。\\n{0}": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "対応するブラウザーやアプリを確認してください。\n{0}"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check for a compatible browser or app.\n{0}"
-          }
-        }
-      }
-    },
-    "▤ {0}\\nタップしてプレビュー": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "▤ {0}\nタップしてプレビュー"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "▤ {0}\nTap to preview"
-          }
-        }
-      }
-    },
     "{0}をプレビュー": {
       "localizations": {
         "ja": {
@@ -12717,22 +11789,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Preview {0}"
-          }
-        }
-      }
-    },
-    "{0} · 再試行": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0} · 再試行"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0} · Retry"
           }
         }
       }
@@ -12833,54 +11889,6 @@
         }
       }
     },
-    "%llu件のファイル": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%llu件のファイル"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%llu files"
-          }
-        }
-      }
-    },
-    "%@ 更新": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ 更新"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Updated %@"
-          }
-        }
-      }
-    },
-    "リセット: %@": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "リセット: %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Resets: %@"
-          }
-        }
-      }
-    },
     "準備に失敗しました: {0}": {
       "localizations": {
         "en": {
@@ -12925,22 +11933,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "送信結果を確認できません。二重実行を避けるため再送していません。"
-          }
-        }
-      }
-    },
-    "{0} · 週間枠": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0} · 週間枠"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "{0} · Weekly allowance"
           }
         }
       }
@@ -14705,38 +13697,6 @@
         }
       }
     },
-    "%@への接続": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connect to %@"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@への接続"
-          }
-        }
-      }
-    },
-    "%@を使用": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enable %@"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@を使用"
-          }
-        }
-      }
-    },
     "プロバイダー": {
       "localizations": {
         "en": {
@@ -14765,38 +13725,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "To send with another AI, wait for the current response, approval or submission to finish, or open a new chat."
-          }
-        }
-      }
-    },
-    "OpenCode Go · 5時間枠": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenCode Go · 5時間枠"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenCode Go · 5-hour allowance"
-          }
-        }
-      }
-    },
-    "OpenCode Go · 月間枠": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenCode Go · 月間枠"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenCode Go · Monthly allowance"
           }
         }
       }
@@ -15411,16 +14339,16 @@
     },
     "音声入力：{0}（文字起こし）": {
       "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice input: {0} (transcription)"
-          }
-        },
         "ja": {
           "stringUnit": {
             "state": "translated",
             "value": "音声入力：{0}（文字起こし）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation: {0} (transcription)"
           }
         }
       }
@@ -17677,6 +16605,886 @@
           "stringUnit": {
             "state": "translated",
             "value": "{0}を閉じる"
+          }
+        }
+      }
+    },
+    "作成元からの変更あり": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作成元からの変更あり"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes from base branch"
+          }
+        }
+      }
+    },
+    "スレッド": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スレッド"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thread"
+          }
+        }
+      }
+    },
+    "スレッドID": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スレッドID"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thread ID"
+          }
+        }
+      }
+    },
+    "パス": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パス"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path"
+          }
+        }
+      }
+    },
+    "ブランチ": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブランチ"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Branch"
+          }
+        }
+      }
+    },
+    "月間枠": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monthly allowance"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "月間枠"
+          }
+        }
+      }
+    },
+    "usage.period.hours": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}-hour allowance"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間枠"
+          }
+        }
+      }
+    },
+    "usage.period.minutes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}-minute allowance"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}分枠"
+          }
+        }
+      }
+    },
+    "duration.hours": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}時間"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}h"
+          }
+        }
+      }
+    },
+    "duration.minutes": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}分"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}m"
+          }
+        }
+      }
+    },
+    "duration.seconds": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}秒"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}s"
+          }
+        }
+      }
+    },
+    "work.summary.detail": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}・{1}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} · {1}"
+          }
+        }
+      }
+    },
+    "work.completed.duration": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 作業しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Worked for {0} · completed"
+          }
+        }
+      }
+    },
+    "work.interrupted.duration": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 作業した後に中断しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Worked for {0} · interrupted"
+          }
+        }
+      }
+    },
+    "work.failed.duration": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 作業した後に失敗しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Worked for {0} · failed"
+          }
+        }
+      }
+    },
+    "work.progress.action.duration": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 作業中 · {1}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0} · {1}"
+          }
+        }
+      }
+    },
+    "work.progress.duration": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 作業中…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working for {0}…"
+          }
+        }
+      }
+    },
+    "提案された変更:": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提案された変更:"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proposed changes:"
+          }
+        }
+      }
+    },
+    "送信結果不明（自動再送しません）": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信結果不明（自動再送しません）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivery unknown (will not resend automatically)"
+          }
+        }
+      }
+    },
+    "履歴の一部を表示しています。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴の一部を表示しています。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some history is shown."
+          }
+        }
+      }
+    },
+    "履歴の一部を読み取れませんでした。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴の一部を読み取れませんでした。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some history could not be read."
+          }
+        }
+      }
+    },
+    "履歴を取得できません。保存済みの表示は最新とは限りません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴を取得できません。保存済みの表示は最新とは限りません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History is unavailable. Saved content may be out of date."
+          }
+        }
+      }
+    },
+    "無題のタスク": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無題のタスク"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Untitled task"
+          }
+        }
+      }
+    },
+    "list.saved_title": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}（保存済み・未確認）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} (saved · unverified)"
+          }
+        }
+      }
+    },
+    "候補を読み込み中…": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "候補を読み込み中…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading suggestions…"
+          }
+        }
+      }
+    },
+    "該当する候補がありません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "該当する候補がありません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching suggestions"
+          }
+        }
+      }
+    },
+    "保存済み（キーは非表示）": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存済み（キーは非表示）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved (key hidden)"
+          }
+        }
+      }
+    },
+    "設定状態を取得してください": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "設定状態を取得してください"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load configuration status"
+          }
+        }
+      }
+    },
+    "キーの接続先を確認してください": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キーの接続先を確認してください"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the key's destination"
+          }
+        }
+      }
+    },
+    "起動中": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "起動中"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting"
+          }
+        }
+      }
+    },
+    "再接続を待っています": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再接続を待っています"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting to reconnect"
+          }
+        }
+      }
+    },
+    "切断済み": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "切断済み"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected"
+          }
+        }
+      }
+    },
+    "終了 · {0}": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終了 · {0}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exited · {0}"
+          }
+        }
+      }
+    },
+    "保存先を選択できません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存先を選択できません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not choose a save destination"
+          }
+        }
+      }
+    },
+    "file.preview.truncated": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先頭1 MiBだけ表示しています。全文はダウンロードできます。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing only the first 1 MiB. Download the file to read it in full."
+          }
+        }
+      }
+    },
+    "{0} にサインインして利用を開始できます。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} にサインインして利用を開始できます。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in to {0} to get started."
+          }
+        }
+      }
+    },
+    "この環境の{0}で使用します。同じ環境を使う端末にも反映されます。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この環境の{0}で使用します。同じ環境を使う端末にも反映されます。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used by {0} in this environment. This also applies to devices using the same environment."
+          }
+        }
+      }
+    },
+    "画像を表示できません: {0}": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像を表示できません: {0}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not display image: {0}"
+          }
+        }
+      }
+    },
+    "環境: {0}": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "環境: {0}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Environment: {0}"
+          }
+        }
+      }
+    },
+    "{0}件のファイル": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}件のファイル"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files: {0}"
+          }
+        }
+      }
+    },
+    "{0}で新しいタスク": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}で新しいタスク"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New task in {0}"
+          }
+        }
+      }
+    },
+    "{0} にサインイン": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} にサインイン"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in to {0}"
+          }
+        }
+      }
+    },
+    "{0}への接続": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}への接続"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection to {0}"
+          }
+        }
+      }
+    },
+    "取り込めるCookieがありません（期限切れなど{0}件を除外）。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り込めるCookieがありません（期限切れなど{0}件を除外）。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No cookies to import ({0} expired or otherwise excluded)."
+          }
+        }
+      }
+    },
+    "Cookieを{0}件取り込みました（期限切れなど{1}件を除外）。ログイン状態をサイトで確認してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cookieを{0}件取り込みました（期限切れなど{1}件を除外）。ログイン状態をサイトで確認してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported {0} cookies ({1} expired or otherwise excluded). Check your login status on the site."
+          }
+        }
+      }
+    },
+    "パスワードを{0}件Keychainに保存しました（HTTPS以外など{1}件を除外）。入力はサイトごとに選択してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パスワードを{0}件Keychainに保存しました（HTTPS以外など{1}件を除外）。入力はサイトごとに選択してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved {0} passwords in Keychain ({1} non-HTTPS or otherwise excluded). Select passwords to fill for each site."
+          }
+        }
+      }
+    },
+    "このサイトの保存パスワードを削除しました。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサイトの保存パスワードを削除しました。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleted saved passwords for this site."
+          }
+        }
+      }
+    },
+    "パスワードを入力しました。内容を確認してからログインしてください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パスワードを入力しました。内容を確認してからログインしてください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Filled the password. Check the contents before signing in."
+          }
+        }
+      }
+    },
+    "フォルダを開けません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルダを開けません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not open folder"
+          }
+        }
+      }
+    },
+    "保存した入力状態を読み込めません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存した入力状態を読み込めません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not read saved input state"
+          }
+        }
+      }
+    },
+    "エラーログを保存できません": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エラーログを保存できません"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not save error logs"
+          }
+        }
+      }
+    },
+    "対応するブラウザーやアプリを確認してください。\n{0}": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "対応するブラウザーやアプリを確認してください。\n{0}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for a compatible browser or app.\n{0}"
+          }
+        }
+      }
+    },
+    "▤ {0}\nタップしてプレビュー": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "▤ {0}\nタップしてプレビュー"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "▤ {0}\nTap to preview"
+          }
+        }
+      }
+    },
+    "ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importing browser data… Allow access if prompted by the OS."
+          }
+        }
+      }
+    },
+    "接続できません。SSHの鍵と接続先を確認し、サーバーでBexのホストを起動してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続できません。SSHの鍵と接続先を確認し、サーバーでBexのホストを起動してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not connect. Check your SSH key and destination, and start Bex Host on the server."
           }
         }
       }

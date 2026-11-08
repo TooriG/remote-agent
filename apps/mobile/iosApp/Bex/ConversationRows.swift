@@ -11,7 +11,7 @@ struct ThreadActivityHeader: View {
     let expanded: Bool
 
     var body: some View {
-        let label = AppText(summary)
+        let label = Text(verbatim: summary)
             .font(.system(size: 16))
             .lineLimit(1).truncationMode(.tail)
         HStack(spacing: 5) {
@@ -54,9 +54,9 @@ struct ThreadErrorRow: View {
                 if error.isReconnecting {
                     ProgressView().controlSize(.small)
                 }
-                AppText(error.title).font(.subheadline.weight(.semibold))
+                Text(verbatim: error.title).font(.subheadline.weight(.semibold))
             }
-            AppText(error.message).textSelection(.enabled)
+            Text(verbatim: error.message).textSelection(.enabled)
             if let details = error.details, !details.isEmpty {
                 DisclosureGroup("詳細を表示") {
                     Text(details).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
@@ -75,6 +75,7 @@ struct ThreadErrorRow: View {
 }
 
 struct ThreadMessageRow: View, Equatable {
+    let row: VisibleConversationRow
     let item: ConversationItem
     let isUser: Bool
     let media: ConversationMediaAccess
@@ -89,11 +90,9 @@ struct ThreadMessageRow: View, Equatable {
     @State private var copied = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.item === rhs.item && lhs.isUser == rhs.isUser
-            && lhs.showActions == rhs.showActions
+        lhs.row == rhs.row && lhs.item === rhs.item
             && lhs.media.host == rhs.media.host && lhs.media.cwd == rhs.media.cwd && lhs.media.draft == rhs.media.draft
-            && lhs.timestampMs == rhs.timestampMs && lhs.forking == rhs.forking && lhs.forkError == rhs.forkError
-            && (lhs.fork == nil) == (rhs.fork == nil)
+            && lhs.forking == rhs.forking && lhs.forkError == rhs.forkError
             && (lhs.selection.askInSideChat == nil) == (rhs.selection.askInSideChat == nil)
             && (lhs.restoreUnknown == nil) == (rhs.restoreUnknown == nil)
             && (lhs.discardUnknown == nil) == (rhs.discardUnknown == nil)
@@ -249,7 +248,7 @@ struct ThreadItemRow: View, Equatable {
                         if item.data.deferred {
                             VStack(alignment: .leading, spacing: 10) {
                                 if let detailError {
-                                    AppText(detailError).font(.caption).foregroundColor(.red)
+                                    ErrorMessage(source: detailError).font(.caption).foregroundColor(.red)
                                     Button("再読み込み") { retry += 1 }
                                 } else {
                                     ProgressView("詳細を読み込み中…")

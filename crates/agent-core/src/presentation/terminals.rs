@@ -1,4 +1,5 @@
 //! Terminal display reads only terminal resources, independent of chat updates.
+use crate::localization::{UiLanguage, localized_ui_format};
 use crate::state::{Terminal, TerminalPhase, TerminalView};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -27,16 +28,31 @@ impl Terminals {
             states: Arc::default(),
         })
     }
-    pub fn view(&self, handle: String) -> Option<TerminalView> {
-        self.states.get(&handle).map(|terminal| view(terminal))
+    pub fn view(&self, language: UiLanguage, handle: String) -> Option<TerminalView> {
+        self.states
+            .get(&handle)
+            .map(|terminal| view(language, terminal))
     }
 }
 
-pub(crate) fn view(terminal: &Terminal) -> TerminalView {
+pub fn terminal_status(language: UiLanguage, phase: &TerminalPhase) -> String {
+    match phase {
+        TerminalPhase::Starting => language.text("起動中").into(),
+        TerminalPhase::Running => language.text("実行中").into(),
+        TerminalPhase::Suspended => language.text("再接続を待っています").into(),
+        TerminalPhase::Detached => language.text("切断済み").into(),
+        TerminalPhase::Exited(code) => {
+            localized_ui_format(language, "終了 · {0}".into(), vec![code.to_string()])
+        }
+        TerminalPhase::Failed(error) => super::error::error_text(language, error).to_string(),
+    }
+}
+
+pub(crate) fn view(language: UiLanguage, terminal: &Terminal) -> TerminalView {
     TerminalView {
         status: match terminal.phase {
             TerminalPhase::Starting | TerminalPhase::Running => None,
-            _ => Some(terminal.phase.label()),
+            _ => Some(terminal_status(language, &terminal.phase)),
         },
         loading: matches!(terminal.phase, TerminalPhase::Starting),
         accepts_input: terminal.phase.accepts_input(),
@@ -88,9 +104,18 @@ mod tests {
             }),
         );
         let before = state.terminals();
-        assert!(before.view("shell".into()).unwrap().loading);
+        assert!(
+            before
+                .view(UiLanguage::Japanese, "shell".into())
+                .unwrap()
+                .loading
+        );
         assert!(state.terminal_accepts_input("shell".into()));
-        assert!(before.view("missing".into()).is_none());
+        assert!(
+            before
+                .view(UiLanguage::Japanese, "missing".into())
+                .is_none()
+        );
         Arc::make_mut(&mut state.input.drafts).insert(Default::default(), Arc::default());
         assert!(Arc::ptr_eq(&before.states, &state.terminals));
         Arc::make_mut(
@@ -99,13 +124,44 @@ mod tests {
                 .unwrap(),
         )
         .phase = TerminalPhase::Suspended;
-        let suspended = state.terminals().view("shell".into()).unwrap();
+        let suspended = state
+            .terminals()
+            .view(UiLanguage::Japanese, "shell".into())
+            .unwrap();
         assert!(!suspended.loading && !suspended.accepts_input);
         assert!(!state.terminal_accepts_input("shell".into()));
         assert_eq!(suspended.status.as_deref(), Some("再接続を待っています"));
         assert_eq!(suspended.output[0].data, b"ready\r\n");
-        let retained = before.view("shell".into()).unwrap();
+        let english = state
+            .terminals()
+            .view(UiLanguage::English, "shell".into())
+            .unwrap();
+        assert_eq!(english.status.as_deref(), Some("Waiting to reconnect"));
+        assert_eq!(english.output[0].data, b"ready\r\n");
+        let retained = before.view(UiLanguage::Japanese, "shell".into()).unwrap();
         assert!(retained.loading && retained.accepts_input);
         assert_eq!(retained.output[0].sequence, 1);
+    }
+    #[test]
+    fn terminal_status_formats_phase_facts_without_changing_output() {
+        for (phase, japanese, english) in [
+            (TerminalPhase::Starting, "起動中", "Starting"),
+            (TerminalPhase::Running, "実行中", "Running"),
+            (
+                TerminalPhase::Suspended,
+                "再接続を待っています",
+                "Waiting to reconnect",
+            ),
+            (TerminalPhase::Detached, "切断済み", "Disconnected"),
+            (TerminalPhase::Exited(-1), "終了 · -1", "Exited · -1"),
+            (
+                TerminalPhase::Failed("request 42 timed out".into()),
+                "ホストから応答がありませんでした。\nrequest 42 timed out",
+                "The Host did not respond.\nrequest 42 timed out",
+            ),
+        ] {
+            assert_eq!(terminal_status(UiLanguage::Japanese, &phase), japanese);
+            assert_eq!(terminal_status(UiLanguage::English, &phase), english);
+        }
     }
 }

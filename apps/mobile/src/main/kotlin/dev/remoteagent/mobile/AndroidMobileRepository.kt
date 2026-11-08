@@ -10,7 +10,8 @@ import dev.remoteagent.core.AgentException
 import dev.remoteagent.core.Attachment
 import dev.remoteagent.core.ClientPlatform
 import dev.remoteagent.core.ClientStorage
-import dev.remoteagent.core.StorageKey
+import dev.remoteagent.core.PreferenceKey
+import dev.remoteagent.core.PreferenceStorage
 import dev.remoteagent.core.generateIdentity
 import java.io.File
 import java.io.IOException
@@ -71,19 +72,13 @@ internal class AndroidMobileRepository(private val context: Context) {
                 throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
             }
 
-        private fun file(key: StorageKey): AtomicFile =
-            when (key) {
-                StorageKey.LOCAL_STATE -> AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
-                StorageKey.MODEL_PREFERENCES -> AtomicFile(File(directory, "model-preferences.json"))
-                StorageKey.EDITOR_PREFERENCES -> AtomicFile(File(directory, "editor-preferences.json"))
-            }
+        private val file = AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
 
-        override fun load(key: StorageKey): ByteArray = access {
-            val file = file(key)
+        override fun load(): ByteArray = access {
             if (file.baseFile.exists()) file.openRead().use { it.readBytes() } else byteArrayOf()
         }
 
-        override fun save(key: StorageKey, bytes: ByteArray) = access { file(key).writeSynced(bytes) }
+        override fun save(bytes: ByteArray) = access { file.writeSynced(bytes) }
 
         override fun identity(): ByteArray = access {
             AndroidCredentialStore(context, id).loadOrCreate(::generateIdentity)
@@ -100,6 +95,45 @@ internal class AndroidMobileRepository(private val context: Context) {
 
     private fun encodedId(id: String): String =
         Base64.getUrlEncoder().withoutPadding().encodeToString(id.encodeToByteArray())
+}
+
+/** Device settings use the existing files and native language preference location. */
+internal class AndroidPreferenceStorage(context: Context) : PreferenceStorage {
+    private val directory = context.filesDir
+    private val preferences = context.getSharedPreferences("bex-app", Context.MODE_PRIVATE)
+
+    private fun file(key: PreferenceKey): AtomicFile? =
+        when (key) {
+            PreferenceKey.MODELS -> AtomicFile(File(directory, "model-preferences.json"))
+            PreferenceKey.EDITOR -> AtomicFile(File(directory, "editor-preferences.json"))
+            PreferenceKey.LANGUAGE -> null
+        }
+
+    override fun load(key: PreferenceKey): ByteArray = access {
+        val file = file(key)
+        if (file == null) {
+            (preferences.all["language"] as? String)?.let { Json.encodeToString(it).encodeToByteArray() }
+                ?: byteArrayOf()
+        } else {
+            if (file.baseFile.exists()) file.openRead().use { it.readBytes() } else byteArrayOf()
+        }
+    }
+
+    override fun save(key: PreferenceKey, bytes: ByteArray) = access {
+        val file = file(key)
+        if (file == null) {
+            preferences.edit().putString("language", Json.decodeFromString<String>(bytes.decodeToString())).apply()
+        } else {
+            file.writeSynced(bytes)
+        }
+    }
+
+    private fun <T> access(body: () -> T): T =
+        try {
+            body()
+        } catch (error: IOException) {
+            throw AgentException.Failed(error.message ?: error.toString()).apply { initCause(error) }
+        }
 }
 
 /** Replaces the file only after the new bytes reach storage. */

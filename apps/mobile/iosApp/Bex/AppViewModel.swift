@@ -7,9 +7,12 @@ import UIKit
 @MainActor
 @Observable
 final class AppViewModel {
-    @ObservationIgnored private(set) var publication = Presentation.empty()
-    @ObservationIgnored private(set) var snapshot = AgentCore.Snapshot.empty()
-    private(set) var settings = Presentation.empty().settings()
+    @ObservationIgnored private(set) var publication: Presentation
+    var snapshot: AgentCore.Snapshot {
+        publication.snapshot()
+    }
+
+    private(set) var settings: SettingsPresentation
     private(set) var connectionStates: [String: HostConnectionState] = [:]
     private(set) var isConnected = false
     private(set) var loadingThreads = false
@@ -32,8 +35,10 @@ final class AppViewModel {
     private(set) var allProfiles = false
     private(set) var list: ThreadList?
 
+    @ObservationIgnored let preferences: DevicePreferences
+    private(set) var language: UiLanguage
     @ObservationIgnored lazy var sessions = ClientSessions(recentChats: false, clientBuild: Self.clientBuild,
-                                                           deviceName: UIDevice.current.name)
+                                                           deviceName: UIDevice.current.name, device: preferences)
     private(set) var chat: ConversationModel?
     private var conversations: [String: ConversationModel] = [:]
     private(set) var session: ClientSession?
@@ -46,7 +51,13 @@ final class AppViewModel {
     private let pathMonitor = NWPathMonitor()
     let liveActivities = TaskLiveActivities()
 
-    init() {
+    init(preferences: DevicePreferences) {
+        self.preferences = preferences
+        let language = preferences.language()
+        self.language = language
+        let empty = Presentation.empty(language: language)
+        publication = empty
+        settings = empty.settings()
         observeLiveActivityRequests()
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let available = path.status == .satisfied
@@ -71,6 +82,17 @@ final class AppViewModel {
     }
 
     deinit { pathMonitor.cancel() }
+
+    func selectLanguage(_ value: UiLanguage) {
+        // UserDefaults keeps the existing non-throwing mobile save contract.
+        try? preferences.selectLanguage(language: value)
+        let next = preferences.language()
+        guard language != next else { return }
+        language = next
+        if session?.store() == nil {
+            publish(session?.presentation() ?? Presentation.empty(language: next))
+        }
+    }
 
     func selectProfile(_ id: String) {
         guard profiles.contains(where: { $0.id == id }) else { return }
@@ -158,9 +180,8 @@ final class AppViewModel {
 
     private func resetPresentation() {
         notice = nil
-        publication = Presentation.empty()
+        publication = Presentation.empty(language: language)
         settings = publication.settings()
-        snapshot = AgentCore.Snapshot.empty()
         isConnected = false
         loadingThreads = false
     }
@@ -263,11 +284,10 @@ extension AppViewModel {
         }
         updateConnection(connected: next.connected(), loading: next.operationRunning(key: .sessionList))
         let scopes: [ErrorScope] = [.application, .projects, .settings, .workspace]
-        let notices = Dictionary(uniqueKeysWithValues: scopes.map { ($0, next.errorNotices(scope: $0)) })
+        let notices = Dictionary(uniqueKeysWithValues: scopes.map { ($0, next.errorNotices(paneId: "", scope: $0)) })
         if self.notices != notices {
             self.notices = notices
         }
-        snapshot = next
         synchronizeLiveActivities(foreground: UIApplication.shared.applicationState == .active)
         if let error = session?.persistenceError() {
             notice = error
@@ -284,7 +304,7 @@ extension AppViewModel {
     }
 
     func updateConnectionState(_ snapshot: AgentCore.Snapshot, host: String) {
-        let next = HostConnectionState(snapshot)
+        let next = HostConnectionState(enabled: snapshot.connectionEnabled(), connected: snapshot.connected())
         if connectionStates[host] != next {
             connectionStates[host] = next
         }

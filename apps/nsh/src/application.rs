@@ -182,8 +182,10 @@ impl State {
                             pane.failure = None;
                         }
                         Err(reason) => {
-                            pane.failure =
-                                Some(agent_core::presentation::error::error_text(&reason))
+                            pane.failure = Some(agent_core::presentation::error::error_text(
+                                crate::l10n::language(),
+                                &reason,
+                            ))
                         }
                     }
                 }
@@ -228,9 +230,6 @@ pub(crate) struct Application {
     selection_path: PathBuf,
     #[cfg(desktop)]
     onboarding_path: PathBuf,
-    /// Only the desktop settings change the language.
-    #[cfg(any(desktop, test))]
-    language_path: PathBuf,
     #[cfg(any(desktop, test))]
     explorer_width_path: PathBuf,
     #[cfg(desktop)]
@@ -251,13 +250,6 @@ impl Application {
     ) -> Result<(tokio::runtime::Runtime, Arc<Self>), AgentError> {
         let selection_path = root.join("connection-selection.json");
         let selection = connections::load_selection(&selection_path)?;
-        let language_path = root.join("language.json");
-        // An unreadable choice falls back to the default, as a first launch.
-        let language = crate::storage::read(&language_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        crate::l10n::set(language);
         #[cfg(any(desktop, test))]
         let explorer_width_path = root.join("file-explorer-width.json");
         // As the language, an unreadable width is the default's.
@@ -274,6 +266,10 @@ impl Application {
         #[cfg(desktop)]
         let scope = local.clone();
         let (runtime, client, incoming) = Client::new(root, local)?;
+        // The device's language, which Core's copy follows too; an unreadable
+        // choice is the default, as on a first launch.
+        let language = client.device.language();
+        crate::l10n::set(language);
         #[cfg(desktop)]
         let updater = scope.map(|scope| {
             agent_core::updates::Updater::start(
@@ -304,8 +300,6 @@ impl Application {
             selection_path,
             #[cfg(desktop)]
             onboarding_path,
-            #[cfg(any(desktop, test))]
-            language_path,
             #[cfg(any(desktop, test))]
             explorer_width_path,
             #[cfg(desktop)]
@@ -438,7 +432,7 @@ impl Application {
     /// Saves the UI language, then publishes it so the root is made again in it.
     #[cfg(any(desktop, test))]
     pub fn select_language(&self, language: UiLanguage) {
-        if let Err(reason) = agent_local_host::save_private_json(&self.language_path, &language) {
+        if let Err(reason) = self.client.device.select_language(language) {
             self.fail(reason.to_string());
             return;
         }
@@ -712,11 +706,13 @@ mod tests {
             let state = Arc::make_mut(state);
             state.receive(Update::PanePresentation {
                 id,
-                value: Presentation::empty(),
+                value: Presentation::empty(agent_core::localization::UiLanguage::default()),
             });
             state.receive(Update::SideChatReady {
                 id,
-                result: Ok(Presentation::empty()),
+                result: Ok(Presentation::empty(
+                    agent_core::localization::UiLanguage::default(),
+                )),
             });
         });
         assert!(!application.snapshot().side_chats.contains_key(&id));
@@ -728,7 +724,7 @@ mod tests {
     fn submitting_a_draft_publishes_its_conversation_and_rekeyed_tabs_together() {
         let mut snapshot = Snapshot::default();
         snapshot.connection.storage_scope = "storage".into();
-        let initial = Presentation::project(Arc::new(snapshot.clone()), None);
+        let initial = Presentation::project(Arc::new(snapshot.clone()), "", None).unwrap();
         let draft = initial.context.navigation().draft_key;
         let before = snapshot.panel_scope("host".into(), draft.clone());
         let session = SessionRef::new(ProviderKind::Codex, "submitted".into()).unwrap();
@@ -751,20 +747,16 @@ mod tests {
         state.panels = opened.panels;
         let retained = state.clone();
         Arc::make_mut(&mut snapshot.sessions.draft_sessions).insert(draft, session.clone());
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key =
             DraftKey::Session { session };
         state.receive(Update::Presentation {
             host: "host".into(),
-            value: Presentation::project(Arc::new(snapshot), None),
+            value: Presentation::project(Arc::new(snapshot), "", None).unwrap(),
         });
         assert_eq!(state.panels.get(after.clone()).active, Some(opened.id));
         assert!(state.panels.get(before.clone()).surfaces.is_empty());
         assert_eq!(
-            state.publications["host"]
-                .snapshot
-                .pane
-                .navigation
-                .draft_key,
+            state.publications["host"].pane().navigation.draft_key,
             after.draft
         );
         assert_eq!(retained.panels.get(before).active, Some(opened.id));
@@ -967,7 +959,7 @@ mod tests {
             }));
         state.receive(Update::Presentation {
             host: "host".into(),
-            value: Presentation::project(Arc::new(snapshot.clone()), None),
+            value: Presentation::project(Arc::new(snapshot.clone()), "", None).unwrap(),
         });
         assert!(
             state.account_locked(),
@@ -977,7 +969,7 @@ mod tests {
         let key = OperationKey::AccountLogin {
             provider: ProviderKind::Codex,
         };
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key.clone(),
             OperationState {
                 generation: 1,
@@ -986,13 +978,13 @@ mod tests {
         );
         state.receive(Update::Presentation {
             host: "host".into(),
-            value: Presentation::project(Arc::new(snapshot.clone()), None),
+            value: Presentation::project(Arc::new(snapshot.clone()), "", None).unwrap(),
         });
         state.provider = Some(ProviderKind::Claude);
         assert!(!state.account_locked());
         state.provider = Some(ProviderKind::Codex);
         assert!(state.account_locked());
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key,
             OperationState {
                 generation: 1,
@@ -1003,7 +995,7 @@ mod tests {
         );
         state.receive(Update::Presentation {
             host: "host".into(),
-            value: Presentation::project(Arc::new(snapshot), None),
+            value: Presentation::project(Arc::new(snapshot), "", None).unwrap(),
         });
         assert!(
             !state.account_locked(),

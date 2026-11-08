@@ -3,7 +3,7 @@ use crate::l10n::{localized, tr};
 use crate::ui::{self, Icon, colors};
 use agent_core::{
     presentation::error::{ErrorNotice, ErrorScope},
-    state::Intent,
+    state::{Intent, operations::ErrorId},
 };
 use nsh_core::{element::rgba, prelude::*};
 
@@ -18,15 +18,27 @@ pub(crate) fn notices(
         move || {
             connection.publication.with(|p| {
                 let mut notices = p.context.notices();
+                let pane = &p.pane_id;
                 if connection.pane.is_none() {
                     for scope in [ErrorScope::Application, ErrorScope::Projects] {
-                        notices.extend(p.snapshot.error_notices(scope));
+                        notices.extend(p.snapshot.error_notices(pane, scope));
                     }
                 } else {
-                    notices.extend(p.snapshot.pane_error_notice());
+                    // A side chat shows its own failures; the Host's stays with
+                    // the main conversation.
+                    let host = p.snapshot.connection.connection_failure.clone();
+                    notices.extend(
+                        p.snapshot
+                            .error_notices(pane, ErrorScope::Application)
+                            .into_iter()
+                            .filter(|notice| {
+                                !matches!(&notice.id, ErrorId::Application { message }
+                                    if Some(message) == host.as_ref())
+                            }),
+                    );
                 }
                 if workspace() {
-                    notices.extend(p.snapshot.error_notices(ErrorScope::Workspace));
+                    notices.extend(p.snapshot.error_notices(pane, ErrorScope::Workspace));
                 }
                 if settings() {
                     notices.extend(p.settings.notices());

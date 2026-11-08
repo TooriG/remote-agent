@@ -28,7 +28,7 @@ impl Operation for ManageCodexCli {
         Ok(status)
     }
 
-    fn apply(self, snapshot: &mut Snapshot, status: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, status: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.catalog.account).codex_cli = Some(Arc::new(status));
         Vec::new()
     }
@@ -49,7 +49,7 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(20), async {
             let initial = Snapshot::default();
             let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-            let store = crate::store::Store::new(peer, initial);
+            let store = crate::store::Store::new(peer, initial, None);
             for _ in 0..4 {
                 let request = reader.read_request().await.unwrap().unwrap();
                 let result = match request["method"].as_str().unwrap() {

@@ -1,3 +1,4 @@
+use crate::localization::{UiLanguage, localized_ui_format};
 use crate::state::{
     DraftKey, Snapshot,
     operations::{ErrorId, OperationKey, OperationPhase},
@@ -24,9 +25,8 @@ pub struct ErrorNotice {
     pub recovery_label: Option<String>,
 }
 
-/// UI copy is written in the source language, Japanese. Host, transport and
-/// provider diagnostics are not, so they stay verbatim in `details` instead
-/// of mixing into translated copy.
+/// UI copy is formatted in the requested language. Host, transport and provider
+/// diagnostics stay verbatim in `details`, separate from translated copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ErrorText {
@@ -49,18 +49,6 @@ impl std::fmt::Display for ErrorText {
 pub(crate) struct ErrorRecovery {
     pub label: String,
     pub intent: crate::state::Intent,
-}
-
-fn application_notice(message: &str, context: &str, title: &str) -> ErrorNotice {
-    ErrorNotice {
-        id: ErrorId::Application {
-            message: message.into(),
-        },
-        context: context.into(),
-        title: title.into(),
-        text: error_text(message),
-        recovery_label: None,
-    }
 }
 
 impl ErrorScope {
@@ -130,10 +118,10 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
         SessionList | SessionPage { .. } => (Projects, "会話一覧を読み込めませんでした"),
         ProjectScan => (Projects, "プロジェクトを検索できませんでした"),
         ProjectImport => (Projects, "プロジェクトを取り込めませんでした"),
-        Directory => (Workspace, "フォルダを読み込めませんでした"),
-        File => (Workspace, "ファイルを読み込めませんでした"),
+        Directory { .. } => (Workspace, "フォルダを読み込めませんでした"),
+        File { .. } => (Workspace, "ファイルを読み込めませんでした"),
         SaveFile { .. } => (Workspace, "ファイルを保存できませんでした"),
-        WorkspaceReview => (Workspace, "変更を読み込めませんでした"),
+        WorkspaceReview { .. } => (Workspace, "変更を読み込めませんでした"),
         CodexCli => (Settings, "Codex CLIの操作に失敗しました"),
         ProviderSettings => (Settings, "プロバイダーの設定を変更できませんでした"),
         HostSoftware => (Settings, "ホストのバージョン情報を取得できませんでした"),
@@ -192,10 +180,10 @@ impl Snapshot {
             OperationKey::SaveFile { path } => {
                 ("保存を再試行", Intent::SaveFile(op::SaveFile { path }))
             }
-            OperationKey::WorkspaceReview => (
+            OperationKey::WorkspaceReview { pane } => (
                 "再試行",
                 Intent::ReviewWorkspace(op::ReviewWorkspace {
-                    cwd: self.pane.workspace.review_cwd.clone()?,
+                    cwd: self.panes.get(&pane)?.workspace.review_cwd.clone()?,
                 }),
             ),
             _ => return None,
@@ -209,26 +197,40 @@ impl Snapshot {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
-    pub fn pane_error_notice(&self) -> Option<ErrorNotice> {
-        self.pane
-            .error
-            .as_ref()
-            .map(|message| application_notice(message, "操作", "操作に失敗しました"))
-    }
-
-    pub fn error_notices(&self, scope: ErrorScope) -> Vec<ErrorNotice> {
+    pub fn error_notices(&self, pane_id: &str, scope: ErrorScope) -> Vec<ErrorNotice> {
+        let language = self.catalog.ui_language;
         let mut notices = Vec::new();
         if scope == ErrorScope::Application {
-            if let Some(message) = &self.connection.connection_failure {
-                notices.push(application_notice(
-                    message,
+            let application = [
+                (
+                    self.connection.connection_failure.as_ref(),
                     "接続",
                     "ホストに接続できません",
-                ));
+                ),
+                (
+                    self.panes.get(pane_id).and_then(|pane| pane.error.as_ref()),
+                    "操作",
+                    "操作に失敗しました",
+                ),
+            ];
+            for (error, context, title) in application {
+                if let Some(error) = error {
+                    notices.push(ErrorNotice {
+                        id: ErrorId::Application {
+                            message: error.clone(),
+                        },
+                        context: language.text(context).into(),
+                        title: language.text(title).into(),
+                        text: error_text(language, error),
+                        recovery_label: None,
+                    });
+                }
             }
-            notices.extend(self.pane_error_notice());
         }
         for (key, state) in self.operations.iter() {
+            if key.pane().is_some_and(|owner| owner != pane_id) {
+                continue;
+            }
             let OperationPhase::Failed { message } = &state.phase else {
                 continue;
             };
@@ -241,15 +243,15 @@ impl Snapshot {
                         key: key.clone(),
                         generation: state.generation,
                     },
-                    context: scope.label().into(),
-                    title: title.into(),
-                    text: error_text(message),
+                    context: language.text(scope.label()).into(),
+                    title: language.text(title).into(),
+                    text: error_text(language, message),
                     recovery_label: self
                         .error_recovery(ErrorId::Operation {
                             key: key.clone(),
                             generation: state.generation,
                         })
-                        .map(|recovery| recovery.label),
+                        .map(|recovery| language.text(&recovery.label).into()),
                 });
             }
         }
@@ -267,10 +269,135 @@ const FAILED: &str = "エラーが発生しました。";
 const HOST_FAILED: &str = "ホストで操作に失敗しました。";
 const NO_DETAILS: &str = "ホストで操作に失敗しました。エラーの詳細を取得できませんでした。";
 
+/// An asynchronous native operation keeps its cause and optional UI context
+/// until the display language is known. It never captures a preference owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ErrorSource {
+    cause: ErrorCause,
+    context: Option<&'static str>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ErrorCause {
+    Error(String),
+    Formatted {
+        template: &'static str,
+        arguments: Vec<String>,
+    },
+    Diagnostic {
+        message: &'static str,
+        details: String,
+    },
+}
+impl ErrorSource {
+    pub fn formatted(template: &'static str, arguments: Vec<String>) -> Self {
+        Self {
+            cause: ErrorCause::Formatted {
+                template,
+                arguments,
+            },
+            context: None,
+        }
+    }
+    pub fn diagnostic(message: &'static str, details: String) -> Self {
+        Self {
+            cause: ErrorCause::Diagnostic { message, details },
+            context: None,
+        }
+    }
+    pub fn with_context(mut self, template: &'static str) -> Self {
+        self.context = Some(template);
+        self
+    }
+    pub fn text(&self, language: UiLanguage) -> ErrorText {
+        let mut text = match &self.cause {
+            ErrorCause::Error(source) => error_text(language, source),
+            ErrorCause::Formatted {
+                template,
+                arguments,
+            } => ErrorText {
+                message: localized_ui_format(language, (*template).into(), arguments.clone()),
+                details: None,
+            },
+            ErrorCause::Diagnostic { message, details } => ErrorText {
+                message: language.text(message).into(),
+                details: Some(details.clone()),
+            },
+        };
+        if let Some(template) = self.context {
+            text.message = localized_ui_format(language, template.into(), vec![text.message]);
+        }
+        text
+    }
+    /// Flat native surfaces keep opaque I/O failures in their original layout.
+    pub fn flat_text(&self, language: UiLanguage) -> String {
+        match &self.cause {
+            ErrorCause::Error(source) if self.context.is_none() => {
+                localized_error_message(language, source)
+            }
+            _ => self.text(language).to_string(),
+        }
+    }
+}
+impl std::error::Error for ErrorSource {}
+impl From<String> for ErrorSource {
+    fn from(error: String) -> Self {
+        Self {
+            // Wire envelopes must be reduced before storage or logging. Other
+            // sources are classified only once, when their display style is known.
+            cause: ErrorCause::Error(if error.starts_with("remote RPC error: ") {
+                error_source(&error)
+            } else {
+                error
+            }),
+            context: None,
+        }
+    }
+}
+impl From<&str> for ErrorSource {
+    fn from(error: &str) -> Self {
+        Self::from(error.to_owned())
+    }
+}
+impl std::fmt::Display for ErrorSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.text(UiLanguage::Japanese).fmt(f)
+    }
+}
+
+/// Flat native error surfaces retain their existing copy and verbatim diagnostic
+/// layout. Structured deferred reasons are formatted without exposing the envelope.
 #[cfg_attr(feature = "bindings", uniffi::export)]
-pub fn error_text(error: &str) -> ErrorText {
+pub fn localized_error_message(language: UiLanguage, error: &str) -> String {
+    if error.starts_with("remote RPC error: ") {
+        error_text(language, error).to_string()
+    } else {
+        error_copy(language, error)
+    }
+}
+
+/// Keep native exception strings safe for storage and logging. Dictation is the
+/// one error whose copy includes an inserted reason: retain only that code and
+/// its sanitized message so presentation can choose the language later.
+pub fn error_source(error: &str) -> String {
+    if let Some(raw) = error.strip_prefix("remote RPC error: ")
+        && let Ok(value) = serde_json::from_str::<Value>(raw)
+        && value["code"] == "dictation_failed"
+    {
+        return format!(
+            "remote RPC error: {}",
+            serde_json::json!({
+                "code": "dictation_failed",
+                "message": value["message"].as_str().map(crate::diagnostics::sanitize).unwrap_or_default()
+            })
+        );
+    }
+    error_text(UiLanguage::Japanese, error).to_string()
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn error_text(language: UiLanguage, error: &str) -> ErrorText {
     if let Some(raw) = error.strip_prefix("remote RPC error: ") {
-        return host_failure(raw);
+        return host_failure(language, raw);
     }
     // Local failures arrive as `PeerError` and `TransportError` text.
     let (fallback, text) = if let Some(text) = error.strip_prefix("invalid RPC message: ") {
@@ -292,16 +419,18 @@ pub fn error_text(error: &str) -> ErrorText {
     let mut text = split(text);
     if text.message.is_empty() {
         text = ErrorText {
-            message: fallback.into(),
+            message: language.text(fallback).into(),
             details: (!error.trim().is_empty()).then(|| error.into()),
         };
+    } else {
+        text.message = error_copy(language, &text.message);
     }
     text
 }
 
-fn host_failure(raw: &str) -> ErrorText {
+fn host_failure(language: UiLanguage, raw: &str) -> ErrorText {
     let copy = |message: &str| ErrorText {
-        message: message.into(),
+        message: language.text(message).into(),
         details: None,
     };
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
@@ -326,14 +455,30 @@ fn host_failure(raw: &str) -> ErrorText {
     };
     if dictation {
         let reason = match text.message.as_str() {
-            "" => "もう一度録音してください。",
+            "" => language.text("もう一度録音してください。"),
             reason => reason,
         };
-        text.message = format!("音声を文字起こしできませんでした。{reason}");
+        text.message = localized_ui_format(
+            language,
+            "音声を文字起こしできませんでした。{0}".into(),
+            vec![reason.into()],
+        );
     } else if text.message.is_empty() {
-        text.message = HOST_FAILED.into();
+        text.message = language.text(HOST_FAILED).into();
+    } else {
+        text.message = error_copy(language, &text.message);
     }
     text
+}
+
+// These are copy lines already separated from diagnostics, not arbitrary text
+// or formatted templates. In particular, inserted dictation reasons bypass this.
+fn error_copy(language: UiLanguage, source: &str) -> String {
+    source
+        .split('\n')
+        .map(|line| language.text(line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Host failures join context and cause as `context: cause`, so a Japanese
@@ -379,8 +524,157 @@ mod error_tests {
     }
 
     #[test]
+    fn deferred_copy_keeps_arguments_and_flat_io_details_verbatim() {
+        use crate::localization::UiLanguage;
+        let source = super::ErrorSource::formatted(
+            "ファイルを取得・保存できません: {0}",
+            vec!["設定 {0}\nraw cause".into()],
+        );
+        assert_eq!(
+            source.flat_text(UiLanguage::Japanese),
+            "ファイルを取得・保存できません: 設定 {0}\nraw cause"
+        );
+        assert_eq!(
+            source.flat_text(UiLanguage::English),
+            "Could not download or save file: 設定 {0}\nraw cause"
+        );
+        let raw = "opaque I/O\r\nraw diagnostic\n";
+        assert_eq!(
+            super::ErrorSource::from(raw).flat_text(UiLanguage::English),
+            raw
+        );
+        assert_eq!(
+            super::ErrorSource::from(raw).flat_text(UiLanguage::Japanese),
+            raw
+        );
+        let source = super::ErrorSource::from("opaque I/O cause");
+        assert_eq!(source.flat_text(UiLanguage::English), "opaque I/O cause");
+        assert_eq!(
+            source.text(UiLanguage::English).details.as_deref(),
+            Some("opaque I/O cause")
+        );
+        let source = super::ErrorSource::from(
+            r#"remote RPC error: {"code":"dictation_failed","message":"設定","data":{"secret":"private-audio"}}"#,
+        );
+        assert!(!format!("{source:?}").contains("private-audio"));
+        assert_eq!(
+            source.flat_text(UiLanguage::English),
+            "Could not transcribe audio. 設定"
+        );
+    }
+
+    #[test]
+    fn language_formats_error_copy_without_reinterpreting_causes_or_dictation_reasons() {
+        use crate::localization::UiLanguage;
+        let timeout = error_text(UiLanguage::English, "request 42 timed out");
+        assert_eq!(timeout.message, "The Host did not respond.");
+        assert_eq!(timeout.details.as_deref(), Some("request 42 timed out"));
+        // Diagnostics keep their existing payload redaction before formatting.
+        for (reason, visible) in [
+            ("設定", "設定"),
+            ("設定{0}", "設定[payload omitted]"),
+            (
+                "Codexにログインしてください。",
+                "Codexにログインしてください。",
+            ),
+        ] {
+            let raw = format!(
+                "remote RPC error: {}",
+                serde_json::json!({
+                    "code":"dictation_failed", "message":reason, "data":{"audio":"private-audio"}
+                })
+            );
+            let source = super::error_source(&raw);
+            assert!(!source.contains("private-audio"));
+            let english = error_text(UiLanguage::English, &source);
+            assert_eq!(
+                english.message,
+                format!("Could not transcribe audio. {visible}")
+            );
+            assert_eq!(english.details, None);
+            assert_eq!(
+                error_text(UiLanguage::Japanese, &source).message,
+                format!("音声を文字起こしできませんでした。{visible}")
+            );
+        }
+        let raw = r#"remote RPC error: {"code":"dictation_failed","message":"provider failed","data":{"audio":"private-audio"}}"#;
+        let text = error_text(UiLanguage::English, &super::error_source(raw));
+        assert_eq!(
+            text.message,
+            "Could not transcribe audio. Please record again."
+        );
+        assert_eq!(text.details.as_deref(), Some("provider failed"));
+        assert_eq!(
+            error_text(
+                UiLanguage::English,
+                "設定アプリでBexのマイクへのアクセスを許可してください。"
+            )
+            .message,
+            "Allow Bex microphone access in the Settings app."
+        );
+        let raw = r#"remote RPC error: {"code":"file_not_found","message":"private-path","data":{"key":"private-key"}}"#;
+        let source = super::error_source(raw);
+        assert!(!source.contains("private-"));
+        assert_eq!(
+            error_text(UiLanguage::English, &source).message,
+            "The file or folder could not be found."
+        );
+    }
+
+    #[test]
+    fn asynchronous_contexts_choose_language_at_display_and_keep_diagnostics_verbatim() {
+        use crate::localization::UiLanguage;
+        let source = super::ErrorSource::from("request 42 timed out")
+            .with_context("ファイルを取得・保存できません: {0}");
+        let japanese = source.text(UiLanguage::Japanese);
+        assert_eq!(
+            japanese.message,
+            "ファイルを取得・保存できません: ホストから応答がありませんでした。"
+        );
+        let english = source.text(UiLanguage::English);
+        assert_eq!(
+            english.message,
+            "Could not download or save file: The Host did not respond."
+        );
+        assert_eq!(english.details.as_deref(), Some("request 42 timed out"));
+        assert_eq!(
+            source.flat_text(UiLanguage::English),
+            "Could not download or save file: The Host did not respond.\nrequest 42 timed out"
+        );
+        assert_eq!(japanese.details, english.details);
+        assert_eq!(
+            source.to_string(),
+            "ファイルを取得・保存できません: ホストから応答がありませんでした。\nrequest 42 timed out"
+        );
+        let diagnostic =
+            super::ErrorSource::diagnostic("保存先を選択できません", "設定 {0}\nraw cause".into());
+        let english = diagnostic.text(UiLanguage::English);
+        assert_eq!(english.message, "Could not choose a save destination");
+        assert_eq!(english.details.as_deref(), Some("設定 {0}\nraw cause"));
+        assert_eq!(
+            super::localized_error_message(UiLanguage::English, "opaque provider output"),
+            "opaque provider output"
+        );
+        assert_eq!(
+            super::localized_error_message(
+                UiLanguage::English,
+                "ホストから応答がありませんでした。\nrequest 42 timed out"
+            ),
+            "The Host did not respond.\nrequest 42 timed out"
+        );
+        let source = super::error_source(
+            r#"remote RPC error: {"code":"dictation_failed","message":"設定"}"#,
+        );
+        assert_eq!(
+            super::localized_error_message(UiLanguage::English, &source),
+            "Could not transcribe audio. 設定"
+        );
+    }
+
+    #[test]
     fn writer_conflicts_explain_explicit_fork_recovery() {
         let text = error_text(
+            crate::localization::UiLanguage::Japanese,
             r#"remote RPC error: {"code":"thread_in_use","message":"thread private-id already has an active writer","delivery":"notSent"}"#,
         );
         assert!(text.message.contains("分岐") && text.message.contains("未送信"));
@@ -402,7 +696,7 @@ mod error_tests {
                 serde_json::json!({"code": code, "message": "host file failure", "data": {"path": "private"}})
             );
             assert_eq!(
-                error_text(&raw),
+                error_text(crate::localization::UiLanguage::Japanese, &raw),
                 ErrorText {
                     message: message.into(),
                     details: None
@@ -414,7 +708,7 @@ mod error_tests {
     #[test]
     fn provider_cause_stays_in_details_without_exposing_payloads() {
         let raw = r#"remote RPC error: {"delivery":"unknown","code":"provider_failed","message":"thread example already has an active writer","execution":{"providerCode":"-32600"}}"#;
-        let text = error_text(raw);
+        let text = error_text(crate::localization::UiLanguage::Japanese, raw);
         assert_eq!(text.message, "ホストで操作に失敗しました。");
         assert_eq!(
             text.details.as_deref(),
@@ -425,7 +719,7 @@ mod error_tests {
             "remote RPC error: invalid",
             r#"remote RPC error: {"message":" "}"#,
         ] {
-            let text = error_text(raw);
+            let text = error_text(crate::localization::UiLanguage::Japanese, raw);
             assert!(text.message.contains("詳細を取得できませんでした"));
             assert!(!text.message.contains("もう一度"));
             assert_eq!(text.details, None);
@@ -435,10 +729,13 @@ mod error_tests {
     #[test]
     fn host_copy_keeps_its_language_and_moves_the_cause_to_details() {
         let host = |message: &str| {
-            error_text(&format!(
-                "remote RPC error: {}",
-                serde_json::json!({"code": "worktree_status_failed", "message": message})
-            ))
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                &format!(
+                    "remote RPC error: {}",
+                    serde_json::json!({"code": "workspace_review_failed", "message": message})
+                ),
+            )
         };
         assert_eq!(
             host("ワークツリーを確認できません: fatal: not a git repository"),
@@ -461,7 +758,10 @@ mod error_tests {
         assert_eq!(host(warning).message, warning);
         assert_eq!(host(warning).details, None);
         assert_eq!(
-            error_text(r#"remote RPC error: {"code":-1,"message":"permission denied"}"#),
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                r#"remote RPC error: {"code":-1,"message":"permission denied"}"#
+            ),
             ErrorText {
                 message: "ホストで操作に失敗しました。".into(),
                 details: Some("permission denied".into()),
@@ -472,6 +772,7 @@ mod error_tests {
     #[test]
     fn dictation_errors_explain_recovery_without_rendering_rpc_payloads() {
         let text = error_text(
+            crate::localization::UiLanguage::Japanese,
             r#"remote RPC error: {"code":"dictation_failed","message":"provider failed","data":{"audio":"private"}}"#,
         );
         assert_eq!(
@@ -480,20 +781,26 @@ mod error_tests {
         );
         assert_eq!(text.details.as_deref(), Some("provider failed"));
         assert_eq!(
-            error_text(r#"remote RPC error: {"code":"dictation_failed","message":" "}"#),
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                r#"remote RPC error: {"code":"dictation_failed","message":" "}"#
+            ),
             ErrorText {
                 message: "音声を文字起こしできませんでした。もう一度録音してください。".into(),
                 details: None,
             }
         );
         assert_eq!(
-            error_text(r#"remote RPC error: {"code":"dictation_failed","message":"Codexにログインしてください。"}"#).message,
+            error_text(crate::localization::UiLanguage::Japanese, r#"remote RPC error: {"code":"dictation_failed","message":"Codexにログインしてください。"}"#).message,
             "音声を文字起こしできませんでした。Codexにログインしてください。"
         );
         assert_eq!(
-            error_text("マイクへのアクセスを許可してください"),
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                "設定アプリでBexのマイクへのアクセスを許可してください。"
+            ),
             ErrorText {
-                message: "マイクへのアクセスを許可してください".into(),
+                message: "設定アプリでBexのマイクへのアクセスを許可してください。".into(),
                 details: None,
             }
         );
@@ -503,7 +810,10 @@ mod error_tests {
     fn local_transport_failures_explain_the_failure_and_keep_the_cause() {
         let busy = "操作が混み合っています。少し待って再試行してください。";
         assert_eq!(
-            error_text(&PeerError::InvalidMessage(busy.into()).to_string()),
+            error_text(
+                crate::localization::UiLanguage::Japanese,
+                &PeerError::InvalidMessage(busy.into()).to_string()
+            ),
             ErrorText {
                 message: busy.into(),
                 details: None,
@@ -553,7 +863,7 @@ mod error_tests {
         ];
         for (raw, message) in cases {
             assert_eq!(
-                error_text(&raw),
+                error_text(crate::localization::UiLanguage::Japanese, &raw),
                 ErrorText {
                     message: message.into(),
                     details: Some(raw.clone()),
@@ -561,7 +871,7 @@ mod error_tests {
             );
         }
         assert_eq!(
-            error_text(""),
+            error_text(crate::localization::UiLanguage::Japanese, ""),
             ErrorText {
                 message: "エラーが発生しました。".into(),
                 details: None
@@ -584,7 +894,7 @@ mod error_tests {
             ]),
         ) {
             let raw = format!("{prefix}{}", lines.join("\n"));
-            let text = error_text(&raw);
+            let text = error_text(crate::localization::UiLanguage::Japanese, &raw);
             prop_assert!(japanese(&text.message));
             prop_assert!(!text.details.as_deref().is_some_and(japanese));
             let details = text.details.clone().unwrap_or_default();
@@ -607,7 +917,7 @@ mod notice_tests {
     use std::sync::Arc;
 
     fn failed(snapshot: &mut Snapshot, key: OperationKey, generation: u64, message: &str) {
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key,
             OperationState {
                 generation,
@@ -625,28 +935,42 @@ mod notice_tests {
     }
 
     #[test]
-    fn a_secondary_panes_notice_can_be_dismissed_without_hiding_host_failure() {
+    fn notices_change_language_without_changing_error_identity_or_recovery() {
         let mut snapshot = Snapshot::default();
-        snapshot.connection.connection_failure = Some("connection lost".into());
-        std::sync::Arc::make_mut(&mut snapshot.pane).error = Some("local validation".into());
-        let notice = snapshot.pane_error_notice().unwrap();
-        assert_eq!(notice.context, "操作");
+        failed(
+            &mut snapshot,
+            OperationKey::HostSoftware,
+            7,
+            "request 42 timed out",
+        );
+        let japanese = snapshot
+            .error_notices("", ErrorScope::Settings)
+            .pop()
+            .unwrap();
+        snapshot.catalog.ui_language = UiLanguage::English;
+        let english = snapshot
+            .error_notices("", ErrorScope::Settings)
+            .pop()
+            .unwrap();
+        assert_eq!(english.id, japanese.id);
+        assert_eq!(english.context, "Settings");
+        assert_eq!(english.title, "Could not read the Host version");
+        assert_eq!(english.text.message, "The Host did not respond.");
         assert_eq!(
-            notice.id,
-            ErrorId::Application {
-                message: "local validation".into()
-            }
+            english.text.details.as_deref(),
+            Some("request 42 timed out")
         );
-        let (next, _) = reduce(
-            &snapshot,
-            Event::Intent(Intent::DismissError { id: notice.id }),
-        );
-        assert!(next.pane_error_notice().is_none());
+        assert_eq!(english.text.details, japanese.text.details);
+        assert_eq!(english.recovery_label.as_deref(), Some("Reload"));
         assert_eq!(
-            next.connection.connection_failure,
-            Some("connection lost".into())
+            japanese.title,
+            "ホストのバージョン情報を取得できませんでした"
         );
-        assert_eq!(next.error_notices(ErrorScope::Application).len(), 1);
+        assert_eq!(japanese.recovery_label.as_deref(), Some("再読み込み"));
+        assert!(matches!(
+            snapshot.error_recovery(english.id).unwrap().intent,
+            Intent::ReadHostSoftware(_)
+        ));
     }
 
     #[test]
@@ -667,33 +991,39 @@ mod notice_tests {
             1,
             r#"remote RPC error: {"message":"send rejected","data":{"secret":"private"}}"#,
         );
-        let global = snapshot.error_notices(ErrorScope::Application);
-        let local = snapshot.error_notices(conversation(&draft));
+        let global = snapshot.error_notices("", ErrorScope::Application);
+        let local = snapshot.error_notices("", conversation(&draft));
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].context, "接続");
         assert_eq!(global[0].title, "ホストに接続できません");
-        let (recovered, _) = reduce(&snapshot, Event::Connected);
-        assert!(recovered.error_notices(ErrorScope::Application).is_empty());
+        let (recovered, _) = reduce(&snapshot, "", Event::Connected);
+        assert!(
+            recovered
+                .error_notices("", ErrorScope::Application)
+                .is_empty()
+        );
         assert_eq!(local.len(), 1);
         assert_eq!(local[0].context, "この会話");
         assert_eq!(local[0].title, "メッセージを送信できませんでした");
         assert_eq!(local[0].text.details.as_deref(), Some("send rejected"));
         let (next, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::DismissError {
                 id: local[0].id.clone(),
             }),
         );
         assert!(effects.is_empty());
-        assert!(next.error_notices(conversation(&draft)).is_empty());
-        assert_eq!(next.error_notices(ErrorScope::Application), global);
+        assert!(next.error_notices("", conversation(&draft)).is_empty());
+        assert_eq!(next.error_notices("", ErrorScope::Application), global);
         let (next, _) = reduce(
             &next,
+            "",
             Event::Intent(Intent::DismissError {
                 id: global[0].id.clone(),
             }),
         );
-        assert!(next.error_notices(ErrorScope::Application).is_empty());
+        assert!(next.error_notices("", ErrorScope::Application).is_empty());
     }
 
     #[test]
@@ -717,8 +1047,12 @@ mod notice_tests {
             2,
             "account unavailable",
         );
-        assert!(snapshot.error_notices(conversation(&draft)).is_empty());
-        assert!(snapshot.error_notices(ErrorScope::Application).is_empty());
+        assert!(snapshot.error_notices("", conversation(&draft)).is_empty());
+        assert!(
+            snapshot
+                .error_notices("", ErrorScope::Application)
+                .is_empty()
+        );
         assert_eq!(
             snapshot
                 .history_control(session)
@@ -728,7 +1062,7 @@ mod notice_tests {
                 .as_deref(),
             Some("history unavailable")
         );
-        let settings = snapshot.error_notices(ErrorScope::Settings);
+        let settings = snapshot.error_notices("", ErrorScope::Settings);
         assert_eq!(settings.len(), 1);
         assert_eq!(
             settings[0].text.details.as_deref(),
@@ -747,16 +1081,17 @@ mod notice_tests {
         };
         let (next, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::ListFiles(ListFiles {
                 path: "relative".into(),
             })),
         );
         assert!(effects.is_empty());
         assert_eq!(
-            next.error_notices(ErrorScope::Application),
-            snapshot.error_notices(ErrorScope::Application)
+            next.error_notices("", ErrorScope::Application),
+            snapshot.error_notices("", ErrorScope::Application)
         );
-        let notices = next.error_notices(ErrorScope::Workspace);
+        let notices = next.error_notices("", ErrorScope::Workspace);
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].text.message, "絶対パスを入力してください。");
         assert!(matches!(
@@ -775,8 +1110,9 @@ mod notice_tests {
         };
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.lists.list_query).search_term = "keep filter".into();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd = "/selected".into();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).review_cwd =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).cwd =
+            "/selected".into();
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace).review_cwd =
             Some("/reviewed".into());
         let cases = [
             (
@@ -822,7 +1158,9 @@ mod notice_tests {
                 }),
             ),
             (
-                OperationKey::WorkspaceReview,
+                OperationKey::WorkspaceReview {
+                    pane: String::new(),
+                },
                 Intent::ReviewWorkspace(op::ReviewWorkspace {
                     cwd: "/reviewed".into(),
                 }),
@@ -848,7 +1186,10 @@ mod notice_tests {
                     })
                     .is_none()
             );
-            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Running;
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(&key)
+                .unwrap()
+                .phase = OperationPhase::Running;
             assert!(snapshot.error_recovery(id).is_none());
         }
         for key in [
@@ -872,14 +1213,20 @@ mod notice_tests {
         snapshot.connection.connected = true;
         failed(
             &mut snapshot,
-            OperationKey::WorkspaceReview,
+            OperationKey::WorkspaceReview {
+                pane: String::new(),
+            },
             7,
             "review unavailable",
         );
-        let notice = snapshot.error_notices(ErrorScope::Workspace).pop().unwrap();
+        let notice = snapshot
+            .error_notices("", ErrorScope::Workspace)
+            .pop()
+            .unwrap();
         assert_eq!(notice.recovery_label, None);
         let (unchanged, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::RecoverError {
                 id: notice.id.clone(),
             }),
@@ -887,16 +1234,23 @@ mod notice_tests {
         assert!(effects.is_empty());
         assert_eq!(unchanged.operations, snapshot.operations);
 
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).review_cwd =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace).review_cwd =
             Some("/reviewed".into());
-        let notice = snapshot.error_notices(ErrorScope::Workspace).pop().unwrap();
+        let notice = snapshot
+            .error_notices("", ErrorScope::Workspace)
+            .pop()
+            .unwrap();
         assert_eq!(notice.recovery_label.as_deref(), Some("再試行"));
         let (next, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::RecoverError { id: notice.id }),
         );
         assert_eq!(effects.len(), 1);
-        assert_eq!(next.pane.workspace.review_cwd.as_deref(), Some("/reviewed"));
+        assert_eq!(
+            next.panes.primary().workspace.review_cwd.as_deref(),
+            Some("/reviewed")
+        );
     }
 
     #[test]
@@ -906,14 +1260,14 @@ mod notice_tests {
                 connected: true,
                 ..Default::default()
             },
-            pane: Arc::new(crate::state::PaneState {
+            panes: crate::state::PaneStates::with_primary(Arc::new(crate::state::PaneState {
                 error: Some("save failed".into()),
                 ..Default::default()
-            }),
+            })),
             ..Default::default()
         };
         let notice = snapshot
-            .error_notices(ErrorScope::Application)
+            .error_notices("", ErrorScope::Application)
             .pop()
             .unwrap();
         assert_eq!(notice.title, "操作に失敗しました");
@@ -921,28 +1275,29 @@ mod notice_tests {
             connection: crate::state::Connection {
                 ..snapshot.connection.clone()
             },
-            pane: Arc::new(crate::state::PaneState {
+            panes: crate::state::PaneStates::with_primary(Arc::new(crate::state::PaneState {
                 error: Some("connection lost".into()),
                 ..Default::default()
-            }),
+            })),
             ..snapshot
         };
         let (next, _) = reduce(
             &newer,
+            "",
             Event::Intent(Intent::DismissError { id: notice.id }),
         );
-        assert_eq!(next.pane.error, newer.pane.error);
-        let (next, _) = reduce(&next, Event::Connected);
-        assert!(next.error_notices(ErrorScope::Application).is_empty());
+        assert_eq!(next.panes.primary().error, newer.panes.primary().error);
+        let (next, _) = reduce(&next, "", Event::Connected);
+        assert!(next.error_notices("", ErrorScope::Application).is_empty());
     }
 
     #[tokio::test]
     async fn offline_operation_failure_stays_with_its_operation() {
-        let store = crate::store::Store::offline(Snapshot::default());
+        let store = crate::store::Store::offline(Snapshot::default(), None);
         assert!(
             store
                 .snapshot()
-                .error_notices(ErrorScope::Application)
+                .error_notices("", ErrorScope::Application)
                 .is_empty()
         );
         assert!(
@@ -956,11 +1311,14 @@ mod notice_tests {
         assert!(
             store
                 .snapshot()
-                .error_notices(ErrorScope::Application)
+                .error_notices("", ErrorScope::Application)
                 .is_empty()
         );
         assert_eq!(
-            store.snapshot().error_notices(ErrorScope::Settings).len(),
+            store
+                .snapshot()
+                .error_notices("", ErrorScope::Settings)
+                .len(),
             1
         );
         store.close().await.unwrap();
@@ -970,9 +1328,15 @@ mod notice_tests {
     fn navigation_clears_workspace_failures_but_keeps_other_owners() {
         let mut snapshot = Snapshot::default();
         for key in [
-            OperationKey::File,
-            OperationKey::Directory,
-            OperationKey::WorkspaceReview,
+            OperationKey::File {
+                pane: String::new(),
+            },
+            OperationKey::Directory {
+                pane: String::new(),
+            },
+            OperationKey::WorkspaceReview {
+                pane: String::new(),
+            },
             OperationKey::SaveFile {
                 path: "/file".into(),
             },
@@ -987,14 +1351,15 @@ mod notice_tests {
         );
         let (next, _) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/other".into(),
             }),
         );
-        assert!(next.error_notices(ErrorScope::Workspace).is_empty());
+        assert!(next.error_notices("", ErrorScope::Workspace).is_empty());
         assert_eq!(
-            next.error_notices(ErrorScope::Settings),
-            snapshot.error_notices(ErrorScope::Settings)
+            next.error_notices("", ErrorScope::Settings),
+            snapshot.error_notices("", ErrorScope::Settings)
         );
     }
 
@@ -1004,7 +1369,7 @@ mod notice_tests {
             provider: agent_protocol::session::ProviderKind::Codex,
         };
         let mut snapshot = Snapshot::default();
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key.clone(),
             OperationState {
                 generation: 1,
@@ -1013,6 +1378,7 @@ mod notice_tests {
         );
         let (next, _) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::DismissError {
                 id: ErrorId::Operation {
                     key: key.clone(),
@@ -1034,15 +1400,17 @@ mod notice_tests {
             let mut snapshot = Snapshot::default();
             failed(&mut snapshot, key.clone(), 1, &message);
             failed(&mut snapshot, OperationKey::Submission { draft_key: other.clone() }, 100, "other failure");
-            let dismissed = snapshot.error_notices(conversation(&first)).pop().unwrap();
-            prop_assert_eq!(snapshot.error_notices(conversation(&other))[0].text.details.clone(), Some("other failure".into()));
-            snapshot.operations.insert(key.clone(), OperationState {
+            let dismissed = snapshot.error_notices("", conversation(&first)).pop().unwrap();
+            prop_assert_eq!(snapshot.error_notices("", conversation(&other))[0].text.details.clone(), Some("other failure".into()));
+            Arc::make_mut(&mut snapshot.operations).insert(key.clone(),
+            OperationState {
                 generation: newer,
                 phase: if running { OperationPhase::Running } else { OperationPhase::Failed { message: message.clone() } },
-            });
-            let (next, _) = reduce(&snapshot, Event::Intent(Intent::DismissError { id: dismissed.id }));
+            },
+            );
+            let (next, _) = reduce(&snapshot, "", Event::Intent(Intent::DismissError { id: dismissed.id }));
             prop_assert_eq!(next.operations.get(&key), snapshot.operations.get(&key));
-            prop_assert_eq!(next.error_notices(conversation(&other)), snapshot.error_notices(conversation(&other)));
+            prop_assert_eq!(next.error_notices("", conversation(&other)), snapshot.error_notices("", conversation(&other)));
         }
     }
 }

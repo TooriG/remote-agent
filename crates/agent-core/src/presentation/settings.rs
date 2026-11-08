@@ -19,18 +19,25 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct SettingsPresentation {
+    language: crate::localization::UiLanguage,
     key: DraftKey,
     provider: Option<ProviderKind>,
     model: Option<ModelRef>,
     connected: bool,
     connection_enabled: bool,
+    pub connection_epoch: u64,
+    pub permission: super::permissions::PermissionControl,
+    cwd: String,
     host: Option<String>,
     software: Option<Arc<HostSoftware>>,
     models: Arc<Vec<Model>>,
     providers: Option<Arc<ProviderSettings>>,
-    accounts: Option<Arc<Accounts>>,
-    login: Option<Arc<AccountLogin>>,
-    cli: Option<Arc<CodexCliStatus>>,
+    pub accounts: Option<Arc<Accounts>>,
+    pub login: Option<Arc<AccountLogin>>,
+    pub cli: Option<Arc<CodexCliStatus>>,
+    pub worktree_settings: Option<Arc<agent_protocol::models::WorktreeSettings>>,
+    pub worktrees: Option<Arc<Vec<agent_protocol::models::Worktree>>>,
+    custom_models: bool,
     setup: ConnectionSetup,
     credentials: Vec<CredentialControl>,
     quick: ModelQuickControls,
@@ -65,10 +72,11 @@ impl SettingsPresentation {
     }
     pub(super) fn project(
         snapshot: &Snapshot,
+        pane: &crate::state::PaneState,
         provider: Option<ProviderKind>,
         previous: Option<&Presentation>,
     ) -> Arc<Self> {
-        let key = &snapshot.pane.navigation.draft_key;
+        let key = &pane.navigation.draft_key;
         if let Some(previous) = previous {
             let before = &previous.snapshot;
             let draft = |state: &Snapshot| {
@@ -80,19 +88,32 @@ impl SettingsPresentation {
                     )
                 })
             };
-            if key == &before.pane.navigation.draft_key
+            if key == &previous.pane().navigation.draft_key
                 && provider == previous.settings.provider
                 && snapshot.catalog.same(&before.catalog)
                 && snapshot.operations.same(&before.operations)
                 && snapshot.connection.connected == before.connection.connected
                 && snapshot.connection.connection_disabled == before.connection.connection_disabled
                 && snapshot.connection.host_name == before.connection.host_name
+                && snapshot.connection.epoch == before.connection.epoch
+                && pane.navigation.cwd == previous.pane().navigation.cwd
+                && snapshot
+                    .files
+                    .workspace
+                    .settings
+                    .same(&before.files.workspace.settings)
+                && snapshot
+                    .files
+                    .workspace
+                    .worktrees
+                    .same(&before.files.workspace.worktrees)
                 && draft(snapshot) == draft(before)
             {
                 return previous.settings.clone();
             }
         }
         let next = Self {
+            language: snapshot.catalog.ui_language,
             key: key.clone(),
             provider,
             model: snapshot
@@ -102,6 +123,9 @@ impl SettingsPresentation {
                 .and_then(|draft| draft.model.clone()),
             connected: snapshot.connection.connected,
             connection_enabled: !snapshot.connection.connection_disabled,
+            connection_epoch: snapshot.connection.epoch,
+            permission: snapshot.permission_control(key),
+            cwd: pane.navigation.cwd.clone(),
             host: snapshot.connection.host_name.clone(),
             software: snapshot.catalog.host_software.clone(),
             models: snapshot.catalog.models.clone(),
@@ -109,6 +133,9 @@ impl SettingsPresentation {
             accounts: snapshot.catalog.account.accounts.clone(),
             login: snapshot.catalog.account.login.clone(),
             cli: snapshot.catalog.account.codex_cli.clone(),
+            worktree_settings: snapshot.files.workspace.settings.clone(),
+            worktrees: snapshot.files.workspace.worktrees.clone(),
+            custom_models: snapshot.allows_custom_codex_models(),
             setup: snapshot.connection_setup(),
             credentials: snapshot.credential_controls(),
             quick: snapshot.model_quick_controls(key.clone()),
@@ -133,7 +160,7 @@ impl SettingsPresentation {
                 .collect(),
             provider_settings_busy: snapshot.operation_running(OperationKey::ProviderSettings),
             codex_cli_busy: snapshot.operation_running(OperationKey::CodexCli),
-            notices: snapshot.error_notices(ErrorScope::Settings),
+            notices: snapshot.error_notices("", ErrorScope::Settings),
         };
         if let Some(previous) = previous
             && next == *previous.settings
@@ -142,16 +169,34 @@ impl SettingsPresentation {
         }
         Arc::new(next)
     }
+
+    pub fn worktree_is_current(&self, path: &str) -> bool {
+        std::path::Path::new(&self.cwd).starts_with(path)
+    }
+
+    pub fn custom_model_choice(
+        &self,
+        provider: Option<ProviderKind>,
+        query: &str,
+    ) -> Option<ModelRef> {
+        let id = query.trim();
+        (self.custom_models
+            && provider == Some(ProviderKind::Codex)
+            && !id.is_empty()
+            && !id.chars().any(char::is_whitespace)
+            && !self
+                .models
+                .iter()
+                .any(|model| model.model.provider == ProviderKind::Codex && model.model.id == id))
+        .then(|| ModelRef {
+            provider: ProviderKind::Codex,
+            id: id.into(),
+        })
+    }
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl SettingsPresentation {
-    #[cfg_attr(feature = "bindings", uniffi::constructor)]
-    pub fn from_snapshot(snapshot: Arc<Snapshot>) -> Arc<Self> {
-        let provider =
-            snapshot.model_provider_for_draft(snapshot.pane.navigation.draft_key.clone());
-        Self::project(&snapshot, provider, None)
-    }
     pub fn draft_key(&self) -> DraftKey {
         self.key.clone()
     }
@@ -177,7 +222,11 @@ impl SettingsPresentation {
         self.connection_enabled
     }
     pub fn connection_status_label(&self) -> String {
-        super::connections::status_label(self.connected, self.connection_enabled)
+        super::connections::connection_status_label(
+            self.language,
+            self.connected,
+            self.connection_enabled,
+        )
     }
     pub fn account_login_error(&self, provider: ProviderKind) -> Option<ErrorText> {
         self.login_errors.get(&provider).cloned()
@@ -243,7 +292,7 @@ impl SettingsPresentation {
         self.choices.get(&provider).cloned().flatten()
     }
     pub fn model_error_messages(&self, provider: Option<ProviderKind>) -> Vec<String> {
-        super::model_settings::error_messages(&self.errors, provider)
+        super::model_settings::error_messages(self.language, &self.errors, provider)
     }
     pub fn account_is_selected(&self, provider: ProviderKind, id: String) -> bool {
         self.accounts.as_ref().is_some_and(|accounts| {
@@ -279,17 +328,123 @@ mod tests {
     }
 
     #[test]
-    fn selected_model_names_keep_custom_ids_when_the_catalog_has_no_display_name() {
+    fn workspace_and_connection_inputs_invalidate_settings_independently() {
+        let changes = [
+            (
+                "settings",
+                (|state: &mut Snapshot| {
+                    Arc::make_mut(&mut state.files.workspace).settings = Some(Arc::default());
+                }) as fn(&mut Snapshot),
+            ),
+            ("worktrees", |state| {
+                Arc::make_mut(&mut state.files.workspace).worktrees = Some(Arc::new(Vec::new()));
+            }),
+            ("directory", |state| {
+                Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).cwd =
+                    "/repo/task/src".into();
+            }),
+            ("reconnection", |state| state.connection.epoch += 1),
+            ("permissions", |state| {
+                Arc::make_mut(&mut state.catalog.permission_settings).insert(
+                    ProviderKind::Codex,
+                    Arc::new(crate::state::operations::PermissionSettingsState { result: None }),
+                );
+            }),
+        ];
+        for (name, change) in changes {
+            let mut state = snapshot();
+            Arc::make_mut(&mut state.input.drafts).insert(
+                state.panes.primary().navigation.draft_key.clone(),
+                Arc::new(Draft {
+                    model: Some(state.catalog.models[0].model.clone()),
+                    ..Default::default()
+                }),
+            );
+            let initial = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
+            change(&mut state);
+            let changed = Presentation::current(Arc::new(state.clone()), &initial).unwrap();
+            assert!(!Arc::ptr_eq(&initial.settings, &changed.settings), "{name}");
+            assert!(changed.changes(initial).settings, "{name}");
+            assert_eq!(
+                changed.settings.worktree_settings,
+                state.files.workspace.settings
+            );
+            assert_eq!(changed.settings.worktrees, state.files.workspace.worktrees);
+            assert_eq!(changed.settings.connection_epoch, state.connection.epoch);
+            assert_eq!(changed.settings.permission.loading, name == "permissions");
+            assert_eq!(
+                changed.settings.permission.load_provider,
+                (name != "permissions").then_some(ProviderKind::Codex),
+            );
+            assert_eq!(
+                changed.settings.permission.provider,
+                Some(ProviderKind::Codex)
+            );
+            assert_eq!(
+                changed.settings.worktree_is_current("/repo/task"),
+                name == "directory"
+            );
+            assert!(!changed.settings.worktree_is_current("/repo/tasks"));
+            let stable = Presentation::project(Arc::new(state), "", Some(&changed)).unwrap();
+            assert!(Arc::ptr_eq(&stable.settings, &changed.settings), "{name}");
+        }
+    }
+
+    #[test]
+    fn custom_model_choices_follow_the_presented_account() {
         let mut state = snapshot();
-        assert!(
-            Presentation::project(Arc::new(state.clone()), None)
+        let initial = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
+        assert_eq!(
+            initial
                 .settings
-                .selected_model_name()
+                .custom_model_choice(Some(ProviderKind::Codex), " custom ")
+                .unwrap()
+                .id,
+            "custom"
+        );
+        for query in ["a", "", "two words"] {
+            assert!(
+                initial
+                    .settings
+                    .custom_model_choice(Some(ProviderKind::Codex), query)
+                    .is_none()
+            );
+        }
+        assert!(
+            initial
+                .settings
+                .custom_model_choice(Some(ProviderKind::Claude), "custom")
                 .is_none()
         );
+        Arc::make_mut(&mut state.catalog.account).accounts = Some(Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "accounts":[{"provider":"codex", "id":"subscription", "planType":"Pro"}],
+                "selected":{"codex":"subscription"}
+            }))
+            .unwrap(),
+        ));
+        let selected = Presentation::current(Arc::new(state), &initial).unwrap();
+        assert!(
+            selected
+                .settings
+                .custom_model_choice(Some(ProviderKind::Codex), "custom")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn selected_model_names_keep_custom_ids_when_the_catalog_has_no_display_name() {
+        let mut state = snapshot();
+        let name = |state: &Snapshot| {
+            Presentation::project(Arc::new(state.clone()), "", None)
+                .unwrap()
+                .settings
+                .selected_model_name()
+        };
+        assert!(name(&state).is_none());
         for (id, expected) in [("a", "Alpha"), ("custom-model", "custom-model")] {
             Arc::make_mut(&mut state.input.drafts).insert(
-                state.pane.navigation.draft_key.clone(),
+                state.panes.primary().navigation.draft_key.clone(),
                 Arc::new(Draft {
                     model: Some(ModelRef {
                         provider: ProviderKind::Codex,
@@ -298,25 +453,19 @@ mod tests {
                     ..Default::default()
                 }),
             );
-            assert_eq!(
-                Presentation::project(Arc::new(state.clone()), None)
-                    .settings
-                    .selected_model_name()
-                    .as_deref(),
-                Some(expected)
-            );
+            assert_eq!(name(&state).as_deref(), Some(expected));
         }
     }
 
     #[test]
     fn typing_streaming_and_unrelated_operations_keep_settings_identity() {
         let mut state = snapshot();
-        let initial = Presentation::project(Arc::new(state.clone()), None);
-        let independent = Presentation::project(initial.snapshot.clone(), None);
+        let initial = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
+        let independent = Presentation::project(initial.snapshot.clone(), "", None).unwrap();
         assert!(!Arc::ptr_eq(&independent.settings, &initial.settings));
         assert!(!independent.changes(initial.clone()).settings);
         Arc::make_mut(&mut state.input.drafts).insert(
-            state.pane.navigation.draft_key.clone(),
+            state.panes.primary().navigation.draft_key.clone(),
             Arc::new(Draft {
                 text: "typed".into(),
                 ..Default::default()
@@ -329,25 +478,28 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let typed = Presentation::project(Arc::new(state.clone()), Some(&initial));
+        let typed = Presentation::project(Arc::new(state.clone()), "", Some(&initial)).unwrap();
         assert!(Arc::ptr_eq(&initial.settings, &typed.settings));
-        state.operations.insert(
-            OperationKey::WorkspaceReview,
+        Arc::make_mut(&mut state.operations).insert(
+            OperationKey::WorkspaceReview {
+                pane: ("").to_owned(),
+            },
             OperationState {
                 generation: 1,
                 phase: OperationPhase::Running,
             },
         );
-        let reviewing = Presentation::current(Arc::new(state.clone()), &typed);
+        let reviewing = Presentation::current(Arc::new(state.clone()), &typed).unwrap();
         assert!(Arc::ptr_eq(&typed.settings, &reviewing.settings));
-        state
-            .operations
-            .get_mut(&OperationKey::WorkspaceReview)
+        Arc::make_mut(&mut state.operations)
+            .get_mut(&OperationKey::WorkspaceReview {
+                pane: ("").to_owned(),
+            })
             .unwrap()
             .phase = OperationPhase::Failed {
             message: "review failed".into(),
         };
-        let failed = Presentation::current(Arc::new(state), &reviewing);
+        let failed = Presentation::current(Arc::new(state), &reviewing).unwrap();
         assert!(Arc::ptr_eq(&reviewing.settings, &failed.settings));
         assert!(
             failed
@@ -362,7 +514,7 @@ mod tests {
     #[test]
     fn model_and_account_choices_acknowledge_before_transcript_projection() {
         let mut state = snapshot();
-        let first = state.pane.navigation.draft_key.clone();
+        let first = state.panes.primary().navigation.draft_key.clone();
         Arc::make_mut(&mut state.input.drafts).insert(
             first.clone(),
             Arc::new(Draft {
@@ -373,7 +525,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let initial = Presentation::project(Arc::new(state.clone()), None);
+        let initial = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
         let model = ModelRef {
             provider: ProviderKind::Codex,
             id: "b".into(),
@@ -388,15 +540,16 @@ mod tests {
         let key = DraftKey::from("second");
         let draft = state.input.drafts[&first].clone();
         Arc::make_mut(&mut state.input.drafts).insert(key.clone(), draft);
-        let selected = Presentation::current(Arc::new(state.clone()), &initial);
+        let selected = Presentation::current(Arc::new(state.clone()), &initial).unwrap();
         assert!(selected.changes(initial).settings);
         assert_eq!(selected.settings.selected_model(), Some(model.clone()));
         assert_eq!(
             selected.settings.current_model().unwrap().display_name,
             "Beta"
         );
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).draft_key = key.clone();
-        let navigated = Presentation::current(Arc::new(state.clone()), &selected);
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).draft_key =
+            key.clone();
+        let navigated = Presentation::current(Arc::new(state.clone()), &selected).unwrap();
         assert!(navigated.changes(selected).settings);
         assert_eq!(navigated.settings.draft_key(), key);
         Arc::make_mut(&mut state.catalog.account).accounts = Some(Arc::new(
@@ -406,7 +559,7 @@ mod tests {
             }))
             .unwrap(),
         ));
-        let current = Presentation::current(Arc::new(state.clone()), &navigated);
+        let current = Presentation::current(Arc::new(state.clone()), &navigated).unwrap();
         assert!(current.changes(navigated).settings);
         assert_eq!(current.settings.draft_key(), key);
         assert_eq!(current.settings.provider(), Some(ProviderKind::Codex));
@@ -436,7 +589,7 @@ mod tests {
         );
         Arc::make_mut(&mut state.catalog.model_errors)
             .insert("codex".into(), serde_json::json!({"message":"unavailable"}));
-        let failed = Presentation::current(Arc::new(state), &current);
+        let failed = Presentation::current(Arc::new(state), &current).unwrap();
         assert_eq!(
             failed
                 .settings
@@ -449,7 +602,7 @@ mod tests {
     fn active_provider_and_host_facts_update_without_a_draft_or_catalog_change() {
         let mut state = snapshot();
         let id = crate::session::SessionRef::new(ProviderKind::Codex, "active".into()).unwrap();
-        let nav = Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation);
+        let nav = Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation);
         nav.thread_id = Some(id.clone());
         nav.draft_key = id.clone().into();
         Arc::make_mut(&mut state.sessions.conversations).insert(
@@ -460,7 +613,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let initial = Presentation::project(Arc::new(state.clone()), None);
+        let initial = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
         assert_eq!(initial.settings.provider(), Some(ProviderKind::Codex));
         Arc::make_mut(
             Arc::make_mut(&mut state.sessions.conversations)
@@ -468,23 +621,23 @@ mod tests {
                 .unwrap(),
         )
         .active_provider = Some(ProviderKind::Claude);
-        let switched = Presentation::current(Arc::new(state.clone()), &initial);
+        let switched = Presentation::current(Arc::new(state.clone()), &initial).unwrap();
         assert_eq!(switched.settings.provider(), Some(ProviderKind::Claude));
         state.connection.host_name = Some("Another PC".into());
-        let named = Presentation::current(Arc::new(state.clone()), &switched);
+        let named = Presentation::current(Arc::new(state.clone()), &switched).unwrap();
         assert_eq!(named.settings.host_name().as_deref(), Some("Another PC"));
         state.connection.connection_disabled = true;
-        let disabled = Presentation::current(Arc::new(state.clone()), &named);
+        let disabled = Presentation::current(Arc::new(state.clone()), &named).unwrap();
         assert!(!disabled.settings.connection_enabled());
         state.connection.connected = false;
-        let disconnected = Presentation::current(Arc::new(state), &disabled);
+        let disconnected = Presentation::current(Arc::new(state), &disabled).unwrap();
         assert!(!disconnected.settings.connected());
     }
 
     #[test]
     fn settings_controls_publish_loading_failure_and_retry_but_ignore_generations() {
         let mut state = snapshot();
-        let mut previous = Presentation::project(Arc::new(state.clone()), None);
+        let mut previous = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
         for phase in [
             OperationPhase::Running,
             OperationPhase::Failed {
@@ -492,14 +645,14 @@ mod tests {
             },
             OperationPhase::Running,
         ] {
-            state.operations.insert(
+            Arc::make_mut(&mut state.operations).insert(
                 OperationKey::DshCredentials,
                 OperationState {
                     generation: 1,
                     phase: phase.clone(),
                 },
             );
-            let next = Presentation::current(Arc::new(state.clone()), &previous);
+            let next = Presentation::current(Arc::new(state.clone()), &previous).unwrap();
             assert!(next.changes(previous).settings);
             assert_eq!(
                 next.settings.credential_busy(),
@@ -511,14 +664,13 @@ mod tests {
             );
             previous = next;
         }
-        state
-            .operations
+        Arc::make_mut(&mut state.operations)
             .get_mut(&OperationKey::DshCredentials)
             .unwrap()
             .generation += 1;
-        let next = Presentation::current(Arc::new(state.clone()), &previous);
+        let next = Presentation::current(Arc::new(state.clone()), &previous).unwrap();
         assert!(Arc::ptr_eq(&next.settings, &previous.settings));
-        state.operations.insert(
+        Arc::make_mut(&mut state.operations).insert(
             OperationKey::Models {
                 provider: ProviderKind::Codex,
             },
@@ -527,7 +679,7 @@ mod tests {
                 phase: OperationPhase::Running,
             },
         );
-        let loading = Presentation::current(Arc::new(state), &next);
+        let loading = Presentation::current(Arc::new(state), &next).unwrap();
         assert!(loading.settings.models_loading(Some(ProviderKind::Codex)));
         assert!(!loading.settings.models_loading(Some(ProviderKind::Claude)));
     }

@@ -1,9 +1,8 @@
 use agent_core::{
     persistence,
     state::{
-        Draft, DraftKey, Event, Intent, Snapshot,
+        Draft, DraftKey, Intent, Snapshot,
         operations::{ListAccounts, Operation, ReadThread},
-        reduce,
     },
 };
 use agent_protocol::{
@@ -15,30 +14,38 @@ use serde_json::json;
 use std::sync::Arc;
 
 fn restart(snapshot: &Snapshot) -> Snapshot {
-    use crate::client::persistence::{ClientStorage, Persistence, StorageKey};
+    use crate::client::persistence::{
+        ClientStorage, DevicePreferences, Persistence, PreferenceKey, PreferenceStorage,
+    };
     struct Storage {
         local: Vec<u8>,
         models: Vec<u8>,
     }
     impl ClientStorage for Storage {
-        fn load(&self, key: StorageKey) -> Result<Vec<u8>, crate::client::AgentError> {
-            Ok(match key {
-                StorageKey::LocalState => self.local.clone(),
-                StorageKey::ModelPreferences => self.models.clone(),
-                StorageKey::EditorPreferences => Vec::new(),
-            })
+        fn load(&self) -> Result<Vec<u8>, crate::client::AgentError> {
+            Ok(self.local.clone())
         }
-        fn save(&self, _: StorageKey, _: Vec<u8>) -> Result<(), crate::client::AgentError> {
+        fn save(&self, _: Vec<u8>) -> Result<(), crate::client::AgentError> {
             panic!("restoration must not write")
         }
     }
-    let persistence = Persistence::new(
-        Arc::new(Storage {
-            local: persistence::encode(snapshot).unwrap(),
-            models: serde_json::to_vec(&snapshot.catalog.model_preferences).unwrap(),
-        }),
-        Arc::default(),
-    );
+    impl PreferenceStorage for Storage {
+        fn load(&self, key: PreferenceKey) -> Result<Vec<u8>, crate::client::AgentError> {
+            Ok(match key {
+                PreferenceKey::Models => self.models.clone(),
+                PreferenceKey::Editor | PreferenceKey::Language => Vec::new(),
+            })
+        }
+        fn save(&self, _: PreferenceKey, _: Vec<u8>) -> Result<(), crate::client::AgentError> {
+            panic!("restoration must not write")
+        }
+    }
+    let storage = Arc::new(Storage {
+        local: persistence::encode(snapshot).unwrap(),
+        models: serde_json::to_vec(&snapshot.catalog.model_preferences).unwrap(),
+    });
+    let preferences = DevicePreferences::new(storage.clone());
+    let persistence = Persistence::new(storage, preferences);
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -70,34 +77,60 @@ fn explicit_codex_model_survives_selection_and_catalog_refresh() {
         },
         ..Default::default()
     };
-    let key = snapshot.pane.navigation.draft_key.clone();
+    let key = snapshot.panes.primary().navigation.draft_key.clone();
     let model = ModelRef {
         provider: ProviderKind::Codex,
         id: "gpt-6.1-sol".into(),
     };
     assert_eq!(
-        snapshot.custom_model_choice(Some(ProviderKind::Codex), " gpt-6.1-sol "),
+        crate::presentation::view::Presentation::from_snapshot(
+            Arc::new(snapshot.clone()),
+            "".into()
+        )
+        .unwrap()
+        .settings()
+        .custom_model_choice(Some(ProviderKind::Codex), " gpt-6.1-sol "),
         Some(model.clone())
     );
     assert!(
-        snapshot
-            .custom_model_choice(Some(ProviderKind::Claude), "gpt-6.1-sol")
-            .is_none()
+        crate::presentation::view::Presentation::from_snapshot(
+            Arc::new(snapshot.clone()),
+            "".into()
+        )
+        .unwrap()
+        .settings()
+        .custom_model_choice(Some(ProviderKind::Claude), "gpt-6.1-sol")
+        .is_none()
     );
     assert!(
-        snapshot
-            .custom_model_choice(Some(ProviderKind::Codex), " ")
-            .is_none()
+        crate::presentation::view::Presentation::from_snapshot(
+            Arc::new(snapshot.clone()),
+            "".into()
+        )
+        .unwrap()
+        .settings()
+        .custom_model_choice(Some(ProviderKind::Codex), " ")
+        .is_none()
     );
     assert!(
-        snapshot
-            .custom_model_choice(Some(ProviderKind::Codex), "two words")
-            .is_none()
+        crate::presentation::view::Presentation::from_snapshot(
+            Arc::new(snapshot.clone()),
+            "".into()
+        )
+        .unwrap()
+        .settings()
+        .custom_model_choice(Some(ProviderKind::Codex), "two words")
+        .is_none()
     );
     assert!(
-        snapshot
-            .custom_model_choice(Some(ProviderKind::Codex), "shared")
-            .is_none()
+        crate::presentation::view::Presentation::from_snapshot(
+            Arc::new(snapshot.clone()),
+            "".into()
+        )
+        .unwrap()
+        .settings()
+        .custom_model_choice(Some(ProviderKind::Codex), "shared")
+        .is_none()
     );
     let selected = apply(
         &snapshot,
@@ -135,15 +168,20 @@ fn chatgpt_catalog_repairs_unavailable_saved_model_but_api_keeps_explicit_ids() 
         }))
         .unwrap();
         Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(accounts));
-        let key = snapshot.pane.navigation.draft_key.clone();
+        let key = snapshot.panes.primary().navigation.draft_key.clone();
         let unsupported = ModelRef {
             provider: ProviderKind::Codex,
             id: "gpt-6.1-sol".into(),
         };
         assert_eq!(
-            snapshot
-                .custom_model_choice(Some(ProviderKind::Codex), "gpt-6.1-sol")
-                .is_some(),
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
+            .custom_model_choice(Some(ProviderKind::Codex), "gpt-6.1-sol")
+            .is_some(),
             plan == "API key"
         );
         snapshot = apply(
@@ -217,7 +255,7 @@ fn catalog_failures_only_preserve_the_affected_providers_saved_model(
         .clone();
     accounts.accounts[0].plan_type = Some("pro".into());
     Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(accounts));
-    let key = snapshot.pane.navigation.draft_key.clone();
+    let key = snapshot.panes.primary().navigation.draft_key.clone();
     Arc::make_mut(&mut snapshot.input.drafts).insert(
         key.clone(),
         Arc::new(agent_core::state::Draft {
@@ -252,7 +290,18 @@ fn catalog_failures_only_preserve_the_affected_providers_saved_model(
 }
 
 fn apply(snapshot: &Snapshot, intent: Intent) -> Snapshot {
-    reduce(snapshot, Event::Intent(intent)).0
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let store = crate::store::Store::offline(snapshot.clone(), None);
+            // Native input controls observe accepted changes before awaiting Host effects.
+            drop(store.dispatch(intent));
+            let next = store.snapshot().as_ref().clone();
+            store.close().await.unwrap();
+            next
+        })
 }
 
 #[test]
@@ -377,14 +426,14 @@ proptest::proptest! {
         let effort = if high { "high" } else { "medium" };
         let tier = if !fast { "default" } else if claude { "fast" } else { "priority" };
         let snapshot = fixture();
-        let key = snapshot.pane.navigation.draft_key.clone();
+        let key = snapshot.panes.primary().navigation.draft_key.clone();
         let snapshot = select(&snapshot, &key, provider, effort, tier);
         let preferences = snapshot.catalog.model_preferences.clone();
         let mut restored = restart(&snapshot);
         restored.catalog.models = snapshot.catalog.models.clone();
         restored.catalog.account = snapshot.catalog.account.clone();
         let next = apply(&restored, Intent::NewChat { cwd });
-        let draft = &next.input.drafts[&next.pane.navigation.draft_key];
+        let draft = &next.input.drafts[&next.panes.primary().navigation.draft_key];
         proptest::prop_assert_eq!(draft.model.as_ref(), Some(&ModelRef { provider, id: "shared".into() }));
         proptest::prop_assert_eq!(draft.effort.as_deref(), Some(effort));
         proptest::prop_assert_eq!(draft.service_tier.as_deref(), Some(tier));
@@ -402,7 +451,7 @@ fn switching_providers_restores_their_last_options_without_rewriting_other_draft
             cwd: "/original".into(),
         },
     );
-    let original = snapshot.pane.navigation.draft_key.clone();
+    let original = snapshot.panes.primary().navigation.draft_key.clone();
     let snapshot = select(
         &snapshot,
         &original,
@@ -423,7 +472,7 @@ fn switching_providers_restores_their_last_options_without_rewriting_other_draft
             cwd: "/another".into(),
         },
     );
-    let key = snapshot.pane.navigation.draft_key.clone();
+    let key = snapshot.panes.primary().navigation.draft_key.clone();
     let snapshot = select(&snapshot, &key, ProviderKind::Claude, "medium", "fast");
     let codex = snapshot
         .model_for_provider(key.clone(), ProviderKind::Codex)
@@ -465,7 +514,7 @@ fn switching_providers_restores_their_last_options_without_rewriting_other_draft
         },
     );
     assert_eq!(
-        next.input.drafts[&next.pane.navigation.draft_key]
+        next.input.drafts[&next.panes.primary().navigation.draft_key]
             .effort
             .as_deref(),
         Some("medium")
@@ -490,7 +539,7 @@ fn reading_a_conversation_and_refreshing_catalogs_do_not_remember_its_model() {
     let snapshot = fixture();
     let snapshot = select(
         &snapshot,
-        &snapshot.pane.navigation.draft_key,
+        &snapshot.panes.primary().navigation.draft_key,
         ProviderKind::Codex,
         "high",
         "priority",
@@ -502,10 +551,11 @@ fn reading_a_conversation_and_refreshing_catalogs_do_not_remember_its_model() {
     };
     let mut snapshot = snapshot;
     ReadThread::open(session.clone())
-        .prepare(&mut snapshot)
+        .prepare(&mut snapshot, "")
         .unwrap();
     ReadThread::open(session.clone()).apply(
         &mut snapshot,
+        "",
         serde_json::from_value(json!({
             "session":session, "response":{
                 "thread":{"id":session,"cwd":"/old"},
@@ -538,7 +588,7 @@ fn reading_a_conversation_and_refreshing_catalogs_do_not_remember_its_model() {
         },
     );
     assert_eq!(
-        next.input.drafts[&next.pane.navigation.draft_key]
+        next.input.drafts[&next.panes.primary().navigation.draft_key]
             .model
             .as_ref()
             .unwrap()
@@ -550,7 +600,7 @@ fn reading_a_conversation_and_refreshing_catalogs_do_not_remember_its_model() {
 #[test]
 fn explicit_changes_in_existing_chats_are_remembered_without_touching_other_chats() {
     let snapshot = fixture();
-    let initial = snapshot.pane.navigation.draft_key.clone();
+    let initial = snapshot.panes.primary().navigation.draft_key.clone();
     let snapshot = select(
         &snapshot,
         &initial,
@@ -583,7 +633,7 @@ fn explicit_changes_in_existing_chats_are_remembered_without_touching_other_chat
             cwd: "/fresh".into(),
         },
     );
-    let draft = &next.input.drafts[&next.pane.navigation.draft_key];
+    let draft = &next.input.drafts[&next.panes.primary().navigation.draft_key];
     assert_eq!(draft.model.as_ref().unwrap().provider, ProviderKind::Claude);
     assert_eq!(draft.effort.as_deref(), Some("high"));
     assert_eq!(draft.service_tier.as_deref(), Some("fast"));
@@ -616,7 +666,7 @@ fn remembered_deepseek_route_waits_for_capabilities_without_losing_choices() {
             cwd: "/deepseek".into(),
         },
     );
-    let key = snapshot.pane.navigation.draft_key.clone();
+    let key = snapshot.panes.primary().navigation.draft_key.clone();
     assert_eq!(snapshot.input.drafts[&key].model.as_ref(), Some(&model));
     assert_eq!(snapshot.input.drafts[&key].effort.as_deref(), Some("max"));
     crate::test_models::apply_catalog(
@@ -664,12 +714,13 @@ fn first_new_chat_waits_for_authentication_without_creating_a_preference() {
             }
         }
         assert!(
-            snapshot.input.drafts[&snapshot.pane.navigation.draft_key]
+            snapshot.input.drafts[&snapshot.panes.primary().navigation.draft_key]
                 .model
                 .is_none()
         );
         ListAccounts {}.apply(
             &mut snapshot,
+            "",
             fixture()
                 .catalog
                 .account
@@ -680,7 +731,7 @@ fn first_new_chat_waits_for_authentication_without_creating_a_preference() {
                 .clone(),
         );
         assert!(
-            snapshot.input.drafts[&snapshot.pane.navigation.draft_key]
+            snapshot.input.drafts[&snapshot.panes.primary().navigation.draft_key]
                 .model
                 .is_some()
         );
@@ -691,7 +742,7 @@ fn first_new_chat_waits_for_authentication_without_creating_a_preference() {
 #[tokio::test]
 async fn selecting_the_already_visible_model_publishes_the_remembered_choice() {
     let mut snapshot = fixture();
-    let key = snapshot.pane.navigation.draft_key.clone();
+    let key = snapshot.panes.primary().navigation.draft_key.clone();
     Arc::make_mut(&mut snapshot.input.drafts).insert(
         key.clone(),
         Arc::new(Draft {
@@ -701,7 +752,7 @@ async fn selecting_the_already_visible_model_publishes_the_remembered_choice() {
             ..Default::default()
         }),
     );
-    let store = agent_core::store::Store::offline(snapshot);
+    let store = agent_core::store::Store::offline(snapshot, None);
     let mut updates = store.subscribe();
     store
         .dispatch(Intent::SelectModel {
@@ -726,7 +777,7 @@ async fn selecting_the_already_visible_model_publishes_the_remembered_choice() {
 fn selecting_another_providers_account_restores_its_settings_and_keeps_input() {
     use agent_core::state::operations::SelectAccountForDraft;
     let snapshot = fixture();
-    let key = snapshot.pane.navigation.draft_key.clone();
+    let key = snapshot.panes.primary().navigation.draft_key.clone();
     let snapshot = select(&snapshot, &key, ProviderKind::Claude, "high", "fast");
     let snapshot = select(&snapshot, &key, ProviderKind::Codex, "medium", "default");
     let mut snapshot = apply(
@@ -744,6 +795,7 @@ fn selecting_another_providers_account_restores_its_settings_and_keeps_input() {
     }
     .apply(
         &mut snapshot,
+        "",
         (
             agent_protocol::operations::AccountSelection {
                 provider: ProviderKind::Claude,
@@ -773,7 +825,7 @@ fn selecting_another_providers_account_restores_its_settings_and_keeps_input() {
 #[test]
 fn choosing_another_model_of_the_same_provider_uses_its_native_options() {
     let snapshot = fixture();
-    let key = snapshot.pane.navigation.draft_key.clone();
+    let key = snapshot.panes.primary().navigation.draft_key.clone();
     let mut snapshot = select(&snapshot, &key, ProviderKind::Codex, "high", "priority");
     let mut alternate = catalog()[0].clone();
     alternate.model.id = "alternate".into();
@@ -802,13 +854,13 @@ fn choosing_another_model_of_the_same_provider_uses_its_native_options() {
         },
     );
     assert_eq!(
-        next.input.drafts[&next.pane.navigation.draft_key]
+        next.input.drafts[&next.panes.primary().navigation.draft_key]
             .model
             .as_ref(),
         Some(&model)
     );
     assert_eq!(
-        next.input.drafts[&next.pane.navigation.draft_key]
+        next.input.drafts[&next.panes.primary().navigation.draft_key]
             .effort
             .as_deref(),
         Some("medium")
@@ -820,7 +872,7 @@ fn starting_a_new_chat_does_not_repair_other_conversations_from_the_catalog() {
     let snapshot = fixture();
     let snapshot = select(
         &snapshot,
-        &snapshot.pane.navigation.draft_key,
+        &snapshot.panes.primary().navigation.draft_key,
         ProviderKind::Codex,
         "medium",
         "default",

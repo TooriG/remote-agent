@@ -217,7 +217,9 @@ fn app_content(
     let client = stored(service.client.clone());
     let hosts = computed(move || state.with(|state| state.hosts.clone()));
     let host = computed(move || state.with(|state| state.host.clone()));
-    let empty = stored(Shared(Presentation::empty()));
+    let empty = stored(Shared(Presentation::empty(
+        agent_core::localization::UiLanguage::default(),
+    )));
     let publication = computed(move || {
         state
             .with(|state| state.publications.get(&host.get()).cloned())

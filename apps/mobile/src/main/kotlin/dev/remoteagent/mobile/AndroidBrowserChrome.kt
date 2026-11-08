@@ -45,10 +45,29 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.remoteagent.core.BrowserAction
 import dev.remoteagent.core.BrowserCredentials
+import dev.remoteagent.core.BrowserStatus
 import dev.remoteagent.core.BrowserTab
 import dev.remoteagent.core.browserAddressUrl
+import dev.remoteagent.core.browserStatusLabel
+import dev.remoteagent.core.localizedErrorMessage
 import dev.remoteagent.core.localizedUiFormat
-import dev.remoteagent.core.localizedUiText
+
+@Composable
+internal fun BrowserNotice(error: String?, notice: BrowserStatus?) {
+    val language = LocalUiLanguage.current
+    val message =
+        when {
+            error != null -> localizedErrorMessage(language, error)
+            notice != null -> browserStatusLabel(language, notice)
+            else -> return
+        }
+    val colors = MaterialTheme.colorScheme
+    Text(
+        message,
+        color = if (error == null) colors.onSurfaceVariant else colors.error,
+        modifier = Modifier.padding(12.dp),
+    )
+}
 
 @Composable
 internal fun BrowserTabs(tabs: List<BrowserTab>, send: (BrowserAction) -> Unit) {
@@ -239,14 +258,22 @@ internal fun BrowserCredentialsDialog(
                     Text(language.text("読み取れなかったブラウザ"))
                     credentials.importErrors.forEach { error ->
                         Text(error.browser)
-                        Text(localizedUiText(language, error.message), style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            dev.remoteagent.core.localizedErrorMessage(language, error.message),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
                 credentials.origin?.let { origin ->
                     HorizontalDivider()
                     Text(localizedUiFormat(language, "保存パスワード · {0}", listOf(origin)))
                     if (credentials.accounts.isEmpty()) {
-                        Text(localizedUiText(language, credentials.passwordError ?: "このサイトの保存パスワードはありません。"))
+                        Text(
+                            dev.remoteagent.core.localizedErrorMessage(
+                                language,
+                                credentials.passwordError ?: "このサイトの保存パスワードはありません。",
+                            )
+                        )
                     }
                     credentials.accounts.forEach { username ->
                         TextButton(onClick = { send(BrowserAction.FillPassword(origin, username)) }) {

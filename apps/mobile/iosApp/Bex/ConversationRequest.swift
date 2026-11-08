@@ -13,7 +13,7 @@ struct RequestPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Label(LocalizedStringKey(request.title), systemImage: "hand.raised")
+                Label { Text(verbatim: request.title) } icon: { Image(systemName: "hand.raised") }
                     .font(.subheadline).foregroundStyle(.secondary)
                     .accessibilityIdentifier("request.\(request.id)")
                 Spacer(minLength: 0)
@@ -34,7 +34,7 @@ struct RequestPanel: View {
             }
             answerControls
             if let inputError {
-                AppText(inputError).font(.caption).foregroundColor(.red)
+                ErrorMessage(source: inputError).font(.caption).foregroundColor(.red)
             } else if let error {
                 ErrorTextView(text: error).font(.caption).foregroundColor(.red)
             }
@@ -59,7 +59,7 @@ struct RequestPanel: View {
             } else {
                 if case let .form(fields) = input {
                     ForEach(fields, id: \.name) { field in
-                        Text("\(field.title) (\(field.name))\(field.required ? " *" : "")")
+                        Text(verbatim: "\(field.title) (\(field.name))\(field.required ? " *" : "")")
                         if !field.description.isEmpty {
                             Text(field.description).font(.caption)
                         }
@@ -210,7 +210,13 @@ struct QuestionPanel: View {
         let expanded = collapsedQuestionId != question.id
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Label(LocalizedStringKey(prompt.status ?? "質問"), systemImage: "questionmark.bubble")
+                Label {
+                    if let status = prompt.status {
+                        Text(verbatim: status)
+                    } else {
+                        Text("質問")
+                    }
+                } icon: { Image(systemName: "questionmark.bubble") }
                     .font(.subheadline).foregroundStyle(.secondary)
                     .accessibilityIdentifier("request.\(prompt.requestId)")
                 if !question.header.isEmpty {
@@ -337,7 +343,7 @@ extension ConversationComposer {
             composerFocused = false
             model.answerQuestion(question.requestId, .advance)
         } label: {
-            AppText(question.action).font(.subheadline.weight(.semibold))
+            Text(verbatim: question.action).font(.subheadline.weight(.semibold))
         }
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.capsule)

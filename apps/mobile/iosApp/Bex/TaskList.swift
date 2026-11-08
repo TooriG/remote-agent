@@ -2,6 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct ThreadsScreen: View {
+    @Environment(\.locale) private var locale
     let model: AppViewModel
     @State private var search = ""
     @Environment(\.colorScheme) private var colorScheme
@@ -13,7 +14,7 @@ struct ThreadsScreen: View {
             if !model.profiles.isEmpty {
                 ErrorNotices(notices: model.notices[.projects] ?? [], perform: { model.perform($0) }).taskListRowStyle()
                 if let notice = model.list?.notice {
-                    AppNotice(text: notice).taskListRowStyle()
+                    AppNotice(text: ErrorText(message: notice, details: nil)).taskListRowStyle()
                 }
                 if model.threadLoadState == .failed {
                     Section {
@@ -102,7 +103,11 @@ struct ThreadsScreen: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.borderless)
-                                .accessibilityLabel("\(project.name)で新しいタスク")
+                                .accessibilityLabel(localizedUiFormat(
+                                    language: locale.appLanguage,
+                                    source: "{0}で新しいタスク",
+                                    arguments: [project.name]
+                                ))
                                 .accessibilityIdentifier("tasks.new.project.\(project.id)")
                             }
                         }
@@ -317,16 +322,13 @@ private struct ThreadListRow: View {
                             .accessibilityIdentifier("tasks.completed.\(accessibilityID)")
                     }
                 }
-                if let status = thread.worktreeStatus {
-                    let unmerged = status == .unmerged
-                    Image(unmerged ? "GitDiff" : "GitMerge")
+                if thread.hasChanges == true {
+                    Image("GitDiff")
                         .resizable()
                         .frame(width: 18, height: 18)
-                        .foregroundStyle(unmerged ? .orange : .purple)
-                        .accessibilityLabel(LocalizedStringKey(worktreeStatusLabel(status: status)))
-                        .accessibilityIdentifier(
-                            "tasks.\(unmerged ? "unmerged" : "merged").\(accessibilityID)"
-                        )
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("作成元からの変更あり")
+                        .accessibilityIdentifier("tasks.changes.\(accessibilityID)")
                 }
             }
             .contentShape(Rectangle())

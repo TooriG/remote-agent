@@ -1,5 +1,4 @@
 //! Status priority and accessible descriptions shared by the conversation lists.
-use agent_protocol::models::WorktreeStatus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,15 +32,6 @@ pub fn thread_activity_label(activity: ThreadActivity) -> String {
     .into()
 }
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
-pub fn worktree_status_label(status: WorktreeStatus) -> String {
-    match status {
-        WorktreeStatus::Unmerged => "main に未反映の変更あり",
-        WorktreeStatus::Merged => "main にマージ済み",
-    }
-    .into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,14 +55,6 @@ mod tests {
         assert_eq!(
             thread_activity_label(ThreadActivity::Unread),
             "完了・未確認"
-        );
-        assert_eq!(
-            worktree_status_label(WorktreeStatus::Unmerged),
-            "main に未反映の変更あり"
-        );
-        assert_eq!(
-            worktree_status_label(WorktreeStatus::Merged),
-            "main にマージ済み"
         );
     }
 }

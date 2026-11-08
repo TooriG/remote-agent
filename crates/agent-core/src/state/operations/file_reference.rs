@@ -24,11 +24,11 @@ pub struct ResolveFileReference {
 
 impl Operation for ResolveFileReference {
     type Input = Option<String>;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         Ok(snapshot.connection.host_home_directory.clone())
     }
     type Output = (String, bool);
-    fn prepare(&mut self, _: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, _: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         let path = &self.path;
         if !path.contains('\0')
             && (agent_protocol::paths::is_absolute_host_path(path)
@@ -155,7 +155,7 @@ mod tests {
                 lookup_path: None,
                 inspect_directory: false,
             };
-            assert!(request.prepare(&mut snapshot).is_ok(), "{path}");
+            assert!(request.prepare(&mut snapshot, "").is_ok(), "{path}");
         }
         for path in ["", "relative.rs", "~someone/file", "/file\0"] {
             let mut request = ResolveFileReference {
@@ -165,7 +165,7 @@ mod tests {
                 lookup_path: None,
                 inspect_directory: false,
             };
-            assert!(request.prepare(&mut snapshot).is_err(), "{path}");
+            assert!(request.prepare(&mut snapshot, "").is_err(), "{path}");
         }
         assert_eq!(
             snapshot,
@@ -183,7 +183,7 @@ mod tests {
             ..Default::default()
         };
         let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-        let store = Store::new(peer, initial);
+        let store = Store::new(peer, initial, None);
         for _ in 0..4 {
             let request = reader.read_request().await.unwrap().unwrap();
             let result = match request["method"].as_str().unwrap() {
@@ -259,7 +259,7 @@ mod tests {
                     path: if exists == Some(false) { "/workspace/repo/src/main.rs" } else { literal }.into(), directory: false,
                 });
             }
-            assert!(store.snapshot().pane.error.is_none());
+            assert!(store.snapshot().panes.primary().error.is_none());
             store.close().await.unwrap();
         }).await.expect("literal path probe deadline");
     }
@@ -277,7 +277,7 @@ mod tests {
                 writer.reply(&request, json!({"error":{"code":"unavailable","message":"not found","delivery":"notSent"}})).await.unwrap();
             }
             assert_eq!(result.await.unwrap(), Outcome::FileReferenceResolved { path: "/workspace/missing.rs".into(), directory: false });
-            assert!(store.snapshot().pane.error.is_none());
+            assert!(store.snapshot().panes.primary().error.is_none());
             store.close().await.unwrap();
         }).await.expect("failed reference lookup deadline");
     }

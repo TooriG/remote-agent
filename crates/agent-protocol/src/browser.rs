@@ -228,6 +228,15 @@ pub struct BrowserCredentials {
     pub password_error: Option<String>,
 }
 
+/// Credential outcomes contain facts; the client supplies its current UI language.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BrowserNotice {
+    CookiesImported { count: u64, skipped: u64 },
+    PasswordsImported { count: u64, skipped: u64 },
+    PasswordsDeleted,
+    PasswordFilled,
+}
+
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BrowserFrame {
     pub tabs: Vec<BrowserTab>,
@@ -247,6 +256,7 @@ pub struct BrowserFrame {
     pub loading: bool,
     pub page_text: String,
     pub value: String,
+    pub notice: Option<BrowserNotice>,
     pub credentials: Option<BrowserCredentials>,
     pub renderer_id: String,
 }
@@ -445,6 +455,10 @@ mod tests {
         }
         let frame = BrowserFrame {
             image: vec![0, 255, 128],
+            notice: Some(BrowserNotice::CookiesImported {
+                count: 12,
+                skipped: 3,
+            }),
             input_kind: Some(BrowserInputKind::Password),
             ..Default::default()
         };

@@ -47,7 +47,7 @@ pub(crate) fn workspace_summary(
     use agent_core::presentation::{editors, markdown::file_basename};
     use agent_protocol::editors::FileManagerRevealKind;
     let cwd = &p.composer.controls.navigation.cwd;
-    let review = p.snapshot.pane.workspace.review.as_ref();
+    let review = p.pane().workspace.review.as_ref();
     let capabilities = p.snapshot.files.file_open_capabilities.as_ref();
     let available = capabilities
         .map(|c| c.editors.as_slice())
@@ -77,7 +77,12 @@ pub(crate) fn workspace_summary(
         editors: if local {
             available
                 .iter()
-                .map(|id| (*id, localized(editors::editor_label(*id, manager).into())))
+                .map(|id| {
+                    (
+                        *id,
+                        editors::editor_label(crate::l10n::language(), *id, manager).to_owned(),
+                    )
+                })
                 .collect()
         } else {
             Vec::new()
@@ -87,7 +92,7 @@ pub(crate) fn workspace_summary(
             .map(|id| {
                 tr_format(
                     "{0}で開く",
-                    [&localized(editors::editor_label(id, manager).into())],
+                    [&editors::editor_label(crate::l10n::language(), id, manager).to_owned()],
                 )
             })
             .unwrap_or_else(|| tr("エディターで開く").into()),
@@ -105,7 +110,7 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
     let host = stored(host);
     let review = computed(move || {
         connection.publication.with(|p| {
-            let workspace = &p.snapshot.pane.workspace;
+            let workspace = &p.pane().workspace;
             (workspace.review_cwd.as_ref() == Some(&cwd.get()))
                 .then(|| workspace.review.clone().map(Shared))
                 .flatten()
@@ -142,7 +147,9 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
     let pending = computed(move || {
         connection.publication.with(|p| {
             p.snapshot
-                .operation_running(op::OperationKey::WorkspaceReview)
+                .operation_running(op::OperationKey::WorkspaceReview {
+                    pane: p.pane_id.clone(),
+                })
         })
     });
     let failed = computed(move || connection.context.with(|p| p.workspace_error().is_some()));
@@ -660,7 +667,7 @@ mod tests {
         use std::sync::Arc;
         let mut snapshot = Snapshot::default();
         snapshot.connection.connected = true;
-        let pane = Arc::make_mut(&mut snapshot.pane);
+        let pane = Arc::make_mut(snapshot.panes.primary_mut());
         Arc::make_mut(&mut pane.navigation).cwd = "/fixture/日本語 👋".into();
         Arc::make_mut(&mut pane.workspace).review = Some(Arc::new(WorkspaceReview {
             branch: "feature/native".into(),
@@ -685,7 +692,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let p = Presentation::project(Arc::new(snapshot), None);
+        let p = Presentation::project(Arc::new(snapshot), "", None).unwrap();
         assert_eq!(
             workspace_summary(&p, true),
             WorkspaceSummary {

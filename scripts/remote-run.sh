@@ -83,7 +83,8 @@ exit "$status"
 EOF
 
 # Snapshot without touching the worktree's index.
-cp "$(git rev-parse --git-path index)" "$work/index"
+# Preserve the timestamp Git uses to invalidate racy stat-cache entries.
+cp -p "$(git rev-parse --git-path index)" "$work/index"
 GIT_INDEX_FILE=$work/index git add --all
 tree=$(GIT_INDEX_FILE=$work/index git write-tree)
 snapshot=$(GIT_AUTHOR_NAME='Remote build' GIT_AUTHOR_EMAIL=remote-build@localhost \

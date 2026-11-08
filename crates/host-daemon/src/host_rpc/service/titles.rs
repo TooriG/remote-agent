@@ -7,26 +7,12 @@ fn append_named_titles(
     threads: Vec<Thread>,
 ) -> Vec<SessionSummary> {
     let original_len = summaries.len();
-    let large_batch = threads.len() >= 64;
-    let mut ids = None;
+    let mut ids: std::collections::HashSet<_> = summaries
+        .iter()
+        .map(|summary| summary.thread.id.clone())
+        .collect();
     for thread in threads {
-        // Small pages and batches need no index. Include earlier appends if
-        // the retained page grows large enough to benefit during this batch.
-        if large_batch && ids.is_none() && summaries.len() >= 128 {
-            ids = Some(
-                summaries
-                    .iter()
-                    .map(|summary| summary.thread.id.clone())
-                    .collect::<std::collections::HashSet<_>>(),
-            );
-        }
-        let unseen = match &mut ids {
-            Some(ids) => ids.insert(thread.id.clone()),
-            None => !summaries
-                .iter()
-                .any(|summary| summary.thread.id == thread.id),
-        };
-        if unseen {
+        if ids.insert(thread.id.clone()) {
             summaries.push(SessionSummary {
                 branch: thread.git_branch.clone(),
                 thread,
@@ -404,43 +390,24 @@ impl HostRpcService {
                 })
                 .collect()
         });
-        let worktrees = if params.threads.is_empty() {
-            Default::default()
-        } else {
-            crate::worktrees::workspace_roots(self.inner.projects.path())
-                .await
-                .map_err(|error| Failure::new("worktree_status_failed", error))?
-        };
-        let sources: Vec<_> = params
-            .threads
-            .iter()
-            .map(|(id, cwd, branch)| {
-                let mapping =
-                    crate::projects::state::worktree_mapping(&worktrees, std::path::Path::new(cwd));
-                (
-                    id.clone(),
-                    crate::worktrees::StatusSource {
-                        cwd: cwd.clone(),
-                        checkout: mapping.map(|(checkout, _)| checkout.to_owned()),
-                        repository: mapping.map(|(_, repository)| repository.to_owned()),
-                        branch: branch.clone(),
-                    },
-                )
-            })
-            .collect();
-        let (icons, statuses) = tokio::join!(
+        let (icons, changes) = tokio::join!(
             icons,
-            crate::worktrees::directory_statuses(
-                sources.iter().map(|(_, source)| source.clone()).collect()
+            crate::workspace_review::directory_changes(
+                params
+                    .threads
+                    .iter()
+                    .map(|(_, cwd, _)| cwd.clone())
+                    .collect()
             )
         );
         let icons = icons.map_err(|error| Failure::new("project_icons_unavailable", error))?;
-        let statuses = statuses.map_err(|error| Failure::new("worktree_status_failed", error))?;
+        let changes = changes.map_err(|error| Failure::new("workspace_review_failed", error))?;
         Ok(op::ListDecorations {
             icons,
-            statuses: sources
-                .into_iter()
-                .map(|(id, source)| (id, statuses.get(&source).copied()))
+            statuses: params
+                .threads
+                .iter()
+                .map(|(id, cwd, _)| (id.clone(), changes.get(cwd).copied()))
                 .collect(),
         })
     }

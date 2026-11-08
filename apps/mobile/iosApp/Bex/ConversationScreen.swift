@@ -71,17 +71,21 @@ struct ThreadScreen: View {
         return VStack(spacing: 0) {
             ErrorNotices(notices: model.conversationContext.notices(), perform: { model.perform($0) })
                 .padding(.horizontal)
-            if let notice = model.notice, notice != history?.error?.plainText {
+            if let notice = model.notice, errorText(language: locale.appLanguage, error: notice) != history?.error {
                 AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
             if let thread = conversation {
-                let rows = conversationRows(thread.rows, expansion: activityExpansionOverrides)
+                let projection = model.conversationRows(thread, expansion: activityExpansionOverrides)
+                let rows = projection.rows
                 let hasHistory = thread.id != nil && history != nil
                 let ids: [ConversationList.RowID] = (hasHistory ? [.history] : []) + rows.map { .message($0.id) }
                 let showLatest = !scroll.latestVisible && !rows.isEmpty
                 GeometryReader { geometry in
                     ConversationList(ids: ids, scroll: scroll, following: scroll.following,
-                                     accessibilityValue: threadAccessibilityValue(thread),
+                                     accessibilityValue: threadAccessibilityValue(
+                                         thread,
+                                         itemCount: projection.sourceItemCount
+                                     ),
                                      viewportHeight: geometry.size.height) { index in
                         let row = index - (hasHistory ? 1 : 0)
                         return AnyView(Group {
@@ -123,7 +127,6 @@ struct ThreadScreen: View {
         .background(Color(UIColor.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ConversationComposer(model: model, mediaPresentation: mediaPresentation,
-                                 hasConversation: conversation != nil,
                                  isSideChat: isSideChat, openTools: openTools)
         }
     }
@@ -213,7 +216,11 @@ extension ThreadScreen {
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .accessibilityLabel(
-                    "フォルダ: \(project?.name ?? (directory.isEmpty ? emptyFolderLabel : directory))"
+                    localizedUiFormat(
+                        language: locale.appLanguage,
+                        source: "フォルダ: {0}",
+                        arguments: [project?.name ?? (directory.isEmpty ? emptyFolderLabel : directory)]
+                    )
                 )
                 .accessibilityIdentifier("task.folder")
             }
@@ -240,7 +247,11 @@ extension ThreadScreen {
             .font(.subheadline)
             .foregroundColor(.secondary)
             .accessibilityLabel(
-                "環境: \(environment.hostName ?? localizedUiText(language: locale.appLanguage, source: "未選択"))"
+                localizedUiFormat(
+                    language: locale.appLanguage,
+                    source: "環境: {0}",
+                    arguments: [environment.hostName ?? localizedUiText(language: locale.appLanguage, source: "未選択")]
+                )
             )
             .accessibilityIdentifier("task.environment")
         }

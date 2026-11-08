@@ -7,19 +7,17 @@ use serde_json::{Value, json};
 #[derive(Clone, PartialEq, serde::Serialize)]
 pub(crate) struct RowIndicators {
     pub activity: Option<agent_core::presentation::thread_status::ThreadActivity>,
-    pub worktree: Option<agent_protocol::models::WorktreeStatus>,
+    /// Its worktree has changes its source branch lacks.
+    pub changes: bool,
 }
 
 impl RowIndicators {
     pub(crate) fn label(&self) -> String {
-        use agent_core::presentation::thread_status::{
-            thread_activity_label, worktree_status_label,
-        };
+        use agent_core::presentation::thread_status::thread_activity_label;
         self.activity
-            .map(thread_activity_label)
+            .map(|activity| localized(thread_activity_label(activity)))
             .into_iter()
-            .chain(self.worktree.map(worktree_status_label))
-            .map(localized)
+            .chain(self.changes.then(|| tr("作成元からの変更あり").to_owned()))
             .collect::<Vec<_>>()
             .join(tr("、"))
     }

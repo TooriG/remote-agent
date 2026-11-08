@@ -325,6 +325,7 @@ mod tests {
         // Deselecting through Core leaves nothing to import.
         let (deselected, _) = crate::state::reduce(
             &scanned(),
+            "",
             Event::Intent(Intent::SelectAllImportProjects { selected: false }),
         );
         let view = deselected.project_import_view();
@@ -337,7 +338,7 @@ mod tests {
         assert_eq!(Snapshot::default().project_import_view().candidates, None);
         for key in [OperationKey::ProjectScan, OperationKey::ProjectImport] {
             let mut snapshot = scanned();
-            snapshot.operations.insert(
+            Arc::make_mut(&mut snapshot.operations).insert(
                 key.clone(),
                 OperationState {
                     generation: 1,

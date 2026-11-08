@@ -1,17 +1,19 @@
 //! Availability is derived from the connected Host's catalog and authentication.
-use crate::{models::Model, session::ProviderKind, state::Snapshot};
+use crate::{localization::UiLanguage, models::Model, session::ProviderKind, state::Snapshot};
 use agent_protocol::operations::Accounts;
 use serde_json::{Map, Value};
 
-pub(super) fn status_label(connected: bool, enabled: bool) -> String {
-    if !enabled {
-        "オフ"
-    } else if connected {
-        "接続済み"
-    } else {
-        "未接続"
-    }
-    .into()
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn connection_status_label(language: UiLanguage, connected: bool, enabled: bool) -> String {
+    language
+        .text(if !enabled {
+            "オフ"
+        } else if connected {
+            "接続済み"
+        } else {
+            "未接続"
+        })
+        .into()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,10 +81,6 @@ impl Snapshot {
         !self.connection.connection_disabled
     }
 
-    pub fn connection_status_label(&self) -> String {
-        status_label(self.connection.connected, self.connection_enabled())
-    }
-
     pub fn provider_enabled(&self, provider: ProviderKind) -> bool {
         self.catalog
             .provider_settings
@@ -136,7 +134,7 @@ impl Snapshot {
                             .get(provider.key())
                             .and_then(|error| error.get("message"))
                             .and_then(Value::as_str)
-                            .map(super::error::error_text)
+                            .map(|error| super::error::error_text(self.catalog.ui_language, error))
                             .or_else(|| {
                                 self.catalog
                                     .account
@@ -144,24 +142,29 @@ impl Snapshot {
                                     .as_ref()?
                                     .errors
                                     .get(&provider)
-                                    .map(|error| super::error::error_text(error))
+                                    .map(|error| {
+                                        super::error::error_text(self.catalog.ui_language, error)
+                                    })
                             })
                             .or_else(|| self.operation_error(OperationKey::Models { provider }))
                             .or_else(|| self.operation_error(OperationKey::Accounts))
                     })
                     .flatten(),
                 availability,
-                label: if !enabled {
-                    "オフ"
-                } else {
-                    match availability {
-                        AgentAvailability::Checking => "確認中…",
-                        AgentAvailability::Ready => "利用可能",
-                        AgentAvailability::LoginRequired => "未ログイン",
-                        AgentAvailability::Unavailable => "設定が必要",
-                    }
-                }
-                .into(),
+                label: self
+                    .catalog
+                    .ui_language
+                    .text(if !enabled {
+                        "オフ"
+                    } else {
+                        match availability {
+                            AgentAvailability::Checking => "確認中…",
+                            AgentAvailability::Ready => "利用可能",
+                            AgentAvailability::LoginRequired => "未ログイン",
+                            AgentAvailability::Unavailable => "設定が必要",
+                        }
+                    })
+                    .into(),
             }
         })
         .collect();
@@ -289,7 +292,7 @@ mod tests {
                 },
                 ..Default::default()
             };
-            snapshot.operations.insert(
+            Arc::make_mut(&mut snapshot.operations).insert(
                 key.clone(),
                 OperationState {
                     generation: 1,
@@ -318,7 +321,10 @@ mod tests {
                 snapshot.connection_setup().agents[0].availability,
                 AgentAvailability::Unavailable
             );
-            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Running;
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(&key)
+                .unwrap()
+                .phase = OperationPhase::Running;
             assert_eq!(
                 snapshot.connection_setup().agents[0].availability,
                 AgentAvailability::Checking
@@ -331,7 +337,10 @@ mod tests {
                 .unwrap(),
             );
             assert!(snapshot.connection_setup().can_start);
-            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(&key)
+                .unwrap()
+                .phase = OperationPhase::Failed {
                 message: "refresh failed".into(),
             };
             assert!(
@@ -497,6 +506,29 @@ mod tests {
             "user@$(command)",
         ] {
             assert!(validate_ssh_destination(target).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    #[test]
+    fn connection_copy_uses_current_language_and_the_saved_enabled_flag() {
+        for (connected, enabled, japanese, english) in [
+            (false, true, "未接続", "Disconnected"),
+            (true, true, "接続済み", "Connected"),
+            (false, false, "オフ", "Off"),
+            (true, false, "オフ", "Off"),
+        ] {
+            assert_eq!(
+                connection_status_label(UiLanguage::Japanese, connected, enabled),
+                japanese
+            );
+            assert_eq!(
+                connection_status_label(UiLanguage::English, connected, enabled),
+                english
+            );
         }
     }
 }

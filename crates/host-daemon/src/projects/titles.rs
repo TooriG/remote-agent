@@ -294,7 +294,7 @@ pub(crate) fn summary(mut thread: Thread) -> Thread {
         status: thread.status,
         capabilities: thread.capabilities,
         can_accept_direct_input: thread.can_accept_direct_input,
-        worktree_status: thread.worktree_status,
+        has_changes: thread.has_changes,
         git_branch: thread.git_branch,
         list_stale: thread.list_stale,
         ..Default::default()

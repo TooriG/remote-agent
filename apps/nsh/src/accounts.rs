@@ -138,6 +138,7 @@ fn account_list(
                     ui::text_button(tr("アカウントを追加"), move || {
                         perform(Intent::StartAccountLogin(op::StartAccountLogin {
                             provider,
+                            thread_id: None,
                         }))
                     })
                     .enabled(move || !busy.get()),
@@ -259,7 +260,9 @@ fn usage(account: ReadSignal<agent_protocol::operations::Account>) -> impl IntoE
                         .unwrap_or_default()
                 })
             },
-            |window: &agent_protocol::operations::UsageWindow| window.label.clone(),
+            |window: &agent_protocol::operations::UsageWindow| {
+                format!("{:?}{:?}", window.period, window.name)
+            },
             move |window, _| {
                 view()
                     .gap_2()
@@ -267,7 +270,14 @@ fn usage(account: ReadSignal<agent_protocol::operations::Account>) -> impl IntoE
                         window.with(|w| {
                             tr_format(
                                 "{0} 残り {1}%",
-                                [&localized(w.label.clone()), &w.remaining_percent],
+                                [
+                                    &agent_core::presentation::model_settings::usage_window_label(
+                                        crate::l10n::language(),
+                                        w.period,
+                                        w.name.clone(),
+                                    ),
+                                    &w.remaining_percent,
+                                ],
                             )
                         })
                     }))
@@ -309,45 +319,15 @@ fn login_panel(
 ) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let code = signal(String::new());
-    let poll_failed = signal(false);
-    let retry = signal(0_u64);
-    let target = computed(move || {
-        (
-            connection.host.get(),
-            login.get(),
-            native::in_use(),
-            connection.settings.with(|p| p.connected()),
-        )
-    });
-    effect(move || {
-        let (host, Some(login), true, true) = target.get() else {
-            return;
-        };
-        retry.get();
-        poll_failed.set(false);
-        spawn(async move {
-            loop {
-                timer(std::time::Duration::from_secs(2)).await;
-                if pending.get_untracked() {
-                    continue;
-                }
-                let response = connection.client.with(|client| {
-                    client.request(
-                        &host,
-                        None,
-                        Intent::ReadAccountLogin(op::ReadAccountLogin {
-                            provider: login.provider,
-                            id: login.login_id.clone(),
-                            thread_id: None,
-                        }),
-                    )
-                });
-                if !matches!(response.recv().await, Ok(Ok(_))) {
-                    poll_failed.set(true);
-                    break;
-                }
-            }
-        });
+    // Core confirms the login itself and stops when a read fails.
+    let login_error = computed(move || {
+        login.with(|login| {
+            login.as_ref().and_then(|login| {
+                connection
+                    .settings
+                    .with(|p| p.account_login_error(login.provider))
+            })
+        })
     });
     let requires_code =
         move || login.with(|l| l.as_ref().is_some_and(|l| l.requires_code_submission));
@@ -430,11 +410,23 @@ fn login_panel(
             }
         }))
         .child(when(
-            move || poll_failed.get(),
+            move || login_error.with(Option::is_some),
             move || {
-                ui::text_button(tr("認証状態を再確認"), move || {
-                    retry.update(|r| *r += 1)
-                })
+                view()
+                    .gap_2()
+                    .child(text(move || {
+                        login_error.with(|error| {
+                            error.as_ref().map(ToString::to_string).unwrap_or_default()
+                        })
+                    }))
+                    .child(ui::text_button(tr("認証状態を再確認"), move || {
+                        if let Some(login) = current() {
+                            perform(Intent::ReadAccountLogin(op::ReadAccountLogin {
+                                provider: login.provider,
+                                id: login.login_id,
+                            }));
+                        }
+                    }))
             },
         ))
         .child(

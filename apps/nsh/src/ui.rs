@@ -86,7 +86,6 @@ impl Icon {
     pub(crate) const KEYBOARD: Self = icon!(Keyboard, "keyboard");
     pub(crate) const FOLDER_PLUS: Self = icon!(FolderPlus, "folder.badge.plus");
     pub(crate) const LOADER: Self = icon!(Loader, "progress.indicator");
-    pub(crate) const MERGE: Self = icon!(GitMerge, "arrow.triangle.merge");
     #[cfg(dictation)]
     pub(crate) const MICROPHONE: Self = icon!(Mic, "mic");
     pub(crate) const MONITOR: Self = icon!(Monitor, "desktopcomputer");

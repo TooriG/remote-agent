@@ -12,9 +12,10 @@ pub struct Pane {
 
 impl Store {
     pub fn open_pane(self: &Arc<Self>, cwd: String) -> Result<Arc<Pane>, PeerError> {
-        let id = self.create_pane(cwd)?;
+        let initial = self.create_pane(cwd)?;
+        let id = initial.pane_id.clone();
         let stop = self.stop.child_token();
-        let presentations = self.subscribe_pane(id.clone(), stop.clone());
+        let presentations = self.subscribe_pane(initial, stop.clone());
         Ok(Arc::new(Pane {
             store: self.clone(),
             id,
@@ -34,18 +35,16 @@ impl Pane {
         if self.stop.is_cancelled() {
             return Err(PeerError::ConnectionClosed("pane is closed".into()));
         }
-        self.store
-            .snapshot()
-            .for_pane(&self.id)
-            .map(Arc::new)
-            .ok_or_else(|| PeerError::ConnectionClosed("pane is closed".into()))
+        let snapshot = self.store.snapshot();
+        if snapshot.panes.get(&self.id).is_none() {
+            return Err(PeerError::ConnectionClosed("pane is closed".into()));
+        }
+        Ok(snapshot)
     }
 
     pub fn presentation(&self) -> Result<Arc<Presentation>, PeerError> {
-        Ok(Presentation::current(
-            self.snapshot()?,
-            &self.presentations.borrow(),
-        ))
+        Presentation::current(self.snapshot()?, &self.presentations.borrow())
+            .ok_or_else(|| PeerError::ConnectionClosed("pane is closed".into()))
     }
 
     pub fn subscribe(&self) -> watch::Receiver<Arc<Presentation>> {
@@ -86,18 +85,21 @@ impl Pane {
             let creation = {
                 let pane = pane.upgrade().ok_or_else(|| error("pane is closed"))?;
                 let snapshot = pane.snapshot().map_err(error)?;
-                if snapshot.pane.navigation.thread_id.is_some() {
+                let state = snapshot
+                    .panes
+                    .get(pane.id())
+                    .ok_or_else(|| error("pane is closed"))?;
+                if state.navigation.thread_id.is_some() {
                     return Ok(());
                 }
                 let provider = provider
                     .or_else(|| {
-                        snapshot
-                            .model_provider_for_draft(snapshot.pane.navigation.draft_key.clone())
+                        snapshot.model_provider_for_draft(state.navigation.draft_key.clone())
                     })
                     .ok_or_else(|| error("利用可能なエージェントを選択してください。"))?;
                 pane.dispatch(Intent::CreateSession(op::CreateSession {
                     provider,
-                    cwd: Some(snapshot.pane.navigation.cwd.clone()),
+                    cwd: Some(state.navigation.cwd.clone()),
                     model: None,
                     initial_input: None,
                 }))

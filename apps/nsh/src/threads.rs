@@ -75,10 +75,10 @@ fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>, scope: 
     );
     Row {
         level,
-        indicators: (activity.is_some() || thread.worktree_status.is_some()).then_some(
+        indicators: (activity.is_some() || thread.has_changes == Some(true)).then_some(
             native::RowIndicators {
                 activity,
-                worktree: thread.worktree_status,
+                changes: thread.has_changes == Some(true),
             },
         ),
         ..Row::new(
@@ -719,14 +719,10 @@ fn indicators(indicators: native::RowIndicators) -> impl IntoElement {
             ),
             None => None,
         })
-        .child(indicators.worktree.map(|status| {
-            let (glyph, color) = match status {
-                agent_protocol::models::WorktreeStatus::Unmerged => (Icon::DIFF, 0xfb923c),
-                agent_protocol::models::WorktreeStatus::Merged => (Icon::MERGE, 0xa78bfa),
-            };
+        .child(indicators.changes.then(|| {
             view()
-                .text_color(nsh_core::element::rgb(color))
-                .child(ui::icon(glyph, 16.0))
+                .text_color(nsh_core::element::rgb(0xfb923c))
+                .child(ui::icon(Icon::DIFF, 16.0))
         }))
 }
 
@@ -821,7 +817,8 @@ mod tests {
             active: false,
             waiting: false,
             unread: false,
-            worktree_status: None,
+            has_changes: None,
+            copy_items: Vec::new(),
         };
         ThreadList {
             loading_projects: false,
@@ -1029,9 +1026,8 @@ mod tests {
     }
 
     #[test]
-    fn conversation_row_preserves_activity_and_worktree_independently() {
+    fn conversation_row_preserves_activity_and_changes_independently() {
         use agent_core::presentation::thread_status::ThreadActivity;
-        use agent_protocol::models::WorktreeStatus;
         let mut thread = ThreadSummary {
             host_id: "host".into(),
             id: serde_json::from_value(json!({"provider": "codex", "id": "chat"})).unwrap(),
@@ -1040,18 +1036,16 @@ mod tests {
             active: true,
             waiting: true,
             unread: true,
-            worktree_status: Some(WorktreeStatus::Unmerged),
+            has_changes: Some(true),
+            copy_items: Vec::new(),
         };
         let row = thread_row(&thread, 1, Some("project"), &scope("host", "scope"));
         assert!(row.symbol.is_empty());
         let indicators = row.indicators.unwrap();
         assert_eq!(indicators.activity, Some(ThreadActivity::Waiting));
-        assert_eq!(indicators.worktree, Some(WorktreeStatus::Unmerged));
+        assert!(indicators.changes);
         let encoded = serde_json::to_value(&indicators).unwrap();
-        assert_eq!(
-            encoded,
-            json!({"activity": "waiting", "worktree": "unmerged"})
-        );
+        assert_eq!(encoded, json!({"activity": "waiting", "changes": true}));
         thread.active = false;
         thread.waiting = false;
         thread.unread = false;
@@ -1059,10 +1053,10 @@ mod tests {
             thread_row(&thread, 0, None, &scope("host", "scope"))
                 .indicators
                 .unwrap()
-                .worktree,
-            Some(WorktreeStatus::Unmerged)
+                .changes,
+            true
         );
-        thread.worktree_status = None;
+        thread.has_changes = Some(false);
         assert!(
             thread_row(&thread, 0, None, &scope("host", "scope"))
                 .indicators
@@ -1095,7 +1089,8 @@ mod tests {
             active: true,
             waiting: true,
             unread: false,
-            worktree_status: Some(agent_protocol::models::WorktreeStatus::Unmerged),
+            has_changes: Some(true),
+            copy_items: Vec::new(),
         };
         let entries = [
             project,

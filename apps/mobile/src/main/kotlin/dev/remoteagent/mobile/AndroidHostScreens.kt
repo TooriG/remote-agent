@@ -58,14 +58,7 @@ internal fun PairingScreen(
     }
 }
 
-internal data class HostConnectionState(val enabled: Boolean, val label: String) {
-    constructor(
-        snapshot: dev.remoteagent.core.Snapshot
-    ) : this(
-        snapshot.connectionEnabled(),
-        snapshot.connectionStatusLabel(),
-    )
-}
+internal data class HostConnectionState(val enabled: Boolean, val connected: Boolean)
 
 @Composable
 internal fun ProfilesScreen(
@@ -86,7 +79,9 @@ internal fun ProfilesScreen(
                         Column(Modifier.weight(1f)) {
                             TextButton(onClick = { open(profile.id) }) { Text(profile.name) }
                             Text(
-                                language.text(state?.label ?: "読み込み中…"),
+                                state?.let {
+                                    dev.remoteagent.core.connectionStatusLabel(language, it.connected, it.enabled)
+                                } ?: language.text("読み込み中…"),
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -128,7 +123,13 @@ internal fun ProfilesScreen(
 @Composable
 internal fun ConnectionStatus(notice: String?, busy: Boolean, reconnect: Boolean, connect: () -> Unit) {
     val language = LocalUiLanguage.current
-    notice?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
+    notice?.let {
+        Text(
+            dev.remoteagent.core.localizedErrorMessage(language, it),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(12.dp),
+        )
+    }
     if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     if (reconnect) Button(onClick = connect, enabled = !busy) { Text(language.text("再接続")) }
 }

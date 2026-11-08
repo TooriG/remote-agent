@@ -46,9 +46,6 @@ import dev.remoteagent.core.SetProviderEnabled
 import dev.remoteagent.core.SettingsPresentation
 import dev.remoteagent.core.StartAccountLogin
 import dev.remoteagent.core.SubmitAccountLogin
-import kotlinx.coroutines.delay
-
-private const val ACCOUNT_LOGIN_POLL_INTERVAL_MILLIS = 2000L
 
 @Composable
 internal fun EnvironmentSettingsScreen(
@@ -78,7 +75,7 @@ internal fun EnvironmentSettingsScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text(language.text("接続"))
-                    Text(language.text(settings.connectionStatusLabel()), style = MaterialTheme.typography.bodySmall)
+                    Text(settings.connectionStatusLabel(), style = MaterialTheme.typography.bodySmall)
                 }
                 Switch(
                     settings.connectionEnabled(),
@@ -112,7 +109,7 @@ private fun ProviderSettingsList(
             TextButton(onClick = { choose(agent.provider) }, modifier = Modifier.weight(1f)) {
                 Column(Modifier.fillMaxWidth()) {
                     Text(agent.name)
-                    Text(language.text(agent.label), style = MaterialTheme.typography.bodySmall)
+                    Text(agent.label, style = MaterialTheme.typography.bodySmall)
                 }
             }
             Switch(
@@ -168,7 +165,7 @@ private fun ProviderSettingsContent(
     }
     val login = settings.accountLogin()?.takeIf { it.provider == provider }
     if (provider == ProviderKind.DEEP_SEEK) CredentialSettings(settings, perform)
-    else if (login != null) AccountLoginSettings(login, settings.connected(), perform)
+    else if (login != null) AccountLoginSettings(login, settings, perform)
     else AccountSettings(settings, provider, perform)
     ProviderRuntimeSettings(settings, provider, perform)
 }
@@ -198,7 +195,10 @@ private fun AccountSettings(
                     }
                     account.planType?.let { Text(it) }
                     account.usage?.let { usage ->
-                        usage.windows.forEach { window -> Text("${window.label}: ${window.remainingPercent}%") }
+                        usage.windows.forEach { window ->
+                            val label = dev.remoteagent.core.usageWindowLabel(language, window.period, window.name)
+                            Text("$label: ${window.remainingPercent}%")
+                        }
                         usage.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     }
                     TextButton(onClick = { signingOut = account }, enabled = settings.connected()) {
@@ -211,7 +211,7 @@ private fun AccountSettings(
         Text(language.text("再取得"))
     }
     TextButton(
-        onClick = { perform(Intent.StartAccountLogin(StartAccountLogin(provider))) {} },
+        onClick = { perform(Intent.StartAccountLogin(StartAccountLogin(provider, null))) {} },
         enabled = settings.connected(),
     ) {
         Text(language.text("アカウントを追加"))
@@ -238,18 +238,13 @@ private fun AccountSettings(
 @Composable
 private fun AccountLoginSettings(
     login: AccountLogin,
-    connected: Boolean,
+    settings: SettingsPresentation,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
     val language = LocalUiLanguage.current
     val context = LocalContext.current
+    val connected = settings.connected()
     var code by remember(login.loginId) { mutableStateOf("") }
-    LaunchedEffect(login.loginId, connected) {
-        while (connected) {
-            delay(ACCOUNT_LOGIN_POLL_INTERVAL_MILLIS)
-            perform(Intent.ReadAccountLogin(ReadAccountLogin(login.provider, login.loginId, null))) {}
-        }
-    }
     Text(login.userCode)
     TextButton(
         onClick = { context.startActivity(AndroidIntent(AndroidIntent.ACTION_VIEW, Uri.parse(login.verificationUrl))) }
@@ -272,6 +267,16 @@ private fun AccountLoginSettings(
             enabled = connected && code.isNotBlank(),
         ) {
             Text(language.text("送信"))
+        }
+    }
+    // Core confirms the login until a read fails; then the user retries.
+    settings.accountLoginError(login.provider)?.let { error ->
+        ErrorTextView(error)
+        TextButton(
+            onClick = { perform(Intent.ReadAccountLogin(ReadAccountLogin(login.provider, login.loginId))) {} },
+            enabled = connected,
+        ) {
+            Text(language.text("認証状態を再確認"))
         }
     }
     TextButton(onClick = { perform(Intent.CancelAccountLogin(CancelAccountLogin(login.provider, login.loginId))) {} }) {

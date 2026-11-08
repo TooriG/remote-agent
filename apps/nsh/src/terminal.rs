@@ -24,9 +24,11 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
     });
     let terminal = computed(move || {
         resource.get();
-        connection
-            .publication
-            .with_untracked(|p| p.snapshot.terminal_view(handle.get()))
+        connection.publication.with_untracked(|p| {
+            p.snapshot
+                .terminals()
+                .view(crate::l10n::language(), handle.get())
+        })
     });
     let input = computed(move || {
         terminal.with(|terminal| {

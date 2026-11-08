@@ -3,8 +3,10 @@ use crate::state::Snapshot;
 use std::sync::Arc;
 
 fn changes(snapshot: &Snapshot, previous: Arc<Snapshot>) -> PresentationChanges {
-    let previous = Presentation::project(previous, None);
-    Presentation::project(Arc::new(snapshot.clone()), Some(&previous)).changes(previous)
+    let previous = Presentation::project(previous, "", None).unwrap();
+    Presentation::project(Arc::new(snapshot.clone()), "", Some(&previous))
+        .unwrap()
+        .changes(previous)
 }
 
 #[test]
@@ -60,37 +62,46 @@ fn list_publication_tracks_visible_operation_phases_without_reacting_to_generati
                         },
                     )
                 })
-                .collect(),
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into(),
             ..Default::default()
         });
         assert!(!changes(&previous, previous.clone()).list);
         for key in keys.iter().take(3).chain(keys.last().filter(|_| count > 0)) {
             let mut next = previous.as_ref().clone();
-            let state = next.operations.get_mut(key).unwrap();
+            let state = Arc::make_mut(&mut next.operations).get_mut(key).unwrap();
             state.generation += 1;
             let generation = changes(&next, previous.clone());
             assert!(generation.changed && !generation.list);
-            next.operations.get_mut(key).unwrap().phase = OperationPhase::Failed {
+            Arc::make_mut(&mut next.operations)
+                .get_mut(key)
+                .unwrap()
+                .phase = OperationPhase::Failed {
                 message: "first failure".into(),
             };
             let failed = Arc::new(next.clone());
             let phase = changes(&next, previous.clone());
-            assert!(phase.list && !phase.models && !phase.conversation);
-            next.operations.get_mut(key).unwrap().phase = OperationPhase::Failed {
+            assert!(phase.list && !phase.groups.catalog && !phase.conversation);
+            Arc::make_mut(&mut next.operations)
+                .get_mut(key)
+                .unwrap()
+                .phase = OperationPhase::Failed {
                 message: "different failure".into(),
             };
             assert!(changes(&next, failed).list);
-            next.operations.remove(key);
+            Arc::make_mut(&mut next.operations).remove(key);
             assert!(changes(&next, previous.clone()).list);
         }
         for key in [
-            OperationKey::WorkspaceReview,
+            OperationKey::WorkspaceReview {
+                pane: String::new(),
+            },
             OperationKey::ProjectList {
                 project_id: "not-visible".into(),
             },
         ] {
             let mut next = previous.as_ref().clone();
-            next.operations.insert(
+            Arc::make_mut(&mut next.operations).insert(
                 key,
                 OperationState {
                     generation: 2,
@@ -100,7 +111,12 @@ fn list_publication_tracks_visible_operation_phases_without_reacting_to_generati
                 },
             );
             let changes = changes(&next, previous.clone());
-            assert!(changes.changed && !changes.list && !changes.models && !changes.conversation);
+            assert!(
+                changes.changed
+                    && !changes.list
+                    && !changes.groups.catalog
+                    && !changes.conversation
+            );
         }
     }
 }
@@ -163,7 +179,7 @@ fn waiting_membership_refreshes_lists_without_republishing_other_surfaces() {
         ));
         let publication = changes(&snapshot, before);
         assert_eq!(publication.list, changed, "waiting={waiting}");
-        assert!(!publication.models && !publication.conversation);
+        assert!(!publication.groups.catalog && !publication.conversation);
         assert_eq!(snapshot.thread_list().unwrap().threads[0].waiting, waiting);
     }
 }
@@ -180,15 +196,20 @@ fn publication_changes_keep_independent_surfaces_and_connection_epochs_distinct(
         ..Default::default()
     });
     let duplicate = changes(&before, before.clone());
-    assert!(!duplicate.changed && !duplicate.list && !duplicate.models && !duplicate.conversation);
+    assert!(
+        !duplicate.changed
+            && !duplicate.list
+            && !duplicate.groups.catalog
+            && !duplicate.conversation
+    );
     assert!(!duplicate.reconnected);
     let mut next = (*before).clone();
     next.catalog.models = Arc::new(Vec::new());
     let catalog = changes(&next, before.clone());
-    assert!(catalog.changed && catalog.models);
+    assert!(catalog.changed && catalog.groups.catalog);
     assert!(!catalog.list && !catalog.conversation && !catalog.reconnected);
     next = (*before).clone();
-    Arc::make_mut(&mut next.pane).error = Some("failed".into());
+    Arc::make_mut(next.panes.primary_mut()).error = Some("failed".into());
     assert!(changes(&next, before.clone()).changed);
     next.connection.connection_generation += 1;
     assert!(
@@ -198,7 +219,7 @@ fn publication_changes_keep_independent_surfaces_and_connection_epochs_distinct(
     next.connection.connected = true;
     let connected = changes(&next, before);
     assert!(connected.reconnected && connected.list);
-    assert!(!connected.models && !connected.conversation);
+    assert!(!connected.groups.catalog && !connected.conversation);
 }
 #[test]
 fn waiting_publication_keeps_distinct_state_and_empty_state_comparisons() {

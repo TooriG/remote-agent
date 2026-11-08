@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    models::{Project, ProjectMembership, ProjectRoot, Thread, ThreadList, WorktreeStatus},
+    models::{Project, ProjectMembership, ProjectRoot, Thread, ThreadList},
     session::{ProviderKind, SessionRef},
 };
 use proptest::prelude::*;
@@ -20,13 +20,13 @@ fn row(
     id: Option<SessionRef>,
     cwd: Option<&str>,
     branch: Option<&str>,
-    status: Option<WorktreeStatus>,
+    status: Option<bool>,
 ) -> Thread {
     Thread {
         id,
         cwd: cwd.map(str::to_owned),
         git_branch: branch.map(str::to_owned),
-        worktree_status: status,
+        has_changes: status,
         ..Default::default()
     }
 }
@@ -486,25 +486,25 @@ fn received_lists_keep_the_first_exact_source_including_absent_fields() {
     for count in [16, 63, 64, 65, 127, 128, 129, 512] {
         let codex = Some(session(ProviderKind::Codex, "same"));
         let claude = Some(session(ProviderKind::Claude, "same"));
-        let merged = Some(WorktreeStatus::Merged);
-        let unmerged = Some(WorktreeStatus::Unmerged);
+        let unchanged = Some(false);
+        let changed = Some(true);
         let mut previous = vec![
-            row(codex.clone(), Some("/repo"), Some("main"), merged),
+            row(codex.clone(), Some("/repo"), Some("main"), unchanged),
             row(codex.clone(), Some("/repo"), Some("main"), None),
             row(codex.clone(), Some("/other"), Some("main"), None),
             row(codex.clone(), Some("/repo"), None, None),
             row(claude.clone(), Some("/repo"), Some("main"), None),
-            row(None, None, None, merged),
+            row(None, None, None, unchanged),
             row(None, None, None, None),
         ];
         let mut received = vec![
-            row(codex.clone(), Some("/repo"), Some("main"), unmerged),
-            row(codex.clone(), Some("/other"), Some("main"), unmerged),
-            row(codex.clone(), Some("/repo"), Some("changed"), unmerged),
-            row(codex.clone(), Some("/repo"), None, unmerged),
-            row(codex, None, Some("main"), unmerged),
-            row(claude, Some("/repo"), Some("main"), unmerged),
-            row(None, None, None, unmerged),
+            row(codex.clone(), Some("/repo"), Some("main"), changed),
+            row(codex.clone(), Some("/other"), Some("main"), changed),
+            row(codex.clone(), Some("/repo"), Some("changed"), changed),
+            row(codex.clone(), Some("/repo"), None, changed),
+            row(codex, None, Some("main"), changed),
+            row(claude, Some("/repo"), Some("main"), changed),
+            row(None, None, None, changed),
         ];
         while previous.len() < count {
             previous.push(row(
@@ -525,7 +525,7 @@ fn received_lists_keep_the_first_exact_source_including_absent_fields() {
                 )),
                 None,
                 None,
-                unmerged,
+                changed,
             ));
         }
         let expected_ids: Vec<_> = received.iter().map(|thread| thread.id.clone()).collect();
@@ -541,14 +541,14 @@ fn received_lists_keep_the_first_exact_source_including_absent_fields() {
         assert_eq!(
             result.data[..7]
                 .iter()
-                .map(|thread| thread.worktree_status)
+                .map(|thread| thread.has_changes)
                 .collect::<Vec<_>>(),
-            [merged, None, unmerged, None, unmerged, None, merged]
+            [unchanged, None, changed, None, changed, None, unchanged]
         );
         assert!(
             result.data[7..]
                 .iter()
-                .all(|thread| thread.worktree_status == unmerged)
+                .all(|thread| thread.has_changes == changed)
         );
     }
 }
@@ -565,8 +565,8 @@ proptest! {
             let id = format!("task{index}");
             let old = match status {
                 0 => None,
-                1 => Some(WorktreeStatus::Merged),
-                _ => Some(WorktreeStatus::Unmerged),
+                1 => Some(false),
+                _ => Some(true),
             };
             previous.push(row(Some(session(ProviderKind::Codex, &id)), Some("/repo"), Some("main"), old));
             let provider = if change == 3 { ProviderKind::Claude } else { ProviderKind::Codex };
@@ -574,13 +574,13 @@ proptest! {
                 Some(session(provider, &id)),
                 Some(if change == 1 { "/other" } else { "/repo" }),
                 Some(if change == 2 { "other" } else { "main" }),
-                Some(WorktreeStatus::Unmerged),
+                Some(true),
             ));
-            expected.push(if change == 0 { old } else { Some(WorktreeStatus::Unmerged) });
+            expected.push(if change == 0 { old } else { Some(true) });
         }
         received.reverse();
         expected.reverse();
         let result = merge_received(list(received), Some(&list(previous)));
-        prop_assert_eq!(result.data.iter().map(|thread| thread.worktree_status).collect::<Vec<_>>(), expected);
+        prop_assert_eq!(result.data.iter().map(|thread| thread.has_changes).collect::<Vec<_>>(), expected);
     }
 }

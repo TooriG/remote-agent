@@ -79,7 +79,7 @@ fn list_metadata(list: &ThreadList) -> ThreadList {
                 parent_id: thread.parent_id.clone(),
                 name: thread.name.clone(),
                 cwd: thread.cwd.clone(),
-                worktree_status: thread.worktree_status,
+                has_changes: thread.has_changes,
                 git_branch: thread.git_branch.clone(),
                 project_id: thread.project_id.clone(),
                 preview: thread.preview.clone(),
@@ -533,11 +533,12 @@ mod tests {
         let id = list.threads[0].id.clone();
         let (mut selected, _) = reduce(
             &offline,
+            "",
             Event::Intent(Intent::ReadThread(op::ReadThread::open(id))),
         );
         assert_eq!(
             selected
-                .conversation_thread()
+                .conversation_thread(selected.panes.primary())
                 .unwrap()
                 .turns
                 .as_ref()
@@ -545,7 +546,7 @@ mod tests {
                 .len(),
             2
         );
-        let (mut connected, _) = reduce(&selected, Event::Connected);
+        let (mut connected, _) = reduce(&selected, "", Event::Connected);
         assert_eq!(
             connected.thread_list().unwrap().threads[0].title,
             "saved chat"
@@ -555,8 +556,11 @@ mod tests {
         let fresh = listed("fresh chat");
         let mut response = fresh.lists.threads.as_ref().unwrap().as_ref().clone();
         response.revision = 1;
-        op::ListSessions::new((*connected.lists.list_query).clone())
-            .apply(&mut connected, response);
+        op::ListSessions::new((*connected.lists.list_query).clone()).apply(
+            &mut connected,
+            "",
+            response,
+        );
         assert_eq!(
             connected.thread_list().unwrap().threads[0].title,
             "fresh chat"
@@ -566,6 +570,7 @@ mod tests {
         Arc::make_mut(&mut connected.lists.expanded_projects).clear();
         let (opened, _) = reduce(
             &connected,
+            "",
             Event::Intent(Intent::SetProjectExpanded {
                 project_id: "p".into(),
                 expanded: true,
@@ -664,9 +669,9 @@ mod tests {
         assert_eq!(offline.lists.expanded_projects.len(), 4);
         assert_eq!(offline.lists.unconfirmed_lists.len(), 6);
 
-        let (connected, _) = reduce(&offline, Event::Connected);
+        let (connected, _) = reduce(&offline, "", Event::Connected);
         let query = op::ListSessions::new((*connected.lists.list_query).clone())
-            .capture(&connected)
+            .capture(&connected, "")
             .unwrap();
         assert_eq!(query.project_limit, 5);
         assert_eq!(
@@ -680,7 +685,7 @@ mod tests {
             .into()
         );
 
-        let (expanded, _) = reduce(&connected, Event::Intent(Intent::ExpandProjects));
+        let (expanded, _) = reduce(&connected, "", Event::Intent(Intent::ExpandProjects));
         assert_eq!(expanded.lists.list_query.project_limit, 15);
     }
 
@@ -753,9 +758,9 @@ mod tests {
                 assert_eq!(row.name.as_deref(), Some(format!("Task {index}").as_str()));
             }
         }
-        let (connected, _) = reduce(&offline, Event::Connected);
+        let (connected, _) = reduce(&offline, "", Event::Connected);
         let query = op::ListSessions::new((*connected.lists.list_query).clone())
-            .capture(&connected)
+            .capture(&connected, "")
             .unwrap();
         assert_eq!(query.limit, 5);
         assert_eq!(
@@ -764,6 +769,7 @@ mod tests {
         );
         let (opened, _) = reduce(
             &connected,
+            "",
             Event::Intent(Intent::SetProjectExpanded {
                 project_id: "p".into(),
                 expanded: true,
@@ -776,6 +782,7 @@ mod tests {
 
         let (more, _) = reduce(
             &opened,
+            "",
             Event::Intent(Intent::ExpandThreadList {
                 project_id: Some("p".into()),
             }),
@@ -783,6 +790,7 @@ mod tests {
         assert_eq!(more.lists.expanded_projects["p"], 15);
         let (more, _) = reduce(
             &more,
+            "",
             Event::Intent(Intent::ExpandThreadList { project_id: None }),
         );
         assert_eq!(more.lists.list_query.limit, 15);
@@ -805,7 +813,7 @@ mod tests {
             "search" => Arc::make_mut(&mut next.lists.list_query).search_term = "filtered".into(),
             "offline" => next.connection.connected = false,
             _ => {
-                next.operations.insert(
+                Arc::make_mut(&mut next.operations).insert(
                     OperationKey::SessionList,
                     op::OperationState {
                         generation: 1,

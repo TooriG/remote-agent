@@ -256,6 +256,7 @@ impl AgentStore {
         snapshot: Snapshot,
         diagnostics_directory: Option<String>,
         client_revision: String,
+        preferences: Option<Arc<super::persistence::DevicePreferences>>,
     ) -> Result<Arc<Self>, AgentError> {
         let started = std::time::Instant::now();
         let trace = Trace::new(client_revision);
@@ -263,7 +264,7 @@ impl AgentStore {
             trace.persist(directory.into()).map_err(error)?;
         }
         trace.activate();
-        let store = crate::store::Store::offline(snapshot);
+        let store = crate::store::Store::offline(snapshot, preferences);
         trace.record(
             ConnectionPhase::StoreRestored,
             0,
@@ -293,6 +294,7 @@ impl AgentStore {
             crate::persistence::decode(&persisted).map_err(error)?,
             diagnostics_directory,
             client_revision,
+            None,
         )
     }
 
@@ -356,34 +358,12 @@ impl AgentStore {
         }
     }
 
-    /// Subscribe before comparing to avoid losing an update between read and wait.
-    pub async fn next_snapshot(
+    /// A native view of one Host browser tab for `thread`.
+    pub fn browser_session(
         &self,
-        previous: Arc<Snapshot>,
-    ) -> Result<Arc<Snapshot>, AgentError> {
-        let mut updates = self.store.subscribe();
-        loop {
-            {
-                let current = updates.borrow_and_update();
-                if !Arc::ptr_eq(&current, &previous) {
-                    return Ok(current.clone());
-                }
-            }
-            updates.changed().await.map_err(error)?;
-        }
-    }
-
-    pub async fn browser(
-        &self,
-        request: crate::browser::BrowserRequest,
-    ) -> Result<crate::browser::BrowserFrame, AgentError> {
-        self.store
-            .browser(request)
-            .await
-            .map_err(|reason| match reason {
-                crate::peer::PeerError::InvalidMessage(reason) => error(reason),
-                reason => error(reason),
-            })
+        thread: crate::session::SessionRef,
+    ) -> Arc<crate::store::BrowserSession> {
+        crate::store::BrowserSession::new(self.store.clone(), thread)
     }
 
     /// Prepare network access without capturing or sending microphone audio.
@@ -431,7 +411,8 @@ impl Receipt {
 mod tests {
     #[test]
     fn native_transfer_errors_show_localized_host_reasons_without_wrappers() {
-        use crate::localization::{UiLanguage, localized_ui_text};
+        use crate::localization::UiLanguage;
+        use crate::presentation::error::localized_error_message;
         for (code, japanese, english) in [
             (
                 "file_not_found",
@@ -460,11 +441,11 @@ mod tests {
             ));
             assert_eq!(error.to_string(), japanese);
             assert_eq!(
-                localized_ui_text(UiLanguage::Japanese, error.to_string()),
+                localized_error_message(UiLanguage::Japanese, &error.to_string()),
                 japanese
             );
             assert_eq!(
-                localized_ui_text(UiLanguage::English, error.to_string()),
+                localized_error_message(UiLanguage::English, &error.to_string()),
                 english
             );
         }
@@ -599,16 +580,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_releases_a_native_snapshot_waiter() {
+    async fn shutdown_releases_a_native_presentation_waiter() {
         let store = AgentStore::offline(Vec::new(), None, "test-revision".into())
             .await
             .unwrap();
-        let previous = store.snapshot();
+        let previous = store.presentation();
         let weak = Arc::downgrade(&store);
         let waiting = store.clone();
         let task = tokio::spawn(async move {
             let mut snapshot = previous;
-            while let Ok(next) = waiting.next_snapshot(snapshot).await {
+            while let Ok(next) = waiting.next_presentation(snapshot).await {
                 snapshot = next;
             }
         });
@@ -639,7 +620,7 @@ mod tests {
                     list_query: Arc::new(crate::models::ListQuery { limit: 60, project_limit: 5, search_term: "retained search".into(), ..Default::default() }),
                     ..Default::default()
                 },
- pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: Some(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() }),
+ panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: Some(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() })),
                 ..Default::default()
             };
             let mut saved: serde_json::Value = serde_json::from_slice(&cached.serialize_local_state().unwrap()).unwrap();
@@ -648,7 +629,7 @@ mod tests {
             let restored = AgentStore::offline(serde_json::to_vec(&saved).unwrap(), None, "test-revision".into()).await.unwrap();
             assert_eq!(*restored.snapshot().lists.list_query, crate::models::ListQuery::default());
             restored.shutdown().await.unwrap();
-            let store = Arc::new(AgentStore { store: Arc::new(crate::store::Store::offline(cached)), recovery: Mutex::new(None), connection_active: tokio::sync::watch::channel(true).0, connection_work: Default::default(), endpoint: Default::default(), trace: Trace::new("development".into()) });
+            let store = Arc::new(AgentStore { store: Arc::new(crate::store::Store::offline(cached, None)), recovery: Mutex::new(None), connection_active: tokio::sync::watch::channel(true).0, connection_work: Default::default(), endpoint: Default::default(), trace: Trace::new("development".into()) });
             let (connected, (session, reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
             connected.unwrap();
             let first = session;
@@ -706,8 +687,8 @@ mod tests {
                 }
                 let snapshot = store.store.snapshot();
                 assert!(snapshot.connected());
-                assert!(snapshot.pane.error.is_none());
-                assert_eq!(snapshot.pane.navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("thread"));
+                assert!(snapshot.panes.primary().error.is_none());
+                assert_eq!(snapshot.panes.primary().navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("thread"));
                 assert!(snapshot.lists.threads.as_ref().unwrap().data.iter().any(|thread| thread.id.as_ref().map(|session| session.id.as_str()) == Some("thread")));
                 assert_eq!(item_text(&(snapshot.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])), Some("after reconnect"));
                 assert_eq!(snapshot.catalog.models[0].model, agent_protocol::models::ModelRef {provider:agent_protocol::session::ProviderKind::Codex,id:"fresh-model".into()});
@@ -750,10 +731,10 @@ mod tests {
                         device_name: "Fixture device".into(),
                     };
                     let snapshot = Snapshot {
- pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation {
+ panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation {
                             thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(),
                             ..Default::default()
-                        }), ..Default::default() }), ..Default::default()
+                        }), ..Default::default() })), ..Default::default()
                     };
                     let store = AgentStore::offline(crate::persistence::encode(&snapshot).unwrap(), None, "test-revision".into()).await.unwrap();
                     let (connected, (first, mut reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
@@ -990,7 +971,8 @@ mod tests {
                 &ticket,
                 Snapshot::default(),
                 None,
-                "Fixture device"
+                "Fixture device",
+                None
             ),
             scoped_incoming(&host, &trust),
         );
@@ -1100,7 +1082,7 @@ mod tests {
             .unwrap();
         let endpoint = Endpoint::bind(identity, Relays::Disabled).await.unwrap();
         let ticket = host.local_ticket();
-        let store = Arc::new(crate::store::Store::offline(Snapshot::default()));
+        let store = Arc::new(crate::store::Store::offline(Snapshot::default(), None));
         let connecting = tokio::spawn({
             let store = store.clone();
             let endpoint = endpoint.clone();
@@ -1169,7 +1151,7 @@ mod tests {
                 let host = Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap();
                 let connection = || Connection { ticket: host.ticket().to_string(), identity: identity.to_bytes().to_vec(), invitation: None, use_relays: false, device_name: "Fixture device".into() };
                 let cached = Snapshot {
- pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() }),
+ panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() })),
                     ..Default::default()
                 };
                 let store = AgentStore::offline(crate::persistence::encode(&cached).unwrap(), None, "test-revision".into()).await.unwrap();
@@ -1229,7 +1211,7 @@ mod tests {
                     let before = store.snapshot();
                     assert!(refresh().await.is_err());
                     assert!(store.snapshot().connected());
-                    assert!(store.snapshot().pane.error.is_none());
+                    assert!(store.snapshot().panes.primary().error.is_none());
                     assert!(store.snapshot().operations.values().any(|state| matches!(&state.phase,
                         crate::state::operations::OperationPhase::Failed { message } if message.contains("temporary read error"))));
                     if selected {
@@ -1252,9 +1234,9 @@ mod tests {
                     refresh().await.unwrap();
                     let after = store.snapshot();
                     assert!(after.connected());
-                    assert!(after.pane.error.is_none());
+                    assert!(after.panes.primary().error.is_none());
                     assert_eq!(after.connection.epoch, before.connection.epoch);
-                    assert_eq!(after.pane.navigation, before.pane.navigation);
+                    assert_eq!(after.panes.primary().navigation, before.panes.primary().navigation);
                     assert_eq!(after.input.drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "preserved");
                     assert_eq!(after.lists.threads.as_ref().unwrap().data[0].name.as_deref(), Some(if selected { "round 3" } else { "round 2" }));
                     store.shutdown().await.unwrap();

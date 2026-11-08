@@ -149,11 +149,6 @@ struct TaskActivityView {
 struct UnregisterLiveActivity {
     pub activity_id: String,
 }
-#[uniffi::remote(Enum)]
-enum WorktreeStatus {
-    Unmerged,
-    Merged,
-}
 #[uniffi::remote(Record)]
 struct CreateInvitation {}
 #[uniffi::remote(Record)]
@@ -428,8 +423,16 @@ struct BrowserFrame {
     pub loading: bool,
     pub page_text: String,
     pub value: String,
+    pub notice: Option<BrowserNotice>,
     pub credentials: Option<BrowserCredentials>,
     pub renderer_id: String,
+}
+#[uniffi::remote(Enum)]
+enum BrowserNotice {
+    CookiesImported { count: u64, skipped: u64 },
+    PasswordsImported { count: u64, skipped: u64 },
+    PasswordsDeleted,
+    PasswordFilled,
 }
 #[uniffi::remote(Enum)]
 enum BrowserInputKind {
@@ -538,9 +541,15 @@ struct AccountUsage {
     pub fetched_at: i64,
     pub error: Option<String>,
 }
+#[uniffi::remote(Enum)]
+enum UsagePeriod {
+    Minutes { minutes: u64 },
+    Monthly,
+}
 #[uniffi::remote(Record)]
 struct UsageWindow {
-    pub label: String,
+    pub period: UsagePeriod,
+    pub name: Option<String>,
     pub remaining_percent: u32,
     pub resets_at: Option<i64>,
 }
@@ -549,10 +558,6 @@ struct Accounts {
     pub accounts: Vec<Account>,
     pub selected: std::collections::HashMap<ProviderKind, String>,
     pub errors: std::collections::HashMap<ProviderKind, String>,
-}
-#[uniffi::remote(Record)]
-struct StartAccountLogin {
-    pub provider: crate::session::ProviderKind,
 }
 #[uniffi::remote(Record)]
 struct SubmitAccountLogin {

@@ -529,17 +529,9 @@ pub(crate) fn parse_turn(mut value: Value) -> Result<Turn, serde_json::Error> {
         turn.items = None;
     }
     if let (Some(ids), Some(items)) = (value["deferredItemIds"].as_array(), &mut turn.items) {
-        let indexed = (ids.len() >= 64 && items.len() >= 64).then(|| {
-            ids.iter()
-                .filter_map(Value::as_str)
-                .collect::<std::collections::HashSet<_>>()
-        });
+        let ids: std::collections::HashSet<_> = ids.iter().filter_map(Value::as_str).collect();
         for item in items {
-            let deferred = match &indexed {
-                Some(ids) => ids.contains(item.id.as_str()),
-                None => ids.iter().any(|id| id.as_str() == Some(item.id.as_str())),
-            };
-            if deferred {
+            if ids.contains(item.id.as_str()) {
                 Arc::make_mut(item).defer();
             }
         }

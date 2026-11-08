@@ -101,7 +101,7 @@ extension AppViewModel {
     }
 
     func connectionState(_ host: String) -> HostConnectionState {
-        connectionStates[host] ?? HostConnectionState(AgentCore.Snapshot.empty())
+        connectionStates[host] ?? HostConnectionState(enabled: true, connected: false)
     }
 
     func setConnectionEnabled(_ host: String, enabled: Bool) {
@@ -127,9 +127,5 @@ extension AppViewModel {
 
 struct HostConnectionState: Equatable {
     let enabled: Bool
-    let label: String
-    init(_ snapshot: AgentCore.Snapshot) {
-        enabled = snapshot.connectionEnabled()
-        label = snapshot.connectionStatusLabel()
-    }
+    let connected: Bool
 }

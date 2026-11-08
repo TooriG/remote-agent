@@ -19,7 +19,7 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
     #[values(false, true)] abandon_waiter: bool,
 ) {
     let mut initial = authenticated_snapshot();
-    let original = initial.pane.navigation.draft_key.clone();
+    let original = initial.panes.primary().navigation.draft_key.clone();
     Arc::make_mut(&mut initial.input.drafts).insert(
         original.clone(),
         Arc::new(Draft {
@@ -42,8 +42,25 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
     assert!(request["params"]["initialInput"].is_null());
     writer.reply(&request, json!({"error":{"code":"request_failed","message":"fixture failure","delivery":"notSent"}})).await.unwrap();
     assert!(failed.await.unwrap().is_err());
-    assert!(pane.snapshot().unwrap().pane.error.is_none());
-    assert!(pane.snapshot().unwrap().pane.navigation.thread_id.is_none());
+    assert!(
+        pane.snapshot()
+            .unwrap()
+            .panes
+            .get(pane.id())
+            .unwrap()
+            .error
+            .is_none()
+    );
+    assert!(
+        pane.snapshot()
+            .unwrap()
+            .panes
+            .get(pane.id())
+            .unwrap()
+            .navigation
+            .thread_id
+            .is_none()
+    );
     assert_eq!(store.snapshot().input.drafts[&original], original_draft);
 
     let retry = tokio::spawn({
@@ -71,8 +88,24 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
         .await
         .unwrap()
         .unwrap();
-    let key = pane.snapshot().unwrap().pane.navigation.draft_key.clone();
-    assert!(pane.snapshot().unwrap().pane.error.is_none());
+    let key = pane
+        .snapshot()
+        .unwrap()
+        .panes
+        .get(pane.id())
+        .unwrap()
+        .navigation
+        .draft_key
+        .clone();
+    assert!(
+        pane.snapshot()
+            .unwrap()
+            .panes
+            .get(pane.id())
+            .unwrap()
+            .error
+            .is_none()
+    );
     assert_eq!(
         pane.snapshot().unwrap().input.drafts[&key].text,
         expected_draft
@@ -97,7 +130,7 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
 
 #[tokio::test]
 async fn side_chat_without_an_agent_or_after_close_cannot_change_input() {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let pane = store.open_pane("/fixture".into()).unwrap();
     let before = pane.snapshot().unwrap();
     let error = pane
@@ -137,7 +170,7 @@ async fn abandoning_side_chat_creation_does_not_keep_its_pane_alive() {
     assert!(preparing.await.unwrap_err().is_cancelled());
     drop(pane);
     assert!(weak.upgrade().is_none());
-    assert!(store.snapshot().for_pane(&id).is_none());
+    assert!(store.snapshot().panes.get(&id).is_none());
     writer.reply(&request, json!({"result":{"thread":{
         "id":{"provider":"codex","id":"abandoned-side"},"cwd":"/fixture","turns":[],"status":"idle"
     }}})).await.unwrap();
@@ -150,7 +183,13 @@ async fn closing_a_side_chat_during_creation_cannot_apply_its_quote_to_another_p
     #[values("", "Closed selection")] selection: &str,
 ) {
     let (store, mut reader, mut writer) = setup(authenticated_snapshot()).await;
-    let original = store.snapshot().pane.navigation.draft_key.clone();
+    let original = store
+        .snapshot()
+        .panes
+        .primary()
+        .navigation
+        .draft_key
+        .clone();
     store
         .dispatch(Intent::SetDraftText {
             thread_id: original.clone(),
@@ -166,6 +205,7 @@ async fn closing_a_side_chat_during_creation_cannot_apply_its_quote_to_another_p
     });
     let request = read_after_reviews(&mut reader, &mut writer).await;
     assert_eq!(request["method"], "host/session/create");
+    let primary = store.snapshot().panes.primary().clone();
     pane.close();
     writer.reply(&request, json!({"result":{"thread":{
         "id":{"provider":"codex","id":"closed-side"},"cwd":"/fixture","turns":[],"status":"idle"
@@ -181,16 +221,19 @@ async fn closing_a_side_chat_during_creation_cannot_apply_its_quote_to_another_p
         snapshot
             .input
             .drafts
-            .get(&closed.into())
+            .get(&closed.clone().into())
             .is_none_or(|draft| draft.text.is_empty())
     );
     assert!(pane.snapshot().is_err());
+    assert!(snapshot.sessions.conversations.contains_key(&closed));
+    assert!(snapshot.panes.get(pane.id()).is_none());
+    assert!(Arc::ptr_eq(&primary, snapshot.panes.primary()));
     store.close().await.unwrap();
 }
 
 #[tokio::test]
 async fn local_validation_errors_and_dismissals_belong_to_the_originating_pane() {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let pane = store.open_pane("/side".into()).unwrap();
     pane.dispatch(Intent::EditProject {
         project_id: "project".into(),
@@ -202,11 +245,13 @@ async fn local_validation_errors_and_dismissals_belong_to_the_originating_pane()
     let message = pane
         .snapshot()
         .unwrap()
-        .pane
+        .panes
+        .get(pane.id())
+        .unwrap()
         .error
         .clone()
         .expect("validation failure");
-    assert!(store.snapshot().pane.error.is_none());
+    assert!(store.snapshot().panes.primary().error.is_none());
     store
         .dispatch(Intent::DismissError {
             id: op::ErrorId::Application {
@@ -216,7 +261,13 @@ async fn local_validation_errors_and_dismissals_belong_to_the_originating_pane()
         .await
         .unwrap();
     assert_eq!(
-        pane.snapshot().unwrap().pane.error.as_deref(),
+        pane.snapshot()
+            .unwrap()
+            .panes
+            .get(pane.id())
+            .unwrap()
+            .error
+            .as_deref(),
         Some(message.as_str())
     );
     pane.dispatch(Intent::DismissError {
@@ -224,13 +275,21 @@ async fn local_validation_errors_and_dismissals_belong_to_the_originating_pane()
     })
     .await
     .unwrap();
-    assert!(pane.snapshot().unwrap().pane.error.is_none());
+    assert!(
+        pane.snapshot()
+            .unwrap()
+            .panes
+            .get(pane.id())
+            .unwrap()
+            .error
+            .is_none()
+    );
     store.close().await.unwrap();
 }
 
 #[tokio::test]
 async fn panes_keep_distinct_local_drafts_and_closing_one_keeps_the_store_available() {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let first = store.open_pane("/same".into()).unwrap();
     let second = store.open_pane("/same".into()).unwrap();
     store
@@ -239,9 +298,31 @@ async fn panes_keep_distinct_local_drafts_and_closing_one_keeps_the_store_availa
         })
         .await
         .unwrap();
-    let first_key = first.snapshot().unwrap().pane.navigation.draft_key.clone();
-    let second_key = second.snapshot().unwrap().pane.navigation.draft_key.clone();
-    let primary_key = store.snapshot().pane.navigation.draft_key.clone();
+    let first_key = first
+        .snapshot()
+        .unwrap()
+        .panes
+        .get(first.id())
+        .unwrap()
+        .navigation
+        .draft_key
+        .clone();
+    let second_key = second
+        .snapshot()
+        .unwrap()
+        .panes
+        .get(second.id())
+        .unwrap()
+        .navigation
+        .draft_key
+        .clone();
+    let primary_key = store
+        .snapshot()
+        .panes
+        .primary()
+        .navigation
+        .draft_key
+        .clone();
     assert_ne!(first_key, second_key);
     assert_ne!(first_key, primary_key);
     assert_ne!(second_key, primary_key);
@@ -262,10 +343,16 @@ async fn panes_keep_distinct_local_drafts_and_closing_one_keeps_the_store_availa
         })
         .await
         .unwrap();
-    assert!(Arc::ptr_eq(&held.pane, &second.snapshot().unwrap().pane));
+    assert!(Arc::ptr_eq(
+        held.panes.get(second.id()).unwrap(),
+        second.snapshot().unwrap().panes.get(second.id()).unwrap()
+    ));
     assert_eq!(store.snapshot().input.drafts[&first_key].text, "first");
     assert_eq!(store.snapshot().input.drafts[&second_key].text, "second");
-    assert_eq!(store.snapshot().pane.navigation.draft_key, primary_key);
+    assert_eq!(
+        store.snapshot().panes.primary().navigation.draft_key,
+        primary_key
+    );
     let restored = agent_core::persistence::decode(
         &agent_core::persistence::encode(&store.snapshot()).unwrap(),
     )
@@ -279,13 +366,29 @@ async fn panes_keep_distinct_local_drafts_and_closing_one_keeps_the_store_availa
 #[tokio::test]
 async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusing_operation_identity()
  {
-    let store = Arc::new(Store::offline(Snapshot::default()));
+    let store = Arc::new(Store::offline(Snapshot::default(), None));
     let first = store.open_pane("/same".into()).unwrap();
     let second = store.open_pane("/same".into()).unwrap();
     let first_id = first.id().to_owned();
     let keys = [
-        first.snapshot().unwrap().pane.navigation.draft_key.clone(),
-        second.snapshot().unwrap().pane.navigation.draft_key.clone(),
+        first
+            .snapshot()
+            .unwrap()
+            .panes
+            .get(first.id())
+            .unwrap()
+            .navigation
+            .draft_key
+            .clone(),
+        second
+            .snapshot()
+            .unwrap()
+            .panes
+            .get(second.id())
+            .unwrap()
+            .navigation
+            .draft_key
+            .clone(),
     ];
     for (pane, key, text) in [
         (&first, &keys[0], "first unsent"),
@@ -302,7 +405,14 @@ async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusin
     let reopened = store.open_pane("/same".into()).unwrap();
     assert_ne!(reopened.id(), first_id);
     assert_eq!(
-        reopened.snapshot().unwrap().pane.navigation.draft_key,
+        reopened
+            .snapshot()
+            .unwrap()
+            .panes
+            .get(reopened.id())
+            .unwrap()
+            .navigation
+            .draft_key,
         keys[0]
     );
     assert_eq!(
@@ -322,7 +432,14 @@ async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusin
         .await
         .unwrap();
     assert_eq!(
-        reopened.snapshot().unwrap().pane.navigation.draft_key,
+        reopened
+            .snapshot()
+            .unwrap()
+            .panes
+            .get(reopened.id())
+            .unwrap()
+            .navigation
+            .draft_key,
         keys[0]
     );
     assert_eq!(
@@ -333,11 +450,22 @@ async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusin
     store.close().await.unwrap();
     let restored = Arc::new(Store::offline(
         agent_core::persistence::decode(&saved).unwrap(),
+        None,
     ));
     let mut panes = Vec::new();
     for (key, text) in keys.iter().zip(["first unsent", "second unsent"]) {
         let pane = restored.open_pane("/same".into()).unwrap();
-        assert_eq!(&pane.snapshot().unwrap().pane.navigation.draft_key, key);
+        assert_eq!(
+            &pane
+                .snapshot()
+                .unwrap()
+                .panes
+                .get(pane.id())
+                .unwrap()
+                .navigation
+                .draft_key,
+            key
+        );
         assert_eq!(pane.snapshot().unwrap().input.drafts[key].text, text);
         panes.push(pane);
     }
@@ -346,13 +474,16 @@ async fn reopening_and_restoring_panes_recovers_each_unsent_draft_without_reusin
 
 #[tokio::test]
 async fn changing_host_storage_keeps_secondary_new_chat_drafts_separate() {
-    let store = Arc::new(Store::offline(Snapshot {
-        connection: agent_core::state::Connection {
-            storage_scope: "original-host".into(),
+    let store = Arc::new(Store::offline(
+        Snapshot {
+            connection: agent_core::state::Connection {
+                storage_scope: "original-host".into(),
+                ..Default::default()
+            },
             ..Default::default()
         },
-        ..Default::default()
-    }));
+        None,
+    ));
     let panes = [
         store.open_pane("/same".into()).unwrap(),
         store.open_pane("/same".into()).unwrap(),
@@ -360,22 +491,33 @@ async fn changing_host_storage_keeps_secondary_new_chat_drafts_separate() {
     let before = store.snapshot();
     let changed = agent_core::state::reduce(
         &before,
+        "",
         agent_core::state::Event::StorageScope("another-host".into()),
     )
     .0;
     for pane in &panes {
-        let view = changed.for_pane(pane.id()).unwrap();
-        let expected = pane.snapshot().unwrap().pane.navigation.draft_key.clone();
-        assert_eq!(view.pane.navigation.draft_key, expected);
+        let view = changed.panes.get(pane.id()).unwrap();
+        let expected = pane
+            .snapshot()
+            .unwrap()
+            .panes
+            .get(pane.id())
+            .unwrap()
+            .navigation
+            .draft_key
+            .clone();
+        assert_eq!(view.navigation.draft_key, expected);
         let navigated = agent_core::state::reduce(
-            &view,
+            &changed,
+            pane.id(),
             agent_core::state::Event::Intent(Intent::NewChat {
                 cwd: "/same".into(),
             }),
         )
         .0;
         assert_eq!(
-            navigated.pane.navigation.draft_key, expected,
+            navigated.panes.get(pane.id()).unwrap().navigation.draft_key,
+            expected,
             "changing Host storage must not merge secondary input with the main pane"
         );
     }
@@ -395,14 +537,20 @@ async fn file_replies_belong_to_their_panes_across_navigation_in_another_pane() 
         first
             .snapshot()
             .unwrap()
-            .operation_running(op::OperationKey::File)
+            .operation_running(op::OperationKey::File {
+                pane: (first.id()).to_owned()
+            })
     );
-    assert!(!store.snapshot().operation_running(op::OperationKey::File));
+    assert!(!store.snapshot().operation_running(op::OperationKey::File {
+        pane: ("").to_owned()
+    }));
     assert!(
         !second
             .snapshot()
             .unwrap()
-            .operation_running(op::OperationKey::File)
+            .operation_running(op::OperationKey::File {
+                pane: (second.id()).to_owned()
+            })
     );
     let request_one = read(&mut reader).await;
     let two = second.dispatch(Intent::ReadFile(op::ReadFile {
@@ -413,13 +561,17 @@ async fn file_replies_belong_to_their_panes_across_navigation_in_another_pane() 
         first
             .snapshot()
             .unwrap()
-            .operation_running(op::OperationKey::File)
+            .operation_running(op::OperationKey::File {
+                pane: (first.id()).to_owned()
+            })
     );
     assert!(
         second
             .snapshot()
             .unwrap()
-            .operation_running(op::OperationKey::File)
+            .operation_running(op::OperationKey::File {
+                pane: (second.id()).to_owned()
+            })
     );
     let request_two = read(&mut reader).await;
     store.dispatch(Intent::ShowThreadList).await.unwrap();
@@ -435,15 +587,26 @@ async fn file_replies_belong_to_their_panes_across_navigation_in_another_pane() 
         first
             .snapshot()
             .unwrap()
-            .operation_running(op::OperationKey::File)
+            .operation_running(op::OperationKey::File {
+                pane: (first.id()).to_owned()
+            })
     );
     assert!(
         !second
             .snapshot()
             .unwrap()
-            .operation_running(op::OperationKey::File)
+            .operation_running(op::OperationKey::File {
+                pane: (second.id()).to_owned()
+            })
     );
-    let second_selection = second.snapshot().unwrap().pane.workspace.clone();
+    let second_selection = second
+        .snapshot()
+        .unwrap()
+        .panes
+        .get(second.id())
+        .unwrap()
+        .workspace
+        .clone();
     writer
         .reply(
             &request_one,
@@ -456,7 +619,9 @@ async fn file_replies_belong_to_their_panes_across_navigation_in_another_pane() 
         first
             .snapshot()
             .unwrap()
-            .pane
+            .panes
+            .get(first.id())
+            .unwrap()
             .workspace
             .file
             .as_ref()
@@ -468,7 +633,9 @@ async fn file_replies_belong_to_their_panes_across_navigation_in_another_pane() 
         second
             .snapshot()
             .unwrap()
-            .pane
+            .panes
+            .get(second.id())
+            .unwrap()
             .workspace
             .file
             .as_ref()
@@ -478,9 +645,15 @@ async fn file_replies_belong_to_their_panes_across_navigation_in_another_pane() 
     );
     assert!(Arc::ptr_eq(
         &second_selection,
-        &second.snapshot().unwrap().pane.workspace
+        &second
+            .snapshot()
+            .unwrap()
+            .panes
+            .get(second.id())
+            .unwrap()
+            .workspace
     ));
-    assert!(store.snapshot().pane.workspace.file.is_none());
+    assert!(store.snapshot().panes.primary().workspace.file.is_none());
     store.close().await.unwrap();
 }
 
@@ -562,7 +735,7 @@ async fn host_settings_follow_the_resource_after_navigation() {
     );
     let request = read(&mut reader).await;
     store.dispatch(Intent::ShowThreadList).await.unwrap();
-    let selected = store.snapshot().pane.clone();
+    let selected = store.snapshot().panes.primary().clone();
     writer
         .reply(
             &request,
@@ -572,7 +745,7 @@ async fn host_settings_follow_the_resource_after_navigation() {
         .await
         .unwrap();
     loading.await.unwrap();
-    assert!(Arc::ptr_eq(&selected, &store.snapshot().pane));
+    assert!(Arc::ptr_eq(&selected, store.snapshot().panes.primary()));
     assert_eq!(
         store
             .snapshot()
@@ -589,10 +762,13 @@ async fn host_settings_follow_the_resource_after_navigation() {
 
 #[tokio::test]
 async fn connection_reopens_every_pane_in_one_shared_subscription_map() {
-    use agent_core::state::{Navigation, PaneState, PaneStates};
-    let mut initial = Snapshot::default();
+    use agent_core::state::{Navigation, PaneState};
+    let offline = Arc::new(Store::offline(Snapshot::default(), None));
+    let side = offline.open_pane("/fixture".into()).unwrap();
+    let side_id = side.id().to_owned();
+    let mut initial = offline.snapshot().as_ref().clone();
     let mut sources = BTreeMap::new();
-    for name in ["primary", "side"] {
+    for (name, pane_id) in [("primary", ""), ("side", side_id.as_str())] {
         let id = SessionRef {
             provider: ProviderKind::Codex,
             id: name.into(),
@@ -610,16 +786,13 @@ async fn connection_reopens_every_pane_in_one_shared_subscription_map() {
             }),
             ..Default::default()
         });
-        if name == "primary" {
-            initial.pane = pane;
-        } else {
-            initial.panes = PaneStates(Arc::new([("side".into(), pane)].into()));
-        }
+        *initial.panes.get_mut(pane_id).unwrap() = pane;
         sources.insert(id, Arc::new(source));
     }
+    offline.close().await.unwrap();
     initial.sessions.conversations = Arc::new(sources.clone());
     let (peer, mut reader, writer) = host_fixture::connect(&initial).await;
-    let store = Store::new(peer, initial);
+    let store = Store::new(peer, initial, None);
     let mut opened = std::collections::BTreeSet::new();
     for _ in 0..8 {
         let request = read(&mut reader).await;
@@ -648,11 +821,11 @@ async fn connection_reopens_every_pane_in_one_shared_subscription_map() {
     }
     wait_for(&store, |snapshot| {
         snapshot.sessions.subscriptions.len() == 2
-            && snapshot.pane.workspace.review.is_some()
+            && snapshot.panes.primary().workspace.review.is_some()
             && snapshot
-                .for_pane("side")
+                .panes
+                .get(&side_id)
                 .unwrap()
-                .pane
                 .workspace
                 .review
                 .is_some()
@@ -662,7 +835,8 @@ async fn connection_reopens_every_pane_in_one_shared_subscription_map() {
     assert_eq!(
         store
             .snapshot()
-            .pane
+            .panes
+            .primary()
             .navigation
             .thread_id
             .as_ref()
@@ -673,9 +847,9 @@ async fn connection_reopens_every_pane_in_one_shared_subscription_map() {
     assert_eq!(
         store
             .snapshot()
-            .for_pane("side")
+            .panes
+            .get(&side_id)
             .unwrap()
-            .pane
             .navigation
             .thread_id
             .as_ref()
@@ -683,5 +857,329 @@ async fn connection_reopens_every_pane_in_one_shared_subscription_map() {
             .id,
         "side"
     );
+    store.close().await.unwrap();
+}
+
+#[rstest::rstest]
+#[tokio::test]
+async fn closed_file_reads_resolve_without_changing_surviving_panes(
+    #[values(false, true)] failed: bool,
+) {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let pane = store.open_pane("/closed".into()).unwrap();
+    let survivor = store.open_pane("/survivor".into()).unwrap();
+    let reading = pane.dispatch(Intent::ReadFile(op::ReadFile {
+        path: "/closed/file".into(),
+        discard_draft: false,
+    }));
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/file/read");
+    pane.close();
+    let before = store.snapshot();
+    let reply = if failed {
+        json!({"error":{"code":"request_failed","message":"read failed","delivery":"notSent"}})
+    } else {
+        json!({"result":file("/closed/file", "read", "closed file")})
+    };
+    writer.reply(&request, reply).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(2), reading)
+        .await
+        .expect("closing a pane must still resolve its operation");
+    if failed {
+        assert!(result.is_err());
+    } else {
+        let agent_core::store::Outcome::FileRead { file } = result.unwrap() else {
+            panic!("the caller must receive the actual file result")
+        };
+        assert_eq!(file.text, "closed file");
+    }
+    let after = store.snapshot();
+    assert!(after.panes.get(pane.id()).is_none());
+    for id in ["", survivor.id()] {
+        assert!(Arc::ptr_eq(
+            before.panes.get(id).unwrap(),
+            after.panes.get(id).unwrap()
+        ));
+        assert!(!after.operation_running(op::OperationKey::File {
+            pane: (id).to_owned()
+        }));
+    }
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn closing_the_saving_pane_keeps_newer_shared_edits_and_the_saved_revision() {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let pane = store.open_pane("/closed".into()).unwrap();
+    let survivor = store.open_pane("/survivor".into()).unwrap();
+    let loading = pane.dispatch(Intent::ReadFile(op::ReadFile {
+        path: "/closed/file".into(),
+        discard_draft: false,
+    }));
+    let request = read(&mut reader).await;
+    writer
+        .reply(
+            &request,
+            json!({"result":file("/closed/file", "base", "old")}),
+        )
+        .await
+        .unwrap();
+    loading.await.unwrap();
+    pane.dispatch(Intent::SetFileDraft {
+        path: "/closed/file".into(),
+        text: "submitted".into(),
+    })
+    .await
+    .unwrap();
+    let saving = pane.dispatch(Intent::SaveFile(op::SaveFile {
+        path: "/closed/file".into(),
+    }));
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/file/write");
+    assert_eq!(request["params"]["text"], "submitted");
+    pane.close();
+    survivor
+        .dispatch(Intent::SetFileDraft {
+            path: "/closed/file".into(),
+            text: "newer shared edit".into(),
+        })
+        .await
+        .unwrap();
+    let before = store.snapshot();
+    writer
+        .reply(
+            &request,
+            json!({"result":file("/closed/file", "saved", "submitted")}),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), saving)
+        .await
+        .unwrap()
+        .unwrap();
+    let after = store.snapshot();
+    let draft = &after.files.file_drafts["/closed/file"];
+    assert_eq!(draft.text, "newer shared edit");
+    assert_eq!(draft.revision, "saved");
+    assert!(after.panes.get(pane.id()).is_none());
+    assert!(!after.operation_running(op::OperationKey::SaveFile {
+        path: "/closed/file".into()
+    }));
+    for id in ["", survivor.id()] {
+        assert!(Arc::ptr_eq(
+            before.panes.get(id).unwrap(),
+            after.panes.get(id).unwrap()
+        ));
+    }
+    store.close().await.unwrap();
+}
+
+#[rstest::rstest]
+#[tokio::test]
+async fn closed_dictation_cannot_append_to_a_reopened_panes_input(
+    #[values(false, true)] send: bool,
+) {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let pane = store.open_pane("/same".into()).unwrap();
+    let key = pane
+        .presentation()
+        .unwrap()
+        .pane()
+        .navigation
+        .draft_key
+        .clone();
+    let transcribing = pane.dispatch(Intent::Transcribe(op::Dictate {
+        draft_key: key.clone(),
+        preparation: None,
+        audio: vec![1, 0],
+        send,
+        client_user_message_id: "closed-voice".into(),
+    }));
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/dictation/transcribe");
+    pane.close();
+    let replacement = store.open_pane("/same".into()).unwrap();
+    assert_eq!(
+        replacement
+            .presentation()
+            .unwrap()
+            .pane()
+            .navigation
+            .draft_key,
+        key
+    );
+    replacement
+        .dispatch(Intent::SetDraftText {
+            thread_id: key.clone(),
+            text: "new pane input".into(),
+        })
+        .await
+        .unwrap();
+    let before = store.snapshot();
+    writer
+        .reply(&request, json!({"result":{"text":"old recording"}}))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), transcribing)
+        .await
+        .unwrap()
+        .unwrap();
+    let after = store.snapshot();
+    assert_eq!(after.input.drafts[&key].text, "new pane input");
+    assert!(Arc::ptr_eq(&before.input.drafts, &after.input.drafts));
+    assert!(Arc::ptr_eq(
+        before.panes.get(replacement.id()).unwrap(),
+        after.panes.get(replacement.id()).unwrap()
+    ));
+    assert!(!after.operation_running(op::OperationKey::Dictation { draft_key: key }));
+    assert!(after.sessions.pending_submissions.is_empty());
+    store.close().await.unwrap();
+}
+
+// Each pair of conditions occurs once; the result belongs to the provider in every case.
+#[rstest::rstest]
+#[case::read_after_navigation(false, false, false)]
+#[case::update_after_closure(true, true, false)]
+#[case::failed_read_after_closure(false, true, true)]
+#[case::failed_update_after_navigation(true, false, true)]
+#[tokio::test]
+async fn permission_results_follow_the_provider_after_navigation_or_pane_closure(
+    #[case] update: bool,
+    #[case] retired: bool,
+    #[case] failed: bool,
+) {
+    use agent_protocol::permissions::{PermissionMode, PermissionSettings};
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let pane = store.open_pane("/permissions".into()).unwrap();
+    let intent = if update {
+        Intent::UpdatePermissionSettings(op::UpdatePermissionSettings {
+            provider: ProviderKind::Codex,
+            mode: PermissionMode::Auto,
+            version: "base".into(),
+        })
+    } else {
+        Intent::ReadPermissionSettings(op::ReadPermissionSettings {
+            provider: ProviderKind::Codex,
+        })
+    };
+    let loading = pane.dispatch(intent);
+    let request = read(&mut reader).await;
+    assert_eq!(request["params"]["provider"], "codex");
+    if retired {
+        pane.close();
+    } else {
+        pane.dispatch(Intent::ShowThreadList).await.unwrap();
+    }
+    let before = store.snapshot();
+    let expected = PermissionSettings {
+        mode: Some(PermissionMode::Auto),
+        version: "applied".into(),
+    };
+    let reply = if failed {
+        json!({"error":{"code":"request_failed","message":"permissions failed","delivery":"notSent"}})
+    } else {
+        json!({"result":expected})
+    };
+    writer.reply(&request, reply).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), loading)
+        .await
+        .unwrap()
+        .unwrap();
+    let after = store.snapshot();
+    let result = after.catalog.permission_settings[&ProviderKind::Codex]
+        .result
+        .as_ref()
+        .expect("the provider response must leave the loading state");
+    if failed {
+        assert!(result.is_err());
+    } else {
+        assert_eq!(result.as_ref().unwrap(), &expected);
+    }
+    assert!(Arc::ptr_eq(before.panes.primary(), after.panes.primary()));
+    if !retired {
+        assert!(Arc::ptr_eq(
+            before.panes.get(pane.id()).unwrap(),
+            after.panes.get(pane.id()).unwrap()
+        ));
+    }
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_login_started_in_a_closed_pane_still_selects_its_account_for_that_draft() {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let pane = store.open_pane("/fixture".into()).unwrap();
+    let draft = pane
+        .presentation()
+        .unwrap()
+        .pane()
+        .navigation
+        .draft_key
+        .clone();
+    let starting = pane.dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
+        provider: ProviderKind::Codex,
+        thread_id: Some(draft.clone()),
+    }));
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/account/login/start");
+    writer.reply(&request, json!({"result":{"provider":"codex","loginId":"login","userCode":"fixture-only","requiresCodeSubmission":false,"verificationUrl":"https://example.invalid"}})).await.unwrap();
+    starting.await.unwrap();
+    // The login belongs to the Host, so closing its pane does not end it.
+    pane.close();
+    let status = tokio::time::timeout(Duration::from_secs(5), reader.read_request())
+        .await
+        .expect("the Store keeps confirming the login")
+        .unwrap()
+        .unwrap();
+    assert_eq!(status["method"], "host/account/login/status");
+    writer
+        .reply(
+            &status,
+            json!({"result":{"completed":true,"accountId":"added"}}),
+        )
+        .await
+        .unwrap();
+    let select = read(&mut reader).await;
+    assert_eq!(select["method"], "host/account/select");
+    assert_eq!(
+        select["params"],
+        json!({"provider":"codex","accountId":"added"})
+    );
+    writer
+        .reply(
+            &select,
+            json!({"result":{"provider":"codex","selectedId":"added"}}),
+        )
+        .await
+        .unwrap();
+    let models = read(&mut reader).await;
+    assert_eq!(models["method"], "host/model/list");
+    writer
+        .reply(&models, json!({"result":{"data":[{"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT","settings":{"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}]}}))
+        .await
+        .unwrap();
+    // The draft recorded when the login started adopts the new account's models.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut snapshots = store.subscribe();
+        loop {
+            let snapshot = snapshots.borrow_and_update().clone();
+            if snapshot
+                .input
+                .drafts
+                .get(&draft)
+                .and_then(|draft| draft.model.as_ref())
+                == Some(&agent_protocol::models::ModelRef {
+                    provider: ProviderKind::Codex,
+                    id: "gpt".into(),
+                })
+            {
+                assert!(snapshot.catalog.account.login.is_none());
+                return;
+            }
+            snapshots.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the draft adopts the new account");
     store.close().await.unwrap();
 }

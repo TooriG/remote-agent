@@ -72,7 +72,7 @@ import dev.remoteagent.core.fileTreePath
 import java.util.Locale
 import java.util.UUID
 
-internal val LocalFiles = compositionLocalOf { Snapshot.empty().files() }
+internal val LocalFiles = compositionLocalOf { requireNotNull(Snapshot.empty().files("")) }
 internal val LocalFileLocation = compositionLocalOf { FileLocation("", null) }
 
 @Composable
@@ -221,7 +221,9 @@ private fun FilesTree(tree: FileTreeView, send: (FileTreeAction) -> Unit, modifi
     ) {
         LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(vertical = 8.dp)) {
             item {
-                tree.error?.let { ErrorTextView(it, Modifier.padding(16.dp)) }
+                tree.error?.let {
+                    ErrorTextView(dev.remoteagent.core.errorText(LocalUiLanguage.current, it), Modifier.padding(16.dp))
+                }
                 if (tree.truncated)
                     Text(LocalUiLanguage.current.text("ほかにも一致する項目があります。検索語を絞り込んでください。"), Modifier.padding(16.dp))
                 if (tree.rows.isEmpty()) FilesEmpty(tree) { send(FileTreeAction.Refresh) }

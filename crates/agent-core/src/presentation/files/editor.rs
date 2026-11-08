@@ -54,12 +54,17 @@ impl Files {
     }
 }
 
-impl crate::state::Snapshot {
-    pub fn file_editor(&self, path: &str) -> FileEditorPresentation {
+impl crate::state::PaneState {
+    /// The editor of `path` in this pane, its unsaved draft in `drafts`.
+    pub fn file_editor(
+        &self,
+        drafts: &std::collections::BTreeMap<String, std::sync::Arc<FileDraft>>,
+        path: &str,
+    ) -> FileEditorPresentation {
         project(
             path,
-            self.pane.workspace.file.as_deref(),
-            self.files.file_drafts.get(path).map(AsRef::as_ref),
+            self.workspace.file.as_deref(),
+            drafts.get(path).map(AsRef::as_ref),
         )
     }
 }

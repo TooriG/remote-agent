@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    models::{ListQuery, ProjectMembership, SessionStatus, Thread, WorktreeStatus},
+    models::{ListQuery, ProjectMembership, SessionStatus, Thread},
     session::{ProviderKind, SessionRef},
     state::{ProjectPreferences, projects::PlacedChat},
 };
@@ -45,7 +45,7 @@ fn fixture() -> Snapshot {
         match key {
             "live" => {
                 thread.list_stale = Some(true);
-                thread.worktree_status = Some(WorktreeStatus::Merged);
+                thread.has_changes = Some(false);
             }
             "anonymous" => thread.id = None,
             "child" => thread.parent_id = Some(session("parent")),
@@ -145,7 +145,7 @@ fn placed_rows_keep_live_metadata_saved_fallbacks_and_activity_in_the_destinatio
     );
     assert_eq!(rows[0].title, "Live latest（保存済み・未確認）");
     assert!(rows[0].active && rows[0].waiting && !rows[0].unread);
-    assert_eq!(rows[0].worktree_status, Some(WorktreeStatus::Merged));
+    assert_eq!(rows[0].has_changes, Some(false));
     assert_eq!(rows[1].title, "Missing saved");
     assert!(!rows[1].active && !rows[1].waiting && rows[1].unread);
     assert_eq!(rows[2].title, "Inactive latest");
@@ -321,6 +321,7 @@ fn project_override_keeps_catalogue_membership_and_does_not_create_row_ids() {
         (Some(""), Some("")),
     ] {
         let rows = thread_summaries(
+            crate::localization::UiLanguage::Japanese,
             std::iter::once(&row),
             &BTreeMap::new(),
             &BTreeSet::new(),
@@ -339,6 +340,7 @@ fn project_override_keeps_catalogue_membership_and_does_not_create_row_ids() {
     ];
     assert!(
         thread_summaries(
+            crate::localization::UiLanguage::Japanese,
             invalid.iter(),
             &BTreeMap::new(),
             &BTreeSet::new(),
@@ -747,7 +749,7 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
                 let key = OperationKey::ProjectList {
                     project_id: "destination".into(),
                 };
-                snapshot.operations.insert(
+                Arc::make_mut(&mut snapshot.operations).insert(
                     key.clone(),
                     OperationState {
                         generation: 1,
@@ -766,7 +768,10 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
                     project.error.as_ref().map(|error| error.message.as_str()),
                     expected
                 );
-                snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
+                Arc::make_mut(&mut snapshot.operations)
+                    .get_mut(&key)
+                    .unwrap()
+                    .phase = OperationPhase::Failed {
                     message: "read failed".into(),
                 };
                 let project = snapshot
@@ -779,9 +784,47 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
                 assert!(!project.loading);
                 assert!(
                     project.error
-                        == expanded.then(|| crate::presentation::error::error_text("read failed"))
+                        == expanded.then(|| crate::presentation::error::error_text(
+                            crate::localization::UiLanguage::Japanese,
+                            "read failed"
+                        ))
                 );
             }
         }
     }
+}
+
+#[test]
+fn translated_list_copy_preserves_titles_paths_and_provider_names() {
+    use crate::{localization::UiLanguage, presentation::view::Presentation};
+    let mut snapshot = Snapshot::default();
+    snapshot.lists.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
+        "data":[
+            {"id":{"provider":"codex","id":"named"},"name":"設定\n{0}","cwd":"/設定/{0}","listStale":true},
+            {"id":{"provider":"codex","id":"unnamed"}},
+            {"id":{"provider":"codex","id":"literal"},"name":"無題のタスク"}
+        ],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,
+        "providerErrors":{"設定":"provider failure"}
+    })).unwrap()));
+    let japanese = Presentation::project(Arc::new(snapshot.clone()), "", None).unwrap();
+    snapshot.catalog.ui_language = UiLanguage::English;
+    let english = Presentation::project(Arc::new(snapshot), "", Some(&japanese)).unwrap();
+    let list = english.list.as_ref().unwrap();
+    assert!(!Arc::ptr_eq(list, japanese.list.as_ref().unwrap()));
+    assert_eq!(list.threads[0].title, "設定\n{0} (saved · unverified)");
+    assert_eq!(list.threads[0].copy_items[0].label, "Path");
+    assert_eq!(
+        list.threads[0].copy_items[0].value.as_deref(),
+        Some("/設定/{0}")
+    );
+    assert_eq!(list.threads[1].title, "Untitled task");
+    assert_eq!(list.threads[2].title, "無題のタスク");
+    assert_eq!(
+        list.notice.as_deref(),
+        Some(
+            "The conversation list is incomplete (設定). Saved results from unavailable providers may be out of date."
+        )
+    );
+    let same = Presentation::project(english.snapshot.clone(), "", Some(&english)).unwrap();
+    assert!(Arc::ptr_eq(list, same.list.as_ref().unwrap()));
 }

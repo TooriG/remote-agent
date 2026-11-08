@@ -227,9 +227,11 @@ impl Browser {
             credentials::Prepared::Metadata(metadata) => output.credentials = Some(metadata),
             #[cfg(test)]
             credentials::Prepared::Cookies { cookies, skipped } => {
+                output.notice = Some(agent_protocol::browser::BrowserNotice::CookiesImported {
+                    count: cookies.len() as u64,
+                    skipped: skipped as u64,
+                });
                 if cookies.is_empty() {
-                    output.value =
-                        format!("取り込めるCookieがありません（期限切れなど{skipped}件を除外）。");
                     return Ok(output);
                 }
                 let page = &state.pages[thread];
@@ -238,10 +240,6 @@ impl Browser {
                 let session = chrome.attach(&page.active).await?;
                 chrome.action(&session, &BrowserAction::Reload).await?;
                 state.pages.get_mut(thread).unwrap().generation += 1;
-                output.value = format!(
-                    "Cookieを{}件取り込みました（期限切れなど{skipped}件を除外）。ログイン状態をサイトで確認してください。",
-                    cookies.len()
-                );
             }
         }
         Ok(output)
@@ -399,6 +397,7 @@ impl Browser {
             loading: chrome.loading(&session),
             page_text: output.page_text,
             value: output.value,
+            notice: output.notice,
             credentials: output.credentials,
             renderer_id: String::new(),
         })

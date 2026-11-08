@@ -66,8 +66,10 @@ pub(crate) fn controls() -> View {
             }) {
                 picker.set(None);
             }
-            if let Some(request) = p.snapshot.permission_control(&draft).load_request {
-                connection.dispatch(Intent::ReadPermissionSettings(request));
+            if let Some(provider) = p.snapshot.permission_control(&draft).load_provider {
+                connection.dispatch(Intent::ReadPermissionSettings(op::ReadPermissionSettings {
+                    provider,
+                }));
             }
         });
     });
@@ -638,7 +640,7 @@ fn picker_data(p: &Presentation, picker: &Picker) -> Value {
             "id": serde_json::to_string(&notice.id).expect("Core error IDs are serializable"),
             "title": localized(notice.title.clone()), "text": localized(notice.text.to_string()), "recovery": notice.recovery_label.clone().map(localized),
         })).collect::<Vec<_>>(),
-        "customModel": p.snapshot.custom_model_choice(picker.provider, &picker.query).map(|model| model.id),
+        "customModel": settings.custom_model_choice(picker.provider, &picker.query).map(|model| model.id),
         "openrouter": settings.openrouter_picks(picker.provider).map(|picks| json!({
             "route": picks.route.map(|route| crate::l10n::tr_format("選択中の送信先: {0}", [&route])),
             "flash": picks.flash.is_some(), "flashSelected": picks.flash_selected,
@@ -654,7 +656,11 @@ fn picker_data(p: &Presentation, picker: &Picker) -> Value {
         })),
         "account": account.as_ref().map(|account| json!({"title": account.email.as_ref().unwrap_or(&account.id), "asset": crate::accounts::icon(account.provider),
             "usage": settings.account_weekly_usage(account.provider, account.id.clone()).into_iter()
-                .map(|window| agent_protocol::operations::UsageWindow { label: localized(window.label), ..window }).collect::<Vec<_>>(),
+                .map(|window| json!({
+                    "label": agent_core::presentation::model_settings::usage_window_label(crate::l10n::language(), window.period, window.name),
+                    "remainingPercent": window.remaining_percent,
+                    "resetsAt": window.resets_at,
+                })).collect::<Vec<_>>(),
         })),
     })
 }
@@ -695,7 +701,7 @@ fn picker_intent(p: &Presentation, picker: &Picker, action: &str, value: &str) -
         "custom" => Intent::SelectModel {
             thread_id,
             model: p
-                .snapshot
+                .settings
                 .custom_model_choice(picker.provider, &picker.query)?,
         },
         "openrouter-flash" => Intent::SelectModel {
@@ -747,11 +753,11 @@ mod tests {
             "selected":{"codex":"shared", "claude":"shared"}, "accounts":[
                 {"id":"shared","provider":"claude","email":"other@example.invalid"},
                 {"id":"shared","provider":"codex","email":"native@example.invalid", "usage":{"fetchedAt":1,"windows":[
-                    {"label":"5時間枠", "remainingPercent":72}, {"label":"週間枠","remainingPercent":42}
+                    {"period":{"kind":"minutes","minutes":300}, "remainingPercent":72}, {"period":{"kind":"minutes","minutes":10080},"remainingPercent":42}
                 ]}}
             ]
         })).unwrap()));
-        let draft = state.pane.navigation.draft_key.clone();
+        let draft = state.panes.primary().navigation.draft_key.clone();
         Arc::make_mut(&mut state.input.drafts).insert(
             draft.clone(),
             Arc::new(Draft {
@@ -777,7 +783,7 @@ mod tests {
     #[test]
     fn native_model_form_uses_core_search_settings_and_provider_scoped_account_limits() {
         let (state, picker) = fixture();
-        let p = Presentation::project(Arc::new(state), None);
+        let p = Presentation::project(Arc::new(state), "", None).unwrap();
         let data = picker_data(&p, &picker);
         let fixture: Value = serde_json::from_str(include_str!(
             "../apple/Tests/BexNshNativeTests/Fixtures/model-picker.json"
@@ -816,7 +822,7 @@ mod tests {
             )]
             .into(),
         );
-        let p = Presentation::project(Arc::new(state), None);
+        let p = Presentation::project(Arc::new(state), "", None).unwrap();
         let data = picker_data(&p, &picker);
         assert_eq!(data["permissions"]["selected"], "0");
         assert_eq!(data["permissions"]["choices"][2]["title"], "フルアクセス");
@@ -851,7 +857,7 @@ mod tests {
     fn deepseek_form_offers_flash_through_openrouter_once_the_host_lists_it() {
         let (mut state, mut picker) = fixture();
         picker.provider = Some(ProviderKind::DeepSeek);
-        let p = Presentation::project(Arc::new(state.clone()), None);
+        let p = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
         assert_eq!(
             picker_data(&p, &picker)["openrouter"],
             json!({"route": null, "flash": false, "flashSelected": false})
@@ -862,7 +868,7 @@ mod tests {
             serde_json::from_value(json!({"id":"deepseek:router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":flash},"displayName":"OpenRouter · DeepSeek V4.1 Flash"}))
                 .unwrap(),
         );
-        let p = Presentation::project(Arc::new(state), None);
+        let p = Presentation::project(Arc::new(state), "", None).unwrap();
         assert_eq!(picker_data(&p, &picker)["openrouter"]["flash"], true);
         assert!(
             matches!(picker_intent(&p, &picker, "openrouter-flash", ""), Some(Intent::SelectModel {model, thread_id}) if model.provider == ProviderKind::DeepSeek && model.id == flash && thread_id == picker.draft)
@@ -876,7 +882,7 @@ mod tests {
     fn a_disconnected_model_form_keeps_error_recovery_and_dismissal_available() {
         let (mut state, picker) = fixture();
         state.connection.connected = false;
-        state.operations.insert(
+        Arc::make_mut(&mut state.operations).insert(
             op::OperationKey::Accounts,
             op::OperationState {
                 generation: 7,
@@ -885,7 +891,7 @@ mod tests {
                 },
             },
         );
-        let p = Presentation::project(Arc::new(state), None);
+        let p = Presentation::project(Arc::new(state), "", None).unwrap();
         let id = op::ErrorId::Operation {
             key: op::OperationKey::Accounts,
             generation: 7,
@@ -911,7 +917,7 @@ mod tests {
         for disconnected in [true, false] {
             state.connection.connected = !disconnected;
             if !disconnected {
-                state.operations.insert(
+                Arc::make_mut(&mut state.operations).insert(
                     op::OperationKey::Submission {
                         draft_key: picker.draft.clone(),
                     },
@@ -921,7 +927,7 @@ mod tests {
                     },
                 );
             }
-            let p = Presentation::project(Arc::new(state.clone()), None);
+            let p = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
             assert_eq!(picker_data(&p, &picker)["disabled"], true);
             for (action, value) in [
                 ("model", "codex/native"),

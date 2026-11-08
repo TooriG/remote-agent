@@ -53,15 +53,24 @@ class NativeTerminalTest {
         try {
             withContext(Dispatchers.Main) {
                 model =
-                    ViewModelProvider(models, viewModelFactory { initializer { AndroidAppModel(isolated) } })[
-                        AndroidAppModel::class.java]
+                    ViewModelProvider(
+                        models,
+                        viewModelFactory {
+                            initializer {
+                                AndroidAppModel(
+                                    isolated,
+                                    dev.remoteagent.core.DevicePreferences(AndroidPreferenceStorage(isolated)),
+                                )
+                            }
+                        },
+                    )[AndroidAppModel::class.java]
                 model.pair(File(base.cacheDir, "fixture-invitation.json").readText())
             }
             withTimeout(30_000) {
                 while (
                     withContext(Dispatchers.Main) {
                         assertNull("Pairing must not fail while waiting for models", model.notice)
-                        model.busy || !model.snapshot.connected() || model.snapshot.models().isEmpty()
+                        model.busy || !model.snapshot.connected() || model.settings.modelsMatching(null, "").isEmpty()
                     }
                 ) delay(20)
             }
@@ -77,7 +86,7 @@ class NativeTerminalTest {
             val device = UiDevice.getInstance(instrumentation)
             fun awaitTerminalReady() {
                 compose.waitUntil(10_000) {
-                    model.snapshot.terminalView(handle)?.let { it.acceptsInput && !it.loading } == true
+                    model.terminals.view(model.language, handle)?.let { it.acceptsInput && !it.loading } == true
                 }
                 assertFalse(device.hasObject(By.text("実行中")))
                 assertFalse(device.hasObject(By.text("起動中")))

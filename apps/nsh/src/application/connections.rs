@@ -274,7 +274,7 @@ mod tests {
     use super::*;
     use crate::storage::{Host as Profile, Storage};
     use agent_core::{
-        client::persistence::{ClientStorage, StorageKey},
+        client::persistence::ClientStorage,
         state::{Event, Snapshot},
     };
 
@@ -297,10 +297,7 @@ mod tests {
                 host: host.clone(),
                 handed: Default::default(),
             }
-            .save(
-                StorageKey::LocalState,
-                agent_core::persistence::encode(&snapshot).unwrap(),
-            )
+            .save(agent_core::persistence::encode(&snapshot).unwrap())
             .unwrap();
         }
         agent_local_host::save_private_json(&root.join("hosts.json"), &profiles).unwrap();
@@ -354,7 +351,7 @@ mod tests {
             let before = app.snapshot().publications[host].0.clone();
             let mut snapshot = (*before.snapshot).clone();
             snapshot.connection.connected = true;
-            let value = Presentation::project(Arc::new(snapshot), Some(&before));
+            let value = Presentation::project(Arc::new(snapshot), "", Some(&before)).unwrap();
             app.state.send_modify(|state| {
                 Arc::make_mut(state).receive(Update::Presentation {
                     host: host.into(),
@@ -519,7 +516,7 @@ mod tests {
             })).unwrap()));
             state.publications.insert(
                 id.into(),
-                Shared(Presentation::project(Arc::new(snapshot), None)),
+                Shared(Presentation::project(Arc::new(snapshot), "", None).unwrap()),
             );
         }
         let sources = state.list_sources();
@@ -550,6 +547,7 @@ mod tests {
         let previous = state.publications["one"].0.clone();
         let (next, _) = agent_core::state::reduce(
             &previous.snapshot,
+            "",
             Event::Intent(Intent::SetDraftText {
                 thread_id: previous.context.navigation().draft_key,
                 text: "typed".into(),
@@ -557,7 +555,7 @@ mod tests {
         );
         state.receive(Update::Presentation {
             host: "one".into(),
-            value: Presentation::project(Arc::new(next), Some(&previous)),
+            value: Presentation::project(Arc::new(next), "", Some(&previous)).unwrap(),
         });
         assert!(state.list_inputs() == inputs);
         state.receive(Update::Hosts(vec![Profile {

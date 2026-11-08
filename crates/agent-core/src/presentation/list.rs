@@ -1,6 +1,8 @@
 //! The visible list combines wire summaries with locally observed activity.
+use super::task_title;
+use crate::localization::{UiLanguage, localized_ui_format};
 use crate::{
-    models::{Project, ProjectRoot, task_active, task_title},
+    models::{Project, ProjectRoot, task_active},
     state::{
         Snapshot,
         projects::{ChatPlacements, project_chat_visible},
@@ -171,15 +173,45 @@ fn coordinator_url(project_id: &str) -> Option<String> {
 }
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct ThreadCopyItem {
+    pub label: String,
+    pub value: Option<String>,
+}
+
+fn thread_copy_items(
+    language: UiLanguage,
+    title: &str,
+    id: &str,
+    cwd: Option<&str>,
+    branch: Option<&str>,
+) -> Vec<ThreadCopyItem> {
+    [
+        ("パス", cwd),
+        ("ブランチ", branch),
+        // BEX has no public thread URL, so a thread copies its undecorated title.
+        ("スレッド", Some(title)),
+        ("スレッドID", Some(id)),
+    ]
+    .into_iter()
+    .map(|(label, value)| ThreadCopyItem {
+        label: language.text(label).into(),
+        value: value.filter(|value| !value.is_empty()).map(str::to_owned),
+    })
+    .collect()
+}
+
+#[derive(Clone, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ThreadSummary {
     pub host_id: String,
     pub id: crate::session::SessionRef,
     pub title: String,
+    pub copy_items: Vec<ThreadCopyItem>,
     pub project_id: Option<String>,
     pub active: bool,
     pub waiting: bool,
     pub unread: bool,
-    pub worktree_status: Option<crate::models::WorktreeStatus>,
+    pub has_changes: Option<bool>,
 }
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -197,6 +229,7 @@ pub struct ThreadList {
 /// Only the data consumed by list presentation. Conversation bodies and
 /// operation generations are deliberately absent from its equality contract.
 pub(crate) struct ListSource<'a> {
+    language: UiLanguage,
     lists: &'a crate::state::Lists,
     accounts: &'a Option<std::sync::Arc<agent_protocol::operations::Accounts>>,
     conversations: &'a std::sync::Arc<
@@ -208,6 +241,7 @@ pub(crate) struct ListSource<'a> {
 }
 impl<'a> ListSource<'a> {
     pub(crate) fn new(
+        language: UiLanguage,
         lists: &'a crate::state::Lists,
         accounts: &'a Option<std::sync::Arc<agent_protocol::operations::Accounts>>,
         conversations: &'a std::sync::Arc<
@@ -218,6 +252,7 @@ impl<'a> ListSource<'a> {
         connected: bool,
     ) -> Self {
         Self {
+            language,
             lists,
             accounts,
             conversations,
@@ -255,7 +290,8 @@ impl<'a> ListSource<'a> {
     }
     pub(crate) fn equivalent(&self, other: &Self) -> bool {
         use crate::state::Same;
-        self.lists.threads.same(&other.lists.threads)
+        self.language == other.language
+            && self.lists.threads.same(&other.lists.threads)
             && self
                 .lists
                 .project_threads
@@ -343,7 +379,7 @@ fn list_metadata(thread: &crate::models::Thread) -> impl PartialEq + '_ {
         thread.updated_at,
         &thread.parent_id,
         &thread.project_id,
-        thread.worktree_status,
+        thread.has_changes,
         thread.list_stale,
     )
 }
@@ -351,6 +387,7 @@ fn list_metadata(thread: &crate::models::Thread) -> impl PartialEq + '_ {
 impl Snapshot {
     pub(crate) fn list_source(&self) -> ListSource<'_> {
         ListSource::new(
+            self.catalog.ui_language,
             &self.lists,
             &self.catalog.account.accounts,
             &self.sessions.conversations,
@@ -360,12 +397,10 @@ impl Snapshot {
         )
     }
 }
-#[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     /// The selected folder is separate from the provider's execution directory.
-    pub fn selected_directory(&self) -> String {
-        let thread = self
-            .pane
+    pub fn selected_directory(&self, pane: &crate::state::PaneState) -> String {
+        let thread = pane
             .navigation
             .thread_id
             .as_ref()
@@ -375,10 +410,13 @@ impl Snapshot {
         }) {
             String::new()
         } else {
-            self.pane.navigation.cwd.clone()
+            pane.navigation.cwd.clone()
         }
     }
+}
 
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
     pub fn thread_list(&self) -> Option<ThreadList> {
         self.list_source().thread_list()
     }
@@ -417,7 +455,6 @@ impl ListSource<'_> {
         &self,
         list: &crate::models::ThreadList,
         include_standalone: bool,
-        additional_queries: usize,
     ) -> (ThreadList, ChatPlacements<'_>) {
         let waiting = self.waiting_sessions();
         let search = self.lists.list_query.search_term.to_lowercase();
@@ -427,7 +464,7 @@ impl ListSource<'_> {
             .map(|project| project.id.as_str())
             .collect();
         let errors = self.list_error_providers(list);
-        let notice = (!errors.is_empty()).then(|| format!("会話一覧は部分結果です（{}）。取得できない提供元の保存済み表示は最新とは限りません。", errors.join("、")));
+        let notice = (!errors.is_empty()).then(|| localized_ui_format(self.language, "会話一覧は部分結果です（{0}）。取得できない提供元の保存済み表示は最新とは限りません。".into(), vec![errors.join("、")]));
         let preferences = self.lists.project_preferences.get(self.storage_scope);
         let mut projects = Vec::new();
         let mut hidden_projects = Vec::new();
@@ -456,52 +493,19 @@ impl ListSource<'_> {
                 prefs.and_then(|p| p.order).unwrap_or(usize::MAX),
             )
         });
-        let (queries, shortcut_queries) = projects
-            .iter()
-            .filter(|(_, _, _, expanded)| *expanded)
-            .fold(
-                (
-                    (if include_standalone {
-                        list.data.len()
-                    } else {
-                        0
-                    })
-                    .saturating_add(additional_queries),
-                    0usize,
-                ),
-                |(queries, shortcuts), (_, prefs, page, _)| {
-                    (
-                        queries.saturating_add(page.map_or(0, |page| page.data.len())),
-                        shortcuts.saturating_add(prefs.map_or(0, |prefs| prefs.placed_chats.len())),
-                    )
-                },
-            );
-        let metadata = if shortcut_queries >= 128
-            && self.conversations.len().saturating_mul(2) < shortcut_queries
-            && self
-                .lists
-                .project_threads
-                .values()
-                .fold(list.data.len(), |count, page| {
-                    count.saturating_add(page.data.len())
-                })
-                >= 128
-        {
-            Some(crate::state::index_missing_metadata(
-                self.conversations,
-                self.listed_threads(),
-                projects
-                    .iter()
-                    .filter(|(_, _, _, expanded)| *expanded)
-                    .flat_map(|(_, prefs, ..)| prefs.iter().flat_map(|prefs| &prefs.placed_chats))
-                    .map(|chat| &chat.id),
-            ))
-        } else {
-            None
-        };
-        let placements = ChatPlacements::new(preferences, queries);
+        let metadata = crate::state::index_missing_metadata(
+            self.conversations,
+            self.listed_threads(),
+            projects
+                .iter()
+                .filter(|(_, _, _, expanded)| *expanded)
+                .flat_map(|(_, prefs, ..)| prefs.iter().flat_map(|prefs| &prefs.placed_chats))
+                .map(|chat| &chat.id),
+        );
+        let placements = ChatPlacements::new(preferences);
         let summaries = if include_standalone {
             thread_summaries(
+                self.language,
                 list.data.iter().filter(|thread| {
                     thread
                         .project_id
@@ -561,7 +565,10 @@ impl ListSource<'_> {
                             || archived_ids.is_some_and(|ids| !ids.is_empty());
                         if !self.connected && page.is_none() {
                             summary.error = Some(super::error::ErrorText {
-                                message: "接続するとタスクを読み込めます".into(),
+                                message: self
+                                    .language
+                                    .text("接続するとタスクを読み込めます")
+                                    .into(),
                                 details: None,
                             });
                         }
@@ -575,7 +582,8 @@ impl ListSource<'_> {
                                     summary.loading = true
                                 }
                                 crate::state::operations::OperationPhase::Failed { message } => {
-                                    summary.error = Some(super::error::error_text(message))
+                                    summary.error =
+                                        Some(super::error::error_text(self.language, message))
                                 }
                             }
                         }
@@ -588,6 +596,7 @@ impl ListSource<'_> {
                             });
                             summary.threads = if !has_archive_filter {
                                 thread_summaries(
+                                    self.language,
                                     data,
                                     &self.lists.activity.active,
                                     &self.lists.activity.unread,
@@ -597,6 +606,7 @@ impl ListSource<'_> {
                                 )
                             } else {
                                 thread_summaries(
+                                    self.language,
                                     data.filter(|thread| {
                                         project_chat_visible(
                                             archived_before,
@@ -623,34 +633,33 @@ impl ListSource<'_> {
                             let errors = self.list_error_providers(page);
                             if !errors.is_empty() {
                                 summary.error = Some(super::error::ErrorText {
-                                    message: format!(
-                                        "一部を取得できません（{}）",
-                                        errors.join("、")
+                                    message: localized_ui_format(
+                                        self.language,
+                                        "一部を取得できません（{0}）".into(),
+                                        vec![errors.join("、")],
                                     ),
                                     details: None,
                                 });
                             }
                         }
-                        let placed_ids = prefs
-                            .filter(|prefs| {
-                                prefs.archived_before.is_some() && prefs.placed_chats.len() >= 64
-                            })
-                            .map(|prefs| {
-                                prefs
-                                    .placed_chats
-                                    .iter()
-                                    .map(|chat| &chat.id)
-                                    .collect::<HashSet<_>>()
-                            });
+                        let placed_ids =
+                            prefs
+                                .filter(|prefs| prefs.archived_before.is_some())
+                                .map(|prefs| {
+                                    prefs
+                                        .placed_chats
+                                        .iter()
+                                        .map(|chat| &chat.id)
+                                        .collect::<HashSet<_>>()
+                                });
                         let placed = prefs
                             .into_iter()
                             .flat_map(|p| &p.placed_chats)
                             .map(|chat| {
-                                metadata
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.get(&chat.id))
-                                    .copied()
-                                    .unwrap_or_else(|| self.thread_metadata(&chat.id))
+                                self.conversations
+                                    .get(&chat.id)
+                                    .map(AsRef::as_ref)
+                                    .or_else(|| metadata.get(&chat.id).copied().flatten())
                                     .map(Cow::Borrowed)
                                     .unwrap_or_else(|| {
                                         Cow::Owned(crate::models::Thread {
@@ -674,29 +683,28 @@ impl ListSource<'_> {
                                         ),
                                         thread.updated_at,
                                         archived_before.is_some()
-                                            && thread.id.as_ref().is_some_and(
-                                                |id| match &placed_ids {
-                                                    Some(ids) => ids.contains(id),
-                                                    None => prefs.is_some_and(|prefs| {
-                                                        prefs
-                                                            .placed_chats
-                                                            .iter()
-                                                            .any(|chat| &chat.id == id)
-                                                    }),
-                                                },
-                                            ),
+                                            && thread.id.as_ref().is_some_and(|id| {
+                                                placed_ids
+                                                    .as_ref()
+                                                    .is_some_and(|ids| ids.contains(id))
+                                            }),
                                     )
                             })
                             .filter(|thread| {
                                 search.is_empty()
-                                    || task_title(thread.name.as_deref(), thread.preview.as_deref())
-                                        .to_lowercase()
-                                        .contains(&search)
+                                    || task_title(
+                                        self.language,
+                                        thread.name.as_deref(),
+                                        thread.preview.as_deref(),
+                                    )
+                                    .to_lowercase()
+                                    .contains(&search)
                             })
                             .collect::<Vec<_>>();
                         summary.threads.splice(
                             0..0,
                             thread_summaries(
+                                self.language,
                                 placed.iter().map(AsRef::as_ref),
                                 &self.lists.activity.active,
                                 &self.lists.activity.unread,
@@ -720,14 +728,7 @@ impl ListSource<'_> {
     /// Recent top-level chats across standalone and project pages, regardless of expansion.
     pub fn recent_thread_list(&self) -> Option<ThreadList> {
         let source = self.lists.threads.as_deref()?;
-        let additional_queries = self
-            .lists
-            .project_threads
-            .values()
-            .fold(source.data.len(), |queries, page| {
-                queries.saturating_add(page.data.len())
-            });
-        let (mut list, placements) = self.list_projection(source, false, additional_queries);
+        let (mut list, placements) = self.list_projection(source, false);
         let waiting = self.waiting_sessions();
         let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
         let mut rows: BTreeMap<_, &crate::models::Thread> = BTreeMap::new();
@@ -775,6 +776,7 @@ impl ListSource<'_> {
         list.has_more |= rows.len() > limit;
         rows.truncate(limit);
         list.threads = thread_summaries(
+            self.language,
             rows.into_iter(),
             &self.lists.activity.active,
             &self.lists.activity.unread,
@@ -800,11 +802,12 @@ impl ListSource<'_> {
 
     pub fn thread_list(&self) -> Option<ThreadList> {
         let list = self.lists.threads.as_deref()?;
-        Some(self.list_projection(list, true, 0).0)
+        Some(self.list_projection(list, true).0)
     }
 }
 
 fn thread_summaries<'a>(
+    language: UiLanguage,
     data: impl Iterator<Item = &'a crate::models::Thread>,
     active: &BTreeMap<crate::session::SessionRef, bool>,
     unread: &BTreeSet<crate::session::SessionRef>,
@@ -812,29 +815,29 @@ fn thread_summaries<'a>(
     project_ids: &HashSet<&str>,
     project_override: Option<&str>,
 ) -> Vec<ThreadSummary> {
-    let mut indexed = None;
+    let waiting: HashSet<_> = waiting.iter().collect();
     data.filter(|thread| thread.parent_id.is_none())
         .filter_map(|thread| Some((thread, thread.id.as_ref()?)))
-        .enumerate()
-        .map(|(index, (thread, id))| {
+        .map(|(thread, id)| {
             let active = task_active(active.get(id).copied(), thread.status);
             let unread = unread.contains(id);
-            let waiting = if waiting.len() >= 64 && index >= 64 {
-                indexed
-                    .get_or_insert_with(|| waiting.iter().collect::<HashSet<_>>())
-                    .contains(id)
-            } else {
-                waiting.contains(id)
-            };
+            let waiting = waiting.contains(id);
+            let title = task_title(language, thread.name.as_deref(), thread.preview.as_deref());
             ThreadSummary {
                 host_id: String::new(),
                 id: id.clone(),
-                title: task_title(thread.name.as_deref(), thread.preview.as_deref()).to_owned()
-                    + if thread.list_stale == Some(true) {
-                        "（保存済み・未確認）"
-                    } else {
-                        ""
-                    },
+                title: if thread.list_stale == Some(true) {
+                    localized_ui_format(language, "list.saved_title".into(), vec![title.into()])
+                } else {
+                    title.into()
+                },
+                copy_items: thread_copy_items(
+                    language,
+                    title,
+                    &id.id,
+                    thread.cwd.as_deref(),
+                    thread.git_branch.as_deref(),
+                ),
                 project_id: project_override
                     .or_else(|| thread.project_id.as_deref())
                     .filter(|id| project_ids.contains(*id))
@@ -842,7 +845,7 @@ fn thread_summaries<'a>(
                 active,
                 waiting,
                 unread,
-                worktree_status: thread.worktree_status,
+                has_changes: thread.has_changes,
             }
         })
         .collect()
@@ -984,6 +987,7 @@ mod tests {
         Arc::make_mut(&mut state.lists.project_threads).insert("project".into(), page);
         state = reduce(
             &state,
+            "",
             Event::Intent(Intent::MoveChatToProject {
                 thread_id: placed,
                 project_id: "project".into(),
@@ -1101,6 +1105,7 @@ mod tests {
         let mut snapshot = Snapshot::default();
         ListSessions::new(Default::default()).apply(
             &mut snapshot,
+            "",
             serde_json::from_value(json!({
                 "data": [
                     {"id":{"provider":"codex","id":"assigned"}, "projectId":"known"},
@@ -1131,17 +1136,14 @@ mod tests {
     fn returned_project_header_replaces_branding_while_preserving_loaded_tasks() {
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.lists.expanded_projects).insert("project".into(), 5);
-        ListSessions::new(Default::default()).apply(
-            &mut snapshot,
-            serde_json::from_value(json!({
+        ListSessions::new(Default::default()).apply(&mut snapshot, "", serde_json::from_value(json!({
                 "data":[{"id":{"provider":"codex","id":"task"},"projectId":"project"}],
                 "projects":[{"id":"project","name":"Old project","roots":[],"icon":{"lightPng":"BAUG","darkPng":"BAUG"}}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{"project":{"limit":5,"hasMore":false}},"limit":5
             }))
-            .unwrap(),
-        );
+            .unwrap());
         for icon in [Some("AQID"), None] {
-            ListSessions::new(Default::default()).apply(&mut snapshot, serde_json::from_value(json!({
+            ListSessions::new(Default::default()).apply(&mut snapshot, "", serde_json::from_value(json!({
                 "data":[],
                 "projects":[{"id":"project","name":"Renamed project","roots":[],"icon":icon.map(|png| json!({"lightPng":png,"darkPng":"BAUG"}))}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
@@ -1153,6 +1155,7 @@ mod tests {
             }
             .apply(
                 &mut snapshot,
+                "",
                 agent_protocol::operations::ListDecorations {
                     icons: [(
                         "project".into(),
@@ -1205,6 +1208,7 @@ mod tests {
             let previous_list = previous.thread_list();
             crate::state::operations::ListAccounts {}.apply(
                 &mut snapshot,
+                "",
                 serde_json::from_value(json!({
                     "accounts": providers.iter().map(|provider| json!({
                         "provider":provider,"id":"account"
@@ -1250,6 +1254,7 @@ mod tests {
         let mut snapshot = snapshot_list(json!([]));
         crate::state::operations::ListAccounts {}.apply(
             &mut snapshot,
+            "",
             serde_json::from_value(json!({"accounts":[],"selected":{}})).unwrap(),
         );
         let page = Arc::make_mut(snapshot.lists.threads.as_mut().unwrap());
@@ -1275,6 +1280,7 @@ mod tests {
         };
         ListSessions::new(Default::default()).apply(
             &mut snapshot,
+            "",
             page(
                 serde_json::json!([{"id":{"provider":"codex","id":"native"},"name":"Cached"}]),
                 serde_json::json!({}),
@@ -1282,6 +1288,7 @@ mod tests {
         );
         ListSessions::new(Default::default()).apply(
             &mut snapshot,
+            "",
             page(
                 serde_json::json!([{"id":{"provider":"claude","id":"uuid"},"name":"Available"}]),
                 serde_json::json!({"codex":{"message":"offline"}}),
@@ -1302,18 +1309,13 @@ mod tests {
                 .title
                 .contains("未確認")
         );
-        assert!(snapshot.pane.error.is_none());
+        assert!(snapshot.panes.primary().error.is_none());
     }
     #[rstest::rstest]
-    fn list_preserves_worktree_status_alongside_activity_after_serialization_and_refresh(
+    fn list_preserves_has_changes_alongside_activity_after_serialization_and_refresh(
         #[values(false, true)] active: bool,
         #[values(false, true)] unread: bool,
-        #[values(
-            None,
-            Some(models::WorktreeStatus::Unmerged),
-            Some(models::WorktreeStatus::Merged)
-        )]
-        status: Option<models::WorktreeStatus>,
+        #[values(None, Some(true), Some(false))] status: Option<bool>,
     ) {
         let mut snapshot = Snapshot::default();
         std::sync::Arc::make_mut(&mut snapshot.lists.activity)
@@ -1336,17 +1338,17 @@ mod tests {
         let mut thread = json!({"id":{"provider":"codex","id":"task"},"name":"Worktree task",
             "status":if active {"running"} else {"idle"}});
         if let Some(status) = status {
-            thread["worktreeStatus"] = json!(status);
+            thread["hasChanges"] = json!(status);
         }
         let page: models::ThreadList = serde_json::from_value(json!({
             "data":[thread], "projects":[],
             "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5, }))
         .unwrap();
-        ListSessions::new(Default::default()).apply(&mut snapshot, page);
+        ListSessions::new(Default::default()).apply(&mut snapshot, "", page);
         let restored: Snapshot =
             serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
         let rows = restored.thread_list().unwrap();
-        assert_eq!(rows.threads[0].worktree_status, status);
+        assert_eq!(rows.threads[0].has_changes, status);
         assert_eq!(rows.threads[0].active, active);
         assert_eq!(rows.threads[0].unread, unread);
     }

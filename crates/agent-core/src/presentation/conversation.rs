@@ -1,6 +1,7 @@
 //! Immutable conversation projection shared by desktop, Swift and Kotlin.
 use super::{ItemMetadata, Role, body, item_presentation, project_items, source_order};
 use crate::{
+    localization::{UiLanguage, localized_ui_format},
     models,
     state::{PendingSubmission, Snapshot},
 };
@@ -11,12 +12,15 @@ use std::{
     sync::Arc,
 };
 mod images;
+pub mod rows;
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.
-    pub fn conversation_thread(&self) -> Option<Arc<models::Thread>> {
-        if let Some(source) = self
-            .pane
+    pub fn conversation_thread(
+        &self,
+        pane: &crate::state::PaneState,
+    ) -> Option<Arc<models::Thread>> {
+        if let Some(source) = pane
             .navigation
             .thread_id
             .as_ref()
@@ -27,7 +31,7 @@ impl Snapshot {
         self.sessions
             .pending_submissions
             .values()
-            .any(|pending| pending.draft_key == self.pane.navigation.draft_key)
+            .any(|pending| pending.draft_key == pane.navigation.draft_key)
             .then(|| {
                 Arc::new(models::Thread {
                     ..Default::default()
@@ -38,6 +42,8 @@ impl Snapshot {
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct RenderedConversation {
+    language: UiLanguage,
+    history_notice: Option<String>,
     pub source: Arc<models::Thread>,
     pending: PendingItems,
     pub turns: Vec<Arc<RenderedTurn>>,
@@ -48,6 +54,7 @@ pub struct RenderedConversation {
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct RenderedTurn {
+    language: UiLanguage,
     pub source: Arc<models::Turn>,
     // Native turn IDs may repeat; the occurrence also belongs to this cache entry.
     occurrence: usize,
@@ -56,7 +63,7 @@ pub struct RenderedTurn {
     pub rows: Vec<ConversationRow>,
 }
 /// Native clients cache this layout per unchanged turn; expansion only filters activity rows.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ConversationRow {
     pub id: String,
@@ -74,10 +81,17 @@ fn conversation_row_id(
 ) -> String {
     // Scope every key, including activity expansion, to one turn occurrence.
     // Escaping the delimiter keeps provider IDs from aliasing another scope.
-    let scope = percent_encoding::utf8_percent_encode(turn, percent_encoding::NON_ALPHANUMERIC);
-    format!("{base}:occurrence:{row_occurrence}:turn:{scope}:{turn_occurrence}")
+    format!(
+        "{base}:occurrence:{row_occurrence}:{}",
+        turn_key(turn, turn_occurrence)
+    )
 }
-#[derive(Clone)]
+
+fn turn_key(turn: &str, occurrence: usize) -> String {
+    let scope = percent_encoding::utf8_percent_encode(turn, percent_encoding::NON_ALPHANUMERIC);
+    format!("turn:{scope}:{occurrence}")
+}
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum ConversationRowContent {
     Preparation {
@@ -181,7 +195,6 @@ pub fn minimap_marker_width(distance_from_hover: Option<usize>) -> f32 {
 
 /// Work starts collapsed. A manual choice belongs to the current status;
 /// a transition closes it again, including after deferred-detail hydration.
-#[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn activity_is_expanded(status: &str, expanded_status: Option<String>) -> bool {
     expanded_status.as_deref() == Some(status)
 }
@@ -201,8 +214,21 @@ pub fn should_load_history(
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl RenderedTurn {
+    pub fn key(&self) -> String {
+        turn_key(self.source.id.as_str(), self.occurrence)
+    }
     pub fn conversation_rows(&self) -> Vec<ConversationRow> {
         self.rows.clone()
+    }
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl RenderedConversation {
+    pub fn language(&self) -> UiLanguage {
+        self.language
+    }
+    pub fn history_notice(&self) -> Option<String> {
+        self.history_notice.clone()
     }
 }
 
@@ -213,20 +239,27 @@ pub struct WorkProgress {
 }
 
 impl WorkProgress {
-    pub fn label(&self, now_seconds: f64) -> String {
+    pub fn label(&self, language: UiLanguage, now_seconds: f64) -> String {
         // As T3 Code's working row: the time so far, in the fold's units.
-        let elapsed = self
-            .started_at
-            .map(|started| {
-                format!(
-                    "{} ",
-                    super::duration_text(((now_seconds - started).max(0.) * 1000.) as u64)
-                )
-            })
-            .unwrap_or_default();
-        match self.action.as_deref().filter(|action| !action.is_empty()) {
-            Some(action) => format!("{elapsed}作業中 · {action}"),
-            None => format!("{elapsed}作業中…"),
+        let elapsed = self.started_at.map(|started| {
+            super::duration_text(language, ((now_seconds - started).max(0.) * 1000.) as u64)
+        });
+        match (
+            elapsed,
+            self.action.as_deref().filter(|action| !action.is_empty()),
+        ) {
+            (Some(elapsed), Some(action)) => localized_ui_format(
+                language,
+                "work.progress.action.duration".into(),
+                vec![elapsed, action.into()],
+            ),
+            (Some(elapsed), None) => {
+                localized_ui_format(language, "work.progress.duration".into(), vec![elapsed])
+            }
+            (None, Some(action)) => {
+                localized_ui_format(language, "作業中 · {0}".into(), vec![action.into()])
+            }
+            (None, None) => language.text("作業中…").into(),
         }
     }
 }
@@ -277,14 +310,30 @@ pub enum ItemSource {
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct RenderedItem {
+    language: Option<UiLanguage>,
     pub source: ItemSource,
     pub data: ItemPresentation,
 }
+// Prepared bodies are immutable render resources. Reusing their identity avoids
+// comparing or preparing long Markdown bodies again in each native surface.
+impl PartialEq for RenderedItem {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl RenderedItem {
+    pub fn unknown_submission_id(&self) -> Option<String> {
+        match &self.source {
+            ItemSource::Pending(id, pending) if pending.delivery_unknown => Some(id.clone()),
+            _ => None,
+        }
+    }
     pub fn detail_blocks(&self) -> Vec<super::markdown::MarkdownBlock> {
         match &self.source {
-            ItemSource::Native(item) => body::detail_blocks(item),
+            ItemSource::Native(item) => {
+                body::detail_blocks(self.language.unwrap_or_default(), item)
+            }
             ItemSource::Pending(..) => {
                 super::markdown::markdown_blocks(self.data.body.clone().unwrap_or_default())
             }
@@ -292,7 +341,9 @@ impl RenderedItem {
     }
     pub fn expanded_body(&self) -> String {
         match &self.source {
-            ItemSource::Native(item) => body::expanded_body(item),
+            ItemSource::Native(item) => {
+                body::expanded_body(self.language.unwrap_or_default(), item)
+            }
             ItemSource::Pending(..) => self.data.body.clone().expect("pending input has text"),
         }
     }
@@ -305,24 +356,37 @@ impl RenderedItem {
         }
     }
     fn native(
+        language: UiLanguage,
         item: &Arc<models::Item>,
         provider: Option<crate::session::ProviderKind>,
         deferred: bool,
         timestamp_ms: Option<u64>,
         previous: Option<&Arc<Self>>,
     ) -> Arc<Self> {
+        // Plain messages have no translated copy, so retain their native Markdown
+        // caches across a language change. Activity details and attachments do.
+        let localized = match item.body() {
+            models::ItemBody::AssistantText { .. } => false,
+            models::ItemBody::UserMessage { content, .. } => content
+                .iter()
+                .any(|part| matches!(part, models::MessagePart::Attachment { .. })),
+            _ => true,
+        }
+        .then_some(language);
         if let Some(previous) = previous
+            && previous.language == localized
             && previous.data.deferred == deferred
             && previous.data.timestamp_ms == timestamp_ms
         {
             return previous.clone();
         }
-        let presentation = item_presentation(item, provider);
-        let body = body::item_body(item);
+        let presentation = item_presentation(language, item, provider);
+        let body = body::item_body(language, item);
         let image_placeholder = presentation.kind == "imageGeneration"
             && item.status == models::ItemStatus::Running
             && body.images.is_empty();
         Arc::new(Self {
+            language: localized,
             source: ItemSource::Native(item.clone()),
             data: ItemPresentation {
                 id: item
@@ -343,15 +407,22 @@ impl RenderedItem {
         })
     }
     fn pending(
+        language: UiLanguage,
         id: &str,
         pending: &Arc<PendingSubmission>,
         previous: Option<&Arc<Self>>,
     ) -> Arc<Self> {
-        if let Some(previous) = previous {
+        let localized = (pending.delivery_unknown
+            || pending.draft.attachments.iter().any(|file| !file.is_image))
+        .then_some(language);
+        if let Some(previous) = previous
+            && previous.language == localized
+        {
             return previous.clone();
         }
-        let body = body::draft_body(&pending.draft);
+        let body = body::draft_body(language, &pending.draft);
         Arc::new(Self {
+            language: localized,
             source: ItemSource::Pending(id.into(), pending.clone()),
             data: ItemPresentation {
                 id: id.into(),
@@ -360,7 +431,7 @@ impl RenderedItem {
                 kind: "user".into(),
                 title: pending
                     .delivery_unknown
-                    .then(|| "送信結果不明（自動再送しません）".into()),
+                    .then(|| language.text("送信結果不明（自動再送しません）").into()),
                 collapsible: false,
                 body: body.text,
                 image_sources: body.images,
@@ -373,6 +444,7 @@ impl RenderedItem {
 
 /// Pass the previous projection to retain native render identities across deltas.
 pub fn project_conversation(
+    language: UiLanguage,
     draft_key: &crate::state::DraftKey,
     pending_submissions: &std::collections::BTreeMap<
         agent_protocol::ids::ClientInputId,
@@ -399,6 +471,7 @@ pub fn project_conversation(
     pending.sort_by_key(|(_, pending)| pending.sequence);
     let requests = &source.requests;
     if let Some(previous) = previous
+        && language == previous.language
         && Arc::ptr_eq(&source, &previous.source)
         && preparation.is_none_or(|preparation| {
             let id = &preparation.submission.client_user_message_id;
@@ -489,7 +562,13 @@ pub fn project_conversation(
                 .and_then(|previous| native[previous].provider)
                 .zip(turn.provider)
                 .filter(|(from, to)| from != to)
-                .map(|(from, to)| format!("{from:?} → {to:?} に切り替えました"));
+                .map(|(from, to)| {
+                    localized_ui_format(
+                        language,
+                        "{0} → {1} に切り替えました".into(),
+                        vec![format!("{from:?}"), format!("{to:?}")],
+                    )
+                });
             let pending = pending_by_turn
                 .get(&Some(index))
                 .into_iter()
@@ -502,6 +581,7 @@ pub fn project_conversation(
                 .copied();
             let old = cached.get(&(turn.id.as_str(), occurrence)).copied();
             if let Some(old) = old
+                && language == old.language
                 && Arc::ptr_eq(turn, &old.source)
                 && (turn.supports_fork.is_some() || supports_fork == previous_supports_fork)
                 && old.rows.iter().find_map(|row| match &row.content {
@@ -523,7 +603,7 @@ pub fn project_conversation(
                 source.id.as_ref(),
                 supports_fork,
                 handoff,
-                (turn.clone(), occurrence),
+                (turn.clone(), occurrence, language),
                 pending.cloned().collect(),
                 requests.cloned().collect(),
                 old,
@@ -542,6 +622,7 @@ pub fn project_conversation(
         .copied()
         .map(|(id, p)| {
             RenderedItem::pending(
+                language,
                 id,
                 p,
                 queued
@@ -566,6 +647,7 @@ pub fn project_conversation(
             queued.insert(
                 0,
                 RenderedItem::native(
+                    language,
                     &item,
                     source.active_provider,
                     false,
@@ -590,7 +672,7 @@ pub fn project_conversation(
             timestamp_ms: None,
             steer: false,
             content: ConversationRowContent::PendingRequest {
-                request: Box::new(request(source)),
+                request: Box::new(request(language, source)),
             },
         })
         .collect();
@@ -608,7 +690,7 @@ pub fn project_conversation(
             timestamp_ms: None,
             steer: false,
             content: ConversationRowContent::Preparation {
-                preparation: preparation_presentation(preparation),
+                preparation: preparation_presentation(language, preparation),
             },
         });
     }
@@ -637,7 +719,10 @@ pub fn project_conversation(
     let source_paths = previous
         .filter(|old| old.source_paths.as_ref() == &source_paths)
         .map_or_else(|| Arc::new(source_paths), |old| old.source_paths.clone());
+    let history_notice = history_notice(language, &source);
     Arc::new(RenderedConversation {
+        language,
+        history_notice,
         source,
         pending,
         turns,
@@ -648,6 +733,7 @@ pub fn project_conversation(
 }
 
 fn preparation_presentation(
+    language: UiLanguage,
     preparation: &agent_protocol::session::SessionPreparation,
 ) -> PreparationPresentation {
     use agent_protocol::{
@@ -661,16 +747,24 @@ fn preparation_presentation(
                 PreparationStage::Worktree => "ワークツリーを準備中…",
                 PreparationStage::Workspace | PreparationStage::Provider => "開始中…",
             };
-            (text.into(), true, false)
+            (language.text(text).into(), true, false)
         }
         PreparationStatus::Failed { error } => (
-            format!("準備に失敗しました: {}", error.message),
+            localized_ui_format(
+                language,
+                "準備に失敗しました: {0}".into(),
+                vec![error.message.clone()],
+            ),
             false,
             true,
         ),
-        PreparationStatus::Interrupted => ("準備を停止しました。".into(), false, true),
+        PreparationStatus::Interrupted => {
+            (language.text("準備を停止しました。").into(), false, true)
+        }
         PreparationStatus::Unknown => (
-            "送信結果を確認できません。二重実行を避けるため再送していません。".into(),
+            language
+                .text("送信結果を確認できません。二重実行を避けるため再送していません。")
+                .into(),
             false,
             false,
         ),
@@ -725,6 +819,7 @@ mod source_tests {
             ..Default::default()
         });
         let graph = project_conversation(
+            UiLanguage::Japanese,
             &Default::default(),
             &Default::default(),
             source.clone(),
@@ -737,6 +832,7 @@ mod source_tests {
         let mut changed = source.as_ref().clone();
         changed.name = Some("A new title".into());
         let next = project_conversation(
+            UiLanguage::Japanese,
             &Default::default(),
             &Default::default(),
             Arc::new(changed),
@@ -758,7 +854,7 @@ mod preparation_tests {
 
     #[test]
     fn startup_labels_follow_host_stages_in_both_languages() {
-        use crate::localization::{UiLanguage, localized_ui_text};
+        use crate::localization::UiLanguage;
         let id = SessionRef::new(ProviderKind::Codex, "startup".into()).unwrap();
         let mut preparation = SessionPreparation {
             submission: Submission {
@@ -782,20 +878,31 @@ mod preparation_tests {
             (PreparationStage::Provider, "開始中…", "Starting…"),
         ] {
             preparation.stage = stage;
-            let presentation = preparation_presentation(&preparation);
-            assert!(presentation.in_progress);
-            assert!(presentation.retry.is_none());
-            assert_eq!(
-                localized_ui_text(UiLanguage::Japanese, presentation.text.clone()),
-                japanese
-            );
-            assert_eq!(
-                localized_ui_text(UiLanguage::English, presentation.text),
-                english
-            );
+            for (language, expected) in [
+                (UiLanguage::Japanese, japanese),
+                (UiLanguage::English, english),
+            ] {
+                let presentation = preparation_presentation(language, &preparation);
+                assert!(presentation.in_progress);
+                assert!(presentation.retry.is_none());
+                assert_eq!(presentation.text, expected);
+            }
         }
         preparation.status = PreparationStatus::Sending;
-        assert_eq!(preparation_presentation(&preparation).text, "開始中…");
+        assert_eq!(
+            preparation_presentation(UiLanguage::Japanese, &preparation).text,
+            "開始中…"
+        );
+        preparation.status = PreparationStatus::Failed {
+            error: models::ExecutionError {
+                message: "設定\n{0}".into(),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            preparation_presentation(UiLanguage::English, &preparation).text,
+            "Preparation failed: 設定\n{0}"
+        );
     }
 
     #[test]
@@ -837,7 +944,8 @@ mod preparation_tests {
             }),
         );
         let prepared = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread.clone()),
             &None,
@@ -850,7 +958,8 @@ mod preparation_tests {
         )
         .submitted_at_ms = Some(13_000);
         let retimed = project_conversation(
-            &timed.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &timed.panes.primary().navigation.draft_key,
             &timed.sessions.pending_submissions,
             prepared.source.clone(),
             &Some(prepared.clone()),
@@ -875,7 +984,8 @@ mod preparation_tests {
             ..Default::default()
         })]);
         let starting = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread.clone()),
             &Some(prepared.clone()),
@@ -900,7 +1010,8 @@ mod preparation_tests {
             error: Default::default(),
         };
         let failed = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread.clone()),
             &Some(prepared.clone()),
@@ -927,7 +1038,8 @@ mod preparation_tests {
             ..Default::default()
         })]);
         let echoed = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread.clone()),
             &Some(failed),
@@ -936,7 +1048,8 @@ mod preparation_tests {
         assert!(echoed.session_rows.is_empty());
         thread.preparation = None;
         let complete = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread),
             &Some(echoed),
@@ -957,7 +1070,7 @@ fn render_turn(
     session: Option<&crate::session::SessionRef>,
     supports_fork: bool,
     handoff: Option<String>,
-    (source, turn_occurrence): (Arc<models::Turn>, usize),
+    (source, turn_occurrence, language): (Arc<models::Turn>, usize, UiLanguage),
     pending: PendingItems,
     requests: Vec<Arc<WireRequest>>,
     previous: Option<&Arc<RenderedTurn>>,
@@ -1007,6 +1120,7 @@ fn render_turn(
     };
     let render_native = |item: &Arc<models::Item>| {
         RenderedItem::native(
+            language,
             item,
             provider,
             item.is_deferred(),
@@ -1021,6 +1135,7 @@ fn render_turn(
         } else {
             let (id, submission) = retained[index - native.len()];
             RenderedItem::pending(
+                language,
                 id,
                 submission,
                 cached
@@ -1084,7 +1199,7 @@ fn render_turn(
     if let Some(text) = handoff {
         push(ProviderHandoff { text });
     }
-    for segment in project_items(&source, order.len(), metadata) {
+    for segment in project_items(language, &source, order.len(), metadata) {
         let segment = &segment;
         // A later segment of a turn starts with a message sent while it worked.
         steering.set(segment.start > 0);
@@ -1105,7 +1220,7 @@ fn render_turn(
             }
         }
         let summary = if source.items_summary {
-            Some(super::work_summary(&source))
+            Some(super::work_summary(language, &source))
         } else {
             segment.label.clone()
         };
@@ -1135,12 +1250,12 @@ fn render_turn(
         if segment.last {
             for pending in &requests {
                 push(PendingRequest {
-                    request: Box::new(request(pending)),
+                    request: Box::new(request(language, pending)),
                 });
             }
             if let Some(error) = &source.error {
                 push(Error {
-                    error: turn_error(error),
+                    error: turn_error(language, error),
                 });
             }
         }
@@ -1171,6 +1286,7 @@ fn render_turn(
         }
     }
     Arc::new(RenderedTurn {
+        language,
         source,
         occurrence: turn_occurrence,
         pending,
@@ -1179,7 +1295,7 @@ fn render_turn(
     })
 }
 
-pub fn request(source: &WireRequest) -> Request {
+pub fn request(language: UiLanguage, source: &WireRequest) -> Request {
     use agent_protocol::requests::{ApprovalKind, RequestBody};
     let (title, body, details) = match &source.body {
         RequestBody::Approval {
@@ -1225,13 +1341,14 @@ pub fn request(source: &WireRequest) -> Request {
     };
     Request {
         id: source.id.clone(),
-        title: match source.delivery {
-            crate::session::RequestDelivery::Awaiting => title,
-            crate::session::RequestDelivery::Sending => "回答を送信中",
-            crate::session::RequestDelivery::Sent => "回答を送信しました",
-            crate::session::RequestDelivery::Unknown => "回答の配送結果が不明です",
-        }
-        .into(),
+        title: language
+            .text(match source.delivery {
+                crate::session::RequestDelivery::Awaiting => title,
+                crate::session::RequestDelivery::Sending => "回答を送信中",
+                crate::session::RequestDelivery::Sent => "回答を送信しました",
+                crate::session::RequestDelivery::Unknown => "回答の配送結果が不明です",
+            })
+            .into(),
         body,
         details,
         can_respond: source.delivery == crate::session::RequestDelivery::Awaiting,
@@ -1281,7 +1398,7 @@ impl Snapshot {
         [false, true]
             .into_iter()
             .filter_map(|question| docked_request(thread, question))
-            .map(request)
+            .map(|source| request(self.catalog.ui_language, source))
             .collect()
     }
 }
@@ -1371,7 +1488,7 @@ pub fn request_input_default(body: agent_protocol::requests::RequestBody) -> Str
     };
     serde_json::to_string_pretty(&value).expect("request defaults serialize")
 }
-fn turn_error(error: &models::ExecutionError) -> TurnErrorPresentation {
+fn turn_error(language: UiLanguage, error: &models::ExecutionError) -> TurnErrorPresentation {
     use models::ErrorCategory::*;
     let retrying = error.retry.as_ref().is_some_and(|retry| retry.retrying);
     let title = if retrying {
@@ -1399,8 +1516,8 @@ fn turn_error(error: &models::ExecutionError) -> TurnErrorPresentation {
         }
     };
     TurnErrorPresentation {
-        title: title.into(),
-        message: error.message.clone(),
+        title: language.text(title).into(),
+        message: language.text(&error.message).into(),
         details: error.details.clone(),
         is_reconnecting: retrying,
         is_usage_limit: !retrying && matches!(error.category, UsageLimit),
@@ -1515,7 +1632,8 @@ mod tests {
         });
         let snapshot = Snapshot::default();
         let rendered = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             source,
             &None,
@@ -1600,7 +1718,8 @@ mod tests {
         });
         let snapshot = Snapshot::default();
         let live = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             source.clone(),
             &None,
@@ -1615,7 +1734,8 @@ mod tests {
             .collect();
         for previous in [None, Some(live.clone())] {
             let reopened = project_conversation(
-                &snapshot.pane.navigation.draft_key,
+                UiLanguage::Japanese,
+                &snapshot.panes.primary().navigation.draft_key,
                 &snapshot.sessions.pending_submissions,
                 restored.clone(),
                 &previous,
@@ -1672,7 +1792,8 @@ mod tests {
         Arc::make_mut(&mut Arc::make_mut(&mut changed).turns.as_mut().unwrap()[1]).status =
             models::TurnStatus::Interrupted;
         let updated = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             changed,
             &Some(live.clone()),
@@ -1720,6 +1841,180 @@ mod tests {
                 following_latest
             ),
             expected
+        );
+    }
+
+    #[test]
+    fn language_changes_reproject_copy_and_retain_plain_message_caches() {
+        let snapshot = fixture();
+        let source = snapshot
+            .sessions
+            .conversations
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let project = |language, previous: Option<Arc<RenderedConversation>>| {
+            project_conversation(
+                language,
+                &snapshot.panes.primary().navigation.draft_key,
+                &snapshot.sessions.pending_submissions,
+                source.clone(),
+                &previous,
+            )
+        };
+        let japanese = project(UiLanguage::Japanese, None);
+        assert!(Arc::ptr_eq(
+            &japanese,
+            &project(UiLanguage::Japanese, Some(japanese.clone()))
+        ));
+        let english = project(UiLanguage::English, Some(japanese.clone()));
+        assert!(!Arc::ptr_eq(&japanese, &english));
+        assert!(Arc::ptr_eq(
+            &english,
+            &project(UiLanguage::English, Some(english.clone()))
+        ));
+        for (old, new) in japanese.turns.iter().zip(&english.turns) {
+            assert!(!Arc::ptr_eq(old, new));
+            for (old, new) in old.items().zip(new.items()) {
+                if matches!(old.data.kind.as_str(), "user" | "agent" | "commentary") {
+                    assert!(
+                        Arc::ptr_eq(old, new),
+                        "plain messages must retain native Markdown caches"
+                    );
+                }
+                if new.data.kind == "command" {
+                    let blocks = new.detail_blocks();
+                    let super::super::markdown::MarkdownBlock::Paragraph { style, .. } = &blocks[0]
+                    else {
+                        panic!()
+                    };
+                    assert_eq!(style.filename.as_deref(), Some("Command"));
+                }
+            }
+        }
+        let summary = |conversation: &RenderedConversation| {
+            conversation.turns[1]
+                .rows
+                .iter()
+                .find_map(|row| match &row.content {
+                    ConversationRowContent::ActivityHeader { activity } => {
+                        Some(activity.activity_summary.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(summary(&japanese), "コマンドを実行しました");
+        assert_eq!(summary(&english), "Ran a command");
+        assert!(Arc::ptr_eq(&japanese.source_paths, &english.source_paths));
+    }
+
+    #[test]
+    fn language_changes_refresh_pending_copy_without_translating_its_input() {
+        let snapshot = Snapshot::default();
+        let pending = [(
+            "pending".into(),
+            Arc::new(PendingSubmission {
+                sequence: 0,
+                submitted_at_ms: None,
+                draft_key: snapshot.panes.primary().navigation.draft_key.clone(),
+                draft: Arc::new(crate::state::Draft {
+                    text: "設定\n{0}".into(),
+                    attachments: vec![crate::state::Attachment {
+                        name: "設定".into(),
+                        path: "/設定/{0}".into(),
+                        is_image: false,
+                    }],
+                    ..Default::default()
+                }),
+                turn_id: None,
+                after_item_id: None,
+                accepted: false,
+                delivery_unknown: true,
+            }),
+        )]
+        .into();
+        let source = Arc::new(models::Thread::default());
+        let japanese = project_conversation(
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
+            &pending,
+            source.clone(),
+            &None,
+        );
+        let english = project_conversation(
+            UiLanguage::English,
+            &snapshot.panes.primary().navigation.draft_key,
+            &pending,
+            source,
+            &Some(japanese.clone()),
+        );
+        assert_eq!(
+            japanese.queued[0].data.title.as_deref(),
+            Some("送信結果不明（自動再送しません）")
+        );
+        assert_eq!(
+            english.queued[0].data.title.as_deref(),
+            Some("Delivery unknown (will not resend automatically)")
+        );
+        assert_eq!(
+            japanese.queued[0].data.body.as_deref(),
+            Some("設定\n{0}\n添付: 設定 (/設定/{0})")
+        );
+        assert_eq!(
+            english.queued[0].data.body.as_deref(),
+            Some("設定\n{0}\nAttachment: 設定 (/設定/{0})")
+        );
+    }
+
+    #[test]
+    fn host_authored_error_copy_is_localized_as_a_whole() {
+        let error = models::ExecutionError {
+            message:
+                "エージェントとの接続が終了しました。ホストを再起動してから再送信してください。"
+                    .into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            turn_error(UiLanguage::Japanese, &error).message,
+            error.message
+        );
+        assert_eq!(
+            turn_error(UiLanguage::English, &error).message,
+            "The connection to the agent ended. Restart the Host, then send again."
+        );
+        let external = models::ExecutionError {
+            message: "Provider said 設定\n{0}".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            turn_error(UiLanguage::English, &external).message,
+            external.message
+        );
+    }
+
+    #[test]
+    fn progress_formats_time_without_retranslating_the_action() {
+        let progress = WorkProgress {
+            started_at: Some(100.),
+            action: Some("設定\n{0}".into()),
+        };
+        assert_eq!(
+            progress.label(UiLanguage::Japanese, 108.),
+            "8秒 作業中 · 設定\n{0}"
+        );
+        assert_eq!(
+            progress.label(UiLanguage::English, 108.),
+            "Working for 8s · 設定\n{0}"
+        );
+        let progress = WorkProgress {
+            started_at: None,
+            action: progress.action,
+        };
+        assert_eq!(
+            progress.label(UiLanguage::English, 108.),
+            "Working · 設定\n{0}"
         );
     }
 
@@ -1865,7 +2160,8 @@ mod tests {
         previous: Option<&Arc<RenderedConversation>>,
     ) -> Arc<RenderedConversation> {
         project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             snapshot.sessions.conversations[&agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
@@ -2033,7 +2329,8 @@ mod tests {
                 .insert(request.id.clone(), Arc::new(request));
         }
         let projected = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(source),
             &None,
@@ -2104,7 +2401,8 @@ mod tests {
             })
         };
         let awaiting = project_conversation(
-            &Snapshot::default().pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             make(RequestDelivery::Awaiting),
             &None,
@@ -2117,7 +2415,8 @@ mod tests {
         };
         assert!(request.can_respond);
         let sent = project_conversation(
-            &Snapshot::default().pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             make(RequestDelivery::Sent),
             &Some(awaiting.clone()),
@@ -2187,7 +2486,7 @@ mod tests {
                     status: models::TurnStatus::Completed,
                     items: Some(vec![item, Arc::new(serde_json::from_value(json!({"id":"answer","status":"completed","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"Here is the image","phase":"final"}}}}})).unwrap())]),
                     ..Default::default()
-                }), 0),
+                }), 0, UiLanguage::Japanese),
                 vec![],
                 vec![],
                 None,
@@ -2290,7 +2589,8 @@ mod tests {
             ]}]
         })).unwrap());
         let live = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
             &None,
@@ -2320,7 +2620,8 @@ mod tests {
         Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).status =
             models::TurnStatus::Completed;
         let completed = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread,
             &Some(live.clone()),
@@ -2344,7 +2645,8 @@ mod tests {
         assert_eq!(actions[0].data.native_id.as_deref(), Some("answer"));
         assert!(Arc::ptr_eq(live_answer, actions[0]));
         let reopened = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             completed.source.clone(),
             &None,
@@ -2380,7 +2682,8 @@ mod tests {
             .unwrap(),
         );
         let initial = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
             &None,
@@ -2390,7 +2693,8 @@ mod tests {
         Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).provider =
             Some(crate::session::ProviderKind::Codex);
         let attributed = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
             &Some(initial.clone()),
@@ -2402,7 +2706,8 @@ mod tests {
         Arc::make_mut(&mut Arc::make_mut(&mut thread).turns.as_mut().unwrap()[0]).provider =
             Some(crate::session::ProviderKind::Claude);
         let updated = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread,
             &Some(attributed),
@@ -2413,7 +2718,8 @@ mod tests {
         assert!(matches!((&before.source, &after.source),
             (ItemSource::Native(before), ItemSource::Native(after)) if Arc::ptr_eq(before, after)));
         let unchanged = project_conversation(
-            &snapshot.pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             updated.source.clone(),
             &Some(updated.clone()),
@@ -2444,7 +2750,8 @@ mod tests {
                 ..Default::default()
             });
             let projected = project_conversation(
-                &snapshot.pane.navigation.draft_key,
+                UiLanguage::Japanese,
+                &snapshot.panes.primary().navigation.draft_key,
                 &snapshot.sessions.pending_submissions,
                 thread.clone(),
                 &previous,
@@ -2485,7 +2792,8 @@ mod tests {
             .unwrap(),
         );
         let rendered = project_conversation(
-            &Snapshot::default().pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             source,
             &None,
@@ -2522,7 +2830,8 @@ mod tests {
         Arc::make_mut(&mut Arc::make_mut(&mut changed).turns.as_mut().unwrap()[0]).status =
             models::TurnStatus::Interrupted;
         let updated = project_conversation(
-            &Snapshot::default().pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             changed,
             &Some(rendered.clone()),
@@ -2547,7 +2856,8 @@ mod tests {
             }]
         })).unwrap());
         let rendered = project_conversation(
-            &Snapshot::default().pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             source,
             &None,
@@ -2609,6 +2919,7 @@ mod tests {
                 );
                 snapshot = reduce(
                     &snapshot,
+                    "",
                     Event::Intent(Intent::Submit {
                         thread_id: Some(agent_protocol::session::SessionRef {
                             provider: agent_protocol::session::ProviderKind::Codex,
@@ -2618,7 +2929,7 @@ mod tests {
                     }),
                 )
                 .0;
-                snapshot = reduce(&snapshot, Event::SubmissionUnknown(id.into())).0;
+                snapshot = reduce(&snapshot, "", Event::SubmissionUnknown(id.into())).0;
                 if status == "running" {
                     let rendered = project_snapshot(snapshot.clone(), None);
                     let activity = rendered.turns[0]
@@ -2701,6 +3012,7 @@ mod tests {
         for id in ["z-first", "a-second", "m-third"] {
             snapshot = reduce(
                 &snapshot,
+                "",
                 Event::Intent(Intent::Submit {
                     thread_id: Some(agent_protocol::session::SessionRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
@@ -2710,7 +3022,7 @@ mod tests {
                 }),
             )
             .0;
-            snapshot = reduce(&snapshot, Event::SubmissionUnknown(id.into())).0;
+            snapshot = reduce(&snapshot, "", Event::SubmissionUnknown(id.into())).0;
         }
         let rendered = project_snapshot(snapshot.clone(), None);
         assert_eq!(
@@ -2843,6 +3155,19 @@ mod tests {
         assert_eq!(item.data.body.as_deref(), Some("waiting for echo"));
         assert_eq!(item.data.timestamp_ms, Some(12_000));
         assert!(item.data.native_id.is_none());
+        assert_eq!(
+            item.unknown_submission_id().as_deref(),
+            delivery_unknown.then_some("pending")
+        );
+        assert!(
+            rendered
+                .turns
+                .iter()
+                .flat_map(|turn| turn.items())
+                .all(|item| {
+                    item.data.native_id.is_none() || item.unknown_submission_id().is_none()
+                })
+        );
         if history_loaded {
             let row = rendered.turns.iter().flat_map(|turn| &turn.rows)
                 .find(|row| matches!(&row.content, ConversationRowContent::User { item } if item.data.id == "pending"))
@@ -3077,15 +3402,18 @@ mod tests {
     }
     #[test]
     fn retry_error_titles_use_host_evidence_without_reinterpreting_native_codes() {
-        let error = turn_error(&models::ExecutionError {
-            category: models::ErrorCategory::Network,
-            message: "retry".into(),
-            retry: Some(models::RetryEvidence {
-                retrying: true,
-                overloaded: true,
-            }),
-            ..Default::default()
-        });
+        let error = turn_error(
+            UiLanguage::Japanese,
+            &models::ExecutionError {
+                category: models::ErrorCategory::Network,
+                message: "retry".into(),
+                retry: Some(models::RetryEvidence {
+                    retrying: true,
+                    overloaded: true,
+                }),
+                ..Default::default()
+            },
+        );
         assert_eq!(error.title, "サーバーが混み合っています。再接続しています");
         assert!(error.is_reconnecting);
         assert_eq!(error.message, "retry");
@@ -3098,24 +3426,30 @@ mod tests {
             models::ErrorCategory::RateLimited,
             models::ErrorCategory::Other,
         ] {
-            let error = turn_error(&models::ExecutionError {
-                category: category.clone(),
-                message: "usage limit".into(),
-                ..Default::default()
-            });
+            let error = turn_error(
+                UiLanguage::Japanese,
+                &models::ExecutionError {
+                    category: category.clone(),
+                    message: "usage limit".into(),
+                    ..Default::default()
+                },
+            );
             assert_eq!(
                 error.is_usage_limit,
                 category == models::ErrorCategory::UsageLimit
             );
         }
-        let error = turn_error(&models::ExecutionError {
-            category: models::ErrorCategory::UsageLimit,
-            retry: Some(models::RetryEvidence {
-                retrying: true,
-                overloaded: false,
-            }),
-            ..Default::default()
-        });
+        let error = turn_error(
+            UiLanguage::Japanese,
+            &models::ExecutionError {
+                category: models::ErrorCategory::UsageLimit,
+                retry: Some(models::RetryEvidence {
+                    retrying: true,
+                    overloaded: false,
+                }),
+                ..Default::default()
+            },
+        );
         assert!(!error.is_usage_limit);
     }
 }
@@ -3181,6 +3515,7 @@ mod progress_tests {
         ] {
             let source = Arc::new(serde_json::from_value(value).unwrap());
             let turn = RenderedTurn {
+                language: UiLanguage::Japanese,
                 source,
                 occurrence: 0,
                 pending: Default::default(),
@@ -3189,18 +3524,30 @@ mod progress_tests {
             };
             let mut progress = turn.work_progress(false);
             progress.action = Some("cargo test".into());
-            assert_eq!(progress.label(108.5), "8秒 作業中 · cargo test");
-            assert_eq!(turn.work_progress(false).label(110.5), "10秒 作業中…");
-            assert_eq!(turn.work_progress(false).label(99.), "<1秒 作業中…");
+            assert_eq!(
+                progress.label(UiLanguage::Japanese, 108.5),
+                "8秒 作業中 · cargo test"
+            );
+            assert_eq!(
+                turn.work_progress(false).label(UiLanguage::Japanese, 110.5),
+                "10秒 作業中…"
+            );
+            assert_eq!(
+                turn.work_progress(false).label(UiLanguage::Japanese, 99.),
+                "<1秒 作業中…"
+            );
             // The time so far reads in the fold's units, as T3 Code's working row.
-            assert_eq!(turn.work_progress(false).label(285.5), "3分 5秒 作業中…");
+            assert_eq!(
+                turn.work_progress(false).label(UiLanguage::Japanese, 285.5),
+                "3分 5秒 作業中…"
+            );
         }
         assert_eq!(
             WorkProgress {
                 started_at: None,
                 action: None
             }
-            .label(100.),
+            .label(UiLanguage::Japanese, 100.),
             "作業中…"
         );
         assert_eq!(
@@ -3208,7 +3555,7 @@ mod progress_tests {
                 started_at: None,
                 action: Some(String::new())
             }
-            .label(100.),
+            .label(UiLanguage::Japanese, 100.),
             "作業中…"
         );
     }
@@ -3223,21 +3570,25 @@ mod progress_tests {
             ]}]
         })).unwrap());
         let conversation = project_conversation(
-            &Snapshot::default().pane.navigation.draft_key,
+            UiLanguage::Japanese,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             source,
             &None,
         );
         let turn = &conversation.turns[0];
         assert_eq!(
-            turn.work_progress(true).label(108.5),
+            turn.work_progress(true).label(UiLanguage::Japanese, 108.5),
             "8秒 作業中 · Webを検索: latest action"
         );
-        assert_eq!(turn.work_progress(false).label(108.5), "8秒 作業中…");
+        assert_eq!(
+            turn.work_progress(false).label(UiLanguage::Japanese, 108.5),
+            "8秒 作業中…"
+        );
         let progress = turn.work_progress(true);
         drop(conversation);
         assert_eq!(
-            progress.label(110.5),
+            progress.label(UiLanguage::Japanese, 110.5),
             "10秒 作業中 · Webを検索: latest action"
         );
     }
@@ -3269,12 +3620,15 @@ impl Snapshot {
         Some(HistoryControl {
             has_more,
             loading,
-            load_label: if loading {
-                "以前のターンを読み込み中…"
-            } else {
-                "以前のターンを読み込む"
-            }
-            .into(),
+            load_label: self
+                .catalog
+                .ui_language
+                .text(if loading {
+                    "以前のターンを読み込み中…"
+                } else {
+                    "以前のターンを読み込む"
+                })
+                .into(),
             error,
         })
     }
@@ -3335,10 +3689,12 @@ mod history_control_tests {
                 ..idle.clone()
             }),
         ] {
-            snapshot.operations.insert(key.clone(), OperationState {
+            Arc::make_mut(&mut snapshot.operations).insert(key.clone(),
+            OperationState {
                 generation: 1,
                 phase,
-            });
+            },
+            );
             assert_eq!(snapshot.history_control(session.clone()), Some(expected));
             assert_eq!(snapshot.history_control(other.clone()), None);
         }
@@ -3360,7 +3716,7 @@ mod history_control_tests {
             }),
         );
         assert_eq!(snapshot.history_control(session.clone()), None);
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             OperationKey::History {
                 session: session.clone(),
             },
@@ -3387,7 +3743,7 @@ mod history_control_tests {
 }
 
 /// Shared read-state wording; native views only render this projection.
-pub fn history_notice(thread: &models::Thread) -> Option<String> {
+pub fn history_notice(language: UiLanguage, thread: &models::Thread) -> Option<String> {
     use crate::session::HistoryReadKind;
     let state = thread.history_read_state.as_ref()?;
     let heading = match state.kind {
@@ -3418,9 +3774,9 @@ pub fn history_notice(thread: &models::Thread) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     Some(if issues.is_empty() {
-        heading.into()
+        language.text(heading).into()
     } else {
-        format!("{heading}\n{issues}")
+        format!("{}\n{issues}", language.text(heading))
     })
 }
 
@@ -3428,6 +3784,48 @@ pub fn history_notice(thread: &models::Thread) -> Option<String> {
 mod history_notice_tests {
     use super::*;
     use crate::session::{HistoryPage, HistoryReadKind, HistoryReadState};
+
+    #[test]
+    fn history_headings_translate_without_changing_issue_identifiers() {
+        for (kind, expected) in [
+            (HistoryReadKind::Partial, "Some history is shown."),
+            (
+                HistoryReadKind::Incomplete,
+                "Some history could not be read.",
+            ),
+            (
+                HistoryReadKind::Unavailable,
+                "History is unavailable. Saved content may be out of date.",
+            ),
+        ] {
+            let thread = models::Thread {
+                history_read_state: Some(HistoryReadState {
+                    kind,
+                    issues: vec!["設定/{0}".into()],
+                }),
+                ..Default::default()
+            };
+            let source = Arc::new(thread);
+            let japanese = project_conversation(
+                UiLanguage::Japanese,
+                &Default::default(),
+                &Default::default(),
+                source.clone(),
+                &None,
+            );
+            let english = project_conversation(
+                UiLanguage::English,
+                &Default::default(),
+                &Default::default(),
+                source,
+                &Some(japanese),
+            );
+            assert_eq!(
+                english.history_notice(),
+                Some(format!("{expected}\n設定/{{0}}"))
+            );
+        }
+    }
 
     #[test]
     fn history_pages_keep_source_errors_visible_and_can_clear_them_after_recovery() {
@@ -3442,7 +3840,7 @@ mod history_notice_tests {
         }
         .prepend_to(&mut thread);
         assert_eq!(
-            history_notice(&thread).as_deref(),
+            history_notice(UiLanguage::Japanese, &thread).as_deref(),
             Some("履歴の一部を読み取れませんでした。\nclaude: Claude failed to start")
         );
         HistoryPage {
@@ -3451,7 +3849,7 @@ mod history_notice_tests {
             history_read_state: Some(HistoryReadState::new(HistoryReadKind::Complete, Vec::new())),
         }
         .prepend_to(&mut thread);
-        assert_eq!(history_notice(&thread), None);
+        assert_eq!(history_notice(UiLanguage::Japanese, &thread), None);
     }
 
     #[test]
@@ -3463,14 +3861,14 @@ mod history_notice_tests {
             next_cursor: Some("older-page".into()),
         }
         .prepend_to(&mut thread);
-        assert_eq!(history_notice(&thread), None);
+        assert_eq!(history_notice(UiLanguage::Japanese, &thread), None);
         HistoryPage {
             history_read_state: None,
             turns: Vec::new(),
             next_cursor: None,
         }
         .prepend_to(&mut thread);
-        assert_eq!(history_notice(&thread), None);
+        assert_eq!(history_notice(UiLanguage::Japanese, &thread), None);
     }
 
     #[rstest::rstest]
@@ -3493,7 +3891,7 @@ mod history_notice_tests {
             ..Default::default()
         };
         assert_eq!(
-            history_notice(&thread).as_deref(),
+            history_notice(UiLanguage::Japanese, &thread).as_deref(),
             Some("履歴の一部を表示しています。")
         );
     }
@@ -3516,7 +3914,7 @@ mod history_notice_tests {
             ..Default::default()
         };
         assert_eq!(
-            history_notice(&thread),
+            history_notice(UiLanguage::Japanese, &thread),
             Some(format!("{heading}\nread issue"))
         );
     }

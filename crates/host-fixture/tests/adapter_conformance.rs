@@ -188,6 +188,7 @@ async fn initial_import_discovers_native_projects_and_continues_the_original_ses
         Snapshot::default(),
         None,
         "Fixture device",
+        None,
     )
     .await
     .unwrap();
@@ -356,7 +357,7 @@ async fn setup_catalog_isolates_stalled_native_providers(
         },
         ..Default::default()
     };
-    agent_core::state::operations::ListAccounts {}.apply(&mut snapshot, accounts);
+    agent_core::state::operations::ListAccounts {}.apply(&mut snapshot, "", accounts);
     // Account checks also use SDK initialization. Stall only the model discovery
     // phase whose timeout and recovery this contract verifies.
     for (home, stalls) in [(&codex_home, codex_stalls), (&claude_home, claude_stalls)] {
@@ -399,7 +400,7 @@ async fn setup_catalog_isolates_stalled_native_providers(
         else {
             panic!("discovery must return its provider's catalog or error");
         };
-        agent_core::state::operations::LoadModels { provider }.apply(&mut snapshot, catalog);
+        agent_core::state::operations::LoadModels { provider }.apply(&mut snapshot, "", catalog);
         if index < healthy {
             assert!(
                 snapshot.connection_setup().can_start,
@@ -464,7 +465,7 @@ async fn setup_catalog_isolates_stalled_native_providers(
         else {
             panic!("retry must return the recovered provider catalog");
         };
-        agent_core::state::operations::LoadModels { provider }.apply(&mut snapshot, catalog);
+        agent_core::state::operations::LoadModels { provider }.apply(&mut snapshot, "", catalog);
     }
     assert!(snapshot.catalog.model_errors.is_empty());
     let setup = snapshot.connection_setup();

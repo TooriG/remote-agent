@@ -9,7 +9,7 @@ impl Operation for ReadProviderSettings {
     fn scheduling(&self) -> Scheduling {
         Scheduling::LatestHostState(OperationKey::ProviderSettings)
     }
-    fn apply(self, snapshot: &mut Snapshot, settings: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, settings: Self::Output) -> Vec<Effect> {
         snapshot.accept_provider_settings(settings);
         let mut effects = refresh_models();
         effects.push(Effect::execute(ListAccounts {}));
@@ -25,7 +25,7 @@ impl Operation for SetProviderEnabled {
     fn scheduling(&self) -> Scheduling {
         Scheduling::Control
     }
-    fn apply(self, snapshot: &mut Snapshot, settings: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, settings: Self::Output) -> Vec<Effect> {
         if snapshot.accept_provider_settings(settings) {
             refresh_models()
         } else {
@@ -80,23 +80,33 @@ mod tests {
         LoadModels {
             provider: ProviderKind::Codex,
         }
-        .apply(&mut snapshot, catalog());
+        .apply(&mut snapshot, "", catalog());
         snapshot.accept_provider_settings(
             ProviderSettings::default().with_enabled(ProviderKind::Codex, false),
         );
         LoadModels {
             provider: ProviderKind::Codex,
         }
-        .apply(&mut snapshot, catalog());
+        .apply(&mut snapshot, "", catalog());
         assert!(
-            snapshot
-                .models_matching(Some(ProviderKind::Codex), String::new())
-                .is_empty()
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
+            .models_matching(Some(ProviderKind::Codex), String::new())
+            .is_empty()
         );
         assert!(
-            snapshot
-                .custom_model_choice(Some(ProviderKind::Codex), "custom")
-                .is_none()
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
+            .custom_model_choice(Some(ProviderKind::Codex), "custom")
+            .is_none()
         );
         let setup = snapshot.connection_setup();
         let codex = setup
@@ -119,11 +129,16 @@ mod tests {
         LoadModels {
             provider: ProviderKind::Codex,
         }
-        .apply(&mut snapshot, catalog());
+        .apply(&mut snapshot, "", catalog());
         assert_eq!(
-            snapshot
-                .models_matching(Some(ProviderKind::Codex), String::new())
-                .len(),
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
+            .models_matching(Some(ProviderKind::Codex), String::new())
+            .len(),
             1
         );
     }

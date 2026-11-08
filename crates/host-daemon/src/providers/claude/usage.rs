@@ -1,4 +1,4 @@
-use agent_protocol::operations::UsageWindow;
+use agent_protocol::operations::{UsagePeriod, UsageWindow};
 use serde_json::Value;
 
 pub(crate) fn windows(value: &Value) -> Vec<UsageWindow> {
@@ -8,23 +8,25 @@ pub(crate) fn windows(value: &Value) -> Vec<UsageWindow> {
         .flatten()
         .filter_map(|window| {
             let period = match window["kind"].as_str()? {
-                "session" => "5時間枠",
-                "weekly_all" | "weekly_scoped" => "週間枠",
+                "session" => 300,
+                "weekly_all" | "weekly_scoped" => 10080,
                 _ => return None,
             };
             let scope = &window["scope"];
             let name = scope["model"]["display_name"]
                 .as_str()
                 .or_else(|| scope["surface"]["display_name"].as_str());
-            let label = match name.filter(|name| !name.is_empty()) {
-                Some(name) => format!("{name} · {period}"),
-                None => period.into(),
-            };
+            let name = name.filter(|name| !name.is_empty()).map(str::to_owned);
             let resets = window["resets_at"]
                 .as_str()
                 .and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok())
                 .map(|date| date.timestamp());
-            UsageWindow::from_used(label, window["percent"].as_f64()?, resets)
+            UsageWindow::from_used(
+                UsagePeriod::Minutes { minutes: period },
+                name,
+                window["percent"].as_f64()?,
+                resets,
+            )
         })
         .collect()
 }
@@ -50,27 +52,32 @@ mod tests {
             windows,
             vec![
                 UsageWindow {
-                    label: "5時間枠".into(),
+                    period: agent_protocol::operations::UsagePeriod::Minutes { minutes: 300 },
+                    name: None,
                     remaining_percent: 28,
                     resets_at: Some(2000000000)
                 },
                 UsageWindow {
-                    label: "週間枠".into(),
+                    period: agent_protocol::operations::UsagePeriod::Minutes { minutes: 10080 },
+                    name: None,
                     remaining_percent: 61,
                     resets_at: None
                 },
                 UsageWindow {
-                    label: "Fable · 週間枠".into(),
+                    period: agent_protocol::operations::UsagePeriod::Minutes { minutes: 10080 },
+                    name: Some("Fable".into()),
                     remaining_percent: 66,
                     resets_at: None
                 },
                 UsageWindow {
-                    label: "アプリ · 週間枠".into(),
+                    period: agent_protocol::operations::UsagePeriod::Minutes { minutes: 10080 },
+                    name: Some("アプリ".into()),
                     remaining_percent: 100,
                     resets_at: None
                 },
                 UsageWindow {
-                    label: "Sonnet · 週間枠".into(),
+                    period: agent_protocol::operations::UsagePeriod::Minutes { minutes: 10080 },
+                    name: Some("Sonnet".into()),
                     remaining_percent: 0,
                     resets_at: None
                 },

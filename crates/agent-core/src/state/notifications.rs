@@ -44,7 +44,7 @@ pub(super) fn notification(
         {
             effects.extend(op::refresh_agents(
                 previous.connection.connected,
-                previous.pane.observed_agents.as_ref(),
+                previous.panes.primary().observed_agents.as_ref(),
             ));
         }
         return (next, effects);
@@ -66,7 +66,7 @@ pub(super) fn notification(
             (next, effects)
         }
         Notification::TerminalFailed { handle, reason } => {
-            reduce(previous, Event::TerminalFailed { handle, reason })
+            reduce(previous, "", Event::TerminalFailed { handle, reason })
         }
         event @ (Notification::Output { .. }
         | Notification::Exited { .. }
@@ -280,7 +280,7 @@ fn updated_row(
             .or(thread.name);
         if old.cwd == thread.cwd {
             thread.git_branch = old.git_branch.clone().or(thread.git_branch);
-            thread.worktree_status = old.worktree_status;
+            thread.has_changes = old.has_changes;
         }
     }
     if index.is_some_and(|index| rows[index] == thread) {
@@ -409,14 +409,15 @@ pub(super) fn session_update(
     Arc::make_mut(&mut next.sessions.conversations).insert(id.clone(), Arc::new(thread));
     reconcile_pending(&mut next, id);
     let mut effects = details;
-    let panes: Vec<_> = std::iter::once(next.pane_id.clone())
-        .chain(next.panes.0.keys().cloned())
-        .collect();
-    for pane in panes {
-        let mut view = next.for_pane(&pane).unwrap();
-        let view_effects = update_pane_context(&mut view, current, id, &update.change, completed);
-        effects.extend(view_effects.into_iter().map(|effect| effect.in_pane(&pane)));
-        next = view.for_pane(&previous.pane_id).unwrap();
+    let panes: Vec<_> = next.panes.0.keys().cloned().collect();
+    for pane_id in panes {
+        let view_effects =
+            update_pane_context(&mut next, &pane_id, current, id, &update.change, completed);
+        effects.extend(
+            view_effects
+                .into_iter()
+                .map(|effect| effect.in_pane(&pane_id)),
+        );
     }
     if next.connection.connected
         && completed
@@ -426,8 +427,7 @@ pub(super) fn session_update(
             .conversations
             .get(id)
             .is_none_or(|thread| thread.requests.is_empty())
-        && next.pane.navigation.thread_id.as_ref() != Some(id)
-        && !next.selected_elsewhere(id)
+        && !next.selected_in_any_pane(id)
     {
         Arc::make_mut(&mut next.sessions.subscriptions).remove(id);
     }
@@ -440,46 +440,50 @@ pub(super) fn session_update(
 }
 
 fn update_pane_context(
-    view: &mut Snapshot,
+    snapshot: &mut Snapshot,
+    pane_id: &str,
     before: &Thread,
     id: &crate::session::SessionRef,
     change: &crate::session::SessionChange,
     completed: bool,
 ) -> Vec<Effect> {
     use crate::session::SessionChange;
-    let thread = view.sessions.conversations[id].clone();
-    let workspace_changed = view.pane.navigation.thread_id.as_ref() == Some(id)
+    let Some(pane) = snapshot.panes.get(pane_id).cloned() else {
+        return Vec::new();
+    };
+    let thread = snapshot.sessions.conversations[id].clone();
+    let workspace_changed = pane.navigation.thread_id.as_ref() == Some(id)
         && matches!(change, SessionChange::Workspace { .. })
-        && thread.cwd.as_deref() != Some(view.pane.navigation.cwd.as_str());
+        && thread.cwd.as_deref() != Some(pane.navigation.cwd.as_str());
     let refresh_workspace = (completed
         || before.preparation.is_some()
             && matches!(change, SessionChange::Preparation { preparation: None })
         || matches!(change, SessionChange::Item { .. }))
-        && before.cwd.as_deref() == Some(&view.pane.navigation.cwd);
+        && before.cwd.as_deref() == Some(&pane.navigation.cwd);
     if workspace_changed {
         let navigation = Navigation {
             cwd: thread.cwd.clone().unwrap_or_default(),
-            ..view.pane.navigation.as_ref().clone()
+            ..pane.navigation.as_ref().clone()
         };
-        Arc::make_mut(&mut view.pane).epoch += 1;
-        navigate(view, navigation);
+        snapshot.invalidate_pane(pane_id);
+        navigate(snapshot, pane_id, navigation);
     }
     let mut effects = Vec::new();
     if fleet_contains(
-        view.pane.observed_agents.as_ref(),
+        pane.observed_agents.as_ref(),
         id,
-        &view.sessions.conversations,
+        &snapshot.sessions.conversations,
     ) && matches!(change, SessionChange::Item { item, .. }
             if matches!(item.body(), crate::models::ItemBody::Subagent { receivers, .. }
-                if receivers.iter().any(|receiver| !view.sessions.conversations.contains_key(receiver))))
+                if receivers.iter().any(|receiver| !snapshot.sessions.conversations.contains_key(receiver))))
     {
         effects.extend(op::refresh_agents(
-            view.connection.connected,
-            view.pane.observed_agents.as_ref(),
+            snapshot.connection.connected,
+            pane.observed_agents.as_ref(),
         ));
     }
     if refresh_workspace || workspace_changed {
-        effects.extend(op::review_workspace(view));
+        effects.extend(op::review_workspace(snapshot, pane_id));
     }
     effects
 }
@@ -521,7 +525,7 @@ impl Snapshot {
                 .unread
                 .iter()
                 .map(|(id, _)| id.clone())
-                .filter(|id| self.pane.navigation.thread_id.as_ref() != Some(id))
+                .filter(|id| self.panes.primary().navigation.thread_id.as_ref() != Some(id))
                 .collect();
             if self.lists.activity.unread != unread {
                 Arc::make_mut(&mut self.lists.activity).unread = unread;
@@ -601,7 +605,8 @@ impl Snapshot {
                 .map(|state| state.unread.as_slice())
                 .unwrap_or_default();
             let receipt = self
-                .pane
+                .panes
+                .primary()
                 .navigation
                 .thread_id
                 .as_ref()
@@ -665,6 +670,7 @@ mod tests {
     #[rstest::rstest]
     fn prepared_workspace_updates_only_its_open_panel_without_losing_new_draft_edits(
         #[values(true, false)] selected: bool,
+        #[values("", "side")] pane_id: &str,
     ) {
         let id = SessionRef::new(ProviderKind::Codex, "admitted".into()).unwrap();
         let subscription = uuid::Uuid::new_v4();
@@ -673,7 +679,7 @@ mod tests {
         } else {
             DraftKey::from("another")
         };
-        let snapshot = Snapshot {
+        let mut snapshot = Snapshot {
             connection: crate::state::Connection {
                 connected: true,
                 ..Default::default()
@@ -706,16 +712,26 @@ mod tests {
                 ),
                 ..Default::default()
             },
-            pane: std::sync::Arc::new(crate::state::PaneState {
-                navigation: Arc::new(Navigation {
-                    thread_id: selected.then_some(id.clone()),
-                    draft_key: draft_key.clone(),
-                    cwd: "/project".into(),
-                }),
-                ..Default::default()
-            }),
             ..Default::default()
         };
+        snapshot.open_pane(pane_id.into(), "/project".into());
+        Arc::make_mut(snapshot.panes.get_mut(pane_id).unwrap()).navigation = Arc::new(Navigation {
+            thread_id: selected.then_some(id.clone()),
+            draft_key: draft_key.clone(),
+            cwd: "/project".into(),
+        });
+        let file = op::OperationKey::File {
+            pane: pane_id.into(),
+        };
+        Arc::make_mut(&mut snapshot.operations).insert(
+            file.clone(),
+            op::OperationState {
+                generation: 1,
+                phase: op::OperationPhase::Failed {
+                    message: "old workspace".into(),
+                },
+            },
+        );
         let (next, effects) = session_update(
             &snapshot,
             crate::session::SessionUpdate {
@@ -730,8 +746,13 @@ mod tests {
             Some("/worktree")
         );
         assert_eq!(
-            next.pane.navigation.cwd,
+            next.panes.get(pane_id).unwrap().navigation.cwd,
             if selected { "/worktree" } else { "/project" }
+        );
+        assert_eq!(
+            next.operations.contains_key(&file),
+            !selected,
+            "only a pane whose workspace moved loses its old read error"
         );
         assert_eq!(next.input.drafts[&draft_key].text, "typed while preparing");
         assert_eq!(effects.len(), usize::from(selected));
@@ -774,14 +795,16 @@ mod tests {
                 subscriptions: Arc::new([(id.clone(), subscription)].into()),
                 ..Default::default()
             },
-            pane: std::sync::Arc::new(crate::state::PaneState {
-                navigation: Arc::new(Navigation {
-                    thread_id: Some(id.clone()),
-                    draft_key: id.clone().into(),
-                    cwd: "/project".into(),
-                }),
-                ..Default::default()
-            }),
+            panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(
+                crate::state::PaneState {
+                    navigation: Arc::new(Navigation {
+                        thread_id: Some(id.clone()),
+                        draft_key: id.clone().into(),
+                        cwd: "/project".into(),
+                    }),
+                    ..Default::default()
+                },
+            )),
             ..Default::default()
         };
         let update = |snapshot: &Snapshot, change| {
@@ -795,7 +818,7 @@ mod tests {
         };
         let mut reviewing = snapshot.clone();
         assert!(
-            op::review_workspace(&mut reviewing).is_none(),
+            op::review_workspace(&mut reviewing, "").is_none(),
             "the source checkout's changes are not the preparing task's"
         );
         let (moved, effects) = update(
@@ -805,7 +828,7 @@ mod tests {
             },
         );
         assert!(effects.is_empty());
-        assert!(moved.pane.workspace.review_cwd.is_none());
+        assert!(moved.panes.primary().workspace.review_cwd.is_none());
         let (started, effects) = update(
             &moved,
             crate::session::SessionChange::Preparation { preparation: None },
@@ -865,14 +888,16 @@ mod tests {
                 ),
                 ..Default::default()
             },
-            pane: std::sync::Arc::new(crate::state::PaneState {
-                observed_agents: observing.then_some(parent.clone()),
-                navigation: Arc::new(Navigation {
-                    thread_id: Some(parent.clone()),
+            panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(
+                crate::state::PaneState {
+                    observed_agents: observing.then_some(parent.clone()),
+                    navigation: Arc::new(Navigation {
+                        thread_id: Some(parent.clone()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            }),
+                },
+            )),
             ..Default::default()
         };
         let (next, effects) = notification(
@@ -884,8 +909,11 @@ mod tests {
         );
         assert!(effects.is_empty());
         assert_eq!(next.lists.activity.active[&child], active);
-        assert_eq!(next.agent_panel()[0].active, active);
-        assert_eq!(next.pane.navigation, snapshot.pane.navigation);
+        assert_eq!(next.agent_panel(next.panes.primary())[0].active, active);
+        assert_eq!(
+            next.panes.primary().navigation,
+            snapshot.panes.primary().navigation
+        );
     }
 
     #[rstest::rstest]
@@ -923,14 +951,42 @@ mod tests {
             },
             ..Default::default()
         };
-        let (phone, effects) = reduce(&initial, Event::Notification(activity(1, Some("first"))));
+        // Task-list unread state follows the primary selection, even when
+        // another pane keeps the conversation open and subscribed.
+        let mut side_only = initial.clone();
+        side_only.open_pane("side".into(), String::new());
+        Arc::make_mut(side_only.panes.get_mut("side").unwrap()).navigation = Arc::new(Navigation {
+            thread_id: Some(id.clone()),
+            draft_key: id.clone().into(),
+            cwd: String::new(),
+        });
+        let (side_only, effects) = reduce(
+            &side_only,
+            "",
+            Event::Notification(activity(1, Some("first"))),
+        );
+        assert!(side_only.lists.activity.unread.contains(&id));
+        assert!(
+            effects.is_empty(),
+            "a side selection must not send a primary read receipt"
+        );
+        let (phone, effects) = reduce(
+            &initial,
+            "",
+            Event::Notification(activity(1, Some("first"))),
+        );
         assert!(effects.is_empty());
         assert!(phone.lists.activity.unread.contains(&id));
-        let (desktop, _) = reduce(&initial, Event::Notification(activity(1, Some("first"))));
+        let (desktop, _) = reduce(
+            &initial,
+            "",
+            Event::Notification(activity(1, Some("first"))),
+        );
         assert_eq!(desktop.lists.activity.unread, phone.lists.activity.unread);
 
         let (phone, effects) = reduce(
             &phone,
+            "",
             Event::Intent(Intent::ReadThread(op::ReadThread::open(id.clone()))),
         );
         assert_eq!(
@@ -939,30 +995,31 @@ mod tests {
             "opening the conversation reads history and sends a receipt"
         );
         assert!(phone.lists.activity.unread.is_empty());
-        let (phone, effects) = reduce(&phone, Event::Notification(activity(2, Some("first"))));
+        let (phone, effects) = reduce(&phone, "", Event::Notification(activity(2, Some("first"))));
         assert!(
             effects.is_empty(),
             "unrelated Host revisions must not repeat a receipt"
         );
-        let (phone, effects) = reduce(&phone, Event::Notification(activity(3, Some("second"))));
+        let (phone, effects) = reduce(&phone, "", Event::Notification(activity(3, Some("second"))));
         assert_eq!(
             effects.len(),
             1,
             "a new visible completion needs its own receipt"
         );
         assert!(phone.lists.activity.unread.is_empty());
-        let (phone, effects) = reduce(&phone, Event::Notification(activity(1, None)));
+        let (phone, effects) = reduce(&phone, "", Event::Notification(activity(1, None)));
         assert!(effects.is_empty());
         assert_eq!(phone.lists.task_activity.as_ref().unwrap().revision, 3);
 
-        let (desktop, effects) = reduce(&desktop, Event::Notification(activity(4, None)));
+        let (desktop, effects) = reduce(&desktop, "", Event::Notification(activity(4, None)));
         assert!(effects.is_empty());
         assert!(desktop.lists.activity.unread.is_empty());
-        let disconnected = reduce(&phone, Event::Disconnected).0;
-        let reconnected = reduce(&disconnected, Event::Connected).0;
+        let disconnected = reduce(&phone, "", Event::Disconnected).0;
+        let reconnected = reduce(&disconnected, "", Event::Connected).0;
         let mut restored = reconnected;
         let effects = op::ReadTaskActivity {}.apply(
             &mut restored,
+            "",
             match activity(0, Some("second")) {
                 Notification::TaskActivity { state } => state,
                 _ => unreachable!(),
@@ -1003,7 +1060,7 @@ mod tests {
             },
             lists: crate::state::Lists {
                 threads: Some(Arc::new(serde_json::from_value(json!({
-                    "data":[{"id":parent,"name":"Task","cwd":"/fixture","status":"idle","worktreeStatus":"unmerged"}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap())),
+                    "data":[{"id":parent,"name":"Task","cwd":"/fixture","status":"idle","hasChanges":true}],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap())),
                 ..Default::default()
             },
             sessions: crate::state::Sessions {
@@ -1029,9 +1086,9 @@ mod tests {
             .id
             .clone()
             .unwrap();
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id =
             Some(parent.clone());
-        Arc::make_mut(&mut state.pane).observed_agents = observing.then_some(parent);
+        Arc::make_mut(state.panes.primary_mut()).observed_agents = observing.then_some(parent);
         let unknown = SessionRef::new(ProviderKind::Codex, "unseen".into()).unwrap();
         let (discovered, effects) = notification(
             &state,
@@ -1053,7 +1110,10 @@ mod tests {
             &discovered.lists.activity,
             &repeated.lists.activity
         ));
-        assert_eq!(repeated.pane.navigation, state.pane.navigation);
+        assert_eq!(
+            repeated.panes.primary().navigation,
+            state.panes.primary().navigation
+        );
     }
 
     #[test]
@@ -1063,8 +1123,9 @@ mod tests {
             .id
             .clone()
             .unwrap();
-        Arc::make_mut(&mut state.pane).observed_agents = Some(parent.clone());
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = Some(parent);
+        Arc::make_mut(state.panes.primary_mut()).observed_agents = Some(parent.clone());
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id =
+            Some(parent);
         let session = |id: &str| SessionRef::new(ProviderKind::Codex, id.into()).unwrap();
         for (id, parent) in [
             ("child", "parent"),
@@ -1137,7 +1198,10 @@ mod tests {
                 },
             );
             assert_eq!(effects.len(), expected, "spawn {id}");
-            assert_eq!(next.pane.navigation, state.pane.navigation);
+            assert_eq!(
+                next.panes.primary().navigation,
+                state.panes.primary().navigation
+            );
         }
     }
 
@@ -1155,7 +1219,7 @@ mod tests {
             Arc::make_mut(state.lists.threads.as_mut().unwrap()).data[0].cwd = Some("/fixture".into());
             let id = state.lists.threads.as_ref().unwrap().data[0].id.clone().unwrap();
             if selected {
-                Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = Some(id.clone());
+                Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id = Some(id.clone());
             }
             Arc::make_mut(&mut state.lists.activity).unread.insert(id.clone());
             let cached_list = state.lists.threads.clone().unwrap();
@@ -1193,8 +1257,8 @@ mod tests {
                     prop_assert!(!row.active);
                     prop_assert_eq!(row.unread, finished && !selected);
                     prop_assert_eq!(row.title.as_str(), "Task");
-                    prop_assert_eq!(row.worktree_status, Some(crate::models::WorktreeStatus::Unmerged));
-                    prop_assert_eq!(&state.pane.navigation, &ended.pane.navigation);
+                    prop_assert_eq!(row.has_changes, Some(true));
+                    prop_assert_eq!(&state.panes.primary().navigation, &ended.panes.primary().navigation);
                     state = ended;
                 }
                 prop_assert!(Arc::ptr_eq(state.lists.threads.as_ref().unwrap(), &cached_list));
@@ -1219,7 +1283,7 @@ mod tests {
             .unwrap();
         let subscription = state.sessions.subscriptions[&id];
         let child = SessionRef::new(provider, "child".into()).unwrap();
-        Arc::make_mut(&mut state.pane).observed_agents = Some(id.clone());
+        Arc::make_mut(state.panes.primary_mut()).observed_agents = Some(id.clone());
         Arc::make_mut(&mut state.sessions.conversations).insert(
             child.clone(),
             Arc::new(crate::models::Thread {
@@ -1428,6 +1492,7 @@ mod tests {
         assert!(!next.lists.project_threads.contains_key("unread"));
         let (_, effects) = reduce_intent(
             &next,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "unread".into(),
                 expanded: true,
@@ -1459,13 +1524,16 @@ mod tests {
             );
             assert!(effects.is_empty(), "activity alone must not read lists");
             assert!(next.lists.activity.active[&session]);
-            assert_eq!(next.pane.navigation, snapshot.pane.navigation);
+            assert_eq!(
+                next.panes.primary().navigation,
+                snapshot.panes.primary().navigation
+            );
         }
         let item = serde_json::from_value(serde_json::json!({
             "id":"spawn","status":"running","clientInputId":null,
             "body":{"inline":{"body":{"subagent":{"tool":"spawnAgent","prompt":null,"model":null,"effort":null,"sender":parent,"receivers":[child],"states":[],"agentId":null,"result":null}}}}
         })).unwrap();
-        Arc::make_mut(&mut snapshot.pane).observed_agents = Some(parent);
+        Arc::make_mut(snapshot.panes.primary_mut()).observed_agents = Some(parent);
         let (next, effects) = session_update(
             &snapshot,
             crate::session::SessionUpdate {
@@ -1481,7 +1549,10 @@ mod tests {
             1,
             "a spawn refreshes while the parent is still running"
         );
-        assert_eq!(next.pane.navigation, snapshot.pane.navigation);
+        assert_eq!(
+            next.panes.primary().navigation,
+            snapshot.panes.primary().navigation
+        );
     }
     #[test]
     fn completion_decorations_keep_the_first_listed_directory_and_skip_child_sessions() {
@@ -1874,7 +1945,7 @@ mod tests {
                 name: Some("Kept title".into()),
                 cwd: Some("/work".into()),
                 git_branch: Some("main".into()),
-                worktree_status: Some(crate::models::WorktreeStatus::Merged),
+                has_changes: Some(false),
                 list_revision: 1,
                 updated_at: Some(1.),
                 ..Default::default()
@@ -1891,7 +1962,7 @@ mod tests {
         incoming.name = Some("Native title".into());
         incoming.preview = Some("updated preview".into());
         incoming.git_branch = None;
-        incoming.worktree_status = None;
+        incoming.has_changes = None;
         incoming.list_revision = 2;
         let (next, effects) = notification(
             &state,
@@ -1924,13 +1995,13 @@ mod tests {
                 row.name.as_deref(),
                 row.preview.as_deref(),
                 row.git_branch.as_deref(),
-                row.worktree_status
+                row.has_changes
             ),
             (
                 Some("Kept title"),
                 Some("updated preview"),
                 Some("main"),
-                Some(crate::models::WorktreeStatus::Merged)
+                Some(false)
             )
         );
         assert_eq!(

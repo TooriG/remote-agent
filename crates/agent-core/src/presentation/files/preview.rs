@@ -7,11 +7,6 @@ pub(super) fn file_mime_type(path: &str) -> Option<&'static str> {
         .map(|(_, mime)| *mime)
 }
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
-pub fn file_preview_truncation_notice() -> String {
-    "先頭1 MiBだけ表示しています。全文はダウンロードできます。".into()
-}
-
 /// Resolved binary files use authenticated downloads and the platform viewer,
 /// bypassing the UTF-8 editor's size limit. HTML and notebook JSON stay editable;
 /// executable Java archives are only available through explicit downloads.

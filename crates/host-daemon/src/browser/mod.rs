@@ -46,5 +46,6 @@ fn validate_agent_action(action: &agent_protocol::browser::BrowserAction) -> Res
 struct ActionOutput {
     page_text: String,
     value: String,
+    notice: Option<agent_protocol::browser::BrowserNotice>,
     credentials: Option<agent_protocol::browser::BrowserCredentials>,
 }

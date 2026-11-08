@@ -32,7 +32,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     });
     // A question's answer has no attachments; the draft keeps them.
     let can_attach = move || {
-        composer.with(|c| c.ready_for_input())
+        composer.with(|c| c.can_attach())
             && !recording.get()
             && !requesting.get()
             && !connection.uploading()
@@ -75,7 +75,12 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                 } else if stopping() {
                     c.can_interrupt()
                 } else {
-                    !connection.uploading() && c.can_submit(recording.get())
+                    !connection.uploading()
+                        && c.can_send(
+                            recording.get()
+                                || !c.draft.text.trim().is_empty()
+                                || !c.draft.attachments.is_empty(),
+                        )
                 }
             })
     };
@@ -165,7 +170,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                         q.as_ref().is_some_and(|q| {
                             !q.can_respond
                                 || !q.question.allow_free_text
-                                || composer.with(|c| c.request_phase(q.request_id.clone()))
+                                || controls.with(|c| c.question_phase.clone())
                                     == Some(op::OperationPhase::Running)
                         })
                     })

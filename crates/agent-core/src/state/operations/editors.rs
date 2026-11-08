@@ -3,7 +3,7 @@ pub use agent_protocol::editors::{OpenInEditor, ReadFileOpenCapabilities};
 
 impl Operation for ReadFileOpenCapabilities {
     rpc_operation!();
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         snapshot.files.file_open_capabilities_requested = true;
         Ok(())
     }
@@ -13,7 +13,7 @@ impl Operation for ReadFileOpenCapabilities {
     fn scheduling(&self) -> Scheduling {
         Scheduling::LatestHostState(OperationKey::FileOpenCapabilities)
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, output: Self::Output) -> Vec<Effect> {
         snapshot.files.file_open_capabilities = Some(Arc::new(output));
         Vec::new()
     }
@@ -21,7 +21,7 @@ impl Operation for ReadFileOpenCapabilities {
 
 impl Operation for OpenInEditor {
     rpc_operation!();
-    fn prepare(&mut self, _: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, _: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         self.validate().map_err(str::to_owned)
     }
 }
@@ -33,13 +33,13 @@ mod tests {
 
     #[test]
     fn file_menu_launches_and_reveals_do_not_change_the_preferred_editor() {
-        let (mut snapshot, effects) = crate::state::reduce(
-            &Snapshot::default(),
-            Event::Intent(Intent::SetPreferredEditor {
-                editor: EditorId::Zed,
-            }),
-        );
-        assert!(effects.is_empty());
+        let mut snapshot = Snapshot {
+            files: crate::state::Files {
+                preferred_editor: Some(EditorId::Zed),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let mut request = OpenInEditor {
             path: "~/a.rs".into(),
             line: Some(12),
@@ -47,14 +47,14 @@ mod tests {
             editor: EditorId::Cursor,
             reveal: false,
         };
-        request.prepare(&mut snapshot).unwrap();
+        request.prepare(&mut snapshot, "").unwrap();
         assert_eq!(snapshot.files.preferred_editor, Some(EditorId::Zed));
         request.editor = EditorId::FileManager;
         request.reveal = true;
-        request.prepare(&mut snapshot).unwrap();
+        request.prepare(&mut snapshot, "").unwrap();
         assert_eq!(snapshot.files.preferred_editor, Some(EditorId::Zed));
         request.editor = EditorId::VsCode;
-        assert!(request.prepare(&mut snapshot).is_err());
+        assert!(request.prepare(&mut snapshot, "").is_err());
         assert_eq!(snapshot.files.preferred_editor, Some(EditorId::Zed));
     }
 
@@ -69,6 +69,7 @@ mod tests {
         };
         ReadFileOpenCapabilities {}.apply(
             &mut snapshot,
+            "",
             agent_protocol::editors::FileOpenCapabilities {
                 editors: vec![EditorId::VsCode],
                 reveal: None,

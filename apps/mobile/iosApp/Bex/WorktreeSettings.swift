@@ -23,7 +23,7 @@ struct SettingsScreen: View {
                     .accessibilityIdentifier("settings.providers")
                     .disabled(model.profiles.isEmpty)
             }
-            LanguageSettings()
+            LanguageSettings(language: model.language, select: model.selectLanguage)
             Section("プロジェクトと会話") {
                 NavigationLink {
                     WorktreeSettingsScreen(model: model).id(model.selectedProfileId)
@@ -45,13 +45,14 @@ struct SettingsScreen: View {
 }
 
 struct LanguageSettings: View {
-    @AppStorage("bex.language") private var language = "ja"
+    let language: UiLanguage
+    let select: (UiLanguage) -> Void
 
     var body: some View {
         Section("表示言語") {
-            Picker("言語", selection: $language) {
-                Text(verbatim: "English").tag("en")
-                Text(verbatim: "日本語").tag("ja")
+            Picker("言語", selection: Binding(get: { language }, set: select)) {
+                Text(verbatim: "English").tag(UiLanguage.english)
+                Text(verbatim: "日本語").tag(UiLanguage.japanese)
             }
             .accessibilityIdentifier("settings.language")
         }
@@ -90,7 +91,7 @@ struct WorktreeSettingsScreen: View {
             }
             if let error {
                 Section {
-                    AppText(error).foregroundColor(.red).accessibilityIdentifier("worktree.error")
+                    ErrorMessage(source: error).foregroundColor(.red).accessibilityIdentifier("worktree.error")
                     if !loaded {
                         Button("再読み込み", action: load).disabled(busy || !model.isConnected)
                     }
@@ -123,7 +124,7 @@ struct WorktreeSettingsScreen: View {
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
-            guard let settings = snapshot.files().worktreeSettings() else { error = "設定の応答が無効です。"; return }
+            guard let settings = snapshot.files(paneId: "")?.worktreeSettings() else { error = "設定の応答が無効です。"; return }
             inputs = WorktreeSettingsInputs(
                 createOnNewSession: settings.createOnNewSession, copyOnCreate: settings.copyOnCreate,
                 copyPaths: settings.copyPaths, worktreeDirectory: settings.worktreeDirectory,
@@ -145,7 +146,7 @@ struct WorktreeSettingsScreen: View {
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
-            guard snapshot.files().worktreeSettings() != nil else { error = "設定を保存できませんでした。"; return }
+            guard snapshot.files(paneId: "")?.worktreeSettings() != nil else { error = "設定を保存できませんでした。"; return }
             dismiss()
         }
     }

@@ -15,7 +15,7 @@ struct ComposerMessageField: View {
                 )
                 let candidates = suggestions?.candidates ?? []
                 if let status = suggestions?.status {
-                    AppText(status).font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: status).font(.caption).foregroundStyle(.secondary)
                 }
                 if !candidates.isEmpty {
                     ScrollView {
@@ -122,5 +122,12 @@ struct ComposerStopButton: View {
         .disabled(interrupting)
         .accessibilityLabel(LocalizedStringKey(interrupting ? "停止中" : "停止"))
         .accessibilityIdentifier("turn.interrupt.\(turnId)")
+    }
+}
+
+extension ConversationModel {
+    func interrupt(_ turnId: String) {
+        guard let threadId = selectedThreadId else { return }
+        perform(.interrupt(Interrupt(threadId: threadId, turnId: turnId)))
     }
 }

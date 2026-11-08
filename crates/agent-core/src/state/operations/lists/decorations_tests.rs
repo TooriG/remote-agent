@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    models::{Project, Thread, ThreadList, WorktreeStatus},
+    models::{Project, Thread, ThreadList},
     session::{ProviderKind, SessionRef},
 };
 use agent_protocol::operations::{ListDecorationScope, ListDecorations};
@@ -17,7 +17,7 @@ fn row(provider: ProviderKind, id: &str, cwd: Option<&str>, branch: Option<&str>
         id: Some(SessionRef::new(provider, id.into()).unwrap()),
         cwd: cwd.map(str::to_owned),
         git_branch: branch.map(str::to_owned),
-        worktree_status: Some(WorktreeStatus::Unmerged),
+        has_changes: Some(true),
         ..Default::default()
     }
 }
@@ -110,30 +110,30 @@ fn decorations_match_captured_sources_across_root_and_project_pages() {
         .into(),
         statuses: vec![
             (current.id.clone().unwrap(), None),
-            (current.id.clone().unwrap(), Some(WorktreeStatus::Merged)),
+            (current.id.clone().unwrap(), Some(false)),
             (cleared.id.clone().unwrap(), None),
             (
                 SessionRef::new(ProviderKind::Codex, "unrequested".into()).unwrap(),
-                Some(WorktreeStatus::Merged),
+                Some(false),
             ),
         ],
     };
-    assert!(operation.apply(&mut state, output).is_empty());
+    assert!(operation.apply(&mut state, "", output).is_empty());
     let root = state.lists.threads.as_ref().unwrap();
-    assert_eq!(root.data[0].worktree_status, Some(WorktreeStatus::Merged));
-    assert_eq!(root.data[1].worktree_status, None);
+    assert_eq!(root.data[0].has_changes, Some(false));
+    assert_eq!(root.data[1].has_changes, None);
     assert_eq!(root.projects[0].icon, None);
     assert_eq!(
-        state.lists.project_threads["changed"].data[0].worktree_status,
-        Some(WorktreeStatus::Merged)
+        state.lists.project_threads["changed"].data[0].has_changes,
+        Some(false)
     );
     assert!(Arc::ptr_eq(
         &state.lists.project_threads["stale"],
         &previous.lists.project_threads["stale"]
     ));
     assert_eq!(
-        previous.lists.threads.as_ref().unwrap().data[0].worktree_status,
-        Some(WorktreeStatus::Unmerged)
+        previous.lists.threads.as_ref().unwrap().data[0].has_changes,
+        Some(true)
     );
     assert_eq!(
         previous.lists.threads.as_ref().unwrap().projects[0]
@@ -164,11 +164,12 @@ fn unchanged_decorations_preserve_shared_lists() {
     };
     for statuses in [
         Vec::new(),
-        vec![(current.id.clone().unwrap(), current.worktree_status)],
+        vec![(current.id.clone().unwrap(), current.has_changes)],
     ] {
         let mut state = original.clone();
         read(std::slice::from_ref(&current)).apply(
             &mut state,
+            "",
             ListDecorations {
                 icons: [("p".into(), Some(project_icon("icon")))].into(),
                 statuses,
@@ -204,6 +205,7 @@ fn icons_apply_without_root_threads_or_status_changes() {
         read(&[])
             .apply(
                 &mut state,
+                "",
                 ListDecorations {
                     icons: [("p".into(), Some(project_icon("icon")))].into(),
                     statuses: Vec::new(),
@@ -223,6 +225,7 @@ fn icons_apply_without_root_threads_or_status_changes() {
         read(&[])
             .apply(
                 &mut state,
+                "",
                 ListDecorations {
                     icons: Default::default(),
                     statuses: Vec::new()
@@ -246,23 +249,23 @@ fn project_decorations_do_not_require_a_root_list() {
     };
     let output = ListDecorations {
         icons: [("p".into(), Some(project_icon("unused")))].into(),
-        statuses: vec![(current.id.clone().unwrap(), Some(WorktreeStatus::Merged))],
+        statuses: vec![(current.id.clone().unwrap(), Some(false))],
     };
     let mut state = original.clone();
-    read(&[]).apply(&mut state, output.clone());
+    read(&[]).apply(&mut state, "", output.clone());
     assert!(Arc::ptr_eq(
         &state.lists.project_threads,
         &original.lists.project_threads
     ));
-    read(&[current]).apply(&mut state, output);
+    read(&[current]).apply(&mut state, "", output);
     assert!(state.lists.threads.is_none());
     assert_eq!(
-        state.lists.project_threads["p"].data[0].worktree_status,
-        Some(WorktreeStatus::Merged)
+        state.lists.project_threads["p"].data[0].has_changes,
+        Some(false)
     );
     assert_eq!(
-        original.lists.project_threads["p"].data[0].worktree_status,
-        Some(WorktreeStatus::Unmerged)
+        original.lists.project_threads["p"].data[0].has_changes,
+        Some(true)
     );
 }
 
@@ -290,6 +293,7 @@ fn a_dark_only_logo_update_does_not_require_the_light_logo_to_change() {
     };
     read(&[]).apply(
         &mut state,
+        "",
         ListDecorations {
             icons: [("p".into(), Some(changed.clone()))].into(),
             statuses: Vec::new(),

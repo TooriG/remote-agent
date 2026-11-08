@@ -36,7 +36,11 @@ async fn wait_for(store: &Store, condition: impl Fn(&Snapshot) -> bool) {
     let mut updates = store.subscribe();
     loop {
         let snapshot = updates.borrow_and_update().clone();
-        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+        assert!(
+            snapshot.panes.primary().error.is_none(),
+            "{:?}",
+            snapshot.panes.primary().error
+        );
         if condition(&snapshot) {
             return;
         }
@@ -107,7 +111,8 @@ impl Fixture {
                 &ticket,
                 Snapshot::default(),
                 None,
-                "Fixture device"
+                "Fixture device",
+                None
             ),
             incoming
         );
@@ -224,7 +229,14 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
         let source = workspace.path().join("screenshot.png");
         let bytes = b"captured image";
         std::fs::write(&source, bytes).unwrap();
-        let draft_key = fixture.store.snapshot().pane.navigation.draft_key.clone();
+        let draft_key = fixture
+            .store
+            .snapshot()
+            .panes
+            .primary()
+            .navigation
+            .draft_key
+            .clone();
         let upload = fixture
             .store
             .dispatch(Intent::UploadAttachment(op::UploadAttachment {
@@ -335,11 +347,15 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
             .unwrap();
         let error = download.await.unwrap_err();
         assert_eq!(
-            agent_core::presentation::error::error_text(&error.to_string()).message,
+            agent_core::presentation::error::error_text(
+                agent_core::localization::UiLanguage::Japanese,
+                &error.to_string()
+            )
+            .message,
             "ファイルまたはフォルダが見つかりません。"
         );
         let after = fixture.store.snapshot();
-        assert!(after.pane.error.is_none());
+        assert!(after.panes.primary().error.is_none());
         assert!(after.connection.connected);
         assert_eq!(after.sessions.conversations, before.sessions.conversations);
         assert_eq!(after.input.drafts, before.input.drafts);
@@ -443,7 +459,7 @@ async fn file_operations_preserve_remote_reasons_and_download_can_retry_after_fa
             assert!(matches!(&error, agent_protocol::error::PeerError::Remote {
                 delivery: agent_protocol::error::Delivery::NotSent, ..
             }));
-            assert_eq!(agent_core::presentation::error::error_text(&error.to_string()).details.as_deref(), Some("Host supplied reason"));
+            assert_eq!(agent_core::presentation::error::error_text(agent_core::localization::UiLanguage::Japanese, &error.to_string()).details.as_deref(), Some("Host supplied reason"));
         }
         assert!(!destination.exists());
         let completion = fixture.store.dispatch(download());

@@ -2,6 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct BrowserCredentialsSheet: View {
+    @Environment(\.locale) private var locale
     let credentials: BrowserCredentials
     let send: (BrowserAction) -> Void
     let close: () -> Void

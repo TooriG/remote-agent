@@ -226,8 +226,11 @@ impl Application {
                     let error = match result {
                         Ok(Ok(_)) => None,
                         Ok(Err(reason)) => Some(
-                            agent_core::presentation::error::error_text(&reason.to_string())
-                                .to_string(),
+                            agent_core::presentation::error::error_text(
+                                crate::l10n::language(),
+                                &reason.to_string(),
+                            )
+                            .to_string(),
                         ),
                         Err(_) => Some(tr("設定の応答が無効です。").into()),
                     };
@@ -280,7 +283,6 @@ mod tests {
     ) -> (tokio::runtime::Runtime, Arc<Application>) {
         // These tests publish explicit Host facts. Discovery must not race those facts.
         let selection_path = root.join("connection-selection.json");
-        let language_path = root.join("language.json");
         let explorer_width_path = root.join("file-explorer-width.json");
         let (runtime, client, _) = crate::client::Client::new(root, None).unwrap();
         let (state, _) = tokio::sync::watch::channel(Arc::new(State::default()));
@@ -294,7 +296,6 @@ mod tests {
             selection_path,
             #[cfg(desktop)]
             onboarding_path: std::path::PathBuf::new(),
-            language_path,
             explorer_width_path,
             #[cfg(desktop)]
             updater: None,
@@ -325,7 +326,7 @@ mod tests {
         let thread =
             SessionRef::new(agent_protocol::session::ProviderKind::Codex, "chat".into()).unwrap();
         let mut snapshot = agent_core::state::Snapshot::default();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).cwd =
             "/managed/tree/src".into();
         Arc::make_mut(&mut snapshot.files.workspace).worktrees =
             Some(Arc::new(vec![agent_protocol::models::Worktree {
@@ -339,7 +340,7 @@ mod tests {
                     active: false,
                 }],
             }]));
-        let p = Presentation::project(Arc::new(snapshot.clone()), None);
+        let p = Presentation::project(Arc::new(snapshot.clone()), "", None).unwrap();
         let scope = p
             .snapshot
             .panel_scope("host".into(), p.context.navigation().draft_key);
@@ -374,11 +375,12 @@ mod tests {
         );
         assert!(app.snapshot().panels.get(scope.clone()).surfaces.is_empty());
         assert!(!unchanged.has_changed().unwrap());
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd = "/another".into();
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).cwd =
+            "/another".into();
         app.state.send_modify(|state| {
             Arc::make_mut(state).publications.insert(
                 "host".into(),
-                Shared(Presentation::project(Arc::new(snapshot), None)),
+                Shared(Presentation::project(Arc::new(snapshot), "", None).unwrap()),
             );
         });
         let removal = app.subscribe();
@@ -442,9 +444,12 @@ mod tests {
                 id: "missing".into(),
                 name: "Host".into(),
             }];
-            state
-                .publications
-                .insert("missing".into(), Shared(Presentation::empty()));
+            state.publications.insert(
+                "missing".into(),
+                Shared(Presentation::empty(
+                    agent_core::localization::UiLanguage::default(),
+                )),
+            );
             state.worktrees = Some(WorktreeEditor {
                 id: "editor".into(),
                 host: "missing".into(),

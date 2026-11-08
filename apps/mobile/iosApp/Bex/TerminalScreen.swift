@@ -3,17 +3,18 @@ import SwiftTerm
 import SwiftUI
 
 struct TerminalScreen: View {
+    @Environment(\.locale) private var locale
     let model: ConversationModel
     let cwd: String
     let handle: String
 
     var body: some View {
         VStack(spacing: 0) {
-            let terminal = model.terminals.view(handle: handle)
+            let terminal = model.terminals.view(language: locale.appLanguage, handle: handle)
             if terminal?.loading ?? true {
                 ProgressView().accessibilityIdentifier("terminal.loading")
             } else if let status = terminal?.status {
-                AppText(status).font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: status).font(.caption).foregroundStyle(.secondary)
             }
             NativeTerminalView(session: model.session, handle: handle, cwd: cwd, terminal: terminal)
         }

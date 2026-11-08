@@ -19,8 +19,8 @@
           "title":"会話 👋", "symbol":"", "asset":null, "png":null,
           "monogram":null, "color":null, "level":1,
           "disclosure":false, "group":false, "expanded":false, "menu":null,
-          "loading":false, "enabled":true, "passive":false, "indicators":{"activity":"waiting","worktree":"unmerged"},
-          "statusLabel":"確認待ち、main に未反映の変更あり", "compose":null
+          "loading":false, "enabled":true, "passive":false, "indicators":{"activity":"waiting","changes":true},
+          "statusLabel":"確認待ち、作成元からの変更あり", "compose":null
         },
         {
           "id":"[null,{\"Heading\":null}]",
@@ -34,8 +34,8 @@
           "title":"会話 👋", "symbol":"", "asset":null, "png":null,
           "monogram":null, "color":null, "level":0,
           "disclosure":false, "group":false, "expanded":false, "menu":null,
-          "loading":false, "enabled":true, "passive":false, "indicators":{"activity":"waiting","worktree":"unmerged"},
-          "statusLabel":"確認待ち、main に未反映の変更あり", "compose":null
+          "loading":false, "enabled":true, "passive":false, "indicators":{"activity":"waiting","changes":true},
+          "statusLabel":"確認待ち、作成元からの変更あり", "compose":null
         }
       ]
     }

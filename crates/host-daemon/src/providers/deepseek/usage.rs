@@ -1,13 +1,13 @@
 //! OpenCode Go reports used percentages; the account UI displays the remainder.
-use agent_protocol::operations::UsageWindow;
+use agent_protocol::operations::{UsagePeriod, UsageWindow};
 use serde_json::Value;
 use std::time::Duration;
 
 const OPENCODE_GO_USAGE: &str = "https://opencode.ai/inference/go/v1/usage";
-const WINDOWS: [(&str, &str); 3] = [
-    ("rolling", "OpenCode Go · 5時間枠"),
-    ("weekly", "OpenCode Go · 週間枠"),
-    ("monthly", "OpenCode Go · 月間枠"),
+const WINDOWS: [(&str, UsagePeriod); 3] = [
+    ("rolling", UsagePeriod::Minutes { minutes: 300 }),
+    ("weekly", UsagePeriod::Minutes { minutes: 10080 }),
+    ("monthly", UsagePeriod::Monthly),
 ];
 
 pub(super) async fn read(key: &str) -> Result<Vec<UsageWindow>, String> {
@@ -47,14 +47,19 @@ async fn read_url(url: &str, key: &str) -> Result<Vec<UsageWindow>, String> {
 fn windows(value: &Value) -> Vec<UsageWindow> {
     WINDOWS
         .iter()
-        .filter_map(|(field, label)| {
+        .filter_map(|(field, period)| {
             let window = value.get("usage")?.get(*field)?;
             let resets_at = window
                 .get("resetsAt")
                 .and_then(Value::as_str)
                 .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
                 .map(|instant| instant.timestamp());
-            UsageWindow::from_used((*label).into(), window.get("percent")?.as_f64()?, resets_at)
+            UsageWindow::from_used(
+                *period,
+                Some("OpenCode Go".into()),
+                window.get("percent")?.as_f64()?,
+                resets_at,
+            )
         })
         .collect()
 }
@@ -75,17 +80,20 @@ mod tests {
             }})),
             vec![
                 UsageWindow {
-                    label: "OpenCode Go · 5時間枠".into(),
+                    period: agent_protocol::operations::UsagePeriod::Minutes { minutes: 300 },
+                    name: Some("OpenCode Go".into()),
                     remaining_percent: 58,
                     resets_at: Some(946684800)
                 },
                 UsageWindow {
-                    label: "OpenCode Go · 週間枠".into(),
+                    period: agent_protocol::operations::UsagePeriod::Minutes { minutes: 10080 },
+                    name: Some("OpenCode Go".into()),
                     remaining_percent: 82,
                     resets_at: Some(947289600)
                 },
                 UsageWindow {
-                    label: "OpenCode Go · 月間枠".into(),
+                    period: agent_protocol::operations::UsagePeriod::Monthly,
+                    name: Some("OpenCode Go".into()),
                     remaining_percent: 0,
                     resets_at: None
                 },

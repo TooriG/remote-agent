@@ -119,7 +119,7 @@ struct ModelSettingsScreen: View {
                         controls.speedChoices.first { $0.selected }?.id ?? "default"
                     }, set: model.chooseServiceTier)) {
                         ForEach(controls.speedChoices, id: \.id) { choice in
-                            AppText(choice.label).tag(choice.id)
+                            Text(verbatim: choice.label).tag(choice.id)
                         }
                     }
                     .pickerStyle(.menu)
@@ -152,7 +152,7 @@ struct ModelSettingsScreen: View {
         .labelsHidden()
         .disabled(disabled)
         ForEach(model.settings.modelErrorMessages(provider: provider), id: \.self) { error in
-            ErrorTextView(text: errorText(error: error)).font(.caption).foregroundStyle(.red)
+            ErrorTextView(source: error).font(.caption).foregroundStyle(.red)
                 .accessibilityIdentifier("model.error")
         }
     }

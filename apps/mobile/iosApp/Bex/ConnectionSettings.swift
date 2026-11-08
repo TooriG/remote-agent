@@ -2,6 +2,7 @@ import AgentCore
 import SwiftUI
 
 struct ConnectionSettingsRow: View {
+    @Environment(\.locale) private var locale
     let model: AppViewModel
     let profile: HostProfile
 
@@ -13,7 +14,11 @@ struct ConnectionSettingsRow: View {
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     Label(profile.name, systemImage: "desktopcomputer").fontWeight(.semibold)
-                    AppText(state.label).font(.subheadline).foregroundStyle(.secondary)
+                    Text(verbatim: connectionStatusLabel(
+                        language: locale.appLanguage,
+                        connected: state.connected,
+                        enabled: state.enabled
+                    )).font(.subheadline).foregroundStyle(.secondary)
                 }
             }
             .accessibilityIdentifier("profiles.\(profile.id)")
@@ -23,7 +28,11 @@ struct ConnectionSettingsRow: View {
             ))
             .labelsHidden()
             .tint(.blue)
-            .accessibilityLabel("\(profile.name)への接続")
+            .accessibilityLabel(localizedUiFormat(
+                language: locale.appLanguage,
+                source: "{0}への接続",
+                arguments: [profile.name]
+            ))
             .accessibilityIdentifier("connection.enabled.\(profile.id)")
         }
         .buttonStyle(.borderless)
@@ -32,6 +41,7 @@ struct ConnectionSettingsRow: View {
 }
 
 struct EnvironmentSettingsScreen: View {
+    @Environment(\.locale) private var locale
     let model: AppViewModel
     let profile: HostProfile
 
@@ -45,8 +55,13 @@ struct EnvironmentSettingsScreen: View {
                 )) {
                     VStack(alignment: .leading, spacing: 6) {
                         Label(profile.name, systemImage: "desktopcomputer").fontWeight(.semibold)
-                        AppText(model.connectionState(profile.id).label)
-                            .font(.subheadline).foregroundStyle(.secondary)
+                        let state = model.connectionState(profile.id)
+                        Text(verbatim: connectionStatusLabel(
+                            language: locale.appLanguage,
+                            connected: state.connected,
+                            enabled: state.enabled
+                        ))
+                        .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 .accessibilityIdentifier("environment.enabled")
@@ -111,6 +126,7 @@ struct ProviderSettingsScreen: View {
 }
 
 struct ProviderSettingsSection: View {
+    @Environment(\.locale) private var locale
     let model: AppViewModel
 
     var body: some View {
@@ -134,7 +150,7 @@ struct ProviderSettingsSection: View {
                             Image(provider.provider.bexIcon).resizable().scaledToFit().frame(width: 24, height: 24)
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(provider.name).fontWeight(.semibold)
-                                AppText(provider.label).font(.subheadline).foregroundStyle(.secondary)
+                                Text(verbatim: provider.label).font(.subheadline).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -147,7 +163,11 @@ struct ProviderSettingsSection: View {
                         ))) }
                     ))
                     .labelsHidden()
-                    .accessibilityLabel("\(provider.name)を使用")
+                    .accessibilityLabel(localizedUiFormat(
+                        language: locale.appLanguage,
+                        source: "{0}を使用",
+                        arguments: [provider.name]
+                    ))
                     .accessibilityIdentifier("provider.enabled.\(provider.provider.bexKey)")
                     .disabled(!model.isConnected || !model.settings.providerSettingsLoaded() ||
                         model.settings.providerSettingsBusy())
@@ -196,7 +216,7 @@ struct ProviderRuntimeSection: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error = status?.error {
-                    ErrorTextView(text: errorText(error: error))
+                    ErrorTextView(source: error)
                 }
             } header: {
                 Text(verbatim: "Codex CLI")

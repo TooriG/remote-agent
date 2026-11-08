@@ -1,23 +1,10 @@
 package dev.remoteagent.mobile
 
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import dev.remoteagent.core.ComposerPresentation
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
-import dev.remoteagent.core.SettingsPresentation
+import dev.remoteagent.core.Presentation
 import dev.remoteagent.core.Snapshot
-
-@Composable
-internal fun ModelPickerFixture(
-    snapshot: Snapshot,
-    perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    ModelPickerButton(ComposerPresentation.fromSnapshot(snapshot), perform, modifier) { selected, dismiss ->
-        ModelPickerDialog(SettingsPresentation.fromSnapshot(snapshot), selected, perform, dismiss)
-    }
-}
 
 @Composable
 internal fun ComposerFixture(
@@ -26,12 +13,18 @@ internal fun ComposerFixture(
     onSend: () -> Unit,
     attach: @Composable ((Boolean) -> Unit) -> Unit,
 ) {
+    val presentation = Presentation.fromSnapshot(snapshot, "")
     ThreadComposer(
-        ComposerPresentation.fromSnapshot(snapshot),
+        presentation.composer(),
         perform,
         onSend,
         settings = { selected, dismiss ->
-            ModelPickerDialog(SettingsPresentation.fromSnapshot(snapshot), selected, perform, dismiss)
+            ModelPickerDialog(
+                presentation.settings(),
+                selected,
+                perform,
+                dismiss,
+            )
         },
         attach = attach,
     )
@@ -43,5 +36,5 @@ internal fun VoiceInputFixture(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     enabled: Boolean,
 ) {
-    VoiceInputButton(ComposerPresentation.fromSnapshot(snapshot), perform, enabled)
+    VoiceInputButton(Presentation.fromSnapshot(snapshot, "").composer(), perform, enabled)
 }

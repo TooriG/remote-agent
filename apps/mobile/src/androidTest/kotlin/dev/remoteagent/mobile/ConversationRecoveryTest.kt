@@ -55,8 +55,17 @@ class ConversationRecoveryTest {
             withContext(Dispatchers.Main) {
                 val models = ViewModelStore()
                 val model =
-                    ViewModelProvider(models, viewModelFactory { initializer { AndroidAppModel(context) } })[
-                        AndroidAppModel::class.java]
+                    ViewModelProvider(
+                        models,
+                        viewModelFactory {
+                            initializer {
+                                AndroidAppModel(
+                                    context,
+                                    dev.remoteagent.core.DevicePreferences(AndroidPreferenceStorage(context)),
+                                )
+                            }
+                        },
+                    )[AndroidAppModel::class.java]
                 suspend fun perform(intent: Intent): Result<Outcome> {
                     val result = CompletableDeferred<Result<Outcome>>()
                     model.perform(intent) { result.complete(it) }
@@ -73,7 +82,13 @@ class ConversationRecoveryTest {
                     perform(Intent.NewChat(cwd)).getOrThrow()
                     perform(Intent.SetDraftText(model.draftKey, "Recovery fixture input")).getOrThrow()
                     perform(Intent.Submit(null, UUID.randomUUID().toString())).getOrThrow()
-                    val id = requireNotNull(model.snapshot.navigation().threadId)
+                    val id =
+                        requireNotNull(
+                            dev.remoteagent.core.Presentation.fromSnapshot(model.snapshot, "")
+                                .conversationContext()
+                                .navigation()
+                                .threadId
+                        )
                     while (true) {
                         val thread = model.snapshot.threadJson(id)
                         // Submission acceptance can precede the subscribed history snapshot.
@@ -93,11 +108,11 @@ class ConversationRecoveryTest {
                     val missing = SessionRef(ProviderKind.CODEX, "missing-thread")
                     assertTrue(perform(Intent.ReadThread(ReadThread(missing, open = true))).isFailure)
                     assertNotNull(model.snapshot.operationError(OperationKey.History(missing)))
-                    assertNull(model.snapshot.error())
+                    assertTrue(model.snapshot.errorNotices("", dev.remoteagent.core.ErrorScope.Application).isEmpty())
                     perform(Intent.ReadThread(ReadThread(id, open = true))).getOrThrow()
                     assertNotNull(model.snapshot.operationError(OperationKey.History(missing)))
                     assertNull(model.snapshot.operationError(OperationKey.History(id)))
-                    assertNull(model.snapshot.error())
+                    assertTrue(model.snapshot.errorNotices("", dev.remoteagent.core.ErrorScope.Application).isEmpty())
                     assertEquals("preserved draft", model.snapshot.draft(DraftKey.Session(id)).text)
                     assertNull("The recovered core error must not remain as a local notice", model.notice)
                     model.notice = "local persistence failure"
@@ -108,7 +123,13 @@ class ConversationRecoveryTest {
                     model.connect()
                     while (model.busy) delay(10)
                     assertTrue(model.snapshot.connected())
-                    assertEquals(id, model.snapshot.navigation().threadId)
+                    assertEquals(
+                        id,
+                        dev.remoteagent.core.Presentation.fromSnapshot(model.snapshot, "")
+                            .conversationContext()
+                            .navigation()
+                            .threadId,
+                    )
                     assertEquals("preserved draft", model.snapshot.draft(DraftKey.Session(id)).text)
                     assertNull(model.notice)
                     verifyImageAttachment(model, context, ::perform)
@@ -127,7 +148,7 @@ class ConversationRecoveryTest {
                         delay(10)
                     }
                     assertEquals("", model.snapshot.draft(DraftKey.Session(id)).text)
-                    assertNull(model.snapshot.error())
+                    assertTrue(model.snapshot.errorNotices("", dev.remoteagent.core.ErrorScope.Application).isEmpty())
                     assertNull(model.notice)
                 } finally {
                     models.clear()

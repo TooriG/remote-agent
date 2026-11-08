@@ -131,6 +131,6 @@ struct ConversationMediaPresenter: ViewModifier {
                 }
             })) {
                 Button("OK") { presentation.imageError = nil }
-            } message: { AppText(presentation.imageError ?? "") }
+            } message: { ErrorMessage(source: presentation.imageError ?? "") }
     }
 }

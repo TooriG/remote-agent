@@ -6,9 +6,7 @@ use crate::{
     ui::{self, Enabled, Icon, colors},
 };
 use agent_core::{
-    presentation::files::{
-        file_edit_prompt, file_line_start_utf16, file_preview_truncation_notice,
-    },
+    presentation::files::{file_edit_prompt, file_line_start_utf16},
     state::{Intent, operations as op},
 };
 use nsh_core::{element::input, prelude::*};
@@ -25,15 +23,18 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
             .with_untracked(|p| p.controls.navigation.draft_key.clone()),
     );
     let controls = computed(move || {
-        connection
-            .publication
-            .with(|p| p.snapshot.file_editor(&path.get()))
+        connection.publication.with(|p| {
+            p.pane()
+                .file_editor(&p.snapshot.files.file_drafts, &path.get())
+        })
     });
     let busy = move || {
         connection.publication.with(|p| {
-            p.snapshot.operation_running(op::OperationKey::File)
-                || p.snapshot
-                    .operation_running(op::OperationKey::SaveFile { path: path.get() })
+            p.snapshot.operation_running(op::OperationKey::File {
+                pane: p.pane_id.clone(),
+            }) || p
+                .snapshot
+                .operation_running(op::OperationKey::SaveFile { path: path.get() })
         })
     };
     let field = element_ref();
@@ -160,7 +161,7 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
         .child(when(busy, || notice(tr("処理中…"))))
         .child(when(
             move || controls.with(|controls| controls.truncated),
-            || notice(localized(file_preview_truncation_notice())),
+            || notice(tr("file.preview.truncated")),
         ))
         .child(
             input()

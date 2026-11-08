@@ -38,9 +38,9 @@ impl Permissions {
             title: control.title,
             label: control.label,
             mode: control.mode,
-            version: control.version.map(str::to_owned),
+            version: control.version,
             loading: control.loading,
-            error: control.error.map(str::to_owned),
+            error: control.error,
             connected: p.snapshot.connection.connected,
         }
     }
@@ -239,7 +239,7 @@ mod tests {
     fn presentation(result: Option<Result<PermissionSettings, String>>) -> Arc<Presentation> {
         let mut state = Snapshot::default();
         state.connection.connected = true;
-        let draft = state.pane.navigation.draft_key.clone();
+        let draft = state.panes.primary().navigation.draft_key.clone();
         Arc::make_mut(&mut state.input.drafts).insert(
             draft,
             Arc::new(Draft {
@@ -257,7 +257,7 @@ mod tests {
             )]
             .into(),
         );
-        Presentation::project(Arc::new(state), None)
+        Presentation::project(Arc::new(state), "", None).unwrap()
     }
 
     #[test]

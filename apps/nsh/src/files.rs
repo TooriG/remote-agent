@@ -445,7 +445,12 @@ fn tree(owner: String, root: Memo<Option<String>>) -> impl Element {
     #[cfg(desktop)]
     pointer.keyboard_menu();
     let all_expanded = move || tree.with(|tree| tree.all_expanded);
-    let toggle_all_label = move || tree.with(|tree| localized(tree.toggle_all_label.clone()));
+    let toggle_all_label = move || {
+        agent_core::presentation::files::file_tree_toggle_all_label(
+            crate::l10n::language(),
+            tree.with(|tree| tree.collapse_all),
+        )
+    };
     view()
         .flex_1()
         .min_h_0()

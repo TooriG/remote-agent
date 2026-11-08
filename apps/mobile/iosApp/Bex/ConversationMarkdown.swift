@@ -37,7 +37,7 @@ struct ConversationMarkdown: View {
                 }
             }
             if let error = linkError ?? (shareFailure?.path == sharedPath ? shareFailure?.message : nil) {
-                AppText(error).font(.caption).foregroundColor(.red)
+                ErrorMessage(source: error).font(.caption).foregroundColor(.red)
             }
         }
         .font(.system(size: 18))

@@ -4,9 +4,9 @@ import UIKit
 
 /// Owns native input, dictation and attachment presentation independently of history.
 struct ConversationComposer: View {
+    @Environment(\.locale) private var locale
     let model: ConversationModel
     let mediaPresentation: ConversationMediaPresentation
-    let hasConversation: Bool
     let isSideChat: Bool
     let openTools: ((PanelKind?) -> Void)?
     @StateObject var dictation = DictationRecorder()
@@ -66,7 +66,11 @@ struct ConversationComposer: View {
             if !isSideChat, !model.isNewThread, let review = model.files.review(), review.fileCount() > 0 {
                 Button { openTools?(.diff) } label: {
                     HStack(spacing: 10) {
-                        Text("\(review.fileCount())件のファイル").foregroundStyle(.tint)
+                        Text(verbatim: localizedUiFormat(
+                            language: locale.appLanguage,
+                            source: "{0}件のファイル",
+                            arguments: [String(review.fileCount())]
+                        )).foregroundStyle(.tint)
                         Text("+\(review.additions())").foregroundColor(.green)
                         Text("−\(review.deletions())").foregroundColor(.red)
                     }
@@ -80,13 +84,13 @@ struct ConversationComposer: View {
                 AppNotice(text: error)
             }
             if let reason = controls.unavailable {
-                AppNotice(text: reason)
+                AppNotice(text: ErrorText(message: reason, details: nil))
             }
             if let request = model.dockedRequest {
                 RequestPanel(
                     request: request,
-                    busy: model.composer.requestPhase(id: request.id) == .running,
-                    error: model.composer.requestError(id: request.id),
+                    busy: model.conversationContext.requestPhase(id: request.id) == .running,
+                    error: model.conversationContext.requestError(id: request.id),
                     respond: { model.respond(request.id, $0) }
                 )
                 // Typed responses belong to one request.
@@ -95,8 +99,8 @@ struct ConversationComposer: View {
             if let question {
                 QuestionPanel(
                     prompt: question,
-                    busy: model.composer.requestPhase(id: question.requestId) == .running,
-                    error: model.composer.requestError(id: question.requestId),
+                    busy: model.conversationContext.requestPhase(id: question.requestId) == .running,
+                    error: model.conversationContext.requestError(id: question.requestId),
                     choose: { model.answerQuestion(question.requestId, .choose(choiceId: $0)) },
                     skip: { model.respond(question.requestId, .skipQuestions) }
                 )
@@ -169,8 +173,7 @@ struct ConversationComposer: View {
 
     var attachMenu: some View {
         ComposerAttachMenu(
-            disabled: (!model.isNewThread && !hasConversation) || model.transferring
-                || preparingMedia || model.sending || model.transcribing,
+            disabled: !model.composer.canAttach() || model.transferring || preparingMedia,
             choose: { composerFocused = false; mediaPicker = $0 },
             camera: openCamera
         )
@@ -213,9 +216,8 @@ struct ConversationComposer: View {
                     .frame(width: 44, height: 44)
             }
         }
-        .disabled(!model.isConnected || (!model.isNewThread && !hasConversation) || model
-            .transcribing || dictation.requestingPermission || model.sending || model
-            .transferring || preparingMedia)
+        .disabled(!model.composer.canDictate() || dictation.requestingPermission || model.transferring
+            || preparingMedia)
         .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "録音を終了して文字起こし" : "音声をCodexで文字起こし"))
         .accessibilityIdentifier("dictation.toggle")
     }
@@ -237,9 +239,9 @@ struct ConversationComposer: View {
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.circle)
         .accessibilityLabel(LocalizedStringKey(dictation.isRecording ? "文字起こしして送信" : "送信"))
-        .disabled(!model.composer.canSubmit(recording: dictation.isRecording)
-            || (!model.isNewThread && !hasConversation) || model.transferring
-            || preparingMedia || dictation.requestingPermission)
+        .disabled(!model.composer.canSend(hasContent: dictation.isRecording || hasAttachments
+                || !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            || model.transferring || preparingMedia || dictation.requestingPermission)
         .accessibilityIdentifier("task.send")
     }
 

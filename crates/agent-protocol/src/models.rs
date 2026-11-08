@@ -108,7 +108,7 @@ pub struct Thread {
     pub can_accept_direct_input: Option<bool>,
     pub name: Option<String>,
     pub cwd: Option<String>,
-    pub worktree_status: Option<WorktreeStatus>,
+    pub has_changes: Option<bool>,
     pub git_branch: Option<String>,
     #[serde(default)]
     pub status: SessionStatus,
@@ -706,21 +706,6 @@ mod tests {
                 prop_assert_eq!(settings.deletes_unchanged(Some(&other)), global);
             }
         }
-
-        #[test]
-        fn worktree_status_distinguishes_pending_work_from_integrated_history(
-            dirty in any::<bool>(),
-            unmerged_changes in any::<bool>(),
-            merged_history in any::<bool>(),
-        ) {
-            let status = worktree_branch_status(dirty, unmerged_changes, merged_history);
-            let expected = match (dirty, unmerged_changes, merged_history) {
-                (true, _, _) | (_, true, _) => Some(WorktreeStatus::Unmerged),
-                (false, false, true) => Some(WorktreeStatus::Merged),
-                _ => None,
-            };
-            prop_assert_eq!(status, expected);
-        }
     }
 
     #[test]
@@ -873,30 +858,24 @@ pub fn task_active(observed: Option<bool>, status: SessionStatus) -> bool {
         SessionStatus::Preparing | SessionStatus::Running
     ))
 }
-pub fn task_title<'a>(name: Option<&'a str>, preview: Option<&'a str>) -> &'a str {
+pub fn task_title<'a>(name: Option<&'a str>, preview: Option<&'a str>) -> Option<&'a str> {
     name.filter(|name| !name.is_empty())
         .or_else(|| preview.filter(|preview| !preview.is_empty()))
-        .unwrap_or("無題のタスク")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum WorktreeStatus {
-    Unmerged,
-    Merged,
-}
-
-/// Pending file changes take priority over previously integrated branch work.
-pub fn worktree_branch_status(
-    has_uncommitted_changes: bool,
-    has_unmerged_changes: bool,
-    has_merged_history: bool,
-) -> Option<WorktreeStatus> {
-    if has_uncommitted_changes || has_unmerged_changes {
-        Some(WorktreeStatus::Unmerged)
-    } else if has_merged_history {
-        Some(WorktreeStatus::Merged)
-    } else {
-        None
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    #[test]
+    fn task_titles_return_only_names_or_previews_without_display_copy() {
+        for (name, preview, expected) in [
+            (None, None, None),
+            (Some(""), Some(""), None),
+            (Some(""), Some("preview"), Some("preview")),
+            (Some("設定{0}"), Some("preview"), Some("設定{0}")),
+            (Some(" "), None, Some(" ")),
+        ] {
+            assert_eq!(task_title(name, preview), expected);
+        }
     }
 }

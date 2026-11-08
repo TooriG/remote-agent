@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     models::{Thread, Turn, TurnStatus},
     session::SessionRef,
-    state::{Attachment, Navigation, operations::OperationState},
+    state::{Navigation, operations::OperationState},
 };
 
 fn session() -> SessionRef {
@@ -12,7 +12,7 @@ fn session() -> SessionRef {
 fn snapshot() -> Snapshot {
     let mut snapshot = Snapshot::default();
     snapshot.connection.connected = true;
-    Arc::make_mut(&mut snapshot.pane).navigation = Arc::new(Navigation {
+    Arc::make_mut(snapshot.panes.primary_mut()).navigation = Arc::new(Navigation {
         thread_id: Some(session()),
         draft_key: session().into(),
         cwd: "/project".into(),
@@ -28,62 +28,30 @@ fn snapshot() -> Snapshot {
 }
 
 fn presentation(snapshot: &Snapshot) -> Arc<ComposerPresentation> {
-    ComposerPresentation::from_snapshot(Arc::new(snapshot.clone()))
-}
-
-#[test]
-fn submission_needs_content_or_recording_and_an_available_provider() {
-    let mut snapshot = snapshot();
-    assert!(!presentation(&snapshot).can_submit(false));
-    assert!(presentation(&snapshot).can_submit(true));
-    crate::state::set_draft_text(&mut snapshot, session().into(), " \n\t".into());
-    assert!(!presentation(&snapshot).can_submit(false));
-    crate::state::set_draft_text(&mut snapshot, session().into(), "日本語 👋".into());
-    assert!(presentation(&snapshot).can_submit(false));
-
-    let draft = Arc::make_mut(&mut snapshot.input.drafts)
-        .get_mut(&session().into())
-        .unwrap();
-    let draft = Arc::make_mut(draft);
-    draft.text.clear();
-    draft.attachments.push(Attachment {
-        path: "/uploaded/image.png".into(),
-        name: "image.png".into(),
-        is_image: true,
-    });
-    assert!(presentation(&snapshot).can_submit(false));
-    snapshot.connection.connected = false;
-    assert!(!presentation(&snapshot).can_submit(false));
-    assert!(!presentation(&snapshot).can_submit(true));
-    snapshot.connection.connected = true;
-    Arc::make_mut(&mut snapshot.pane).navigation = Arc::default();
-    assert!(
-        !presentation(&snapshot).can_submit(true),
-        "recording does not choose an unavailable provider"
-    );
+    ComposerPresentation::project(snapshot, snapshot.panes.primary(), None)
 }
 
 #[test]
 fn a_conversation_still_opening_or_failed_to_open_keeps_its_draft_but_sends_nothing() {
     let mut snapshot = snapshot();
     crate::state::set_draft_text(&mut snapshot, session().into(), "下書き".into());
-    assert!(presentation(&snapshot).controls.opened);
-    assert!(presentation(&snapshot).can_submit(false));
+    assert!(presentation(&snapshot).controls.loaded);
+    assert!(presentation(&snapshot).can_send(true));
 
     Arc::make_mut(&mut snapshot.sessions.conversations).remove(&session());
     let opening = presentation(&snapshot);
-    assert!(!opening.controls.opened);
+    assert!(!opening.controls.loaded);
     assert_eq!(opening.draft.text, "下書き");
-    assert!(!opening.can_submit(false));
-    assert!(!opening.can_submit(true), "a recording would send too");
+    assert!(!opening.can_send(true));
+    assert!(!opening.can_attach(), "nor an attachment");
 
     // A new chat has no conversation to wait for.
-    Arc::make_mut(&mut snapshot.pane).navigation = Arc::new(Navigation {
+    Arc::make_mut(snapshot.panes.primary_mut()).navigation = Arc::new(Navigation {
         thread_id: None,
         draft_key: session().into(),
         cwd: "/project".into(),
     });
-    assert!(presentation(&snapshot).controls.opened);
+    assert!(presentation(&snapshot).controls.loaded);
 }
 
 #[test]
@@ -101,7 +69,7 @@ fn active_draft_operations_block_submission_until_completion_or_retry() {
             draft_key: session().into(),
         },
     ] {
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key.clone(),
             OperationState {
                 generation: 1,
@@ -109,20 +77,23 @@ fn active_draft_operations_block_submission_until_completion_or_retry() {
             },
         );
         let busy = presentation(&snapshot);
-        assert!(!busy.can_submit(false));
-        assert!(!busy.can_submit(true));
+        assert!(!busy.can_send(true));
+        assert!(!busy.can_attach() && !busy.can_dictate());
         assert_eq!(
             busy.controls.transferring,
             matches!(key, OperationKey::Attachment { .. })
         );
-        snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
+        Arc::make_mut(&mut snapshot.operations)
+            .get_mut(&key)
+            .unwrap()
+            .phase = OperationPhase::Failed {
             message: "retry".into(),
         };
-        assert!(presentation(&snapshot).can_submit(false));
-        snapshot.operations.remove(&key);
-        assert!(presentation(&snapshot).can_submit(false));
+        assert!(presentation(&snapshot).can_send(true));
+        Arc::make_mut(&mut snapshot.operations).remove(&key);
+        assert!(presentation(&snapshot).can_send(true));
     }
-    snapshot.operations.insert(
+    Arc::make_mut(&mut snapshot.operations).insert(
         OperationKey::Attachment {
             draft_key: SessionRef::new(ProviderKind::Codex, "other".into())
                 .unwrap()
@@ -134,7 +105,7 @@ fn active_draft_operations_block_submission_until_completion_or_retry() {
         },
     );
     assert!(
-        presentation(&snapshot).can_submit(false),
+        presentation(&snapshot).can_send(true),
         "another conversation's transfer does not block this draft"
     );
 }
@@ -183,7 +154,7 @@ fn answers_cannot_be_advanced_twice_while_the_response_is_in_flight() {
     let key = OperationKey::Request {
         id: "question".into(),
     };
-    snapshot.operations.insert(
+    Arc::make_mut(&mut snapshot.operations).insert(
         key.clone(),
         OperationState {
             generation: 1,
@@ -191,7 +162,10 @@ fn answers_cannot_be_advanced_twice_while_the_response_is_in_flight() {
         },
     );
     assert!(!presentation(&snapshot).can_advance_question());
-    snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
+    Arc::make_mut(&mut snapshot.operations)
+        .get_mut(&key)
+        .unwrap()
+        .phase = OperationPhase::Failed {
         message: "retry".into(),
     };
     assert!(presentation(&snapshot).can_advance_question());
@@ -216,12 +190,12 @@ fn stopping_retries_failure_and_does_not_depend_on_message_input_availability() 
         ..Default::default()
     })]);
     assert!(presentation(&snapshot).can_interrupt());
-    assert!(!presentation(&snapshot).can_submit(true));
+    assert!(!presentation(&snapshot).can_send(true));
     let key = OperationKey::Interrupt {
         session: session(),
         turn: "turn".into(),
     };
-    snapshot.operations.insert(
+    Arc::make_mut(&mut snapshot.operations).insert(
         key.clone(),
         OperationState {
             generation: 1,
@@ -229,7 +203,10 @@ fn stopping_retries_failure_and_does_not_depend_on_message_input_availability() 
         },
     );
     assert!(!presentation(&snapshot).can_interrupt());
-    snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
+    Arc::make_mut(&mut snapshot.operations)
+        .get_mut(&key)
+        .unwrap()
+        .phase = OperationPhase::Failed {
         message: "retry".into(),
     };
     assert!(presentation(&snapshot).can_interrupt());
@@ -242,7 +219,7 @@ fn the_review_card_folds_past_three_files_and_needs_a_conversation_with_changes(
     use agent_protocol::models::{ChangedFile, WorkspaceReview};
     let with_files = |count: usize| {
         let mut snapshot = snapshot();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).review =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace).review =
             Some(Arc::new(WorkspaceReview {
                 branch: "main".into(),
                 additions: 7,
@@ -266,22 +243,26 @@ fn the_review_card_folds_past_three_files_and_needs_a_conversation_with_changes(
             .map(|file| file.path.clone())
             .collect::<Vec<_>>()
     };
-    assert_eq!(snapshot().composer_review(false), None);
-    assert_eq!(with_files(0).composer_review(true), None);
+    assert_eq!(snapshot().panes.primary().composer_review(false), None);
+    assert_eq!(with_files(0).panes.primary().composer_review(true), None);
 
-    let three = with_files(3).composer_review(false).unwrap();
+    let three = with_files(3)
+        .panes
+        .primary()
+        .composer_review(false)
+        .unwrap();
     assert_eq!((three.files, three.additions, three.deletions), (3, 7, 2));
     assert_eq!(three.rows.len(), 3);
     assert_eq!(three.folded, None, "three files need no toggle");
 
     let four = with_files(4);
-    let folded = four.composer_review(false).unwrap();
+    let folded = four.panes.primary().composer_review(false).unwrap();
     assert_eq!(
         paths(&folded),
         ["src/日本語-0.rs", "src/日本語-1.rs", "src/日本語-2.rs"]
     );
     assert_eq!(folded.folded, Some(1));
-    let expanded = four.composer_review(true).unwrap();
+    let expanded = four.panes.primary().composer_review(true).unwrap();
     assert_eq!(expanded.rows.len(), 4);
     assert_eq!(
         expanded.folded,
@@ -290,13 +271,13 @@ fn the_review_card_folds_past_three_files_and_needs_a_conversation_with_changes(
     );
 
     let mut draft = four;
-    Arc::make_mut(&mut draft.pane).navigation = Arc::new(Navigation {
+    Arc::make_mut(draft.panes.primary_mut()).navigation = Arc::new(Navigation {
         thread_id: None,
         draft_key: "draft".into(),
         cwd: "/project".into(),
     });
     assert_eq!(
-        draft.composer_review(false),
+        draft.panes.primary().composer_review(false),
         None,
         "a new draft has no card"
     );

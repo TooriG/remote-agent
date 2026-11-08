@@ -315,7 +315,7 @@ pub(crate) fn review_card() -> impl IntoElement {
         let expanded = expanded.get();
         connection
             .publication
-            .with(|p| p.snapshot.composer_review(expanded))
+            .with(|p| p.pane().composer_review(expanded))
     });
     let connected = move || connection.composer.with(|p| p.controls.connected);
     let review_file = move |file: Option<String>| {

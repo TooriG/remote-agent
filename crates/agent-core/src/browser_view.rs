@@ -1,4 +1,53 @@
 //! Shared browser presentation and input decisions.
+use crate::localization::{UiLanguage, localized_ui_format};
+use agent_protocol::browser::BrowserNotice;
+
+/// Native browser surfaces retain facts so language changes do not re-read the Host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
+pub enum BrowserStatus {
+    Importing { remote: bool },
+    Notice { notice: BrowserNotice },
+    Value { value: String },
+}
+
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn browser_status_label(language: UiLanguage, status: BrowserStatus) -> String {
+    let (key, arguments) = match status {
+        BrowserStatus::Importing { remote } => (
+            if remote {
+                "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。"
+            } else {
+                "ブラウザデータを取り込み中… OSのアクセス確認が出たら許可してください。"
+            },
+            vec![],
+        ),
+        BrowserStatus::Value { value } => return value,
+        BrowserStatus::Notice { notice } => match notice {
+            BrowserNotice::CookiesImported { count: 0, skipped } => (
+                "取り込めるCookieがありません（期限切れなど{0}件を除外）。",
+                vec![skipped.to_string()],
+            ),
+            BrowserNotice::CookiesImported { count, skipped } => (
+                "Cookieを{0}件取り込みました（期限切れなど{1}件を除外）。ログイン状態をサイトで確認してください。",
+                vec![count.to_string(), skipped.to_string()],
+            ),
+            BrowserNotice::PasswordsImported { count, skipped } => (
+                "パスワードを{0}件Keychainに保存しました（HTTPS以外など{1}件を除外）。入力はサイトごとに選択してください。",
+                vec![count.to_string(), skipped.to_string()],
+            ),
+            BrowserNotice::PasswordsDeleted => {
+                ("このサイトの保存パスワードを削除しました。", vec![])
+            }
+            BrowserNotice::PasswordFilled => (
+                "パスワードを入力しました。内容を確認してからログインしてください。",
+                vec![],
+            ),
+        },
+    };
+    localized_ui_format(language, key.into(), arguments)
+}
+
 pub fn address_url(input: &str) -> Result<String, String> {
     let input = input.trim();
     if input.is_empty() || input.len() > 8192 {
@@ -234,6 +283,81 @@ mod tests {
                 proptest::prop_assert!(action.validate().is_ok());
             }
         }
+    }
+
+    #[test]
+    fn credential_outcomes_use_current_language_and_page_values_stay_verbatim() {
+        use BrowserNotice::*;
+        for (notice, japanese, english) in [
+            (
+                CookiesImported {
+                    count: 0,
+                    skipped: 3,
+                },
+                "取り込めるCookieがありません（期限切れなど3件を除外）。",
+                "No cookies to import (3 expired or otherwise excluded).",
+            ),
+            (
+                CookiesImported {
+                    count: 12,
+                    skipped: 3,
+                },
+                "Cookieを12件取り込みました（期限切れなど3件を除外）。ログイン状態をサイトで確認してください。",
+                "Imported 12 cookies (3 expired or otherwise excluded). Check your login status on the site.",
+            ),
+            (
+                PasswordsImported {
+                    count: 4,
+                    skipped: 2,
+                },
+                "パスワードを4件Keychainに保存しました（HTTPS以外など2件を除外）。入力はサイトごとに選択してください。",
+                "Saved 4 passwords in Keychain (2 non-HTTPS or otherwise excluded). Select passwords to fill for each site.",
+            ),
+            (
+                PasswordsDeleted,
+                "このサイトの保存パスワードを削除しました。",
+                "Deleted saved passwords for this site.",
+            ),
+            (
+                PasswordFilled,
+                "パスワードを入力しました。内容を確認してからログインしてください。",
+                "Filled the password. Check the contents before signing in.",
+            ),
+        ] {
+            let status = BrowserStatus::Notice { notice };
+            assert_eq!(
+                browser_status_label(UiLanguage::Japanese, status.clone()),
+                japanese
+            );
+            assert_eq!(browser_status_label(UiLanguage::English, status), english);
+        }
+        for language in [UiLanguage::Japanese, UiLanguage::English] {
+            for value in ["設定", "残り 42%", "設定\n{0}"] {
+                assert_eq!(
+                    browser_status_label(
+                        language,
+                        BrowserStatus::Value {
+                            value: value.into()
+                        }
+                    ),
+                    value
+                );
+            }
+        }
+        assert_eq!(
+            browser_status_label(
+                UiLanguage::English,
+                BrowserStatus::Importing { remote: false }
+            ),
+            "Importing browser data… Allow access if prompted by the OS."
+        );
+        assert_eq!(
+            browser_status_label(
+                UiLanguage::English,
+                BrowserStatus::Importing { remote: true }
+            ),
+            "Importing browser data… Allow access if prompted on the remote Mac."
+        );
     }
 
     #[test]

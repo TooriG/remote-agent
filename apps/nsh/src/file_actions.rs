@@ -91,6 +91,7 @@ impl Chips {
 
     fn reference_menu(&self, path: &str) -> Vec<FileMenuItem> {
         file_reference_menu(
+            crate::l10n::language(),
             self.local,
             self.editor,
             self.reveal,
@@ -231,7 +232,13 @@ pub(crate) fn tree_menu(connection: Connection, key: &FileTreeKey, path: &str) {
             capabilities.and_then(|c| c.reveal),
         )
     });
-    let items = file_tree_menu(true, host == "local", &editors, reveal);
+    let items = file_tree_menu(
+        crate::l10n::language(),
+        true,
+        host == "local",
+        &editors,
+        reveal,
+    );
     let relative = file_workspace_relative_path(&file_tree_path(&key.root, path), &key.root)
         .unwrap_or_default();
     let mention = file_tree_mention(&key.root, &cwd, &relative);
@@ -341,6 +348,7 @@ mod tests {
     #[test]
     fn menu_ids_round_trip_their_actions_and_submenus_keep_their_items() {
         let items = file_tree_menu(
+            crate::l10n::language(),
             true,
             true,
             &[EditorId::FileManager, EditorId::VsCode],

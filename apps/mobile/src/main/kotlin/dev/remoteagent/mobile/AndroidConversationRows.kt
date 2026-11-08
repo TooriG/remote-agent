@@ -85,7 +85,9 @@ internal fun RequestCard(request: Request, submit: (Answer, (String?) -> Unit) -
                 }
                 is RequestBody.ToolExecution -> StructuredAnswer(request, disabled, ::respond) { error = it }
             }
-            error?.let { Text(language.text(it), color = MaterialTheme.colorScheme.error) }
+            error?.let {
+                Text(dev.remoteagent.core.localizedErrorMessage(language, it), color = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }

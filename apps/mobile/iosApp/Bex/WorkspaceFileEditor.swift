@@ -136,6 +136,7 @@ private struct WorkspaceFilePreview: View {
 
 struct WorkspaceFileSheet: View {
     let files: AgentCore.Files
+    let paneId: String
     @Binding var text: String
     let perform: SnapshotRequest
     let entry: FileEntry
@@ -172,7 +173,7 @@ struct WorkspaceFileSheet: View {
                     ProgressView().padding()
                 }
                 if controls.truncated {
-                    AppText(filePreviewTruncationNotice()).font(.caption).padding(.horizontal)
+                    AppText("file.preview.truncated").font(.caption).padding(.horizontal)
                     FileTextPreview(text: controls.text, line: line)
                 } else {
                     BufferedTextInput(value: $text) { TextEditor(text: $0, selection: $selection) }
@@ -253,7 +254,7 @@ struct WorkspaceFileSheet: View {
                 error = failure.localizedDescription; return
             }
             initialized = true
-            if let notice = snapshot.files().fileEditor(path: entry.path).conflictNotice {
+            if let notice = snapshot.files(paneId: paneId)?.fileEditor(path: entry.path).conflictNotice {
                 error = notice
             }
         }

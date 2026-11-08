@@ -44,7 +44,7 @@ fn prepare_catalog(catalogs: &mut Arc<BTreeMap<String, Arc<ComposerCatalog>>>, c
 }
 impl Operation for LoadComposerCatalog {
     type Input = Arc<ComposerCatalog>;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         snapshot
             .catalog
             .composer_catalogs
@@ -55,7 +55,7 @@ impl Operation for LoadComposerCatalog {
     const BACKGROUND: bool = true;
     type Output = (Arc<ComposerCatalog>, ComposerCatalog);
     const STALE_POLICY: StalePolicy = StalePolicy::Apply;
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         prepare_catalog(&mut snapshot.catalog.composer_catalogs, &self.cwd);
         Ok(())
     }
@@ -74,7 +74,12 @@ impl Operation for LoadComposerCatalog {
         let catalog = unavailable_catalog(&self.cwd, &source.candidates);
         Some((source, catalog))
     }
-    fn apply(self, snapshot: &mut Snapshot, (source, catalog): Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        (source, catalog): Self::Output,
+    ) -> Vec<Effect> {
         if snapshot
             .catalog
             .composer_catalogs
@@ -127,7 +132,7 @@ mod tests {
                        composer_catalogs: std::sync::Arc::new((if connected { Some(current.clone()) } else { None }).into_iter().map(|catalog| (catalog.cwd.clone(), catalog)).collect()),
                        ..Default::default()
                    },
-    pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(Navigation { cwd: if same_cwd { "/first" } else { "/second" }.into(), ..Default::default() }), ..Default::default() }),
+    panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(Navigation { cwd: if same_cwd { "/first" } else { "/second" }.into(), ..Default::default() }), ..Default::default() })),
                    ..Default::default()
                };
                let before = snapshot.catalog.composer_catalogs.clone();
@@ -135,7 +140,7 @@ mod tests {
                // A reply survives unrelated navigation epochs only while the
                // exact loading catalog still owns it. Account/reconnect resets
                // replace that owner even when all catalog values are identical.
-               LoadComposerCatalog { cwd: "/first".into() }.complete(&mut snapshot, (source, output), false).unwrap();
+               LoadComposerCatalog { cwd: "/first".into() }.complete(&mut snapshot, "", (source, output), false).unwrap();
                if same_source && connected {
                    proptest::prop_assert!(!snapshot.catalog.composer_catalogs["/first"].loading);
                } else {

@@ -17,7 +17,7 @@ pub(super) enum Prepared {
         skipped: usize,
     },
     #[cfg(target_os = "macos")]
-    Notice(String),
+    Notice(agent_protocol::browser::BrowserNotice),
     #[cfg(target_os = "macos")]
     Fill {
         origin: String,

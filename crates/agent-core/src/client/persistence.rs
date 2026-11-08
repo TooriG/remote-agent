@@ -1,10 +1,7 @@
 //! Shared restoration and ordered persistence. Platform adapters only read and
 //! atomically replace opaque payloads; device preferences have one shared owner.
 use super::{AgentError, error};
-use crate::{
-    persistence::{EditorPreferences, merge_model_preferences},
-    state::{ModelPreferences, Snapshot},
-};
+use crate::state::{Same, Snapshot};
 use futures_util::{
     FutureExt,
     future::{BoxFuture, Shared},
@@ -16,20 +13,15 @@ use std::{
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
-pub enum StorageKey {
-    LocalState,
-    ModelPreferences,
-    EditorPreferences,
-}
+mod device;
+pub use device::{DevicePreferences, PreferenceKey, PreferenceStorage};
+pub(crate) use device::{ModelChoice, Preferences};
 
-/// Runs on blocking workers. Each adapter is scoped to one Host/window; the
-/// preference keys always address the device-wide locations on that platform.
+/// A Host/window state file. Device settings use their own storage adapter.
 #[cfg_attr(feature = "bindings", uniffi::export(rust, foreign))]
 pub trait ClientStorage: Send + Sync {
-    fn load(&self, key: StorageKey) -> Result<Vec<u8>, AgentError>;
-    fn save(&self, key: StorageKey, bytes: Vec<u8>) -> Result<(), AgentError>;
+    fn load(&self) -> Result<Vec<u8>, AgentError>;
+    fn save(&self, bytes: Vec<u8>) -> Result<(), AgentError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -40,105 +32,14 @@ pub enum RestoreError {
     Storage(#[from] AgentError),
 }
 
-#[derive(Clone, Default)]
-struct Preferences {
-    models: ModelPreferences,
-    editor: EditorPreferences,
-}
-impl Preferences {
-    fn capture(snapshot: &Snapshot) -> Self {
-        Self {
-            models: snapshot.catalog.model_preferences.clone(),
-            editor: EditorPreferences::capture(snapshot),
-        }
-    }
-    fn apply(&self, snapshot: &mut Snapshot) {
-        snapshot.catalog.model_preferences = self.models.clone();
-        snapshot.files.preferred_editor = self.editor.preferred;
-    }
-}
-struct DeviceState {
-    current: Preferences,
-    saved_models: Option<ModelPreferences>,
-    saved_editor: Option<EditorPreferences>,
-}
-
-/// Share this owner between simultaneous views and successive Host sessions.
-/// The last disk payload is tracked separately, so failed writes remain dirty
-/// without reapplying an obsolete session's edits over another window's work.
-#[derive(Default)]
-pub struct DevicePreferences {
-    state: Mutex<Option<DeviceState>>,
-}
-impl DevicePreferences {
-    fn load(&self, storage: &dyn ClientStorage) -> Result<Preferences, AgentError> {
-        let mut state = self.state.lock().unwrap();
-        let state = Self::initialize(&mut state, storage)?;
-        Ok(state.current.clone())
-    }
-    fn initialize<'a>(
-        state: &'a mut Option<DeviceState>,
-        storage: &dyn ClientStorage,
-    ) -> Result<&'a mut DeviceState, AgentError> {
-        if state.is_none() {
-            let models = storage.load(StorageKey::ModelPreferences)?;
-            let editor = storage.load(StorageKey::EditorPreferences)?;
-            let saved_models: Option<ModelPreferences> = (!models.is_empty())
-                .then(|| serde_json::from_slice(&models).map_err(error))
-                .transpose()?;
-            let saved_editor: Option<EditorPreferences> = (!editor.is_empty())
-                .then(|| serde_json::from_slice(&editor).map_err(error))
-                .transpose()?;
-            *state = Some(DeviceState {
-                current: Preferences {
-                    models: saved_models.clone().unwrap_or_default(),
-                    editor: saved_editor.clone().unwrap_or_default(),
-                },
-                saved_models,
-                saved_editor,
-            });
-        }
-        Ok(state.as_mut().unwrap())
-    }
-    fn save(
-        &self,
-        storage: &dyn ClientStorage,
-        before: Preferences,
-        after: Preferences,
-    ) -> (Preferences, Result<(), AgentError>) {
-        let mut state = self.state.lock().unwrap();
-        let state = match Self::initialize(&mut state, storage) {
-            Ok(state) => state,
-            Err(reason) => return (before, Err(reason)),
-        };
-        state.current.models =
-            merge_model_preferences(&state.current.models, &before.models, &after.models);
-        if before.editor != after.editor {
-            state.current.editor = after.editor.clone();
-        }
-        let result = state.persist(storage);
-        (after, result)
-    }
-}
-
-impl DeviceState {
-    fn persist(&mut self, storage: &dyn ClientStorage) -> Result<(), AgentError> {
-        if self.saved_models.as_ref() != Some(&self.current.models) {
-            storage.save(
-                StorageKey::ModelPreferences,
-                serde_json::to_vec(&self.current.models).map_err(error)?,
-            )?;
-            self.saved_models = Some(self.current.models.clone());
-        }
-        if self.saved_editor.as_ref() != Some(&self.current.editor) {
-            storage.save(
-                StorageKey::EditorPreferences,
-                serde_json::to_vec(&self.current.editor).map_err(error)?,
-            )?;
-            self.saved_editor = Some(self.current.editor.clone());
-        }
-        Ok(())
-    }
+// A repeated failure is a new failed attempt. Successful writes only notify
+// when they clear an error; idle flushes must not republish an empty state.
+fn publish_failure(failures: &watch::Sender<Option<String>>, reason: Option<String>) {
+    failures.send_if_modified(|current| {
+        let changed = current.is_some() || reason.is_some();
+        *current = reason;
+        changed
+    });
 }
 
 pub(crate) type Completion<T> = Shared<BoxFuture<'static, Result<T, AgentError>>>;
@@ -147,15 +48,10 @@ struct Save {
     complete: oneshot::Sender<Result<(), AgentError>>,
 }
 
-struct Restored {
-    preferences: Preferences,
-    conversations: Option<PathBuf>,
-}
-
 pub struct Persistence {
     storage: Arc<dyn ClientStorage>,
-    device: Arc<DevicePreferences>,
-    restored: Mutex<Option<Restored>>,
+    pub(crate) device: Arc<DevicePreferences>,
+    conversations: Mutex<Option<PathBuf>>,
     queue: Mutex<Option<mpsc::UnboundedSender<Save>>>,
     /// Asks the conversation copies to write what is pending now.
     copies: Mutex<Option<mpsc::UnboundedSender<crate::conversation_cache::Flush>>>,
@@ -179,18 +75,21 @@ impl Persistence {
         Arc::new(Self {
             storage,
             device,
-            restored: Mutex::default(),
+            conversations: Mutex::default(),
             queue: Mutex::default(),
             copies: Mutex::default(),
             failure: watch::channel(None).0,
         })
     }
     pub fn failure(&self) -> Option<String> {
-        self.failure.borrow().clone()
+        self.failure
+            .borrow()
+            .clone()
+            .or_else(|| self.device.failure())
     }
     #[cfg(feature = "bindings")]
     pub(crate) fn report_failure(&self, reason: String) {
-        self.failure.send_replace(Some(reason));
+        publish_failure(&self.failure, Some(reason));
     }
     pub fn failures(&self) -> watch::Receiver<Option<String>> {
         self.failure.subscribe()
@@ -206,22 +105,21 @@ impl Persistence {
             let bytes = if new_pairing {
                 Vec::new()
             } else {
-                storage.load(StorageKey::LocalState)?
+                storage.load()?
             };
             let mut snapshot =
                 crate::persistence::decode(&bytes).map_err(RestoreError::InvalidState)?;
-            let preferences = persistence.device.load(storage)?;
-            preferences.apply(&mut snapshot);
+            let preferences = persistence.device.restore()?;
+            snapshot.catalog.model_preferences = preferences.models.clone();
+            snapshot.files.preferred_editor = preferences.editor.preferred;
+            snapshot.catalog.ui_language = preferences.language;
             if let Some(directory) = &conversations {
                 if new_pairing {
                     crate::conversation_cache::clear(directory);
                 }
                 crate::conversation_cache::restore(directory, &mut snapshot);
             }
-            *persistence.restored.lock().unwrap() = Some(Restored {
-                preferences,
-                conversations,
-            });
+            *persistence.conversations.lock().unwrap() = conversations;
             Ok::<_, RestoreError>(snapshot)
         })
         .await
@@ -239,18 +137,7 @@ impl Persistence {
         }
         let (send, mut receive) = mpsc::unbounded_channel::<Save>();
         *queue = Some(send);
-        let Restored {
-            preferences: mut baseline,
-            conversations,
-        } = self
-            .restored
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap_or_else(|| Restored {
-                preferences: Preferences::capture(&snapshots.borrow()),
-                conversations: None,
-            });
+        let conversations = self.conversations.lock().unwrap().take();
         let (flush, flushes) = mpsc::unbounded_channel();
         if conversations.is_some() {
             *self.copies.lock().unwrap() = Some(flush);
@@ -260,33 +147,25 @@ impl Persistence {
         let failure = self.failure.clone();
         let saving = async move {
             while let Some(Save { snapshot, complete }) = receive.recv().await {
+                if let Err(reason) = device.flush().await {
+                    let _ = complete.send(Err(reason));
+                    continue;
+                }
                 let storage = storage.clone();
-                let device = device.clone();
-                let saved = tokio::task::spawn_blocking(move || {
-                    let (baseline, result) =
-                        device.save(storage.as_ref(), baseline, Preferences::capture(&snapshot));
-                    let result = result.and_then(|()| {
-                        storage.save(
-                            StorageKey::LocalState,
-                            crate::persistence::encode(&snapshot).map_err(error)?,
-                        )
-                    });
-                    (baseline, result)
+                let result = match tokio::task::spawn_blocking(move || {
+                    storage.save(crate::persistence::encode(&snapshot).map_err(error)?)
                 })
-                .await;
-                let result = match saved {
-                    Ok((previous, result)) => {
-                        baseline = previous;
-                        result
-                    }
+                .await
+                {
+                    Ok(result) => result,
                     Err(reason) => {
                         let reason = error(reason);
-                        failure.send_replace(Some(reason.to_string()));
+                        publish_failure(&failure, Some(reason.to_string()));
                         let _ = complete.send(Err(reason));
                         break;
                     }
                 };
-                failure.send_replace(result.as_ref().err().map(ToString::to_string));
+                publish_failure(&failure, result.as_ref().err().map(ToString::to_string));
                 let _ = complete.send(result);
             }
         };
@@ -360,17 +239,26 @@ impl Persistence {
     ) {
         let mut previous = snapshots.borrow_and_update().clone();
         let mut dirty = true;
+        let delay = std::time::Duration::from_millis(250);
+        let deadline = tokio::time::sleep(delay);
+        tokio::pin!(deadline);
         loop {
             let next = tokio::select! {
                 biased;
                 _ = stop.cancelled() => return,
                 result = snapshots.changed() => match result { Ok(()) => Some(snapshots.borrow_and_update().clone()), Err(_) => return },
-                _ = tokio::time::sleep(std::time::Duration::from_millis(250)), if dirty => None,
+                _ = &mut deadline, if dirty => None,
             };
             if let Some(next) = next {
+                let changed = !crate::persistence::PersistedState::capture(&next)
+                    .same(&crate::persistence::PersistedState::capture(&previous));
                 let immediate = !next.list_source().equivalent(&previous.list_source());
                 previous = next;
+                if !changed {
+                    continue;
+                }
                 dirty = true;
+                deadline.as_mut().reset(tokio::time::Instant::now() + delay);
                 if !immediate {
                     continue;
                 }
