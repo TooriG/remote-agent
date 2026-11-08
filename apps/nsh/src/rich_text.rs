@@ -216,7 +216,7 @@ fn view_parts(
                                     .number_of_lines(1)
                                     .text_size(px(12.0)),
                                 )
-                                .child(crate::ui::text_button(
+                                .child(crate::ui::row_text_button(
                                     move || {
                                         SharedString::from(if wrap.get() {
                                             tr("折り返し解除")
@@ -226,7 +226,7 @@ fn view_parts(
                                     },
                                     move || wrap.update(|wrap| *wrap = !*wrap),
                                 ))
-                                .child(crate::ui::icon_button(
+                                .child(crate::ui::row_icon_button(
                                     crate::ui::Icon::COPY,
                                     tr("コードをコピー"),
                                     move || {
@@ -266,7 +266,7 @@ fn view_parts(
                 240.0,
             )
             .into_element(),
-            Part::Link(_) => crate::ui::text_button(tr("ファイルを開く"), move || {
+            Part::Link(_) => crate::ui::row_text_button(tr("ファイルを開く"), move || {
                 let target = serde_json::from_str::<Target>(&target.get_untracked()).unwrap();
                 let Part::Link(path) = part.with_untracked(|(_, part)| part.clone()) else {
                     return;
@@ -375,7 +375,7 @@ fn table(
                 .flex_row()
                 .justify_end()
                 .gap_2()
-                .child(crate::ui::text_button(
+                .child(crate::ui::row_text_button(
                     move || {
                         SharedString::from(if compact.get() {
                             tr("セルを折り返す")
@@ -385,13 +385,14 @@ fn table(
                     },
                     move || compact.update(|compact| *compact = !*compact),
                 ))
-                .child(crate::ui::text_button(
+                .child(crate::ui::row_text_button(
                     tr("Markdownをコピー"),
                     move || copy(true),
                 ))
-                .child(crate::ui::text_button(tr("CSVをコピー"), move || {
-                    copy(false)
-                })),
+                .child(crate::ui::row_text_button(
+                    tr("CSVをコピー"),
+                    move || copy(false),
+                )),
         )
 }
 

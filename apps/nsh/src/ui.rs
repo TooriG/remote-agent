@@ -265,8 +265,7 @@ pub(crate) fn spinner() -> impl IntoElement {
 #[cfg(not(target_os = "macos"))]
 pub(crate) type Control = nsh_base::ButtonElement;
 
-#[cfg(not(target_os = "macos"))]
-fn ghost(label: impl IntoReactive<SharedString>, content: View) -> Control {
+fn ghost(label: impl IntoReactive<SharedString>, content: View) -> nsh_base::ButtonElement {
     nsh_base::button()
         .accessibility_label(nsh_core::element::Prop::from(
             label.into_reactive().map(Some),
@@ -323,7 +322,6 @@ pub(crate) fn icon_button_sized(
 }
 
 /// A hint over a control, as the desktop client's tooltips.
-#[cfg(not(target_os = "macos"))]
 fn tooltip(label: impl IntoReactive<SharedString>) -> AnyElement {
     view()
         .px_2()
@@ -346,6 +344,32 @@ pub(crate) fn text_button(
     title: impl IntoReactive<SharedString>,
     press: impl Fn() + 'static,
 ) -> Control {
+    row_text_button(title, press)
+}
+
+/// A small ghost icon button (24 pt, a 14 pt icon) drawn by NSH on every
+/// platform, for controls repeated on each row of a list: AppKit's buttons
+/// measure themselves through SwiftUI, which scrolling cannot afford.
+pub(crate) fn row_icon_button(
+    glyph: Icon,
+    label: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
+    let label = label.into_reactive();
+    ghost(
+        label.clone(),
+        view().tooltip(tooltip(label)).child(icon(glyph, 14.0)),
+    )
+    .w(px(24.0))
+    .h(px(24.0))
+    .on_press(press)
+}
+
+/// A small ghost text button drawn by NSH, for the same rows.
+pub(crate) fn row_text_button(
+    title: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
     let title = title.into_reactive();
     ghost(
         title.clone(),

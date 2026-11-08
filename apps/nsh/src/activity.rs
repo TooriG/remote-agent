@@ -146,7 +146,7 @@ pub(crate) fn details(
                                     .unwrap_or_default()
                             }))
                             .child(
-                                crate::ui::text_button(
+                                crate::ui::row_text_button(
                                     move || {
                                         SharedString::from(if running() {
                                             tr("詳細を読み込み中…")
