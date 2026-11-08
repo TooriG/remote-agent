@@ -1,6 +1,5 @@
 //! Core supplies Markdown semantics; TextKit owns native selection, layout and menus.
 use crate::Connection;
-use crate::client::SideChatStart;
 use crate::conversation::Kind;
 use crate::l10n::tr;
 use agent_core::{
@@ -9,6 +8,7 @@ use agent_core::{
         MarkdownAlignment, MarkdownBlock, MarkdownFileReference, MarkdownRun, MarkdownStyle,
     },
     state::{DraftKey, Intent},
+    store::SideChatStart,
 };
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::{Value, json};

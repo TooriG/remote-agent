@@ -187,7 +187,7 @@ pub(crate) fn open_tool(key: &str) {
                     workspace.scope.get_untracked(),
                     directory,
                     provider,
-                    crate::client::SideChatStart::Quote(String::new()),
+                    agent_core::store::SideChatStart::Quote(String::new()),
                 )
             });
         } else {

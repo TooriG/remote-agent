@@ -1,6 +1,6 @@
 //! The application owns UI resources shared by native views; each view observes immutable snapshots.
 use crate::{
-    client::{Client, SideChatStart, Update},
+    client::{Client, Update},
     shared::Shared,
 };
 use agent_core::{
@@ -9,6 +9,7 @@ use agent_core::{
     panels::{PanelKind, PanelLayout, PanelScope, Panels},
     presentation::view::Presentation,
     state::{DraftKey, Intent},
+    store::SideChatStart,
 };
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::watch;

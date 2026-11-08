@@ -47,17 +47,19 @@ impl AgentPane {
             .start_side_chat(provider, crate::store::SideChatStart::Quote(text))
             .await
     }
-    pub async fn explain_in_side_chat(
-        &self,
-        provider: Option<crate::session::ProviderKind>,
-        text: String,
-    ) -> Result<(), AgentError> {
-        self.pane
-            .start_side_chat(provider, crate::store::SideChatStart::Explain(text))
-            .await
-    }
     pub fn retire(&self) {
         self.pane.close();
+    }
+}
+
+/// Rust clients start a side chat with either first input.
+impl AgentPane {
+    pub async fn start_side_chat(
+        &self,
+        provider: Option<crate::session::ProviderKind>,
+        start: crate::store::SideChatStart,
+    ) -> Result<(), AgentError> {
+        self.pane.start_side_chat(provider, start).await
     }
 }
 

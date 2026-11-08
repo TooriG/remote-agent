@@ -2,18 +2,10 @@
 use super::*;
 use crate::l10n::tr;
 use agent_core::client::native::AgentPane;
+use agent_core::store::SideChatStart;
 use agent_protocol::session::ProviderKind;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
-
-/// What a side chat begins with.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum SideChatStart {
-    /// The selection quoted in its draft; nothing for an empty one.
-    Quote(String),
-    /// A request to explain the selection, sent at once.
-    Explain(String),
-}
 
 pub(super) struct Pane {
     host: String,
@@ -67,10 +59,7 @@ impl Client {
                         owner.observe_pane(id, core.clone(), pane.stop.clone());
                         Ok::<_, AgentError>(core)
                     }).await?;
-                    match start {
-                        SideChatStart::Quote(text) => core.prepare_side_chat(provider, text).await?,
-                        SideChatStart::Explain(text) => core.explain_in_side_chat(provider, text).await?,
-                    }
+                    core.start_side_chat(provider, start).await?;
                     core.presentation()
                 } => result.map_err(|reason| reason.to_string()),
             };
