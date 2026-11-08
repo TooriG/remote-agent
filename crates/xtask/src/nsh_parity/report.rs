@@ -250,8 +250,9 @@ gpui = { height = 1, source = "sidebar.rs" }
     #[test]
     fn approved_deviations_are_listed_apart_from_differences() {
         let approved = format!(
-            "{MAP}\n[[approved]]\nelement = \"row\"\nmetrics = [\"position\"]\nreason = \"Bex keeps its layout\"\napproved = \"2026-11-08\"\nby = \"the user\"\n"
-        );
+            "{MAP}\n[[approved]]\nelement = \"row\"\nmetrics = [\"position\"]\nreason = \"Bex keeps its layout\"\napproved = \"2026-11-08\"\nby = \"the user\"\n\n[[approved]]\ngroup = \"sidebar\"\nreason = \"GPUI's own\"\napproved = \"2026-11-08\"\nby = \"the user\"\n"
+        )
+        .replace("nsh = { text = \"Search\" }", "nsh = { text = \"Search\" }\ngroup = \"sidebar\"");
         let map = Map::parse(&approved).unwrap();
         let difference = |metric| Difference {
             element: "row".into(),
@@ -259,13 +260,26 @@ gpui = { height = 1, source = "sidebar.rs" }
             reference: "0.0, 5.0".into(),
             nsh: "9.0, 5.0".into(),
         };
-        let outcomes = [Outcome {
-            state: &map.states[0],
-            result: Ok(vec![difference("position"), difference("size")]),
-        }];
+        // A group's approval covers every metric of its elements.
+        let glyph = Difference {
+            element: "search".into(),
+            ..difference("glyph size (drawn)")
+        };
+        let outcomes = [
+            Outcome {
+                state: &map.states[0],
+                result: Ok(vec![difference("position"), difference("size")]),
+            },
+            Outcome {
+                state: &map.states[2],
+                result: Ok(vec![glyph]),
+            },
+        ];
         let text = render("run-1", &map, &outcomes);
         for line in [
             "| Conversation | 1 | 0 | 1 | 0 | 1 |",
+            "| Sidebar | 1 | 0 | 0 | 0 | 1 |",
+            "| Search icon (`search`) | glyph size (drawn) | 0.0, 5.0 | 9.0, 5.0 | GPUI's own | 2026-11-08 by the user |",
             "| Work row \\| folded (`row`) | size | 0.0, 5.0 | 9.0, 5.0 |",
             "Approved deviations:",
             "| Work row \\| folded (`row`) | position | 0.0, 5.0 | 9.0, 5.0 | Bex keeps its layout | 2026-11-08 by the user |",

@@ -20,14 +20,17 @@ pub struct Map {
     pub approvals: Vec<Approval>,
 }
 
-/// A difference the user approved: Bex keeps its own design there, and the
-/// report lists it as approved rather than as a difference.
+/// Differences the user approved: Bex keeps its own design there, and the
+/// report lists them as approved rather than as differences. It names one
+/// `element` or a `group` of elements (every element whose `group` it is).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Approval {
-    pub element: String,
+    pub element: Option<String>,
+    pub group: Option<String>,
     /// The metrics approved, as the report names them (`position`, `text
-    /// position (drawn)`, …).
+    /// position (drawn)`, …); none: every metric.
+    #[serde(default)]
     pub metrics: Vec<String>,
     pub reason: String,
     /// The day it was approved, `YYYY-MM-DD`.
@@ -133,6 +136,10 @@ pub struct Element {
     /// compared with this element's centre.
     #[serde(default)]
     pub centred_in: Option<String>,
+    /// The part of the screen it belongs to, which an approval can name for
+    /// all its elements at once.
+    #[serde(default)]
+    pub group: Option<String>,
     #[serde(default)]
     pub tolerance: ToleranceOverride,
     /// Which of the selector's matches counts, from 0.
@@ -207,9 +214,15 @@ impl Map {
 
     /// The approval that covers `metric` of `element`, if one does.
     pub fn approval(&self, element: &str, metric: &str) -> Option<&Approval> {
+        let group = self
+            .element(element)
+            .and_then(|element| element.group.as_deref());
         self.approvals.iter().find(|approval| {
-            approval.element == element
-                && approval.metrics.iter().any(|approved| approved == metric)
+            let names = approval.element.as_deref() == Some(element)
+                || (approval.group.is_some() && approval.group.as_deref() == group);
+            names
+                && (approval.metrics.is_empty()
+                    || approval.metrics.iter().any(|approved| approved == metric))
         })
     }
 
@@ -238,10 +251,22 @@ impl Map {
                         byte.is_ascii_digit()
                     }
                 });
-            if self.element(&approval.element).is_none() || !dated {
+            let names = match (&approval.element, &approval.group) {
+                (Some(element), None) => self.element(element).is_some(),
+                (None, Some(group)) => self
+                    .elements
+                    .iter()
+                    .any(|element| element.group.as_ref() == Some(group)),
+                _ => false,
+            };
+            if !names || !dated {
                 return Err(format!(
-                    "the approval of {} must name a defined element and a YYYY-MM-DD date",
-                    approval.element
+                    "the approval of {} must name a defined element or group and a YYYY-MM-DD date",
+                    approval
+                        .element
+                        .as_ref()
+                        .or(approval.group.as_ref())
+                        .map_or("nothing", String::as_str)
                 ));
             }
         }
@@ -460,7 +485,7 @@ gpui = { x = 20, height = 14, glyph_dy = 0, source = "sidebar.rs:744" }
         );
         assert_eq!(
             Map::parse(&undated).unwrap_err(),
-            "the approval of answer must name a defined element and a YYYY-MM-DD date"
+            "the approval of answer must name a defined element or group and a YYYY-MM-DD date"
         );
         let unknown_up = MAP.replace("up = \"background\"", "up = \"parent\"");
         assert_eq!(

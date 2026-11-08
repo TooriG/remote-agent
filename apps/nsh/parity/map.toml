@@ -209,6 +209,7 @@ elements = ["sidebar", "sidebar-search-field", "sidebar-search-text", "sidebar-s
 id = "composer"
 what = "Composer surface"
 kind = "box"
+group = "composer"
 t3 = "[data-chat-composer-surface]"
 nsh = { class = "NshInputPad", up = "background" }
 
@@ -216,6 +217,7 @@ nsh = { class = "NshInputPad", up = "background" }
 id = "composer-placeholder"
 what = "Composer placeholder"
 kind = "text"
+group = "composer"
 t3 = "[data-chat-composer-body] div:has(> [data-testid=composer-editor]) + div"
 nsh = { contains = "", class = "NSTextField" }
 anchor = "composer"
@@ -224,6 +226,7 @@ anchor = "composer"
 id = "composer-text"
 what = "Typed draft"
 kind = "text"
+group = "composer"
 t3 = "[data-testid=composer-editor]"
 nsh = { class = "NshTextView" }
 anchor = "composer"
@@ -232,6 +235,7 @@ anchor = "composer"
 id = "composer-send"
 what = "Send button"
 kind = "icon"
+group = "composer"
 t3 = "button[aria-label='Submit message']"
 nsh = { text = "Send" }
 anchor = "composer"
@@ -240,6 +244,7 @@ anchor = "composer"
 id = "composer-stop"
 what = "Stop button"
 kind = "icon"
+group = "composer"
 t3 = "button[aria-label='Stop generation']"
 nsh = { text = "Stop" }
 anchor = "composer"
@@ -248,6 +253,7 @@ anchor = "composer"
 id = "composer-attach"
 what = "Attach button"
 kind = "icon"
+group = "composer"
 t3 = "button[aria-label='Attach files']"
 nsh = { text = "Attach file" }
 anchor = "composer"
@@ -256,6 +262,7 @@ anchor = "composer"
 id = "composer-dictation"
 what = "Dictation button"
 kind = "icon"
+group = "composer"
 t3 = "button[aria-label*='ictat'], button[aria-label*='microphone' i]"
 nsh = { text = "Transcribe audio with Codex" }
 anchor = "composer"
@@ -264,6 +271,7 @@ anchor = "composer"
 id = "composer-model"
 what = "Model picker"
 kind = "text"
+group = "composer"
 t3 = "[data-chat-provider-model-picker]"
 nsh = { text = "Fixture Model", class = "NSButton" }
 anchor = "composer"
@@ -272,6 +280,7 @@ anchor = "composer"
 id = "composer-mode"
 what = "Access mode picker"
 kind = "text"
+group = "composer"
 t3 = "button[aria-label='Runtime mode']"
 nsh = { text = "Change approval mode" }
 anchor = "composer"
@@ -280,6 +289,7 @@ anchor = "composer"
 id = "composer-context-strip"
 what = "Project and destination strip"
 kind = "text"
+group = "composer"
 t3 = "[data-slot=composer-context-strip]"
 nsh = { text = "Destination", up = 2 }
 
@@ -287,6 +297,7 @@ nsh = { text = "Destination", up = 2 }
 id = "model-menu"
 what = "Model picker popup"
 kind = "box"
+group = "composer"
 t3 = "[data-slot=popover-popup]"
 nsh = { text = "Search models", up = "background" }
 
@@ -294,6 +305,7 @@ nsh = { text = "Search models", up = "background" }
 id = "model-menu-row"
 what = "Model picker: the model's row"
 kind = "text"
+group = "composer"
 t3 = "[data-slot=popover-popup] [role=option], [data-slot=popover-popup] button"
 nsh = { text = "Fixture Model", role = "AXButton" }
 
@@ -624,6 +636,7 @@ nsh = { text = "作業を進めます" }
 id = "question-submit"
 what = "Question: submit"
 kind = "text"
+group = "composer"
 t3 = "[data-chat-composer-actions] button:last-child"
 nsh = { text = "回答を送信", class = "NSButton" }
 
@@ -785,18 +798,14 @@ gpui = { source = "sidebar.rs:778 icon_button(Settings) in a py_2 footer" }
 
 # ── Approved deviations ─────────────────────────────────────────────────────
 # Differences the user approved: the report lists them as approved, not as
-# differences. `metrics` name the report's metrics for that element.
+# differences. An approval names an `element` or a `group` (the elements whose
+# `group` it is); `metrics` (the report's names) narrow it, all when omitted.
+# The composer group is the input field, its footer, controls and chips and
+# the model picker's popup, in every state; the approval and question panels
+# above it are still compared.
 
 [[approved]]
-element = "composer-attach"
-metrics = ["position"]
-reason = "Bex keeps attach at the left of the composer footer (T3: beside send, at the right)."
-approved = "2026-11-08"
-by = "the user"
-
-[[approved]]
-element = "composer-model"
-metrics = ["text position (drawn)"]
-reason = "Bex keeps the model picker at the right of the composer footer (T3: at the left)."
+group = "composer"
+reason = "composer keeps Bex's own design"
 approved = "2026-11-08"
 by = "the user"
