@@ -45,7 +45,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | DictationUITests.testSimulatorDictationPermissionDenialPreservesDraftAndSend | covered | dictation-denied (`microphone deny`) |
 | HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | not yet | the reading position is not observable: NSH's conversation list gives accessibility no scroll area or position, only the rows it has made |
 | HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | not yet | `scroll` works, but the reading position is not observable (as above) |
-| HistoryUITests.testSimulatorRendersVisualizationAndReopensIt | partial | visualization (the Mac offers the file and opens it in the tool panel; it does not render it inline) |
+| HistoryUITests.testSimulatorRendersVisualizationAndReopensIt | partial | visualization (the Mac offers the file and opens it in the tool panel, as the desktop client did; only the iPhone renders it inline) |
 | HistoryUITests.testSimulatorRendersMarkdownTableAndReopensIt | covered | markdown-table |
 | HistoryUITests.testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText | covered | long-markdown |
 | HistoryUITests.testSimulatorReopensCompletedHistoryCollapsed | covered | folded-work, markdown-table (reopened collapsed) |
