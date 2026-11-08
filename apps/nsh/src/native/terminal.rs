@@ -115,6 +115,7 @@ unsafe extern "C" fn event(
             context.emit("input", json!(bytes));
         }
         2 => context.emit("resize", json!({"cols": cols, "rows": rows})),
+        3 => context.emit("focus", json!(cols != 0)),
         _ => {}
     }
 }

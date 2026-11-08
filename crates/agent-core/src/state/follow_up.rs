@@ -108,23 +108,17 @@ pub enum QueueAction {
     Resume,
 }
 
-/// Moving queued message `id` by `steps` rows, as T3 Code's drag and arrow
-/// keys reorder its queue: before the message it lands ahead of, or to the
-/// end. None when it stays where it is.
-pub fn reorder(ids: &[ClientInputId], id: &ClientInputId, steps: i32) -> Option<QueueAction> {
+/// Dropping queued message `id` at queue position `insert` (0..=len), as T3
+/// Code's drag and arrow keys reorder its queue: before the message now
+/// there, or at the end. None when it would stay where it is.
+pub fn drop_at(ids: &[ClientInputId], id: &ClientInputId, insert: usize) -> Option<QueueAction> {
     let from = ids.iter().position(|queued| queued == id)?;
-    let last = ids.len() as i64 - 1;
-    let to = (from as i64 + i64::from(steps)).clamp(0, last) as usize;
-    if to == from {
+    if insert == from || insert == from + 1 || insert > ids.len() {
         return None;
     }
     Some(QueueAction::Move {
         client_user_message_id: id.clone(),
-        before: if to > from {
-            ids.get(to + 1).cloned()
-        } else {
-            Some(ids[to].clone())
-        },
+        before: ids.get(insert).cloned(),
     })
 }
 

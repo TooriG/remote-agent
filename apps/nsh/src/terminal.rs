@@ -16,6 +16,17 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
     // The view's owner releases its stored values before its cleanup runs, so
     // what the cleanup reads lives outside them.
     let started = std::rc::Rc::new(std::cell::Cell::new(false));
+    // A grid that goes away with the keyboard gives it up.
+    let focus = use_context::<Focus>().unwrap();
+    let focused = std::rc::Rc::new(std::cell::Cell::new(false));
+    cleanup({
+        let focused = focused.clone();
+        move || {
+            if focused.get() {
+                focus.set(false);
+            }
+        }
+    });
     let size = signal(None::<agent_protocol::operations::TerminalSize>);
     let resource = computed(move || {
         connection
@@ -194,6 +205,11 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                         handle: handle.get(),
                         sequence,
                     }),
+                    Report::Focus(now) => {
+                        if focused.replace(now) != now {
+                            focus.set(now);
+                        }
+                    }
                 }
             },
         ))
@@ -204,6 +220,32 @@ pub(crate) enum Report {
     Resize(agent_protocol::operations::TerminalSize),
     Input(Vec<u8>),
     Ack(u64),
+    /// The grid took or gave up the keyboard.
+    Focus(bool),
+}
+
+/// Whether a terminal holds the keyboard, for shortcuts that T3 Code binds
+/// everywhere but the terminal (`!terminalFocus`).
+#[derive(Clone, Copy)]
+pub(crate) struct Focus(Signal<u32>);
+
+impl Focus {
+    pub(crate) fn new() -> Self {
+        Self(signal(0))
+    }
+    /// Counted, so one terminal's blur cannot clear another's focus.
+    fn set(self, focused: bool) {
+        self.0.update(|count| {
+            *count = if focused {
+                *count + 1
+            } else {
+                count.saturating_sub(1)
+            }
+        });
+    }
+    pub(crate) fn get(self) -> bool {
+        self.0.get() > 0
+    }
 }
 
 /// The terminal's grid: SwiftTerm on Apple platforms, which reports through
@@ -244,6 +286,11 @@ fn grid(
                 "ack" => {
                     if let Some(sequence) = data.as_u64() {
                         report(Report::Ack(sequence));
+                    }
+                }
+                "focus" => {
+                    if let Some(focused) = data.as_bool() {
+                        report(Report::Focus(focused));
                     }
                 }
                 _ => {}

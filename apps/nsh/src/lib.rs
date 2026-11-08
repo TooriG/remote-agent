@@ -243,6 +243,7 @@ fn app_content(
     provide_context(workspace);
     let files = files::Browser::new(preview);
     provide_context(files);
+    provide_context(terminal::Focus::new());
     let failure = computed(move || state.with(|state| state.failure.clone().map(l10n::localized)));
     let routes = signal(vec![0_u8]);
     let settings = computed(move || state.with(|state| state.settings));
