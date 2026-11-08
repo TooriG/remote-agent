@@ -44,6 +44,8 @@ pub struct NshView {
     pub class: String,
     pub frame: Rect,
     pub hidden: bool,
+    #[serde(default = "opaque")]
+    pub alpha: f64,
     pub role: Option<String>,
     pub texts: BTreeMap<String, String>,
     pub layer: Option<NshLayer>,
@@ -53,7 +55,13 @@ pub struct NshView {
 pub struct NshLayer {
     pub background: Option<[f64; 4]>,
     pub radius: f64,
+    #[serde(default = "opaque")]
+    pub opacity: f64,
     pub animations: Vec<String>,
+}
+
+fn opaque() -> f64 {
+    1.0
 }
 
 /// One side's element, measured.
@@ -201,13 +209,14 @@ fn descends(views: &[NshView], mut view: usize, ancestor: usize) -> bool {
     false
 }
 
-/// The `nth` shown view `matcher` names, then the ancestor it asks for. An
-/// empty matcher names none: NSH draws no counterpart.
+/// The `nth` shown view `matcher` names, then the ancestor it asks for, then
+/// the descendant. An empty matcher names none: NSH draws no counterpart.
 pub fn find(views: &[NshView], matcher: &NshMatch) -> Option<usize> {
     if *matcher
         == (NshMatch {
             up: matcher.up.clone(),
             nth: matcher.nth,
+            down: matcher.down.clone(),
             ..NshMatch::default()
         })
     {
@@ -216,10 +225,10 @@ pub fn find(views: &[NshView], matcher: &NshMatch) -> Option<usize> {
     let index = views
         .iter()
         .enumerate()
-        .filter(|(_, view)| shown(view) && matches(view, matcher))
+        .filter(|(index, view)| shown(views, *index) && matches(view, matcher))
         .map(|(index, _)| index)
         .nth(matcher.nth)?;
-    match &matcher.up {
+    let index = match &matcher.up {
         None => Some(index),
         Some(Up::Levels(levels)) => (0..*levels).try_fold(index, |view, _| views[view].parent),
         Some(Up::Named(name)) if name == "background" => {
@@ -227,11 +236,31 @@ pub fn find(views: &[NshView], matcher: &NshMatch) -> Option<usize> {
                 .find(|&view| fills(&views[view]))
         }
         Some(Up::Named(_)) => None,
-    }
+    }?;
+    matcher.down.iter().try_fold(index, |view, &nth| {
+        (view + 1..views.len())
+            .filter(|&child| views[child].parent == Some(view) && shown(views, child))
+            .nth(nth)
+    })
 }
 
-fn shown(view: &NshView) -> bool {
-    !view.hidden && view.frame[2] > 0.0 && view.frame[3] > 0.0 && view.frame[1] > -1000.0
+/// Drawn: laid out on screen and, as T3's side counts it, not transparent
+/// through itself or an ancestor (hover-only controls).
+fn shown(views: &[NshView], index: usize) -> bool {
+    let view = &views[index];
+    let transparent = |view: &NshView| {
+        view.alpha == 0.0
+            || view
+                .layer
+                .as_ref()
+                .is_some_and(|layer| layer.opacity == 0.0)
+    };
+    !view.hidden
+        && view.frame[2] > 0.0
+        && view.frame[3] > 0.0
+        && view.frame[1] > -1000.0
+        && !std::iter::successors(Some(index), |&view| views[view].parent)
+            .any(|view| transparent(&views[view]))
 }
 
 fn fills(view: &NshView) -> bool {
@@ -314,7 +343,9 @@ struct Frames<'a> {
 }
 
 impl Frames<'_> {
-    /// Where positions are measured from on the reference side and NSH's.
+    /// Where positions are measured from on the reference side and NSH's:
+    /// the column's left edge (its right one for an element at its end) and
+    /// the window's top, or the anchor's.
     fn origins(&self) -> [[f64; 2]; 2] {
         let anchor = self.element.anchor.as_ref();
         // The column itself is placed in the window.
@@ -324,9 +355,14 @@ impl Frames<'_> {
             .as_ref()
             .filter(|column| **column != self.element.id));
         [self.reference, self.nsh].map(|side| {
-            let x = column
-                .and_then(|id| side.get(id))
-                .map_or(0.0, |measure| measure.frame[0]);
+            let x = column.and_then(|id| side.get(id)).map_or(0.0, |measure| {
+                measure.frame[0]
+                    + if self.element.from_end {
+                        measure.frame[2]
+                    } else {
+                        0.0
+                    }
+            });
             let y = anchor
                 .and_then(|id| side.get(id))
                 .map_or(0.0, |measure| measure.frame[1]);
@@ -378,10 +414,14 @@ fn compare(
         (!measure.unknown[index]).then(|| frame(measure)[index] - origin)
     };
     let place = |measure: &Measure, origin: [f64; 2]| {
-        [
-            component(measure, 0, origin[0]),
-            component(measure, 1, origin[1]),
-        ]
+        let x = if element.from_end {
+            // Its right edge's distance from the column's.
+            (!measure.unknown[0] && !measure.unknown[2])
+                .then(|| origin[0] - frame(measure)[0] - frame(measure)[2])
+        } else {
+            component(measure, 0, origin[0])
+        };
+        [x, component(measure, 1, origin[1])]
     };
     let size = |measure: &Measure| [component(measure, 2, 0.0), component(measure, 3, 0.0)];
     let (position, extent) = if drawn_text {
@@ -667,6 +707,7 @@ gpui = { x = 14, y = 14, width = 16, height = 16, glyph_dx = -20, glyph_dy = 0, 
             class: "NshView".into(),
             frame,
             hidden: false,
+            alpha: 1.0,
             role: Some(
                 if text == "Copy" {
                     "AXButton"
@@ -688,6 +729,7 @@ gpui = { x = 14, y = 14, width = 16, height = 16, glyph_dx = -20, glyph_dy = 0, 
         Some(NshLayer {
             background,
             radius,
+            opacity: 1.0,
             animations: animations.iter().map(|key| (*key).into()).collect(),
         })
     }
@@ -791,6 +833,26 @@ gpui = { x = 14, y = 14, width = 16, height = 16, glyph_dx = -20, glyph_dy = 0, 
             None
         );
         assert_eq!(find(NshMatch::default(), 0), None);
+        // A hover-only control is transparent through an ancestor: not shown.
+        let mut hover_only = views.clone();
+        hover_only[3].alpha = 0.0;
+        let copy = NshMatch {
+            text: Some("Copy".into()),
+            ..NshMatch::default()
+        };
+        assert_eq!(super::find(&views, &copy), Some(4));
+        assert_eq!(super::find(&hover_only, &copy), None);
+        hover_only[3].alpha = 1.0;
+        hover_only[4].layer.as_mut().unwrap().opacity = 0.0;
+        assert_eq!(super::find(&hover_only, &copy), None);
+        // The row's glyph, down from its label.
+        let glyph = |down: Vec<usize>| NshMatch {
+            contains: Some("Worked".into()),
+            down,
+            ..NshMatch::default()
+        };
+        assert_eq!(super::find(&views, &glyph(vec![0])), Some(4));
+        assert_eq!(super::find(&views, &glyph(vec![1])), None);
         let image = Image {
             width: 100,
             height: 50,
@@ -872,6 +934,37 @@ gpui = { x = 14, y = 14, width = 16, height = 16, glyph_dx = -20, glyph_dy = 0, 
                     "missing".into()
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn an_element_at_the_columns_end_is_placed_from_its_right_edge() {
+        let at_end = MAP.replace(
+            "id = \"row\"\nwhat = \"Row\"\nkind = \"text\"",
+            "id = \"row\"\nwhat = \"Row\"\nkind = \"text\"\nfrom_end = true",
+        );
+        let map = Map::parse(&at_end).unwrap();
+        let state = &map.states[0];
+        let positions = |nsh_row: Rect| {
+            let reference = BTreeMap::from([
+                ("column".to_owned(), measure([20.0, 30.0, 60.0, 18.0])),
+                ("row".to_owned(), measure([50.0, 5.0, 30.0, 10.0])),
+            ]);
+            // A narrower column: the row keeps its distance from its end.
+            let nsh = BTreeMap::from([
+                ("column".to_owned(), measure([20.0, 30.0, 50.0, 18.0])),
+                ("row".to_owned(), measure(nsh_row)),
+            ]);
+            differences(&map, state, &reference, &nsh)
+                .into_iter()
+                .filter(|difference| difference.element == "row")
+                .map(|difference| (difference.metric, difference.reference, difference.nsh))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(positions([40.0, 5.0, 30.0, 10.0]), []);
+        assert_eq!(
+            positions([30.0, 5.0, 30.0, 10.0]),
+            [("position", "0.0, 5.0".into(), "10.0, 5.0".into())]
         );
     }
 

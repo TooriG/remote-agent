@@ -132,6 +132,11 @@ pub struct Element {
     /// state's column and the window's top.
     #[serde(default)]
     pub anchor: Option<String>,
+    /// It sits at the end of the column (a user's message): its horizontal
+    /// position is how far its right edge is from the column's, which a
+    /// column of another width keeps.
+    #[serde(default)]
+    pub from_end: bool,
     /// Where an [`Kind::Icon`] is centred: its drawn glyph's centre is
     /// compared with this element's centre.
     #[serde(default)]
@@ -176,6 +181,10 @@ pub struct NshMatch {
     /// ancestor (or itself) whose layer fills a background.
     #[serde(default)]
     pub up: Option<Up>,
+    /// Then down into its children, the shown child at each index in turn
+    /// (an unlabelled glyph inside a labelled row).
+    #[serde(default)]
+    pub down: Vec<usize>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]

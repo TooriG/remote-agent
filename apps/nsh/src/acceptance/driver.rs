@@ -1460,9 +1460,18 @@ fn hover(tree: &Tree, index: usize) -> Result<(), String> {
         NSEventType::MouseMoved, point, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 0, 0.0,
     ).ok_or("AppKit made no pointer event")?;
     let content = window.contentView().ok_or("the window has no content")?;
-    let view = content
+    let mut view = content
         .hitTest(content.convertPoint_fromView(point, None))
         .ok_or_else(|| format!("no view is under {}", node.describe()))?;
+    // A native view (message text) keeps moves to itself, and only NSH's
+    // root view tracks hover: the move goes to the outermost NSH view.
+    let nsh = |view: &NSView| view.class().name().to_string_lossy().starts_with("Nsh");
+    // SAFETY: views of the window, on the main thread.
+    while let Some(parent) = unsafe { view.superview() }
+        && (!nsh(&view) || nsh(&parent))
+    {
+        view = parent;
+    }
     view.mouseMoved(&event);
     Ok(())
 }
