@@ -131,8 +131,7 @@ fn follow_up_controls(
     sending.sort_by_key(|(_, pending)| pending.sequence);
     FollowUpControls {
         preferences,
-        active: thread.active_turn_id().is_some()
-            || thread.status == crate::models::SessionStatus::Running
+        active: follow_up::working(thread)
             || (!thread.queue.held && !thread.queue.inputs.is_empty()),
         default_action: action(false),
         alternate_action: action(true),

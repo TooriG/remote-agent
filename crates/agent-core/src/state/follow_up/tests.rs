@@ -161,6 +161,20 @@ fn input_waits_unless_a_running_turn_can_take_its_steer() {
     let mut held = thread(false, true, vec![queued("waiting", "earlier")]);
     held.queue.held = true;
     assert!(!waits(&held, FollowUp::Queue));
+    // An answered turn waiting on background work takes input as its next
+    // turn, though its conversation still runs.
+    let mut waiting_on_work = thread(false, true, Vec::new());
+    waiting_on_work.status = SessionStatus::Running;
+    waiting_on_work.background = vec![agent_protocol::execution::BackgroundTask {
+        id: "shell".into(),
+        kind: agent_protocol::execution::BackgroundTaskKind::Command,
+        description: None,
+    }];
+    assert!(!working(&waiting_on_work));
+    assert!(!waits(&waiting_on_work, FollowUp::Queue));
+    waiting_on_work.background.clear();
+    assert!(working(&waiting_on_work));
+    assert!(waits(&waiting_on_work, FollowUp::Queue));
 }
 
 #[test]

@@ -18,3 +18,8 @@ expect_scrolled この会話 0 0.999
 screenshot kept-place
 scroll この会話 400
 expect_scrolled この会話 0.99 1 10000
+scroll この会話 -40
+expect_scrolled この会話 0 0.99 10000
+press 最新のメッセージへ 10000
+expect_scrolled この会話 0.99 1 10000
+expect_absent 最新のメッセージへ

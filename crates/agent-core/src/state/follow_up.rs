@@ -61,11 +61,27 @@ pub fn requested(preference: FollowUp, alternate: bool) -> FollowUp {
 /// overtakes input already waiting unless a stop holds that input.
 pub fn waits(thread: &Thread, follow_up: FollowUp) -> bool {
     let running = thread.active_turn_id().is_some();
-    if running || thread.status == crate::models::SessionStatus::Running {
+    if working(thread) {
         !(running && follow_up == FollowUp::Steer && steers(thread))
     } else {
         !thread.queue.held && !thread.queue.inputs.is_empty()
     }
+}
+
+/// Whether the conversation works: a turn runs, or it runs without an answered
+/// turn waiting on background work, which takes new input as its next turn
+/// (T3 Code's Waiting).
+pub fn working(thread: &Thread) -> bool {
+    // The answered turn stays the one Stop ends while its work runs on.
+    let waiting = !thread.background.is_empty()
+        && thread
+            .turns
+            .iter()
+            .flatten()
+            .all(|turn| turn.status != crate::models::TurnStatus::Running);
+    !waiting
+        && (thread.active_turn_id().is_some()
+            || thread.status == crate::models::SessionStatus::Running)
 }
 
 /// The conversation's provider can take input into its running turn.

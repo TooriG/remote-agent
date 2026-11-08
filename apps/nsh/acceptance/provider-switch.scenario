@@ -11,7 +11,7 @@ press "Claude Code" 10000
 press Sonnet
 type "AI に依頼する" "切り替えて送ります"
 expect "AIを切り替えて送信するには" 10000
-expect_disabled 送信
+expect_disabled メッセージをキューに追加
 expect "AIを切り替えて送信するには"
 expect "切り替えて送ります"
 screenshot held

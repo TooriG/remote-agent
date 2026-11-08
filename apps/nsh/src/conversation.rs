@@ -244,6 +244,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     effect(move || {
         target.get();
         following.set(true);
+        scrolled.replace(None);
         expanded.set(HashMap::new());
         expanded_items.set(HashSet::new());
     });
@@ -259,11 +260,13 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
         crate::acceptance::rows_ready(projected.len());
         Shared(std::sync::Arc::new(projected))
     });
+    // A conversation opening or changing rows goes to its end while it
+    // follows. A reader who scrolls back to the end is there already.
     effect(move || {
         target.get();
         if column_width.get() > 0.0
             && rows.with(|rows| !rows.is_empty())
-            && following.get()
+            && following.get_untracked()
             && !scroll_pending.get()
         {
             scroll_pending.replace(true);
@@ -394,8 +397,11 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                             progress
                                                 .label(
                                                     crate::l10n::language(),
+                                                    // A cell can outlive the list's clock
+                                                    // while its conversation closes.
                                                     clock
-                                                        .get()
+                                                        .try_get()
+                                                        .unwrap_or_else(std::time::SystemTime::now)
                                                         .duration_since(std::time::UNIX_EPOCH)
                                                         .unwrap_or_default()
                                                         .as_secs_f64(),
@@ -696,7 +702,10 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                     tr("最新のメッセージへ"),
                     32.0,
                     16.0,
-                    move || following.set(true),
+                    move || {
+                        following.set(true);
+                        list.scroll_to_end(true);
+                    },
                 )
                 .bg(crate::ui::colors::RAISED)
                 .border_1()

@@ -20,8 +20,13 @@ pub struct ScrollPosition {
 /// Whether the conversation follows its end once it moved from `previous` to
 /// `now`. Moving toward the start stops following, unless the content shrank
 /// under the reader or cannot scroll at all; reaching the end, by the reader
-/// or by following, follows again; anything else keeps `following`.
+/// or by following, follows again; anything else keeps `following`. Without
+/// a `previous` position, a following conversation was at its end.
 pub fn follows_end(following: bool, previous: Option<ScrollPosition>, now: ScrollPosition) -> bool {
+    let previous = previous.or(following.then_some(ScrollPosition {
+        offset: (now.content - now.viewport).max(0.),
+        ..now
+    }));
     let toward_start = previous.is_some_and(|previous| {
         now.offset < previous.offset - 0.5 && now.content >= previous.content - 0.5
     });
@@ -75,6 +80,16 @@ mod tests {
         assert!(follows_end(true, Some(at(10., 300.)), at(0., 300.)));
     }
 
+    #[test]
+    fn the_first_scroll_of_a_following_conversation_leaves_its_end() {
+        // Nothing scrolled the list since it opened at its end.
+        assert!(!follows_end(true, None, at(1300., 2000.)));
+        assert!(!follows_end(true, None, at(1490., 2000.)));
+        assert!(follows_end(true, None, at(1500., 2000.)));
+        // A reader who left the end keeps their place.
+        assert!(!follows_end(false, None, at(1300., 2000.)));
+    }
+
     proptest::proptest! {
         #[test]
         fn the_end_follows_and_an_upward_scroll_never_does(
@@ -89,7 +104,8 @@ mod tests {
             if gap <= FOLLOW_REARM_DISTANCE {
                 proptest::prop_assert!(follows_end(following, None, now));
             } else {
-                proptest::prop_assert_eq!(follows_end(following, None, now), following);
+                // Away from the end, the reader left it.
+                proptest::prop_assert!(!follows_end(following, None, now));
             }
             proptest::prop_assert!(!follows_end(following, Some(below), now));
         }
