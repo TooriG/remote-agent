@@ -94,15 +94,17 @@ jobs:
             case "$path" in
               docs/PRIVACY.md) area=all ;;
               cccc.toml | docs/* | AGENTS.md | CHANGELOG.md | README.md | README.ja.md | SECURITY.md | \
-                lp/* | scripts/*.test.mjs | tools/windows-fxc/update.test.ps1 | \
+                lp/* | scripts/*.test.mjs | \
                 crates/agent-protocol/src/browser_input.test.cjs | crates/host-daemon/src/browser/password-fill.test.cjs | \
                 apps/native-browser/src/macos/snapshot.test.cjs) continue ;;
-              tools/windows-fxc/* | scripts/package-windows.ps1 | scripts/windows-installer.iss) area=windows ;;
+              scripts/package-windows.ps1 | scripts/windows-installer.iss) area=windows ;;
               # Mac runs the runner's unit tests; iPhone exercises its Simulator lifecycle.
               crates/xtask/src/ios_e2e.rs) area='iphone-mac' ;;
               scripts/test-ios-scroll.sh) area=iphone ;;
               apps/native-focus/*) area=mac ;;
-              apps/native-browser/* | apps/native-settings/* | apps/nsh/*) area='iphone-mac' ;;
+              apps/native-browser/* | apps/native-settings/*) area='iphone-mac' ;;
+              # The NSH client is the Mac, Windows and iPhone app.
+              apps/nsh/*) area=nsh ;;
               apps/mobile/src/* | apps/mobile/build.gradle.kts | build.gradle.kts | settings.gradle.kts | \
                 gradle.properties | gradle/* | gradlew | gradlew.bat | detekt.yml | scripts/android-e2e.sh | \
                 scripts/build-agent-android.ts) area=android ;;
@@ -111,10 +113,10 @@ jobs:
               apps/desktop/*) area=desktop ;;
               *) area=all ;;
             esac
-            if [[ $area == all || $area == desktop || $area == windows ]]; then windows=true; fi
+            if [[ $area == all || $area == desktop || $area == windows || $area == nsh ]]; then windows=true; fi
             if [[ $area == all || $area == android ]]; then android=true; fi
-            if [[ $area == all || $area == iphone || $area == iphone-mac ]]; then iphone=true; fi
-            if [[ $area == all || $area == mac || $area == iphone-mac || $area == desktop ]]; then mac=true; fi
+            if [[ $area == all || $area == iphone || $area == iphone-mac || $area == nsh ]]; then iphone=true; fi
+            if [[ $area == all || $area == mac || $area == iphone-mac || $area == desktop || $area == nsh ]]; then mac=true; fi
           done <<< "$changed"
           printf 'windows=%s\nandroid=%s\niphone=%s\nmac=%s\n' "$windows" "$android" "$iphone" "$mac" | tee -a "$GITHUB_OUTPUT"
   toolchain:
@@ -562,8 +564,6 @@ jobs:
     timeout-minutes: 60
     env:
       AGENT_RELEASE_TAG: ${{ inputs.release-tag }}
-      # rust-cache prunes non-Cargo files inside target, leaving empty tool caches.
-      AGENT_FXC_CACHE_ROOT: ${{ github.workspace }}/output/tool-cache/windows-fxc
     steps:
       - *windows-checkout
       - name: Require a verified Nightly revision for release packaging
@@ -595,27 +595,19 @@ jobs:
           tool: cargo-nextest@${{ needs.toolchain.outputs.nextest-version }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          cache-directories: ${{ env.AGENT_FXC_CACHE_ROOT }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: bex-wsl-runtime
           path: target/wsl-runtime
-      - name: Verify pinned shader compiler and reproducible bytecode
-        run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/windows-fxc/verify.ps1
-      - name: Compile GPUI shaders with the pinned compiler
-        run: |
-          $compiler = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/windows-fxc/prepare.ps1
-          if ($LASTEXITCODE -ne 0) { throw "Pinned FXC preparation failed." }
-          "GPUI_FXC_PATH=$compiler" >> $env:GITHUB_ENV
       - name: Build desktop, Host and CLI
         if: ${{ !inputs.release-tag }}
         run: |
-          cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
+          cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-nsh -p host-daemon -p agent-cli
           if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
           $buildNumberPath = Join-Path $env:RUNNER_TEMP 'desktop-build-number.txt'
-          $probe = Start-Process ./target/debug/agent-desktop.exe -ArgumentList '--bex-build-number' `
+          $probe = Start-Process ./target/debug/agent-nsh.exe -ArgumentList '--bex-build-number' `
             -NoNewWindow -Wait -PassThru -RedirectStandardOutput $buildNumberPath
           $desktopBuildNumber = Get-Content -Raw $buildNumberPath
           if ($probe.ExitCode -ne 0 -or "$desktopBuildNumber".Trim() -ne "0") {
@@ -628,7 +620,7 @@ jobs:
         if: ${{ !inputs.release-tag }}
         env:
           AGENT_RUNTIME_DIRECTORY: ${{ github.workspace }}/target/debug
-        run: cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask
+        run: cargo nextest run --locked --no-fail-fast --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask -p agent-nsh
       - name: Documentation examples
         if: ${{ !inputs.release-tag }}
         run: cargo test --locked --doc --features agent-core/bindings -p codex-app-server -p agent-process -p agent-protocol -p agent-transport -p agent-local-host -p agent-core -p agent-cli -p host-daemon -p host-fixture -p xtask

@@ -8,6 +8,8 @@
   #define BuildRevision "preview"
 #endif
 
+; agent-desktop.exe is the NSH client. Installs and in-app updates keep its
+; name, AppId and shortcuts, so existing installations upgrade in place.
 [Setup]
 AppId={{86D79957-8C60-4BB2-AED7-31D423A45B89}
 AppName=BEX

@@ -33,7 +33,6 @@ jobs:
           nix develop .#repository --command bash -euo pipefail <<'CHECKS'
           actionlint
           just typescript
-          pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1
           node --test lp/download.test.cjs scripts/*.test.mjs
           node --test crates/agent-protocol/src/browser_input.test.cjs crates/host-daemon/src/browser/password-fill.test.cjs apps/native-browser/src/macos/snapshot.test.cjs
           npm --prefix crates/host-daemon/src/visualize ci --ignore-scripts --no-audit

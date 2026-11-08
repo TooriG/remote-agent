@@ -62,20 +62,16 @@ try {
     }
     if (-not $SkipBuild) {
         $previousRevision = $env:AGENT_BUILD_REVISION
-        $previousCompiler = $env:GPUI_FXC_PATH
         try {
             $env:AGENT_BUILD_REVISION = $revision
-            # GPUI compiles its shaders with the compiler named here.
-            $env:GPUI_FXC_PATH = & (Join-Path $PSScriptRoot "../tools/windows-fxc/prepare.ps1")
-            & cargo build --locked --profile $Profile --features agent-core/bindings -p agent-desktop -p host-daemon -p agent-process -p agent-cli
+            & cargo build --locked --profile $Profile -p agent-nsh -p host-daemon -p agent-process -p agent-cli
             if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
         } finally {
             $env:AGENT_BUILD_REVISION = $previousRevision
-            $env:GPUI_FXC_PATH = $previousCompiler
         }
     }
     # Check the PE Subsystem field in both profiles before distributing the app.
-    $desktopReader = [IO.BinaryReader]::new([IO.File]::OpenRead((Join-Path $buildDirectory "agent-desktop.exe")))
+    $desktopReader = [IO.BinaryReader]::new([IO.File]::OpenRead((Join-Path $buildDirectory "agent-nsh.exe")))
     try {
         $desktopReader.BaseStream.Position = 0x3c
         $peHeaderOffset = $desktopReader.ReadInt32()
@@ -91,7 +87,10 @@ try {
     $bundle = Join-Path $staging "bex"
     New-Item -ItemType Directory -Path $bundle -Force | Out-Null
     try {
-        foreach ($executable in @("agent-desktop.exe", "host-daemon.exe", "agent-provider-supervisor.exe", "agent-cli.exe")) {
+        # The NSH client keeps the installed app's executable name: updates
+        # verify and relaunch the executable at the path the running app has.
+        Copy-Item -LiteralPath (Join-Path $buildDirectory "agent-nsh.exe") -Destination (Join-Path $bundle "agent-desktop.exe")
+        foreach ($executable in @("host-daemon.exe", "agent-provider-supervisor.exe", "agent-cli.exe")) {
             Copy-Item -LiteralPath (Join-Path $buildDirectory $executable) -Destination $bundle
         }
         Copy-Item -LiteralPath $WslRuntimeDirectory -Destination (Join-Path $bundle "wsl-runtime") -Recurse

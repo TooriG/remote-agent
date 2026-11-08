@@ -119,7 +119,7 @@ test('only affected native clients run while repository-only changes stay lightw
     [[], []],
     [['README.md', 'docs/development.md'], []],
     [['cccc.toml', 'AGENTS.md', 'lp/download.test.cjs'], []],
-    [['scripts/native-ci.test.mjs', 'tools/windows-fxc/update.test.ps1'], []],
+    [['scripts/native-ci.test.mjs'], []],
     [['crates/agent-protocol/src/browser_input.test.cjs', 'crates/host-daemon/src/browser/password-fill.test.cjs', 'apps/native-browser/src/macos/snapshot.test.cjs'], []],
     [['apps/mobile/src/main/kotlin/Conversation.kt'], ['android']],
     [['apps/mobile/build.gradle.kts', 'gradle.properties', 'scripts/android-e2e.sh', 'scripts/build-agent-android.ts'], ['android']],
@@ -138,7 +138,7 @@ test('only affected native clients run while repository-only changes stay lightw
     [['apps/native-focus/src/lib.rs'], ['mac']],
     [['apps/native-browser/src/macos/mod.rs'], ['iphone', 'mac']],
     [['apps/native-browser/apple-views/Sources/NativeBrowserViews/RemoteBrowserCanvas.swift'], ['iphone', 'mac']],
-    [['tools/windows-fxc/prepare.ps1', 'tools/windows-fxc/verify.ps1'], ['windows']],
+    [['apps/nsh/src/terminal_screen.rs'], ['windows', 'iphone', 'mac']],
     [['scripts/package-windows.ps1', 'scripts/windows-installer.iss'], ['windows']],
     [['apps/mobile/src/main/kotlin/Conversation.kt', 'apps/mobile/iosApp/Bex/ConversationView.swift'], ['android', 'iphone']],
   ];

@@ -29,7 +29,6 @@ unit-tests *targets:
     just typescript || failed=1
     node --test scripts/*.test.mjs || failed=1
     node --test crates/agent-protocol/src/browser_input.test.cjs crates/host-daemon/src/browser/password-fill.test.cjs apps/native-browser/src/macos/snapshot.test.cjs || failed=1
-    pwsh -NoLogo -NoProfile -NonInteractive -File tools/windows-fxc/update.test.ps1 || failed=1
     npm --prefix crates/host-daemon/src/providers/claude/sdk test || failed=1
     node scripts/build-claude-sdk.ts target/debug || failed=1
     cargo build --locked -p agent-process --bin agent-provider-supervisor || failed=1
