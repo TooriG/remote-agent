@@ -69,8 +69,9 @@ impl Client {
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
             closing: AtomicBool::new(false),
+            // Chats lists only standalone chats, as the desktop client's sidebar.
             sessions: ClientSessions::new(
-                cfg!(not(target_os = "ios")),
+                false,
                 ClientBuild {
                     number: 0,
                     revision: option_env!("AGENT_BUILD_REVISION")
