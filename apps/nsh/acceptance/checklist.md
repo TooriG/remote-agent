@@ -35,9 +35,9 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | DeviceNavigationUITests.testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs | covered | tool-panel, tools |
 | DeviceNavigationUITests.testSimulatorBrowserUsesOneSharedImportMenu | not yet | the browser's menu is disabled until a page loads, and loading one needs the network |
 | DeviceNavigationUITests.testSimulatorNativeTerminalCopiesTextOnLongPress | n/a | long press |
-| DeviceNavigationUITests.testSimulatorNativeTerminalPastesMultilineText | not yet | the terminal's screen is not in the accessibility tree, so the driver cannot read it |
-| DeviceNavigationUITests.testSimulatorNativeTerminalDoesNotDuplicateQueryResponses | not yet | as above |
-| DeviceNavigationUITests.testSimulatorNativeTerminalRetainsShellAfterReopening | partial | tools (opens and closes beside other tabs without failing); the shell is not readable |
+| DeviceNavigationUITests.testSimulatorNativeTerminalPastesMultilineText | covered | terminal-paste |
+| DeviceNavigationUITests.testSimulatorNativeTerminalDoesNotDuplicateQueryResponses | covered | terminal-query |
+| DeviceNavigationUITests.testSimulatorNativeTerminalRetainsShellAfterReopening | covered | terminal-reopen (the shell keeps its variable while another tool is in front and the panel closes and opens; the draft stays), tools |
 | DeviceNavigationUITests.testSimulatorUsesNativeProjectDisclosureAndWorkspaceTree | covered | open-conversation (project disclosure), tool-panel (file tree) |
 | DeviceNavigationUITests.testPhysicalDeviceCanPairWithManualPayload | n/a | physical device |
 | DictationUITests.testSimulatorDictationContinuesPastThirtySecondsAndReachesHost | not yet | needs microphone permission |

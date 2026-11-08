@@ -211,6 +211,9 @@ async fn scenario(
         .arg(&tools.claude)
         // Publishes the Host where a client with the same isolated state finds it.
         .env("AGENT_FIXTURE_LOCAL_HOST", "1")
+        // The Host's terminals inherit it: this runner checks how many answers a
+        // terminal query gets (`cargo xtask terminal-query-probe`).
+        .env("AGENT_TERMINAL_QUERY_PROBE", std::env::current_exe()?)
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);

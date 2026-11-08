@@ -276,6 +276,10 @@ fn attempt(
         Step::Menu(find) => context_menu(&Tree::read(mtm, menus), find),
         Step::Choose(path) => choose(path, mtm),
         Step::ExpectFile(path, _) => file_written(path),
+        Step::Clipboard(text) => {
+            Clipboard::set(text);
+            Attempt::Passed("set the clipboard".into(), None)
+        }
         Step::ExpectClipboard(text, _) => {
             let copied = Clipboard::text();
             if copied.contains(text.as_str()) {
@@ -390,8 +394,15 @@ fn on_element(
     find: &Find,
     act: impl FnOnce(&Tree, usize) -> Result<String, String>,
 ) -> Attempt {
-    match tree.labelled(find) {
-        Ok(matches) => done(act(tree, matches[0])),
+    // A menu item takes no text, wheel or selection: the element of the same
+    // name is meant while the menu that offered it closes.
+    match tree.labelled(find).map(|matches| {
+        matches
+            .into_iter()
+            .find(|&index| !matches!(tree.nodes[index].target, Target::MenuItem { .. }))
+    }) {
+        Ok(Some(index)) => done(act(tree, index)),
+        Ok(None) => Attempt::Pending(format!("only a menu item is labelled {:?}", find.text)),
         Err(reason) => Attempt::Pending(reason),
     }
 }
@@ -817,11 +828,18 @@ fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
     let responder = window
         .firstResponder()
         .ok_or("the window has no first responder")?;
-    if !responds(&responder, sel!(insertText:)) {
+    let text = NSString::from_str(text);
+    // As the keyboard's input context commits text, where the view takes it so
+    // (a text view, SwiftTerm's terminal).
+    if responds(&responder, sel!(insertText:replacementRange:)) {
+        let nowhere = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+        let _: () =
+            unsafe { msg_send![&*responder, insertText: &*text, replacementRange: nowhere] };
+    } else if responds(&responder, sel!(insertText:)) {
+        let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
+    } else {
         return Err(format!("{} does not edit text", node.describe()));
     }
-    let text = NSString::from_str(text);
-    let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
     Ok(())
 }
 
@@ -1156,6 +1174,13 @@ impl Clipboard {
         if !items.is_empty() {
             pasteboard.writeObjects(&NSArray::from_retained_slice(&items));
         }
+    }
+
+    /// Puts `text` on the clipboard, as copying it elsewhere would.
+    fn set(text: &str) {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        pasteboard.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
     }
 
     fn text() -> String {

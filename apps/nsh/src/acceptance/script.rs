@@ -1,5 +1,6 @@
 //! The step language of an acceptance scenario: one step per line, `#` starts a
-//! comment, and an argument with spaces is quoted (`"..."`, with `\"` and `\\`).
+//! comment, and an argument with spaces is quoted (`"..."`, with `\"`, `\\` and
+//! `\n` for a line break).
 //!
 //! - `fixture <path>`: posts `<path>` to the fixture Host's control server
 //!   (`crates/host-fixture/src/pairing.rs`). The runner posts leading ones before
@@ -27,6 +28,8 @@
 //!   fixture Host's directory, whose `project` folder is the fixture's project.
 //! - `expect_file <path> [timeout-ms]`: waits until the file at `<path>` (as
 //!   `choose` takes it) exists with some content.
+//! - `clipboard <text>`: puts `<text>` on the clipboard, as copying it elsewhere
+//!   would; `key cmd+v` then pastes it.
 //! - `expect_clipboard <text> [timeout-ms]`: waits until the clipboard's text
 //!   contains `<text>`. The driver restores the clipboard when the scenario ends.
 //! - `activate`: brings the app to the front through Launch Services, as the
@@ -60,6 +63,7 @@ pub(crate) enum Step {
     Menu(Find),
     Choose(String),
     ExpectFile(String, Duration),
+    Clipboard(String),
     ExpectClipboard(String, Duration),
     Activate,
     Wait(Duration),
@@ -138,7 +142,10 @@ fn words(line: &str) -> Result<Vec<String>, String> {
             loop {
                 match characters.next() {
                     Some('"') => break,
-                    Some('\\') => word.push(characters.next().ok_or("unfinished escape")?),
+                    Some('\\') => match characters.next().ok_or("unfinished escape")? {
+                        'n' => word.push('\n'),
+                        escaped => word.push(escaped),
+                    },
                     Some(character) => word.push(character),
                     None => return Err("unclosed quote".into()),
                 }
@@ -184,6 +191,7 @@ fn step(words: &[String]) -> Result<Step, String> {
         {
             Step::ExpectFile((*path).to_owned(), find(path, rest)?.timeout)
         }
+        ("clipboard", [text]) => Step::Clipboard((*text).to_owned()),
         ("expect_clipboard", [text]) => Step::ExpectClipboard((*text).to_owned(), DEFAULT_TIMEOUT),
         ("expect_clipboard", [text, timeout]) => {
             Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
@@ -310,7 +318,7 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\nexpect_file $AGENT_STATE_DIR/saved.png 500\n\
+             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\nexpect_file $AGENT_STATE_DIR/saved.png 500\nclipboard \"a\\nb\"\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nactivate\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
         )
@@ -370,6 +378,7 @@ mod tests {
                     "$AGENT_STATE_DIR/saved.png".into(),
                     Duration::from_millis(500)
                 ),
+                Step::Clipboard("a\nb".into()),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
                 Step::Control("/release-inputs".into()),
                 Step::Activate,
