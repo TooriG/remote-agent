@@ -178,7 +178,7 @@ impl SearchPaths {
                 .into_iter()
                 .map(|name| format!("{name}.app"))
                 .collect::<Vec<_>>();
-            for entry in directory_names(&root) {
+            for entry in directory_names(root) {
                 if install_names(editor)
                     .iter()
                     .any(|name| versioned_bundle(&entry, name))
