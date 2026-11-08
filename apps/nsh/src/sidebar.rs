@@ -111,6 +111,7 @@ pub(crate) fn sheet(
     dismiss: impl Fn() + Copy + 'static,
 ) -> impl IntoElement {
     on_key("escape", move |_| dismiss());
+    let width = move || px((window().width.0 - SHEET_INSET).max(0.0));
     view()
         .absolute()
         .top(px(0.0))
@@ -120,21 +121,31 @@ pub(crate) fn sheet(
         .flex_row()
         .child(
             view()
-                .absolute()
-                .top(px(0.0))
-                .left(px(0.0))
-                .right(px(0.0))
-                .bottom(px(0.0))
-                .bg(rgba(0x08080899))
-                .on_press(dismiss),
-        )
-        .child(
-            view()
-                .w(move || px((window().width.0 - 12.0).max(0.0)))
+                .w(width)
                 .flex_row()
                 .child(sidebar(hosts, compose, true)),
         )
+        // T3's backdrop: the content dimmed to 60% and blurred by 4 points
+        // (`bg-background/60 backdrop-blur-xs`). The sheet hides the rest of
+        // it, so it lies beside the sheet, after it for assistive technologies.
+        .child(
+            view()
+                .absolute()
+                .top(px(0.0))
+                .left(width)
+                .right(px(0.0))
+                .bottom(px(0.0))
+                .bg(rgba(0x08080899))
+                .backdrop_blur(px(4.0))
+                .role(AccessibilityRole::Button)
+                .label(SharedString::from(tr("サイドバーを閉じる")))
+                .on_press(dismiss),
+        )
 }
+
+/// How far short of the window's other edge the sheet ends (T3's
+/// `calc(100vw - var(--spacing(3)))`).
+const SHEET_INSET: f32 = 12.0;
 
 /// The title bar's leading part: the app icon after the window controls, and the
 /// sidebar's toggle.

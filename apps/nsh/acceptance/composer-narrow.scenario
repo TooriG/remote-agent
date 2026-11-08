@@ -25,6 +25,11 @@ expect_absent 会話を検索
 press サイドバーを開く
 key escape
 expect_absent 会話を検索
+# The backdrop beside the sheet closes it too; it follows the sheet's own
+# controls, the last of which refreshes the list.
+press サイドバーを開く
+press サイドバーを閉じる after 会話を更新
+expect_absent 会話を検索
 press サイドバーを開く
 press "Long conversation"
 expect_absent 会話を検索
