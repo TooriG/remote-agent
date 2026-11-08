@@ -275,6 +275,65 @@ pub(crate) fn screen(id: u64) -> impl Element {
             );
         }
     });
+    // A clicked tree takes the keys an outline view would, while no field
+    // edits text; Core decides what each key does to the focused row.
+    let engaged = signal(false);
+    let keyed = stored(false);
+    let list = element_ref();
+    for (keystroke, key, shift) in [
+        ("up", "up", false),
+        ("down", "down", false),
+        ("left", "left", false),
+        ("right", "right", false),
+        ("home", "home", false),
+        ("end", "end", false),
+        ("enter", "enter", false),
+        ("space", "space", false),
+        ("shift+up", "up", true),
+        ("shift+down", "down", true),
+    ] {
+        let options = KeyOptions {
+            when: nsh_core::keymap::When::NotEditing,
+            repeat: true,
+        };
+        on_key_with(keystroke, options, move |_| {
+            if engaged.get_untracked()
+                && tree.with_untracked(|tree| tree.handles_desktop_key(key, false, shift))
+            {
+                keyed.replace(true);
+                send(FileTreeAction::Keyboard {
+                    key: key.into(),
+                    additive: false,
+                    shift,
+                });
+            }
+        });
+    }
+    // A row the keys move past the viewport's edge scrolls in at that edge.
+    let viewable = stored(None::<(usize, usize)>);
+    let focused = computed(move || tree.with(|tree| tree.focused_path.clone()));
+    effect(move || {
+        let path = focused.get();
+        if !keyed.replace(false) {
+            return;
+        }
+        let Some(index) = path.and_then(|path| {
+            tree.with_untracked(|tree| tree.rows.iter().position(|row| row.path == path))
+        }) else {
+            return;
+        };
+        let edge = match viewable.get() {
+            Some((first, _)) if index < first => 0.0,
+            Some((_, last)) if index > last => 1.0,
+            _ => return,
+        };
+        list.scroll_to_index(
+            index as u32,
+            nsh_core::geometry::Percentage(edge),
+            px(0.0),
+            false,
+        );
+    });
     let all_expanded = move || tree.with(|tree| tree.all_expanded);
     let toggle_all_label = move || tree.with(|tree| localized(tree.toggle_all_label.clone()));
     view()
@@ -387,7 +446,15 @@ pub(crate) fn screen(id: u64) -> impl Element {
                                 Some((row.clone(), tree.is_search_match(row)))
                             })
                         }),
+                        move || {
+                            engaged.get()
+                                && tree.with(|tree| {
+                                    tree.rows.get(at.index()).map(|row| &row.path)
+                                        == tree.focused_path.as_ref()
+                                })
+                        },
                         move |path| {
+                            engaged.set(true);
                             send(FileTreeAction::Click {
                                 path,
                                 additive: false,
@@ -404,6 +471,10 @@ pub(crate) fn screen(id: u64) -> impl Element {
                         .map(|row| row.path.clone())
                         .collect::<Vec<_>>()
                 })
+            })
+            .element_ref(&list)
+            .on_viewable_items_change(move |items: &ViewableItems| {
+                viewable.replace(items.viewable);
             })
             .estimated_item_size(px(24.0))
             .content_padding_x(px(8.0))
@@ -426,6 +497,7 @@ pub(crate) fn notice(message: impl IntoReactive<SharedString>) -> impl IntoEleme
 /// file and folds or unfolds a folder.
 fn tree_row(
     row: Memo<Option<(FileTreeRow, bool)>>,
+    focused: impl Fn() -> bool + 'static,
     press: impl Fn(String) + Copy + 'static,
 ) -> impl IntoElement {
     let field = move |read: fn(&FileTreeRow) -> bool| {
@@ -459,6 +531,15 @@ fn tree_row(
         .rounded(px(ui::RADIUS))
         .hover(|s| s.bg(ROW_HOVER))
         .selected_style(|s| s.bg(ROW_SELECTED))
+        // The keyboard's row, ringed as the desktop client's.
+        .border_1()
+        .border_color(move || {
+            if focused() {
+                rgb(0x009fff)
+            } else {
+                rgba(0x00000000)
+            }
+        })
         .child(
             view()
                 .w(px(16.0))
