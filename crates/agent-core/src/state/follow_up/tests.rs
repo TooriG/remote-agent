@@ -97,9 +97,9 @@ fn the_alternate_does_the_opposite_of_the_preference_for_one_message() {
 }
 
 #[test]
-fn reordering_moves_before_the_message_it_lands_ahead_of() {
+fn a_drop_moves_before_the_message_at_its_position() {
     let ids: Vec<ClientInputId> = ["a", "b", "c"].map(Into::into).into();
-    let moved = |id: &str, steps| match reorder(&ids, &id.into(), steps) {
+    let dropped = |id: &str, insert| match drop_at(&ids, &id.into(), insert) {
         Some(QueueAction::Move {
             client_user_message_id,
             before,
@@ -110,14 +110,14 @@ fn reordering_moves_before_the_message_it_lands_ahead_of() {
         None => None,
         Some(other) => panic!("unexpected {other:?}"),
     };
-    assert_eq!(moved("a", 1), Some(Some("c".into())));
-    assert_eq!(moved("a", 2), Some(None));
-    assert_eq!(moved("a", 9), Some(None));
-    assert_eq!(moved("c", -1), Some(Some("b".into())));
-    assert_eq!(moved("c", -9), Some(Some("a".into())));
-    assert_eq!(moved("b", 0), None);
-    assert_eq!(moved("a", -1), None);
-    assert_eq!(moved("missing", 1), None);
+    // A drop beside itself, past the end or of a missing message moves nothing.
+    for (id, insert) in [("b", 1), ("b", 2), ("a", 4), ("missing", 0)] {
+        assert_eq!(dropped(id, insert), None, "{id} at {insert}");
+    }
+    assert_eq!(dropped("a", 2), Some(Some("c".into())));
+    assert_eq!(dropped("a", 3), Some(None));
+    assert_eq!(dropped("c", 1), Some(Some("b".into())));
+    assert_eq!(dropped("c", 0), Some(Some("a".into())));
 }
 
 #[test]

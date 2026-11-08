@@ -459,8 +459,14 @@ mod draw {
                     .auto_correct(false)
                     .auto_capitalize(AutoCapitalize::None)
                     .value(move || typed.get())
-                    .on_focus(move || focused.set(true))
-                    .on_blur(move || focused.set(false))
+                    .on_focus(move || {
+                        focused.set(true);
+                        (report.get())(Report::Focus(true));
+                    })
+                    .on_blur(move || {
+                        focused.set(false);
+                        (report.get())(Report::Focus(false));
+                    })
                     .on_change(move |text: &str| {
                         typed.set(text.to_owned());
                         if !text.is_empty() {

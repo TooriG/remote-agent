@@ -216,9 +216,11 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     // T3 Code's composer shortcuts, bound only while their `when` holds so the
     // keys otherwise reach the text: Mod+Enter in the focused composer sends
     // (the alternate while a turn runs); Mod+Shift+Enter steers the first
-    // queued message outside the terminal; Alt+Up with the caret at the start
-    // of the focused composer edits the latest queued message.
+    // queued message wherever the terminal lacks the keyboard, text fields
+    // included; Alt+Up with the caret at the start of the focused composer
+    // edits the latest queued message.
     let caret_at_start = signal(true);
+    let terminal = use_context::<crate::terminal::Focus>().unwrap();
     let steerable = move || {
         follow_up.with(|f| {
             f.can_steer
@@ -268,14 +270,9 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     })
                 },
             ))
-            // The composer, or no text or hosted view such as the terminal.
             .child(when(
-                move || steerable().is_some() && focused.get(),
+                move || steerable().is_some() && !terminal.get(),
                 move || shortcut("mod+shift+enter", When::Always, steer_first),
-            ))
-            .child(when(
-                move || steerable().is_some() && !focused.get(),
-                move || shortcut("mod+shift+enter", When::NotEditing, steer_first),
             ))
     };
     let prompt = move || -> String {

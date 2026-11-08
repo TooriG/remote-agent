@@ -38,12 +38,38 @@ private final class HostTerminalView: SwiftTerm.TerminalView {
     var callback: TerminalCallback?
     var acceptsInput = false
     var restoring = false
+    #if os(macOS)
+        var windowUpdates: NSObjectProtocol?
+        var focused = false
+
+        /// Whether the terminal holds the keyboard, for shortcuts that skip it.
+        func reportFocus() {
+            let now = view.window?.firstResponder === view
+            guard now != focused else { return }
+            focused = now
+            callback?(context, 3, nil, 0, now ? 1 : 0, 0)
+        }
+
+        func stopReportingFocus() {
+            if let windowUpdates { NotificationCenter.default.removeObserver(windowUpdates) }
+            windowUpdates = nil
+        }
+    #endif
 
     init(context: UnsafeMutableRawPointer?, callback: @escaping TerminalCallback) {
         self.context = context
         self.callback = callback
         super.init()
         view.terminalDelegate = self
+        #if os(macOS)
+            // SwiftTerm keeps its responder methods closed, so the window's
+            // updates tell when the terminal takes or gives up the keyboard.
+            windowUpdates = NotificationCenter.default.addObserver(
+                forName: NSWindow.didUpdateNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reportFocus() }
+            }
+        #endif
         view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         #if os(macOS)
             // The Mac window is drawn dark by the app, not by the system appearance.
@@ -128,5 +154,8 @@ private final class HostTerminalView: SwiftTerm.TerminalView {
 @MainActor public func terminalRelease(_ handle: UnsafeMutableRawPointer) {
     let owner = Unmanaged<TerminalOwner>.fromOpaque(handle).takeRetainedValue()
     owner.view.terminalDelegate = nil
+    #if os(macOS)
+        owner.stopReportingFocus()
+    #endif
     owner.callback = nil
 }

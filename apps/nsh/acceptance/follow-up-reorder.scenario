@@ -1,4 +1,5 @@
-# Queued messages are reordered by dragging their grip, as T3 Code's queue,
+# Queued messages are reordered by dragging their grip over the rows to where
+# the insertion line shows, as T3 Code's queue,
 # run in that order after the turn, and each says it waited in the queue.
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
@@ -12,7 +13,7 @@ press メッセージをキューに追加
 type "AI に依頼する" "三番目"
 press メッセージをキューに追加
 expect "三番目" after "二番目" 10000
-drag "キューのメッセージを並べ替え（ドラッグ、または矢印キー）" -56 after "二番目"
+drag "キューのメッセージを並べ替え（ドラッグ、または矢印キー）" -70 after "二番目"
 expect "一番目" after "三番目" 10000
 expect "二番目" after "一番目"
 screenshot reordered

@@ -74,20 +74,48 @@ pub(crate) fn queued(connection: Connection) -> View {
         .label(move || tr_format("キューのメッセージ {0}件", [&count()]))
         .child(header)
         .child(when(expanded, move || {
+            let drag = signal(None::<Drag>);
             scroll().max_h(px(128.0)).child(view().gap_1().child(each(
                 move || follow_up.with(|f| f.queue.clone()),
                 |message: &QueuedMessage| message.id.to_string(),
-                move |message, _| row(follow_up, message, act),
+                move |message, index| row(follow_up, message, index, drag, act),
             )))
         }))
 }
 
-/// A queued message's height, which a drag moves it by per row.
+/// A queued message's height.
 const ROW_HEIGHT: f32 = 28.0;
 
-/// T3 Code's grip: dragging it moves its message by whole rows, and the arrow
-/// keys move it by one while it has the keyboard focus.
-fn grip(dragging: Signal<bool>, reorder: impl Fn(i32) + Copy + 'static) -> View {
+/// A queued message being dragged, and the queue position (0..=len) it would
+/// drop at, as T3 Code tracks its drag over the rows.
+#[derive(Clone, PartialEq)]
+struct Drag {
+    id: agent_protocol::ids::ClientInputId,
+    insert: Option<usize>,
+}
+
+/// The waiting messages the Host holds, which a drag reorders.
+fn held_ids(
+    follow_up: Memo<agent_core::presentation::composer::FollowUpControls>,
+) -> Vec<agent_protocol::ids::ClientInputId> {
+    follow_up.with_untracked(|f| {
+        f.queue
+            .iter()
+            .filter(|row| !row.pending)
+            .map(|row| row.id.clone())
+            .collect()
+    })
+}
+
+/// T3 Code's grip: dragging it from its row drops the message where the
+/// insertion line shows, and the arrow keys move it by one while it has
+/// the keyboard focus.
+fn grip(
+    drag: Signal<Option<Drag>>,
+    id: impl Fn() -> agent_protocol::ids::ClientInputId + Copy + 'static,
+    drop_at: impl Fn(usize) + Copy + 'static,
+    index: ReadSignal<usize>,
+) -> View {
     let focused = signal(false);
     view()
         .w(px(24.0))
@@ -104,11 +132,17 @@ fn grip(dragging: Signal<bool>, reorder: impl Fn(i32) + Copy + 'static) -> View 
         .on_press(|| {})
         .on_focus(move || focused.set(true))
         .on_blur(move || focused.set(false))
-        .on_pan_start(move |_: &PanEvent| dragging.set(true))
+        .on_pan_start(move |_: &PanEvent| {
+            drag.set(Some(Drag {
+                id: id(),
+                insert: None,
+            }))
+        })
         .on_pan_end(move |event: &PanEvent| {
-            dragging.set(false);
-            if !event.cancelled {
-                reorder((event.translation.y.0 / ROW_HEIGHT).round() as i32);
+            let insert = drag.with_untracked(|drag| drag.as_ref().and_then(|drag| drag.insert));
+            drag.set(None);
+            if let Some(insert) = insert.filter(|_| !event.cancelled) {
+                drop_at(insert);
             }
         })
         .child(ui::icon(Icon::GRIP, 14.0))
@@ -117,12 +151,16 @@ fn grip(dragging: Signal<bool>, reorder: impl Fn(i32) + Copy + 'static) -> View 
                 .child(crate::composer::shortcut(
                     "up",
                     nsh_core::keymap::When::NotEditing,
-                    move |_| reorder(-1),
+                    move |_| {
+                        if let Some(insert) = index.get_untracked().checked_sub(1) {
+                            drop_at(insert);
+                        }
+                    },
                 ))
                 .child(crate::composer::shortcut(
                     "down",
                     nsh_core::keymap::When::NotEditing,
-                    move |_| reorder(1),
+                    move |_| drop_at(index.get_untracked() + 2),
                 ))
         }))
 }
@@ -131,6 +169,8 @@ fn grip(dragging: Signal<bool>, reorder: impl Fn(i32) + Copy + 'static) -> View 
 fn row(
     follow_up: Memo<agent_core::presentation::composer::FollowUpControls>,
     message: ReadSignal<QueuedMessage>,
+    index: ReadSignal<usize>,
+    drag: Signal<Option<Drag>>,
     act: impl Fn(QueueAction) + Copy + 'static,
 ) -> View {
     let id = move || message.with(|message| message.id.clone());
@@ -145,19 +185,42 @@ fn row(
             }
         })
     };
-    // The row being dragged dims, as in T3 Code; it moves when released.
-    let dragging = signal(false);
-    let reorder = move |steps: i32| {
-        let ids: Vec<_> = follow_up.with_untracked(|f| {
-            f.queue
-                .iter()
-                .filter(|row| !row.pending)
-                .map(|row| row.id.clone())
-                .collect()
-        });
-        if let Some(action) = agent_core::state::follow_up::reorder(&ids, &id(), steps) {
+    let drop_at = move |insert: usize| {
+        if let Some(action) =
+            agent_core::state::follow_up::drop_at(&held_ids(follow_up), &id(), insert)
+        {
             act(action);
         }
+    };
+    // Where a drag over this row would drop, as T3 Code's dragover: above
+    // its middle before it, below after it.
+    let over = move |event: &MouseEvent| {
+        let pending = message.with_untracked(|message| message.pending);
+        if pending || event.pressed_button.is_none() {
+            return;
+        }
+        let index = index.get_untracked();
+        let insert = if event.position.y.0 < ROW_HEIGHT / 2.0 {
+            index
+        } else {
+            index + 1
+        };
+        drag.update(|drag| {
+            if let Some(drag) = drag.as_mut().filter(|drag| drag.insert != Some(insert)) {
+                drag.insert = Some(insert);
+            }
+        });
+    };
+    let insert = move || drag.with(|drag| drag.as_ref().and_then(|drag| drag.insert));
+    let line = |edge: f32| {
+        view()
+            .absolute()
+            .left(px(0.0))
+            .right(px(0.0))
+            .top(px(edge))
+            .h(px(2.0))
+            .rounded_full()
+            .bg(rgba(0xe6e6e6b3))
     };
     view()
         .flex_row()
@@ -165,7 +228,11 @@ fn row(
         .gap_1()
         .h(px(ROW_HEIGHT))
         .rounded(px(ui::RADIUS))
-        .style_when(move || dragging.get(), |s| s.opacity(0.5))
+        // The dragged row dims, as in T3 Code.
+        .style_when(
+            move || drag.with(|drag| drag.as_ref().is_some_and(|drag| drag.id == id())),
+            |s| s.opacity(0.5),
+        )
         .bg(move || {
             if editing() {
                 colors::SELECTED
@@ -173,7 +240,19 @@ fn row(
                 rgba(0x00000000)
             }
         })
-        .child(when(idle, move || grip(dragging, reorder)))
+        .on_mouse_move(over)
+        .child(when(
+            move || insert() == Some(index.get()),
+            move || line(0.0),
+        ))
+        .child(when(
+            move || {
+                let last = follow_up.with(|f| f.queue.iter().filter(|row| !row.pending).count());
+                index.get() + 1 == last && insert() == Some(last)
+            },
+            move || line(ROW_HEIGHT - 2.0),
+        ))
+        .child(when(idle, move || grip(drag, id, drop_at, index)))
         .child(when(
             move || message.with(|message| message.pending),
             || {
