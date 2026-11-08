@@ -33,7 +33,8 @@ use objc2_app_kit::{
 use objc2_core_graphics::{CGEvent, CGScrollEventUnit};
 use objc2_foundation::{
     NSArray, NSAttributedString, NSData, NSDictionary, NSNotification, NSNotificationCenter,
-    NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer, NSURL,
+    NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
+    NSURL,
 };
 use serde_json::{Value, json};
 use std::{
@@ -222,7 +223,8 @@ fn limit(step: &Step) -> Duration {
         | Step::Select(find, _)
         | Step::Menu(find)
         | Step::Expect(find)
-        | Step::ExpectAbsent(find) => find.timeout,
+        | Step::ExpectAbsent(find)
+        | Step::ExpectApart(find, _) => find.timeout,
         Step::Wait(duration) | Step::ExpectClipboard(_, duration) => *duration,
         _ => super::script::DEFAULT_TIMEOUT,
     }
@@ -253,6 +255,15 @@ fn attempt(
         Step::Dump(name) => artifact(dump(&Tree::read(mtm, menus), output, name)),
         Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
+        Step::ExpectApart(find, other) => apart(&Tree::read(mtm, menus), find, other),
+        Step::Window(width, height) => done(
+            main_window(mtm)
+                .ok_or_else(|| "no window to resize".to_owned())
+                .map(|window| {
+                    window.setContentSize(NSSize::new(*width, *height));
+                    format!("resized the window to {width}×{height}")
+                }),
+        ),
         Step::Press(find) => press(&Tree::read(mtm, menus), find),
         Step::Type(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             insert(tree, index, text)
@@ -312,6 +323,49 @@ fn shown(tree: &Tree, find: &Find, present: bool) -> Attempt {
         (Err(reason), true) => Attempt::Pending(reason),
         (Err(reason), false) => Attempt::Passed(reason, None),
     }
+}
+
+/// Whether the elements `find` names and those labelled `other` all show apart.
+fn apart(tree: &Tree, find: &Find, other: &str) -> Attempt {
+    let (first, second) = match (
+        tree.labelled(find),
+        tree.labelled(&Find {
+            text: other.to_owned(),
+            after: None,
+            timeout: find.timeout,
+        }),
+    ) {
+        (Ok(first), Ok(second)) => (first, second),
+        (Err(reason), _) | (_, Err(reason)) => return Attempt::Pending(reason),
+    };
+    for &a in &first {
+        for &b in &second {
+            let (one, two) = (tree.frame(a), tree.frame(b));
+            if one.size.width > 0.0
+                && one.size.height > 0.0
+                && two.size.width > 0.0
+                && two.size.height > 0.0
+                && one.origin.x < two.origin.x + two.size.width
+                && two.origin.x < one.origin.x + one.size.width
+                && one.origin.y < two.origin.y + two.size.height
+                && two.origin.y < one.origin.y + one.size.height
+            {
+                return Attempt::Pending(format!(
+                    "{} overlaps {}",
+                    tree.nodes[a].describe(),
+                    tree.nodes[b].describe()
+                ));
+            }
+        }
+    }
+    Attempt::Passed(
+        format!(
+            "{} elements apart from {} labelled {other:?}",
+            first.len(),
+            second.len()
+        ),
+        None,
+    )
 }
 
 fn press(tree: &Tree, find: &Find) -> Attempt {
@@ -681,6 +735,16 @@ impl Tree {
             link: link?,
             index,
         })
+    }
+
+    /// Where `index` is on the screen.
+    fn frame(&self, index: usize) -> NSRect {
+        match &self.nodes[index].target {
+            Target::Element(object) if responds(object, sel!(accessibilityFrame)) => unsafe {
+                msg_send![&**object, accessibilityFrame]
+            },
+            _ => NSRect::ZERO,
+        }
     }
 
     /// `index` and its ancestors, nearest first.

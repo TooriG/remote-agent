@@ -3,8 +3,8 @@ use crate::ui::Enabled;
 use crate::{Connection, shared::Shared};
 use agent_core::{
     presentation::conversation::{
-        ActivityPresentation, ConversationRowContent, RenderedConversation, TurnErrorPresentation,
-        WorkProgress, activity_is_expanded,
+        ActivityPresentation, ConversationRowContent, LANE_WIDTH, RenderedConversation,
+        TurnErrorPresentation, WorkProgress, activity_is_expanded, lane_padding,
     },
     state::{Intent, operations as op},
 };
@@ -14,8 +14,6 @@ use nsh_core::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 const FOLLOW_END_THRESHOLD: f32 = 60.0;
-/// A message column and its padding, which the minimap must not overlap.
-const CONTENT_WIDTH: f32 = 780.0 + 2.0 * 24.0;
 
 pub(crate) fn reveal_row(list: ElementRef, index: u32) {
     after_answer(move || {
@@ -169,6 +167,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     let clock = signal(std::time::SystemTime::now());
     let top_row = signal(0_usize);
     let width = signal(0_f32);
+    let padding = move || lane_padding(window().width.0);
     spawn(async move {
         loop {
             timer(std::time::Duration::from_secs(1)).await;
@@ -298,13 +297,13 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                     view()
                         .w_full()
                         .items_center()
-                        .px(move || if is_desktop() { px(24.0) } else { px(16.0) })
+                        .px(move || px(padding()))
                         .py_3()
                         .child(
                             view()
                                 .group()
                                 .w_full()
-                                .max_w(px(CONTENT_WIDTH - 48.0))
+                                .max_w(px(LANE_WIDTH))
                                 .items_start()
                                 .style_when(user, |s| s.items_end())
                                 .child(when(
@@ -450,7 +449,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
         )
         .child(when(is_desktop, move || {
             minimap(rows, top_row, list, following, move || {
-                agent_core::presentation::conversation::minimap_persistent(width.get(), CONTENT_WIDTH)
+                agent_core::presentation::conversation::minimap_persistent(width.get(), padding())
             })
         }))
         .child(when(move || !following.get(), move || {
@@ -473,7 +472,9 @@ fn minimap(
     persistent: impl Fn() -> bool + 'static,
 ) -> View {
     use crate::ui::colors;
-    use agent_core::presentation::conversation::{minimap_marker_width, minimap_markers};
+    use agent_core::presentation::conversation::{
+        MINIMAP_WIDTH, minimap_marker_width, minimap_markers,
+    };
     let hovered = signal(None::<usize>);
     let over = signal(false);
     let user_rows = computed(move || {
@@ -507,7 +508,7 @@ fn minimap(
         .left(px(0.0))
         .top(px(0.0))
         .bottom(px(0.0))
-        .w(px(56.0))
+        .w(px(MINIMAP_WIDTH))
         .justify_center()
         .on_mouse_enter(move |_: &MouseEvent| over.set(true))
         .on_mouse_leave(move |_: &MouseEvent| over.set(false))
@@ -539,10 +540,11 @@ fn minimap(
                                 "この発言へ移動: {0}",
                                 [&exchange(marker.with_untracked(|m| m.row)).0],
                             ))))
-                            .w(px(56.0))
+                            .w(px(MINIMAP_WIDTH))
                             .h(px(10.0))
                             .pl(px(16.5))
-                            .pr(px(11.5))
+                            // The widest mark fills what is left.
+                            .pr(px(MINIMAP_WIDTH - 16.5 - minimap_marker_width(Some(0))))
                             .justify_center()
                             .on_press(move || {
                                 following.set(false);
@@ -573,7 +575,7 @@ fn minimap(
                             let (user, answer) = exchange(marker.with_untracked(|m| m.row));
                             view()
                                 .absolute()
-                                .left(px(56.0))
+                                .left(px(MINIMAP_WIDTH))
                                 .top(px(-24.0))
                                 .w(px(300.0))
                                 .p_3()

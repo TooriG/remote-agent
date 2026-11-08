@@ -161,11 +161,26 @@ pub fn minimap_markers(user_rows: &[usize], top_row: usize) -> Vec<MinimapMarker
         .collect()
 }
 
-/// The minimap stays shown only beside a gutter wide enough for it; over
-/// narrower timelines it shows while the pointer is on it.
-pub fn minimap_persistent(viewport_width: f32, content_width: f32) -> bool {
-    const GUTTER: f32 = 48.;
-    (viewport_width - viewport_width.min(content_width)) / 2. >= GUTTER
+/// The widest the column of messages and of the composer grows.
+pub const LANE_WIDTH: f32 = 780.;
+
+/// The space the timeline and the composer keep beside their lane, as T3 Code's
+/// (`0.75rem`, `3rem` from a 640 pt wide window), so that from there on the
+/// minimap has a gutter of its own.
+pub fn lane_padding(window_width: f32) -> f32 {
+    if window_width >= 640. { 48. } else { 12. }
+}
+
+/// How wide the minimap is at the timeline's leading edge, its marks' hit
+/// areas included.
+pub const MINIMAP_WIDTH: f32 = 48.;
+
+/// The minimap stays shown only beside a gutter wide enough for it: the space
+/// the lane leaves at each side of a timeline `timeline_width` wide with
+/// `padding` beside it. Over narrower gutters it shows while the pointer is on it.
+pub fn minimap_persistent(timeline_width: f32, padding: f32) -> bool {
+    let lane = (timeline_width - 2. * padding).clamp(0., LANE_WIDTH);
+    (timeline_width - lane) / 2. >= MINIMAP_WIDTH
 }
 
 /// A mark's line widens toward the hovered one.
@@ -3154,11 +3169,26 @@ mod minimap_tests {
     }
 
     #[test]
-    fn the_map_stays_only_beside_a_wide_gutter() {
-        assert!(minimap_persistent(1000., 828.));
-        assert!(!minimap_persistent(900., 828.));
-        assert!(!minimap_persistent(600., 828.));
-        assert!(!minimap_persistent(0., 828.));
+    fn lanes_keep_the_minimaps_gutter_from_a_640_point_window() {
+        assert_eq!(lane_padding(639.9), 12.);
+        assert_eq!(lane_padding(640.), 48.);
+        assert_eq!(lane_padding(1440.), 48.);
+        assert_eq!(lane_padding(0.), 12.);
+    }
+
+    #[test]
+    fn the_map_stays_beside_a_gutter_the_padding_or_a_wide_timeline_leaves() {
+        // The padding alone is the gutter, however narrow the lane gets.
+        for width in [96., 300., 640., 876., 2000.] {
+            assert!(minimap_persistent(width, 48.), "{width}");
+        }
+        // A smaller padding is no gutter until the lane stops growing.
+        assert!(!minimap_persistent(600., 12.));
+        assert!(!minimap_persistent(875., 12.));
+        assert!(minimap_persistent(876., 12.));
+        // Too narrow for any lane.
+        assert!(!minimap_persistent(95., 48.));
+        assert!(!minimap_persistent(0., 12.));
     }
 
     #[test]

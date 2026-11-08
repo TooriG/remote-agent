@@ -470,11 +470,14 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             )
             .child(crate::connections::destination(hosts, connection.host))
     };
+    use agent_core::presentation::conversation::{LANE_WIDTH, lane_padding};
+    // The timeline's lane: the same width and padding beside it.
+    let padding = move || lane_padding(window().width.0);
     let column = view()
         .w_full()
-        .max_w(move || px(if is_desktop() { 828.0 } else { 780.0 }))
+        .max_w(move || px(LANE_WIDTH + 2.0 * padding()))
         .self_center()
-        .px(move || if is_desktop() { px(24.0) } else { px(12.0) })
+        .px(move || px(padding()))
         .pt(move || if is_desktop() { px(8.0) } else { px(12.0) })
         .pb(move || if is_desktop() { px(16.0) } else { px(12.0) })
         .gap(move || if is_desktop() { px(4.0) } else { px(8.0) });

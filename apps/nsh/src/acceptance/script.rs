@@ -18,6 +18,12 @@
 //!   until some element's text contains `<text>`, or none does.
 //! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
 //!   that element; positive lines move the content up, toward its end.
+//! - `expect_apart <label> <other> [after <anchor>] [timeout-ms]`: waits until
+//!   elements labelled `<label>` (after the anchor) and `<other>` both show and
+//!   none of the first overlaps one of the others, as minimap marks and message
+//!   text must not.
+//! - `window <width> <height>`: resizes the main window's content to that many
+//!   points.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
@@ -49,6 +55,10 @@ pub(crate) enum Step {
     Key(Key),
     Expect(Find),
     ExpectAbsent(Find),
+    /// No element `Find` names overlaps one labelled the text.
+    ExpectApart(Find, String),
+    /// The main window's content size in points.
+    Window(f64, f64),
     /// A wheel of this many lines over the element.
     Scroll(Find, i32),
     Select(Find, String),
@@ -159,6 +169,10 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("key", [name]) => Step::Key(key(name)?),
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
+        ("expect_apart", [text, other, rest @ ..]) => {
+            Step::ExpectApart(find(text, rest)?, (*other).to_owned())
+        }
+        ("window", [width, height]) => Step::Window(points(width)?, points(height)?),
         ("scroll", [target, lines, rest @ ..]) => Step::Scroll(
             find(target, rest)?,
             lines
@@ -210,6 +224,14 @@ fn find(text: &str, rest: &[&str]) -> Result<Find, String> {
         after,
         timeout,
     })
+}
+
+fn points(value: &str) -> Result<f64, String> {
+    value
+        .parse()
+        .ok()
+        .filter(|points: &f64| points.is_finite() && *points > 0.0)
+        .ok_or_else(|| format!("{value:?} is not a size in points"))
 }
 
 fn milliseconds(value: &str) -> Result<Duration, String> {
@@ -297,7 +319,7 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             scroll 会話 -3\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
         )
@@ -338,6 +360,15 @@ mod tests {
                     },
                     -3
                 ),
+                Step::ExpectApart(
+                    Find {
+                        text: "移動:*".into(),
+                        after: None,
+                        timeout: Duration::from_millis(500)
+                    },
+                    "message.*".into()
+                ),
+                Step::Window(660.0, 700.0),
                 Step::Select(
                     Find {
                         text: "回答".into(),
@@ -409,6 +440,11 @@ mod tests {
             ("", "the scenario has no steps"),
             ("press", "line 1: unknown step or wrong arguments: press"),
             ("tap x", "line 1: unknown step or wrong arguments: tap"),
+            ("window 0 700", "line 1: \"0\" is not a size in points"),
+            (
+                "window wide 700",
+                "line 1: \"wide\" is not a size in points",
+            ),
             ("expect \"open", "line 1: unclosed quote"),
             (
                 "wait soon",

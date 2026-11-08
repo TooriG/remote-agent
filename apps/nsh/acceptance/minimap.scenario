@@ -1,0 +1,18 @@
+# From a 640 point wide window the timeline keeps T3 Code's 48 point padding
+# beside its lane, so the minimap stays shown in that gutter and never covers
+# message text, here with the sidebar and the side panel open in a window just
+# wider than that. Hidden marks would stay in the accessibility tree, so the
+# screenshot is the evidence that they show.
+fixture /long-conversation/minimap
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "Long conversation" 20000
+expect "Review section 14, input 0." 20000
+window 660 760
+expect "この発言へ移動: Review section 14, input 0."
+expect_apart "この発言へ移動:*" "message.*"
+screenshot narrow
+press "この発言へ移動: Review section 5, input 0."
+expect "Review section 5, input 0."
+expect_apart "この発言へ移動:*" "message.*"
+screenshot jumped
