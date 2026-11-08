@@ -36,8 +36,6 @@ pub struct FileTreeView {
     pub all_expanded: bool,
     pub toggle_all_label: String,
     pub can_expand_all: bool,
-    /// Desktop search keeps all matching ancestors open.
-    pub can_change_expansion: bool,
     pub truncated: bool,
     pub error: Option<crate::presentation::error::ErrorText>,
 }
@@ -154,7 +152,6 @@ impl Tree {
         FileTreeView {
             focused_path,
             can_expand_all,
-            can_change_expansion: !self.desktop_search(),
             rows,
             selected_paths: self.selected.clone(),
             open_file: self.open_file.clone(),

@@ -106,22 +106,4 @@ final class DisplayTests: XCTestCase {
         let url = try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json"))
         return try JSONDecoder().decode(DetailsContent.self, from: Data(contentsOf: url))
     }
-
-    func testDiffPreservesOldAndNewLineNumbersAndBinaryFiles() throws {
-        guard case let .diff(files) = try content("diff") else { return XCTFail("Expected diff files") }
-        XCTAssertEqual(files.count, 2)
-        XCTAssertEqual(files[0].path, "日本語 👋.txt")
-        XCTAssertEqual(files[0].additions, 1)
-        XCTAssertEqual(files[0].deletions, 1)
-        XCTAssertEqual(files[0].rows[1].old, 1)
-        XCTAssertNil(files[0].rows[1].new)
-        XCTAssertEqual(files[0].rows[2].new, 1)
-        XCTAssertNil(files[0].rows[2].old)
-        XCTAssertEqual(files[0].rows[2].kind, "+")
-        XCTAssertEqual(files[0].rows[2].text, "+変更 👋")
-        XCTAssertEqual(files[1].path, "image.png")
-        XCTAssertNil(files[1].additions)
-        XCTAssertNil(files[1].deletions)
-        XCTAssertTrue(files[1].rows.isEmpty)
-    }
 }

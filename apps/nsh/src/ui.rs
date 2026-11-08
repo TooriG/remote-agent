@@ -100,6 +100,10 @@ impl Icon {
     pub(crate) const SPARKLES: Self = icon!(Sparkles, "sparkles");
     pub(crate) const QUESTION: Self = icon!(MessageCircleQuestionMark, "questionmark.bubble");
     pub(crate) const REFRESH: Self = icon!(RotateCw, "arrow.clockwise");
+    pub(crate) const SHARE: Self = icon!(Share, "square.and.arrow.up");
+    pub(crate) const EXPAND_ALL: Self = icon!(ChevronsUpDown, "arrow.up.left.and.arrow.down.right");
+    pub(crate) const COLLAPSE_ALL: Self =
+        icon!(ChevronsDownUp, "arrow.down.right.and.arrow.up.left");
     #[cfg(target_os = "macos")]
     pub(crate) const SETTINGS: Self = icon!(Settings, "gearshape");
     #[cfg(target_os = "macos")]
@@ -280,7 +284,11 @@ fn ghost(label: impl IntoReactive<SharedString>, content: View) -> Control {
 
 /// A small ghost icon button (24 pt, a 14 pt icon) with its label as tooltip.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn icon_button(icon: Icon, label: &'static str, press: impl Fn() + 'static) -> Control {
+pub(crate) fn icon_button(
+    icon: Icon,
+    label: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> Control {
     icon_button_sized(icon, label, 24.0, 14.0, press)
 }
 
@@ -288,7 +296,7 @@ pub(crate) fn icon_button(icon: Icon, label: &'static str, press: impl Fn() + 's
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn small_icon_button(
     icon: Icon,
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
     press: impl Fn() + 'static,
 ) -> Control {
     icon_button_sized(icon, label, 20.0, 12.0, press)
@@ -297,13 +305,14 @@ pub(crate) fn small_icon_button(
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn icon_button_sized(
     glyph: Icon,
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
     size: f32,
     icon_size: f32,
     press: impl Fn() + 'static,
 ) -> Control {
+    let label = label.into_reactive();
     ghost(
-        label,
+        label.clone(),
         view().tooltip(tooltip(label)).child(icon(glyph, icon_size)),
     )
     .w(px(size))
@@ -313,7 +322,7 @@ pub(crate) fn icon_button_sized(
 
 /// A hint over a control, as the desktop client's tooltips.
 #[cfg(not(target_os = "macos"))]
-fn tooltip(label: &'static str) -> AnyElement {
+fn tooltip(label: impl IntoReactive<SharedString>) -> AnyElement {
     view()
         .px_2()
         .py_1()
@@ -405,14 +414,18 @@ fn appkit_button(label: impl IntoReactive<SharedString>, press: impl Fn() + 'sta
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn icon_button(icon: Icon, label: &'static str, press: impl Fn() + 'static) -> Control {
+pub(crate) fn icon_button(
+    icon: Icon,
+    label: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> Control {
     icon_button_sized(icon, label, 24.0, 14.0, press)
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) fn small_icon_button(
     icon: Icon,
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
     press: impl Fn() + 'static,
 ) -> Control {
     icon_button_sized(icon, label, 20.0, 12.0, press)
@@ -421,7 +434,7 @@ pub(crate) fn small_icon_button(
 #[cfg(target_os = "macos")]
 pub(crate) fn icon_button_sized(
     glyph: Icon,
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
     size: f32,
     icon_size: f32,
     press: impl Fn() + 'static,

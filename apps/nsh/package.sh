@@ -65,7 +65,6 @@ binary.parent.mkdir(parents=True, exist_ok=True)
 frameworks = contents / "Frameworks"
 frameworks.mkdir(parents=True, exist_ok=True)
 shutil.copytree(native, frameworks / "BexNshNative.framework", dirs_exist_ok=True, copy_function=copy_file)
-shutil.copytree("apps/mobile/file-icons", (resources if platform == "macos" else contents) / "file-icons", dirs_exist_ok=True, copy_function=copy_file)
 copy_file(executable, binary)
 with (contents / "Info.plist").open("wb") as output:
     plistlib.dump(info, output)

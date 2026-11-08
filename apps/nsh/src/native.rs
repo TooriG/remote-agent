@@ -38,7 +38,6 @@ pub(super) struct ListRow {
     pub id: String,
     pub title: String,
     pub symbol: String,
-    pub asset: Option<String>,
     #[cfg(target_os = "macos")]
     pub png: Option<Vec<u8>>,
     pub level: u32,

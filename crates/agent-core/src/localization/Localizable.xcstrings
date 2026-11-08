@@ -17889,22 +17889,6 @@
         }
       }
     },
-    "すべてのフォルダーを展開": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Expand all folders"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "すべてのフォルダーを展開"
-          }
-        }
-      }
-    },
     "更新して再試行してください。": {
       "localizations": {
         "en": {

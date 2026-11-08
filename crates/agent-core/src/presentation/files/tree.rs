@@ -48,11 +48,6 @@ pub enum FileTreeAction {
     Toggle {
         path: String,
     },
-    /// An OS outline reports its resulting state, which may precede publication.
-    SetExpanded {
-        path: String,
-        expanded: bool,
-    },
     Focus {
         path: String,
     },
@@ -463,9 +458,6 @@ impl Tree {
             }
             FileTreeAction::Toggle { path } if valid_tree_path(&path) => {
                 let expanded = !self.expanded.contains(&path);
-                self.set_expanded(path, expanded);
-            }
-            FileTreeAction::SetExpanded { path, expanded } if valid_tree_path(&path) => {
                 self.set_expanded(path, expanded);
             }
             FileTreeAction::Focus { path } if valid_tree_path(&path) => self.focused = Some(path),

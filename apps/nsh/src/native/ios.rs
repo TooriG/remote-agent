@@ -325,16 +325,9 @@ define_class!(
             if let Some(row) = self.ivars().items.borrow().get(index.row() as usize) {
                 cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
                 config.setText(Some(&NSString::from_str(&row.title)));
-                let image = if let Some(asset) = &row.asset {
-                    UIImage::imageNamed(&NSString::from_str(asset))
-                } else {
-                    None
-                }
-                .or_else(|| {
-                    (!row.symbol.is_empty())
-                        .then(|| UIImage::systemImageNamed(&NSString::from_str(&row.symbol)))
-                        .flatten()
-                });
+                let image = (!row.symbol.is_empty())
+                    .then(|| UIImage::systemImageNamed(&NSString::from_str(&row.symbol)))
+                    .flatten();
                 config.setImage(image.as_deref());
                 config
                     .imageProperties()

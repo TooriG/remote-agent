@@ -12,7 +12,7 @@ use objc2::{
 use objc2_app_kit::*;
 use objc2_core_foundation::{CGRect, CGSize};
 use objc2_foundation::{
-    NSArray, NSBundle, NSData, NSEdgeInsets, NSIndexSet, NSInteger, NSNotification, NSObject,
+    NSArray, NSData, NSEdgeInsets, NSIndexSet, NSInteger, NSNotification, NSObject,
     NSObjectProtocol, NSString,
 };
 use std::{
@@ -50,7 +50,6 @@ struct State {
     data: RefCell<Data>,
     updating: Cell<bool>,
     selected: RefCell<Option<String>>,
-    expansion_enabled: Cell<bool>,
     sidebar: Cell<bool>,
 }
 
@@ -60,22 +59,6 @@ impl State {
             data.item(object).map(|item| &item.row)
         })
         .ok()
-    }
-
-    fn expansion(&self, notification: &NSNotification, expanded: bool) {
-        if self.updating.get() {
-            return;
-        }
-        let id = notification
-            .userInfo()
-            .and_then(|info| info.objectForKey(&NSString::from_str("NSObject")))
-            .and_then(|item| self.row(&item).map(|row| row.id.clone()));
-        if let Some(id) = id {
-            self.context.emit(
-                "expand",
-                serde_json::json!({"id": id, "expanded": expanded}),
-            );
-        }
     }
 }
 
@@ -123,20 +106,6 @@ define_class!(
         fn can_select(&self, _: &NSOutlineView, item: &AnyObject) -> bool {
             self.ivars().row(item).is_some_and(|row| !row.group && row.enabled != Some(false))
         }
-        // Only completed changes emit events. AppKit also queries shouldExpand /
-        // shouldCollapse while inspecting accessibility; those queries stay pure.
-        #[unsafe(method(outlineView:shouldExpandItem:))]
-        fn can_expand(&self, _: &NSOutlineView, _: &AnyObject) -> bool {
-            self.ivars().updating.get() || self.ivars().expansion_enabled.get()
-        }
-        #[unsafe(method(outlineView:shouldCollapseItem:))]
-        fn can_collapse(&self, _: &NSOutlineView, _: &AnyObject) -> bool {
-            self.ivars().updating.get() || self.ivars().expansion_enabled.get()
-        }
-        #[unsafe(method(outlineViewItemDidExpand:))]
-        fn expanded(&self, notification: &NSNotification) { self.ivars().expansion(notification, true); }
-        #[unsafe(method(outlineViewItemDidCollapse:))]
-        fn collapsed(&self, notification: &NSNotification) { self.ivars().expansion(notification, false); }
         #[unsafe(method_id(outlineView:viewForTableColumn:item:))]
         fn view(
             &self,
@@ -195,16 +164,6 @@ define_class!(
                         let image = if let Some(png) = &row.png {
                             NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(png))
                                 .inspect(|image| image.setSize(CGSize::new(17.0, 17.0)))
-                        } else if let Some(asset) = &row.asset {
-                            NSBundle::mainBundle()
-                                .URLForResource_withExtension(
-                                    Some(&NSString::from_str(asset)),
-                                    None,
-                                )
-                                .and_then(|url| {
-                                    NSImage::initWithContentsOfURL(NSImage::alloc(), &url)
-                                })
-                                .inspect(|image| image.setSize(CGSize::new(17.0, 17.0)))
                         } else {
                             None
                         }.or_else(|| symbol(&row.symbol));
@@ -245,11 +204,6 @@ define_class!(
             if let Some(id) = sender.representedObject().and_then(|value| value.downcast::<NSString>().ok()) {
                 self.ivars().context.emit("menu", id.to_string().into());
             }
-        }
-        #[unsafe(method(activate:))]
-        fn activate(&self, view: &NSOutlineView) {
-            let id = view.itemAtRow(view.selectedRow()).and_then(|item| self.ivars().row(&item).map(|row| row.id.clone()));
-            if let Some(id) = id { self.ivars().context.emit("activate", id.into()); }
         }
     }
 );
@@ -470,7 +424,6 @@ impl List {
             data: RefCell::default(),
             updating: Cell::new(false),
             selected: RefCell::new(None),
-            expansion_enabled: Cell::new(true),
             sidebar: Cell::new(false),
         });
         let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
@@ -487,8 +440,6 @@ impl List {
             outline.setOutlineTableColumn(Some(&column));
             outline.setDataSource(Some(ProtocolObject::from_ref(&*delegate)));
             outline.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-            outline.setTarget(Some(&delegate));
-            outline.setDoubleAction(Some(sel!(activate:)));
         }
         let view = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), CGRect::ZERO);
         view.setDocumentView(Some(&outline));
@@ -607,13 +558,6 @@ impl NativeComponent for List {
             self.outline.reloadData();
             return;
         }
-        if name == "expansion_enabled" {
-            self.delegate
-                .ivars()
-                .expansion_enabled
-                .set(value.and_then(JsonValue::as_bool).unwrap_or(true));
-            return;
-        }
         if !matches!(name, "items" | "selected") {
             return;
         }
@@ -672,7 +616,6 @@ impl Drop for List {
         unsafe {
             self.outline.setDelegate(None);
             self.outline.setDataSource(None);
-            self.outline.setTarget(None);
         }
     }
 }

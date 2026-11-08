@@ -1,7 +1,7 @@
 use crate::models::WorkspaceReview;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct DiffRow {
     pub text: String,
@@ -198,6 +198,65 @@ pub fn diff_files(review: &WorkspaceReview) -> Vec<WorkspaceDiffFile> {
                 .unwrap_or_default(),
         })
         .collect()
+}
+
+impl DiffRow {
+    /// The number a line shows beside it, as a unified diff does: a removed line's
+    /// old one, an added or unchanged line's new one; hunk headers and notes have none.
+    pub fn line_number(&self) -> Option<u64> {
+        match self.kind.as_str() {
+            "-" => self.old,
+            "+" | " " => self.new,
+            _ => None,
+        }
+    }
+}
+
+/// A row of the Diff panel, each file a card: its header, then, unless it is
+/// collapsed, its lines or the note that it has no text diff. Rows index
+/// [`diff_files`]' result rather than copy its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DiffPanelRow {
+    File { file: usize, collapsed: bool },
+    Line { file: usize, line: usize },
+    NoTextDiff { file: usize },
+}
+
+impl DiffPanelRow {
+    pub fn file(self) -> usize {
+        match self {
+            Self::File { file, .. } | Self::Line { file, .. } | Self::NoTextDiff { file } => file,
+        }
+    }
+}
+
+/// The panel's rows for `files` with the files at `collapsed` paths folded.
+pub fn diff_panel_rows(
+    files: &[WorkspaceDiffFile],
+    collapsed: &std::collections::BTreeSet<String>,
+) -> Vec<DiffPanelRow> {
+    let mut rows = Vec::new();
+    for (file, entry) in files.iter().enumerate() {
+        let folded = collapsed.contains(&entry.path);
+        rows.push(DiffPanelRow::File {
+            file,
+            collapsed: folded,
+        });
+        if folded {
+            continue;
+        }
+        if entry.rows.is_empty() {
+            rows.push(DiffPanelRow::NoTextDiff { file });
+        }
+        rows.extend((0..entry.rows.len()).map(|line| DiffPanelRow::Line { file, line }));
+    }
+    rows
+}
+
+/// Whether `rows[index]` ends its file's card: the next row starts another file.
+pub fn diff_panel_row_ends_card(rows: &[DiffPanelRow], index: usize) -> bool {
+    rows.get(index + 1)
+        .is_none_or(|next| matches!(next, DiffPanelRow::File { .. }))
 }
 
 #[cfg(kani)]
@@ -402,5 +461,116 @@ mod tests {
         assert_eq!((rows[5].old, rows[5].new), (None, Some(3)));
         assert_eq!((rows[6].old, rows[6].new), (Some(4), Some(4)));
         assert_eq!((rows[9].file, rows[9].new), (2, Some(1)));
+    }
+
+    #[test]
+    fn lines_show_the_number_of_the_side_they_belong_to() {
+        let row = |kind: &str| DiffRow {
+            text: String::new(),
+            old: Some(3),
+            new: Some(7),
+            kind: kind.into(),
+            file: 1,
+        };
+        assert_eq!(row("-").line_number(), Some(3));
+        assert_eq!(row("+").line_number(), Some(7));
+        assert_eq!(row(" ").line_number(), Some(7));
+        assert_eq!(row("@").line_number(), None);
+        assert_eq!(row("M").line_number(), None);
+    }
+
+    fn panel_file(path: &str, lines: usize) -> WorkspaceDiffFile {
+        WorkspaceDiffFile {
+            path: path.into(),
+            additions: Some(lines as u64),
+            deletions: Some(0),
+            rows: (0..lines)
+                .map(|index| DiffRow {
+                    text: format!("+{index}"),
+                    old: None,
+                    new: Some(index as u64 + 1),
+                    kind: "+".into(),
+                    file: 1,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn panel_cards_hold_lines_or_a_no_text_note_unless_collapsed() {
+        use DiffPanelRow::*;
+        let files = [
+            panel_file("a.txt", 2),
+            panel_file("image.png", 0),
+            panel_file("c.txt", 1),
+        ];
+        let rows = diff_panel_rows(&files, &["c.txt".to_owned()].into());
+        assert_eq!(
+            rows,
+            [
+                File {
+                    file: 0,
+                    collapsed: false
+                },
+                Line { file: 0, line: 0 },
+                Line { file: 0, line: 1 },
+                File {
+                    file: 1,
+                    collapsed: false
+                },
+                NoTextDiff { file: 1 },
+                File {
+                    file: 2,
+                    collapsed: true
+                },
+            ]
+        );
+        let ends = (0..rows.len())
+            .filter(|index| diff_panel_row_ends_card(&rows, *index))
+            .collect::<Vec<_>>();
+        assert_eq!(ends, [2, 4, 5]);
+        assert!(rows.iter().map(|row| row.file()).is_sorted());
+    }
+
+    proptest! {
+        #[test]
+        fn every_file_is_one_card_in_order(
+            files in prop::collection::vec((0usize..5, any::<bool>()), 0..8),
+        ) {
+            let entries = files
+                .iter()
+                .enumerate()
+                .map(|(index, (lines, _))| panel_file(&format!("{index}"), *lines))
+                .collect::<Vec<_>>();
+            let collapsed = files
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, folded))| *folded)
+                .map(|(index, _)| index.to_string())
+                .collect();
+            let rows = diff_panel_rows(&entries, &collapsed);
+            let headers = rows
+                .iter()
+                .filter_map(|row| match row {
+                    DiffPanelRow::File { file, collapsed } => Some((*file, *collapsed)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let expected = files
+                .iter()
+                .enumerate()
+                .map(|(index, (_, folded))| (index, *folded))
+                .collect::<Vec<_>>();
+            prop_assert_eq!(headers, expected);
+            let shown = files
+                .iter()
+                .map(|(lines, folded)| if *folded { 1 } else { 1 + (*lines).max(1) })
+                .sum::<usize>();
+            prop_assert_eq!(rows.len(), shown);
+            let ends = (0..rows.len())
+                .filter(|index| diff_panel_row_ends_card(&rows, *index))
+                .count();
+            prop_assert_eq!(ends, files.len());
+        }
     }
 }

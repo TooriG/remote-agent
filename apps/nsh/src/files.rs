@@ -1,17 +1,28 @@
 use crate::l10n::{localized, tr};
-use crate::{Connection, client::Client, media::Preview, native, workbench::Workbench};
+use crate::{
+    Connection,
+    client::Client,
+    media::Preview,
+    native,
+    ui::{self, Icon, colors},
+    workbench::Workbench,
+};
 use agent_core::{
     panels::{PanelKind, PanelScope},
     presentation::files::{
-        FileTreeAction, FileTreeKey, FileTreeSurface, file_preview_mime_type, file_tree_path,
-        mobile_file_icon, mobile_file_open_request,
+        FileTreeAction, FileTreeKey, FileTreeRow, FileTreeSurface, desktop_file_icon,
+        file_preview_mime_type, file_tree_path, mobile_file_open_request,
     },
     state::Intent,
     store::Outcome,
 };
-use nsh_core::prelude::*;
+use agent_protocol::file_tree::EntryKind;
+use nsh_core::{
+    element::{ImageSrc, Rgba, rgb, rgba},
+    prelude::*,
+};
 use serde_json::json;
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Browser {
@@ -179,7 +190,10 @@ pub(crate) fn screen(id: u64) -> impl Element {
         owner: format!("nsh-files-{id}"),
         root: browser.root.get().unwrap_or_default(),
     });
-    let mounted = stored(None::<(String, FileTreeKey)>);
+    // Opening a file from the tree replaces this screen while its effect runs, so
+    // the open tree is kept outside the reactive graph for the cleanup to close it.
+    let mounted = Rc::new(RefCell::new(None::<(String, FileTreeKey)>));
+    let closing = mounted.clone();
     effect(move || {
         let host = connection.host.get();
         let key = key.get();
@@ -222,7 +236,7 @@ pub(crate) fn screen(id: u64) -> impl Element {
         });
     });
     cleanup(move || {
-        if let Some((host, key)) = mounted.replace(None) {
+        if let Some((host, key)) = closing.take() {
             connection.client.with(|client| {
                 client.dispatch(
                     &host,
@@ -261,48 +275,272 @@ pub(crate) fn screen(id: u64) -> impl Element {
             );
         }
     });
-    view().flex_1().gap_2().p_2()
-        .child(text(move || key.with(|key| key.root.clone())).selectable(true).truncate().text_size(px(12.0)).w_full())
-        .child(view().flex_row().items_center().gap_2()
-            .child(view().flex_1())
-            .child(native::button("arrow.clockwise", tr("更新"), move || send(FileTreeAction::Refresh)).w(px(44.0)).h(px(44.0)))
-            .child(native::button("arrow.up.left.and.arrow.down.right", tr("すべてのフォルダーを展開"), move || send(FileTreeAction::ToggleAll))
-                .prop("symbol", move || json!(if tree.with(|tree| tree.all_expanded) { "arrow.down.right.and.arrow.up.left" } else { "arrow.up.left.and.arrow.down.right" }))
-                .prop("label", move || json!(tree.with(|tree| tree.toggle_all_label.clone())))
-                .prop("enabled", move || json!(tree.with(|tree| tree.can_expand_all))).w(px(44.0)).h(px(44.0))))
-        .child(native("bex.search").prop("placeholder", json!(tr("ファイルを検索"))).prop("value", move || json!(tree.with(|tree| tree.query.clone()))).on_native_event(move |event: &NativeEvent| {
-            if &*event.name == "change" && let Some(text) = event.data.as_str() { send(FileTreeAction::Query { text: text.into() }); }
-        }).w_full())
-        .child(text(move || tree.with(|tree| tree.error.as_ref().map(|error| localized(error.to_string())).unwrap_or_default())))
-        .child(when(move || tree.with(|tree| tree.rows.is_empty()), move || text(move || tree.with(|tree| {
-            if tree.pending { tr("ファイルを読み込み中…") } else if tree.error.is_some() { tr("更新して再試行してください。") }
-            else if tree.query.trim().is_empty() { tr("ファイルはありません") } else { tr("一致するファイルはありません") }
-        }))))
-        .child(when(move || tree.with(|tree| tree.truncated), || text(tr("ほかにも一致する項目があります。検索語を絞り込んでください。"))))
-        .child(native("bex.list").prop("items", move || json!(tree.with(|tree| tree.rows.iter().map(|row| json!({
-            "id": row.path, "title": row.label,
-            "symbol": if row.kind == agent_protocol::file_tree::EntryKind::Directory { "folder" } else { "" },
-            "asset": (row.kind != agent_protocol::file_tree::EntryKind::Directory).then(|| format!("file-icons/pierre_{}.png", mobile_file_icon(row.path.clone()))),
-            "level": row.depth, "disclosure": row.kind == agent_protocol::file_tree::EntryKind::Directory, "group": false, "expanded": row.expanded,
-        })).collect::<Vec<_>>()))).prop("selected", move || json!(tree.with(|tree| tree.selected_paths.first().cloned().into_iter().collect::<Vec<_>>())))
-        .prop("expansion_enabled", move || json!(tree.with(|tree| tree.can_change_expansion)))
-        .on_native_event(move |event: &NativeEvent| {
-            if &*event.name == "activate" && let Some(path) = event.data.as_str()
-                && let Some(kind) = tree.with_untracked(|tree| tree.rows.iter().find(|row| row.path == path).map(|row| row.kind)) {
-                if kind == agent_protocol::file_tree::EntryKind::Directory {
-                    send(FileTreeAction::Toggle { path: path.into() });
-                } else {
-                    browser.open_file(file_tree_path(&key.get_untracked().root, path), None, connection.host.get_untracked(), connection.client.get());
-                }
+    let all_expanded = move || tree.with(|tree| tree.all_expanded);
+    let toggle_all_label = move || tree.with(|tree| localized(tree.toggle_all_label.clone()));
+    view()
+        .flex_1()
+        .min_h_0()
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .h(px(40.0))
+                .px_3()
+                .border_b_1()
+                .border_b_color(colors::BORDER)
+                .child(
+                    text(move || key.with(|key| key.root.clone()))
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED)
+                        .truncate()
+                        .selectable(true)
+                        .flex_1()
+                        .min_w_0(),
+                )
+                .child(ui::icon_button(
+                    Icon::REFRESH,
+                    tr("ファイル一覧を更新"),
+                    move || send(FileTreeAction::Refresh),
+                ))
+                .child(when(
+                    move || tree.with(|tree| tree.can_expand_all),
+                    move || {
+                        view()
+                            .child(when(all_expanded, move || {
+                                ui::icon_button(Icon::COLLAPSE_ALL, toggle_all_label, move || {
+                                    send(FileTreeAction::ToggleAll)
+                                })
+                            }))
+                            .child(when(
+                                move || !all_expanded(),
+                                move || {
+                                    ui::icon_button(Icon::EXPAND_ALL, toggle_all_label, move || {
+                                        send(FileTreeAction::ToggleAll)
+                                    })
+                                },
+                            ))
+                    },
+                )),
+        )
+        .child(
+            native("bex.search")
+                .prop("placeholder", json!(tr("ファイルを検索")))
+                .prop("value", move || json!(tree.with(|tree| tree.query.clone())))
+                .on_native_event(move |event: &NativeEvent| {
+                    if &*event.name == "change"
+                        && let Some(text) = event.data.as_str()
+                    {
+                        send(FileTreeAction::Query { text: text.into() });
+                    }
+                })
+                .mx_2()
+                .my_2(),
+        )
+        .child(when(
+            move || tree.with(|tree| tree.error.is_some()),
+            move || {
+                notice(move || {
+                    tree.with(|tree| {
+                        tree.error
+                            .as_ref()
+                            .map(|error| localized(error.to_string()))
+                            .unwrap_or_default()
+                    })
+                })
+            },
+        ))
+        .child(when(
+            move || tree.with(|tree| tree.truncated),
+            || {
+                notice(tr(
+                    "ほかにも一致する項目があります。検索語を絞り込んでください。",
+                ))
+            },
+        ))
+        .child(when(
+            move || tree.with(|tree| tree.rows.is_empty()),
+            move || {
+                notice(move || {
+                    tree.with(|tree| {
+                        if tree.pending {
+                            tr("ファイルを読み込み中…")
+                        } else if tree.error.is_some() {
+                            tr("更新して再試行してください。")
+                        } else if tree.query.trim().is_empty() {
+                            tr("ファイルはありません")
+                        } else {
+                            tr("一致するファイルはありません")
+                        }
+                    })
+                })
+            },
+        ))
+        .child(
+            virtual_list(
+                move || tree.with(|tree| tree.rows.len()),
+                move |at| {
+                    tree_row(
+                        computed(move || {
+                            tree.with(|tree| {
+                                let row = tree.rows.get(at.index())?;
+                                Some((row.clone(), tree.is_search_match(row)))
+                            })
+                        }),
+                        move |path| {
+                            send(FileTreeAction::Click {
+                                path,
+                                additive: false,
+                                range: false,
+                            })
+                        },
+                    )
+                },
+            )
+            .keys(move || {
+                tree.with(|tree| {
+                    tree.rows
+                        .iter()
+                        .map(|row| row.path.clone())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .estimated_item_size(px(24.0))
+            .content_padding_x(px(8.0))
+            .flex_1()
+            .min_h_0(),
+        )
+}
+
+/// A muted line under a panel's header: an error, a limit, or why it is empty.
+pub(crate) fn notice(message: impl IntoReactive<SharedString>) -> impl IntoElement {
+    text(message)
+        .px_3()
+        .py_1()
+        .text_size(px(12.0))
+        .text_color(colors::MUTED)
+}
+
+/// A row of the tree, as the desktop client's: a folder's chevron (a spinner while
+/// it loads) or a file's glyph, and its name; a press selects it, which opens a
+/// file and folds or unfolds a folder.
+fn tree_row(
+    row: Memo<Option<(FileTreeRow, bool)>>,
+    press: impl Fn(String) + Copy + 'static,
+) -> impl IntoElement {
+    let field = move |read: fn(&FileTreeRow) -> bool| {
+        row.with(|row| row.as_ref().is_some_and(|(row, _)| read(row)))
+    };
+    let directory = move || field(|row| row.kind == EntryKind::Directory);
+    let expanded = move || field(|row| row.expanded);
+    let loading = move || directory() && expanded() && field(|row| row.loading);
+    let ignored = move || field(|row| row.ignored);
+    let selected = move || field(|row| row.selected);
+    let label = move || {
+        row.with(|row| {
+            row.as_ref()
+                .map(|(row, _)| row.label.clone())
+                .unwrap_or_default()
+        })
+    };
+    nsh_base::button()
+        .accessibility_label(nsh_core::element::Prop::from(
+            (move || Some(SharedString::from(label()))).into_reactive(),
+        ))
+        .selected(selected)
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .h(px(24.0))
+        .pl(move || {
+            px(6.0 + row.with(|row| row.as_ref().map_or(0, |(row, _)| row.depth)) as f32 * 18.0)
+        })
+        .pr_2()
+        .rounded(px(ui::RADIUS))
+        .hover(|s| s.bg(ROW_HOVER))
+        .selected_style(|s| s.bg(ROW_SELECTED))
+        .child(
+            view()
+                .w(px(16.0))
+                .h(px(16.0))
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .text_color(move || {
+                    if selected() {
+                        colors::FOREGROUND
+                    } else {
+                        GLYPH
+                    }
+                })
+                .opacity(move || if ignored() { 0.5_f32 } else { 1.0 })
+                .child(when(loading, ui::spinner))
+                .child(when(
+                    move || directory() && !loading() && expanded(),
+                    || ui::icon(Icon::CHEVRON_DOWN, 16.0),
+                ))
+                .child(when(
+                    move || directory() && !expanded(),
+                    || ui::icon(Icon::CHEVRON_RIGHT, 16.0),
+                ))
+                .child(when(
+                    move || !directory(),
+                    move || {
+                        svg(move || {
+                            file_icon(&row.with(|row| {
+                                row.as_ref()
+                                    .map(|(row, _)| row.path.clone())
+                                    .unwrap_or_default()
+                            }))
+                        })
+                        .w(px(16.0))
+                        .h(px(16.0))
+                    },
+                )),
+        )
+        .child(
+            text(label)
+                .text_size(px(12.0))
+                .number_of_lines(1)
+                .flex_1()
+                .min_w_0()
+                .text_color(move || {
+                    if ignored() {
+                        IGNORED
+                    } else {
+                        colors::FOREGROUND
+                    }
+                })
+                .style_when(
+                    move || row.with(|row| row.as_ref().is_some_and(|(_, found)| *found)),
+                    |s| s.font_weight(FontWeight::SEMIBOLD),
+                ),
+        )
+        .on_press(move || {
+            if let Some(path) =
+                row.with_untracked(|row| row.as_ref().map(|(row, _)| row.path.clone()))
+            {
+                press(path);
             }
-            if &*event.name == "expand" && let Some(path) = event.data["id"].as_str()
-                && let Some(expanded) = event.data["expanded"].as_bool() {
-                send(FileTreeAction::SetExpanded { path: path.into(), expanded });
-            }
-            if &*event.name == "select" && let Some(path) = event.data.as_str()
-                && tree.with_untracked(|tree| tree.rows.iter().any(|row| row.path == path)) {
-                send(if is_desktop() { FileTreeAction::Select { path: path.into(), additive: false, range: false } }
-                else { FileTreeAction::Click { path: path.into(), additive: false, range: false } });
-            }
-        }).flex_1())
+        })
+}
+
+// The desktop client's tree inks: a row under the pointer and a selected row
+// (the foreground at 7% and 12%), glyphs, and ignored entries.
+const ROW_HOVER: Rgba = rgba(0xe6e6e612);
+const ROW_SELECTED: Rgba = rgba(0xe6e6e61f);
+const GLYPH: Rgba = rgb(0x84848a);
+const IGNORED: Rgba = rgb(0x4a4a4e);
+
+include!(concat!(env!("OUT_DIR"), "/file_icons.rs"));
+
+/// A file's glyph from T3 Code's tree icons, its tree variant when it has one.
+fn file_icon(path: &str) -> ImageSrc {
+    let name = desktop_file_icon(path);
+    ImageSrc::svg_markup(
+        file_icon_markup(&format!("{name}-tree"))
+            .or_else(|| file_icon_markup(name))
+            .or_else(|| file_icon_markup("file-tree-builtin-default"))
+            .unwrap_or_default(),
+    )
 }

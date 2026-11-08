@@ -1,19 +1,25 @@
 use crate::l10n::{localized, tr, tr_format};
-use crate::{Connection, native, shared::Shared};
+use crate::{
+    Connection,
+    shared::Shared,
+    ui::{self, Enabled, Icon, colors},
+};
 use agent_core::{
     presentation::{
         agents::AgentSummary,
-        diff::{WorkspaceDiffFile, diff_files},
+        diff::{
+            DiffPanelRow, DiffRow, WorkspaceDiffFile, diff_files, diff_panel_row_ends_card,
+            diff_panel_rows,
+        },
     },
     state::{Intent, operations as op},
 };
-use nsh_core::prelude::*;
-use serde_json::{Value, json};
+use nsh_core::{
+    element::{Rgba, rgb},
+    prelude::*,
+};
+use std::{collections::BTreeSet, sync::Arc};
 
-// The Swift decoder and this encoder share a fixture to guard the native boundary.
-fn diff_data(files: &[WorkspaceDiffFile]) -> Value {
-    json!({"diff": {"files": files}})
-}
 
 /// The desktop workspace card's content: the folder, its editors, review and sources.
 #[cfg(any(target_os = "macos", test))]
@@ -104,16 +110,16 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
                 .flatten()
         })
     });
-    let projected = signal(None::<Result<Value, String>>);
+    let projected = signal(None::<Result<Shared<Vec<WorkspaceDiffFile>>, String>>);
     effect(move || {
         let review = review.get();
         projected.set(None);
         if let Some(review) = review {
-            // Parsing large diffs does not block the native UI. The effect's task
-            // is cancelled when a newer review or a different surface replaces it.
+            // Parsing large diffs does not block the UI. The effect's task is
+            // cancelled when a newer review or a different surface replaces it.
             spawn(async move {
                 projected.set(Some(
-                    blocking(move || diff_data(&diff_files(&review)))
+                    blocking(move || Shared(Arc::new(diff_files(&review))))
                         .await
                         .map_err(|reason| reason.to_string()),
                 ));
@@ -139,6 +145,42 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
         })
     });
     let failed = computed(move || connection.context.with(|p| p.workspace_error().is_some()));
+    let totals = computed(move || {
+        review.with(|review| {
+            review
+                .as_ref()
+                .map_or((0, 0), |review| (review.additions, review.deletions))
+        })
+    });
+    let files = computed(move || projected.with(|files| files.clone().and_then(Result::ok)));
+    let collapsed = signal(BTreeSet::<String>::new());
+    let rows = computed(move || {
+        files.with(|files| {
+            files.as_ref().map_or_else(Vec::new, |files| {
+                collapsed.with(|collapsed| diff_panel_rows(files, collapsed))
+            })
+        })
+    });
+    let body = computed(move || {
+        if failed.get() {
+            return DiffBody::Hidden;
+        }
+        if pending.get() {
+            return DiffBody::Loading;
+        }
+        projected.with(|result| match result {
+            None => DiffBody::Loading,
+            Some(Err(reason)) => DiffBody::Message(localized(reason.clone())),
+            Some(Ok(files)) if files.is_empty() => {
+                DiffBody::Message(tr("変更はありません").to_owned())
+            }
+            Some(Ok(_)) => DiffBody::Files,
+        })
+    });
+    let message = move || match body.get() {
+        DiffBody::Message(message) => message,
+        _ => String::new(),
+    };
     view()
         .flex_1()
         .min_h_0()
@@ -146,42 +188,264 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
             view()
                 .flex_row()
                 .items_center()
-                .p_2()
+                .gap_2()
+                .h(px(40.0))
+                .px_3()
+                .border_b_1()
+                .border_b_color(colors::BORDER)
                 .child(
                     text(move || cwd.get())
                         .text_size(px(12.0))
+                        .text_color(colors::MUTED)
                         .truncate()
                         .selectable(true)
                         .flex_1()
                         .min_w_0(),
                 )
+                .child(line_counts(move || totals.get()))
                 .child(
-                    native::button("arrow.clockwise", tr("差分を更新"), load)
-                        .prop("enabled", move || {
-                            json!(!pending.get() && connection.settings.with(|p| p.connected()))
-                        })
-                        .w(px(44.0))
-                        .h(px(44.0)),
+                    ui::icon_button(Icon::REFRESH, tr("差分を更新"), load).enabled(move || {
+                        !pending.get() && connection.settings.with(|p| p.connected())
+                    }),
                 ),
         )
         .child(when(
-            move || !failed.get(),
+            move || matches!(body.get(), DiffBody::Loading | DiffBody::Message(_)),
             move || {
-                native("bex.details")
-                    .prop("data", move || {
-                        if pending.get() {
-                            return json!({"loading": {}});
-                        }
-                        projected.with(|result| match result {
-                            Some(Ok(data)) => data.clone(),
-                            Some(Err(message)) => json!({"error": {"message": message}}),
-                            None => json!({"loading": {}}),
-                        })
-                    })
+                view()
                     .flex_1()
-                    .min_h_0()
+                    .items_center()
+                    .justify_center()
+                    .px_5()
+                    .child(when(move || body.get() == DiffBody::Loading, ui::spinner))
+                    .child(text(message).text_size(px(12.0)).text_color(colors::MUTED))
             },
         ))
+        .child(when(
+            move || body.get() == DiffBody::Files,
+            move || {
+                virtual_list(
+                    move || rows.with(Vec::len),
+                    move |at| {
+                        diff_row(
+                            computed(move || {
+                                let (row, ends_card) = rows.with(|rows| {
+                                    let row = *rows.get(at.index())?;
+                                    Some((row, diff_panel_row_ends_card(rows, at.index())))
+                                })?;
+                                files.with(|files| {
+                                    let file = files.as_ref()?.get(row.file())?;
+                                    Some(DisplayRow {
+                                        row,
+                                        ends_card,
+                                        path: file.path.clone(),
+                                        counts: file.additions.zip(file.deletions),
+                                        line: match row {
+                                            DiffPanelRow::Line { line, .. } => {
+                                                file.rows.get(line).cloned()
+                                            }
+                                            _ => None,
+                                        },
+                                    })
+                                })
+                            }),
+                            move |path| {
+                                collapsed.update(|collapsed| {
+                                    if !collapsed.remove(&path) {
+                                        collapsed.insert(path);
+                                    }
+                                })
+                            },
+                        )
+                    },
+                )
+                .keys(move || rows.get())
+                .estimated_item_size(px(20.0))
+                .content_padding(px(12.0))
+                .flex_1()
+                .min_h_0()
+            },
+        ))
+}
+
+/// What the Diff panel shows under its header: nothing on a workspace error (its
+/// notice tells), a spinner while the diff loads, why there are no files, or them.
+#[derive(Clone, PartialEq)]
+enum DiffBody {
+    Hidden,
+    Loading,
+    Message(String),
+    Files,
+}
+
+/// What a row of the Diff panel shows: its place in its file's card, the file's
+/// path and line counts, and its line.
+#[derive(Clone, PartialEq)]
+struct DisplayRow {
+    row: DiffPanelRow,
+    ends_card: bool,
+    path: String,
+    counts: Option<(u64, u64)>,
+    line: Option<DiffRow>,
+}
+
+const ADDED: Rgba = rgb(0x22c55e);
+const REMOVED: Rgba = rgb(0xef4444);
+
+/// Added and removed line counts, in the desktop client's colors.
+fn line_counts(counts: impl Fn() -> (u64, u64) + Copy + 'static) -> View {
+    view()
+        .flex_row()
+        .gap_1()
+        .flex_shrink_0()
+        .child(
+            text(move || format!("+{}", counts().0))
+                .text_size(px(12.0))
+                .text_color(ADDED),
+        )
+        .child(
+            text(move || format!("−{}", counts().1))
+                .text_size(px(12.0))
+                .text_color(REMOVED),
+        )
+}
+
+/// A row of a file's card: the header, which folds the card, a line of a hunk, or
+/// the note that the file has no text diff.
+fn diff_row(row: Memo<Option<DisplayRow>>, toggle: impl Fn(String) + Copy + 'static) -> View {
+    let kind = move || row.with(|row| row.as_ref().map(|row| row.row));
+    let header = move || matches!(kind(), Some(DiffPanelRow::File { .. }));
+    let collapsed = move || {
+        matches!(
+            kind(),
+            Some(DiffPanelRow::File {
+                collapsed: true,
+                ..
+            })
+        )
+    };
+    let path = move || row.with(|row| row.as_ref().map(|row| row.path.clone()).unwrap_or_default());
+    let counts = move || row.with(|row| row.as_ref().and_then(|row| row.counts));
+    let line = computed(move || row.with(|row| row.as_ref().and_then(|row| row.line.clone())));
+    view()
+        .w_full()
+        .child(when(
+            move || header() && kind().is_some_and(|row| row.file() > 0),
+            || view().h(px(12.0)),
+        ))
+        .child(
+            view()
+                .border_l_1()
+                .border_r_1()
+                .border_color(colors::BORDER)
+                .bg(colors::SURFACE)
+                .overflow_hidden()
+                .style_when(header, |s| s.border_t_1().rounded_t(px(ui::RADIUS)))
+                .style_when(
+                    move || row.with(|row| row.as_ref().is_some_and(|row| row.ends_card)),
+                    |s| s.border_b_1().rounded_b(px(ui::RADIUS)),
+                )
+                .child(when(header, move || {
+                    nsh_base::button()
+                        .accessibility_label(nsh_core::element::Prop::from(
+                            (move || Some(SharedString::from(path()))).into_reactive(),
+                        ))
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .h(px(32.0))
+                        .px_2()
+                        .bg(colors::RAISED)
+                        .hover(|s| s.bg(colors::SELECTED))
+                        .child(
+                            view()
+                                .text_color(colors::MUTED)
+                                .child(when(collapsed, || ui::icon(Icon::CHEVRON_RIGHT, 14.0)))
+                                .child(when(
+                                    move || !collapsed(),
+                                    || ui::icon(Icon::CHEVRON_DOWN, 14.0),
+                                )),
+                        )
+                        .child(
+                            text(path)
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .number_of_lines(1)
+                                .flex_1()
+                                .min_w_0(),
+                        )
+                        .child(when(
+                            move || counts().is_some(),
+                            move || line_counts(move || counts().unwrap_or_default()),
+                        ))
+                        .on_press(move || toggle(path()))
+                }))
+                .child(when(
+                    move || matches!(kind(), Some(DiffPanelRow::NoTextDiff { .. })),
+                    || {
+                        text(tr("テキスト差分はありません"))
+                            .text_size(px(12.0))
+                            .text_color(colors::MUTED)
+                            .p_3()
+                    },
+                ))
+                .child(when(
+                    move || line.with(Option::is_some),
+                    move || diff_line(line),
+                )),
+        )
+}
+
+/// A line of a hunk: its number and text, in the desktop client's tints for what
+/// happened to it.
+fn diff_line(line: Memo<Option<DiffRow>>) -> View {
+    let tint = move || {
+        line.with(|line| match line.as_ref().map(|line| line.kind.as_str()) {
+            Some("+") => (rgb(0x14291d), rgb(0x9be9a8)),
+            Some("-") => (rgb(0x321c20), rgb(0xffa2a2)),
+            Some("@") => (rgb(0x232b38), rgb(0x9cc7f5)),
+            _ => (colors::SURFACE, rgb(0xd0d0d0)),
+        })
+    };
+    let code = |content: Text| {
+        content
+            .font_family(SharedString::from("monospace"))
+            .text_size(px(12.0))
+            .line_height(px(20.0))
+    };
+    view()
+        .flex_row()
+        .items_start()
+        .bg(move || tint().0)
+        .child(
+            code(text(move || {
+                line.with(|line| {
+                    line.as_ref()
+                        .and_then(DiffRow::line_number)
+                        .map(|number| number.to_string())
+                        .unwrap_or_default()
+                })
+            }))
+            .w(px(48.0))
+            .flex_shrink_0()
+            .pr_2()
+            .text_right()
+            .text_color(rgb(0x8b8b8b)),
+        )
+        .child(
+            code(text(move || {
+                line.with(|line| {
+                    line.as_ref()
+                        .map(|line| line.text.clone())
+                        .unwrap_or_default()
+                })
+            }))
+            .flex_1()
+            .min_w_0()
+            .pr_2()
+            .text_color(move || tint().1)
+            .selectable(true),
+        )
 }
 
 pub(crate) fn agents(host: String) -> impl IntoElement {
@@ -369,51 +633,5 @@ mod tests {
             }
         );
         assert!(workspace_summary(&p, false).editors.is_empty());
-    }
-
-    #[test]
-    fn diffs_match_the_native_display_contract() {
-        use agent_core::presentation::diff::DiffRow;
-        let files = [
-            WorkspaceDiffFile {
-                path: "日本語 👋.txt".into(),
-                additions: Some(1),
-                deletions: Some(1),
-                rows: vec![
-                    DiffRow {
-                        text: "@@ -1 +1 @@".into(),
-                        old: None,
-                        new: None,
-                        kind: "@".into(),
-                        file: 1,
-                    },
-                    DiffRow {
-                        text: "-before".into(),
-                        old: Some(1),
-                        new: None,
-                        kind: "-".into(),
-                        file: 1,
-                    },
-                    DiffRow {
-                        text: "+変更 👋".into(),
-                        old: None,
-                        new: Some(1),
-                        kind: "+".into(),
-                        file: 1,
-                    },
-                ],
-            },
-            WorkspaceDiffFile {
-                path: "image.png".into(),
-                additions: None,
-                deletions: None,
-                rows: vec![],
-            },
-        ];
-        let expected: Value = serde_json::from_str(include_str!(
-            "../apple/Tests/BexNshNativeTests/Fixtures/diff.json"
-        ))
-        .unwrap();
-        assert_eq!(diff_data(&files), expected);
     }
 }

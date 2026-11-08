@@ -1,9 +1,9 @@
 use crate::l10n::{localized, tr};
 use crate::{
     Connection,
-    files::{Browser, TextFile},
+    files::{Browser, TextFile, notice},
     media::Preview,
-    native,
+    ui::{self, Enabled, Icon, colors},
 };
 use agent_core::{
     presentation::files::{
@@ -12,7 +12,6 @@ use agent_core::{
     state::{Intent, operations as op},
 };
 use nsh_core::{element::input, prelude::*};
-use serde_json::json;
 
 pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
     let connection = use_context::<Connection>().unwrap();
@@ -56,60 +55,117 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
             field.set_selection(offset, offset);
         }
     });
+    let reload = move || {
+        let modified = controls.with_untracked(|controls| controls.modified);
+        spawn(async move {
+            if modified
+                && !nsh_base::alert_dialog()
+                    .title(tr("再読込"))
+                    .description(tr("保存していない編集を破棄して再読込しますか？"))
+                    .cancel("cancel", tr("キャンセル"))
+                    .destructive("reload", tr("編集を破棄して再読込"))
+                    .show()
+                    .await
+                    .is_ok_and(|answer| answer.action.as_deref() == Some("reload"))
+            {
+                return;
+            }
+            connection.client.with(|client| {
+                client.dispatch(
+                    &host.get(),
+                    None,
+                    Intent::ReadFile(op::ReadFile {
+                        path: path.get(),
+                        discard_draft: true,
+                    }),
+                )
+            });
+        });
+    };
+    let edit_with_ai = move || {
+        connection.client.with(|client| {
+            client.dispatch(
+                &host.get(),
+                None,
+                Intent::SetDraftText {
+                    thread_id: draft.get(),
+                    text: file_edit_prompt(path.get()),
+                },
+            )
+        });
+        browser.close();
+    };
+    let save = move || {
+        connection.client.with(|client| {
+            client.dispatch(
+                &host.get(),
+                None,
+                Intent::SaveFile(op::SaveFile { path: path.get() }),
+            )
+        })
+    };
     view()
         .flex_1()
         .min_h_0()
-        .gap_2()
-        .p_2()
         .pb_keyboard()
         .child(
             view()
                 .flex_row()
                 .items_center()
-                .gap_2()
+                .gap_1()
+                .h(px(40.0))
+                .px_3()
+                .border_b_1()
+                .border_b_color(colors::BORDER)
                 .child(
                     text(move || path.get())
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED)
                         .truncate()
                         .selectable(true)
-                        .text_size(px(12.0))
                         .flex_1()
                         .min_w_0(),
                 )
                 .child(
-                    native::text_button(json!(tr("保存")), move || {
-                        connection.client.with(|client| {
-                            client.dispatch(
-                                &host.get(),
-                                None,
-                                Intent::SaveFile(op::SaveFile { path: path.get() }),
-                            )
-                        })
-                    })
-                    .prop("enabled", move || {
-                        json!(
-                            controls.with(|controls| controls.can_save)
-                                && !busy()
-                                && !composing.get()
-                        )
-                    }),
-                ),
+                    ui::icon_button(Icon::REFRESH, tr("再読込"), reload).enabled(move || !busy()),
+                )
+                .child(ui::icon_button(
+                    Icon::SHARE,
+                    tr("プレビュー・共有"),
+                    move || {
+                        preview.load(crate::media::receive(
+                            connection.client.get().download(host.get(), path.get()),
+                        ))
+                    },
+                ))
+                .child(ui::text_button(tr("AIで編集"), edit_with_ai))
+                .child(ui::text_button(tr("保存"), save).enabled(move || {
+                    controls.with(|controls| controls.can_save) && !busy() && !composing.get()
+                })),
         )
-        .child(text(move || {
-            controls.with(|controls| {
-                controls
-                    .conflict_notice
-                    .clone()
-                    .map(localized)
-                    .unwrap_or_default()
-            })
-        }))
-        .child(when(busy, || text(tr("処理中…"))))
+        .child(when(
+            move || controls.with(|controls| controls.conflict_notice.is_some()),
+            move || {
+                notice(move || {
+                    controls.with(|controls| {
+                        controls
+                            .conflict_notice
+                            .clone()
+                            .map(localized)
+                            .unwrap_or_default()
+                    })
+                })
+            },
+        ))
+        .child(when(busy, || notice(tr("処理中…"))))
         .child(when(
             move || controls.with(|controls| controls.truncated),
-            || text(localized(file_preview_truncation_notice())),
+            || notice(localized(file_preview_truncation_notice())),
         ))
         .child(
             input()
+                .px_3()
+                .py_2()
                 .multiline(true)
                 .submit_behavior(SubmitBehavior::Newline)
                 .readonly(move || controls.with(|controls| !controls.can_edit))
@@ -141,70 +197,6 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                 .flex_1()
                 .min_h_0()
                 .w_full(),
-        )
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(
-                    native::button("arrow.clockwise", tr("再読込"), move || {
-                        let modified = controls.with_untracked(|controls| controls.modified);
-                        spawn(async move {
-                            if modified
-                                && !nsh_base::alert_dialog()
-                                    .title(tr("再読込"))
-                                    .description(tr("保存していない編集を破棄して再読込しますか？"))
-                                    .cancel("cancel", tr("キャンセル"))
-                                    .destructive("reload", tr("編集を破棄して再読込"))
-                                    .show()
-                                    .await
-                                    .is_ok_and(|answer| answer.action.as_deref() == Some("reload"))
-                            {
-                                return;
-                            }
-                            connection.client.with(|client| {
-                                client.dispatch(
-                                    &host.get(),
-                                    None,
-                                    Intent::ReadFile(op::ReadFile {
-                                        path: path.get(),
-                                        discard_draft: true,
-                                    }),
-                                )
-                            });
-                        });
-                    })
-                    .prop("enabled", move || json!(!busy()))
-                    .w(px(44.0))
-                    .h(px(44.0)),
-                )
-                .child(
-                    native::button(
-                        "square.and.arrow.up",
-                        tr("プレビュー・共有"),
-                        move || {
-                            preview.load(crate::media::receive(
-                                connection.client.get().download(host.get(), path.get()),
-                            ))
-                        },
-                    )
-                    .w(px(44.0))
-                    .h(px(44.0)),
-                )
-                .child(native::text_button(json!(tr("AIで編集")), move || {
-                    connection.client.with(|client| {
-                        client.dispatch(
-                            &host.get(),
-                            None,
-                            Intent::SetDraftText {
-                                thread_id: draft.get(),
-                                text: file_edit_prompt(path.get()),
-                            },
-                        )
-                    });
-                    browser.close();
-                })),
         )
 }
 

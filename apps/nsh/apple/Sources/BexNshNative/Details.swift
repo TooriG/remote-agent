@@ -6,25 +6,8 @@ import SwiftUI
     import UIKit
 #endif
 
-/// These are Core's projected display values; no diff parsing lives here.
-struct DiffRow: Decodable {
-    let text: String
-    let old: UInt64?
-    let new: UInt64?
-    let kind: String
-}
-
-struct DiffFile: Decodable {
-    let path: String
-    let additions: UInt64?
-    let deletions: UInt64?
-    let rows: [DiffRow]
-}
-
 enum DetailsContent: Decodable {
     case separator
-    case loading
-    case diff(files: [DiffFile])
     case error(message: String)
     case welcome(directory: String)
     case projectEditor(editor: ProjectEditorData?)
@@ -55,79 +38,11 @@ private struct DetailsView: View {
                     Text(directory.isEmpty ? "メッセージを入力して、作業を始めましょう。" : directory)
                         .font(.system(size: 14))
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .loading:
-                ProgressView().accessibilityIdentifier("files.diff.loading")
-            case let .diff(files):
-                if files.isEmpty {
-                    ContentUnavailableView("変更はありません", systemImage: "checkmark.circle")
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 16) {
-                            ForEach(files, id: \.path) { file in DiffCard(file: file) }
-                        }.padding(12)
-                    }
-                }
             case let .error(message):
                 ContentUnavailableView("表示できませんでした", systemImage: "exclamationmark.triangle",
                                        description: Text(verbatim: message))
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-private struct DiffCard: View {
-    let file: DiffFile
-    @State private var expanded = true
-
-    var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(spacing: 0) {
-                if file.rows.isEmpty {
-                    Text("テキスト差分はありません").font(.caption).foregroundStyle(.secondary).padding()
-                }
-                ForEach(file.rows.indices, id: \.self) { index in
-                    let row = file.rows[index]
-                    HStack(alignment: .top, spacing: 0) {
-                        if ["+", "-", " "].contains(row.kind) {
-                            Text((row.new ?? row.old).map(String.init) ?? "")
-                                .foregroundStyle(.secondary).frame(width: 40, alignment: .trailing).padding(
-                                    .trailing,
-                                    8
-                                )
-                        }
-                        Text(verbatim: row.text.isEmpty ? " " : row.text)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                    }
-                    .font(.system(.footnote, design: .monospaced))
-                    .padding(.vertical, 3).padding(.horizontal, 8)
-                    .background(row.kind == "+" ? Color.green.opacity(0.18) :
-                        row.kind == "-" ? Color.red.opacity(0.18) :
-                        row.kind == "@" ? Color.secondary.opacity(0.12) : Color.clear)
-                }
-            }
-            #if os(iOS)
-            .background(Color(uiColor: .systemBackground))
-            #endif
-        } label: {
-            HStack(alignment: .top, spacing: 8) {
-                Text(verbatim: file.path).fontWeight(.semibold).frame(maxWidth: .infinity, alignment: .leading)
-                if let additions = file.additions {
-                    Text("+\(additions)").foregroundStyle(.green)
-                }
-                if let deletions = file.deletions {
-                    Text("−\(deletions)").foregroundStyle(.red)
-                }
-            }
-            .font(.subheadline).foregroundStyle(.primary)
-        }
-        .accessibilityIdentifier("diff.file.\(file.path)")
-        .padding(12)
-        #if os(iOS)
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
-        #else
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-        #endif
     }
 }
 
@@ -144,9 +59,9 @@ private struct DiffCard: View {
     }
 
     #if os(macOS)
-        let view = NSHostingView(rootView: DetailsView(content: .diff(files: [])))
+        let view = NSHostingView(rootView: DetailsView(content: .separator))
     #else
-        let view = NativeHostingView(rootView: DetailsView(content: .diff(files: [])))
+        let view = NativeHostingView(rootView: DetailsView(content: .separator))
     #endif
 
     func update(_ data: Data) {
