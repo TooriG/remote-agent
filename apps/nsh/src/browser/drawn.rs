@@ -419,3 +419,15 @@ fn data_panel(
             ),
         )
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_page_keys_are_ones_windows_lets_the_app_bind() {
+        use nsh_core::{keymap::Keystroke, platform::Os};
+        for (keystroke, _) in super::KEYS {
+            let parsed = Keystroke::parse(keystroke, Os::Windows).unwrap();
+            assert_eq!(parsed.reserved(Os::Windows), None, "{keystroke}");
+        }
+    }
+}
