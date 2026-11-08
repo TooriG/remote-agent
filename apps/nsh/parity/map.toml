@@ -974,3 +974,10 @@ metrics = ["present"]
 reason = "Bex's Host can skip any question; hiding dismiss would remove skipping"
 approved = "2026-11-09"
 by = "the coordinator"
+
+[[approved]]
+element = "header-new-chat"
+metrics = ["text extent (drawn)"]
+reason = "Bex calls conversations chats everywhere"
+approved = "2026-11-09"
+by = "the user"
