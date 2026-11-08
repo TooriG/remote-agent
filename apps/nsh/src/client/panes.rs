@@ -32,7 +32,7 @@ impl Client {
     ) {
         let pane = {
             let mut panes = self.panes.lock().unwrap();
-            if self.closing.load(Ordering::SeqCst) {
+            if self.closing.is_cancelled() {
                 return;
             }
             panes

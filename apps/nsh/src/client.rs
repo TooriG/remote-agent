@@ -10,13 +10,8 @@ use agent_core::{
     state::Intent,
 };
 use agent_local_host::{LocalHostState, launch::HostScope};
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{path::PathBuf, sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 mod panes;
 mod transfers;
@@ -44,7 +39,8 @@ pub(crate) enum Update {
 pub(crate) struct Client {
     runtime: tokio::runtime::Handle,
     jobs: tokio_util::task::TaskTracker,
-    closing: AtomicBool,
+    /// Cancelled once the client shuts down: its work ends.
+    closing: CancellationToken,
     sessions: Arc<ClientSessions>,
     root: PathBuf,
     hosts: tokio::sync::Mutex<Vec<Host>>,
@@ -76,7 +72,7 @@ impl Client {
         let client = Arc::new(Self {
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
-            closing: AtomicBool::new(false),
+            closing: CancellationToken::new(),
             // Chats lists only standalone chats, as the desktop client's sidebar.
             sessions: ClientSessions::new(
                 false,
@@ -138,7 +134,7 @@ impl Client {
             }
         }
         let mut registry = self.hosts.lock().await;
-        if self.closing.load(Ordering::SeqCst) {
+        if self.closing.is_cancelled() {
             return Ok(());
         }
         *registry = hosts.clone();
@@ -166,9 +162,13 @@ impl Client {
             match session.clone().ready().await {
                 Ok(_) => {
                     owner.observe(host.id.clone(), session.clone());
+                    let distro = agent_local_host::wsl::host_distro(&host.id).is_some();
+                    if distro || host.id == LOCAL {
+                        owner.recover(session.clone(), host.clone());
+                    }
                     // A distro's Host starts only once it is chosen: starting
                     // WSL is not free.
-                    if agent_local_host::wsl::host_distro(&host.id).is_none() {
+                    if !distro {
                         owner.resume(session, host).await;
                     }
                 }
@@ -178,23 +178,61 @@ impl Client {
     }
 
     async fn resume(&self, session: Arc<ClientSession>, host: Host) {
+        if let Some(failure) = self.reach(session, host).await {
+            self.report(failure);
+        }
+    }
+
+    /// Starts and reaches `host`; the failure Core did not record, if any.
+    async fn reach(&self, session: Arc<ClientSession>, host: Host) -> Option<String> {
         // A disconnected Host is neither started nor reached.
         if !session.snapshot().connection_enabled() {
-            return;
+            return None;
         }
         let ticket = match self.ticket(host).await {
             Ok(ticket) => ticket,
-            Err(reason) => return self.report(reason),
+            Err(reason) => return Some(reason.to_string()),
         };
-        if let Err(reason) = session.clone().resume(ticket).await {
-            let message = reason.to_string();
-            if !session.store().is_some_and(|store| {
-                store.snapshot().connection.connection_failure.as_deref() == Some(&message)
-            }) {
-                // Identity and ticket preparation can fail before Core records an attempt.
-                self.report(message);
+        let message = session.clone().resume(ticket).await.err()?.to_string();
+        // Identity and ticket preparation can fail before Core records an attempt.
+        (!session.store().is_some_and(|store| {
+            store.snapshot().connection.connection_failure.as_deref() == Some(&message)
+        }))
+        .then_some(message)
+    }
+
+    /// Core reconnects to a Host that runs; this machine's own Host and its
+    /// distros' stop with it or with WSL, and only this client starts them
+    /// again. Once reached, a Host lost while it is to be connected is
+    /// started and reached again, less often while that keeps failing.
+    fn recover(self: &Arc<Self>, session: Arc<ClientSession>, host: Host) {
+        const CHECK: Duration = Duration::from_secs(1);
+        const LONGEST: Duration = Duration::from_secs(8);
+        let owner = self.clone();
+        self.spawn(async move {
+            let (mut reached, mut wait, mut last) = (false, CHECK, None);
+            loop {
+                tokio::select! {
+                    _ = owner.closing.cancelled() => return,
+                    _ = tokio::time::sleep(wait) => {}
+                }
+                let snapshot = session.snapshot();
+                let connected = snapshot.connection.connected;
+                reached |= connected;
+                last = last.filter(|_| !connected);
+                if connected || !reached || !snapshot.connection_enabled() {
+                    wait = CHECK;
+                    continue;
+                }
+                // A failure shows once, not again on each later attempt.
+                let failure = owner.reach(session.clone(), host.clone()).await;
+                if let Some(reason) = failure.as_ref().filter(|_| failure != last) {
+                    owner.report(reason);
+                }
+                last = failure;
+                wait = (wait * 2).min(LONGEST);
             }
-        }
+        });
     }
 
     /// A paired Host's saved ticket, or this machine's Host's current one,
@@ -355,7 +393,7 @@ impl Client {
         request: agent_protocol::browser::BrowserRequest,
     ) -> async_channel::Receiver<Result<agent_protocol::browser::BrowserFrame, AgentError>> {
         let session = self.sessions.session(host);
-        let closing = self.closing.load(Ordering::SeqCst);
+        let closing = self.closing.is_cancelled();
         let (send, receive) = async_channel::bounded(1);
         self.spawn(async move {
             let result = async {
@@ -411,7 +449,7 @@ impl Client {
             .pair(storage.clone(), storage, invitation)
             .await?;
         let mut hosts = self.hosts.lock().await;
-        if self.closing.load(Ordering::SeqCst) {
+        if self.closing.is_cancelled() {
             session.shutdown().await?;
             return Err(error("client is closing"));
         }
@@ -501,7 +539,7 @@ impl Client {
     }
 
     pub async fn shutdown(&self) -> Result<(), AgentError> {
-        self.closing.store(true, Ordering::SeqCst);
+        self.closing.cancel();
         self.close_panes();
         let hosts = self.hosts.lock().await;
         self.sessions.retire();
