@@ -679,6 +679,7 @@ impl HostRpcService {
             if let Err(message) = self.inner.transcripts.interrupt_running() {
                 tracing::error!(target: "agent", operation = "host.transcript.write", message);
             }
+            self.restore_queues();
             if self.inner.router.apns().is_some() {
                 let owner = Arc::downgrade(&self.inner);
                 tokio::spawn(async move {

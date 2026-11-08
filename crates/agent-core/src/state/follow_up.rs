@@ -95,12 +95,37 @@ pub enum QueueAction {
     Remove {
         client_user_message_id: ClientInputId,
     },
+    /// Moves the queued message before `before`, or to the end without it.
+    Move {
+        client_user_message_id: ClientInputId,
+        before: Option<ClientInputId>,
+    },
     /// Sends the queued message into the running turn now.
     Steer {
         client_user_message_id: ClientInputId,
     },
     /// Starts a queue a stop or failure held.
     Resume,
+}
+
+/// Moving queued message `id` by `steps` rows, as T3 Code's drag and arrow
+/// keys reorder its queue: before the message it lands ahead of, or to the
+/// end. None when it stays where it is.
+pub fn reorder(ids: &[ClientInputId], id: &ClientInputId, steps: i32) -> Option<QueueAction> {
+    let from = ids.iter().position(|queued| queued == id)?;
+    let last = ids.len() as i64 - 1;
+    let to = (from as i64 + i64::from(steps)).clamp(0, last) as usize;
+    if to == from {
+        return None;
+    }
+    Some(QueueAction::Move {
+        client_user_message_id: id.clone(),
+        before: if to > from {
+            ids.get(to + 1).cloned()
+        } else {
+            Some(ids[to].clone())
+        },
+    })
 }
 
 /// The text a queued message shows and edits.
@@ -198,6 +223,13 @@ pub(super) fn reduce(
                 client_user_message_id,
             }
         }
+        QueueAction::Move {
+            client_user_message_id,
+            before,
+        } => QueueChange::Move {
+            client_user_message_id,
+            before,
+        },
         QueueAction::Steer {
             client_user_message_id,
         } => QueueChange::Steer {

@@ -17,4 +17,5 @@ screenshot queued
 fixture /release-inputs
 expect_absent "キューのメッセージ" 30000
 expect "この発言へ移動: 終わったら次を確認します" 30000
+expect "実行中の作業の後に送信しました"
 screenshot ran

@@ -95,6 +95,34 @@ impl HostRpcService {
         });
     }
 
+    /// Queues saved before the Host restarted. The restart ended the turns
+    /// they waited for, so they come back held, as T3 Code's recovery holds
+    /// queued runs, and their senders see them accepted.
+    pub(super) fn restore_queues(&self) {
+        let queues = match self.inner.transcripts.queues() {
+            Ok(queues) => queues,
+            Err(message) => {
+                tracing::error!(target: "agent", operation = "session.queue.restore", message);
+                return;
+            }
+        };
+        for (target, mut queue) in queues {
+            queue.held = true;
+            for input in &queue.inputs {
+                self.inner.router.session_change(
+                    &target,
+                    SessionChange::Submission {
+                        id: input.client_user_message_id.clone(),
+                        delivery: SubmissionDelivery::Accepted { turn_id: None },
+                    },
+                );
+            }
+            self.inner
+                .router
+                .session_change(&target, SessionChange::Queue { queue });
+        }
+    }
+
     /// A stop or a failed turn leaves the rest of the queue for the user.
     /// Whether waiting input changed to `held`.
     pub(super) fn hold_queue(&self, target: &SessionRef, held: bool) -> bool {
@@ -133,12 +161,22 @@ impl HostRpcService {
         input: &op::Submission,
     ) -> Result<bool, Failure> {
         let id = &input.client_user_message_id;
+        let running = self.inner.router.running_turn(target);
         let result = self.submit_input(target, input).await;
         if result
             .as_ref()
             .is_err_and(|error| error.code == STILL_QUEUED)
         {
             return Ok(false);
+        }
+        // Input that started its own turn, rather than steering the running
+        // one, shows that it waited in the queue.
+        if let Ok(op::SubmissionReceipt {
+            turn_id: Some(turn),
+        }) = &result
+            && running.as_ref() != Some(turn)
+        {
+            self.inner.router.mark_queued_turn(target, turn.clone());
         }
         let delivery = match &result {
             Ok(receipt) => SubmissionDelivery::Accepted {
@@ -219,6 +257,26 @@ impl HostRpcService {
                     },
                 );
                 return Ok(agent_protocol::models::Empty {});
+            }
+            QueueChange::Move {
+                client_user_message_id,
+                before,
+            } => {
+                let input = queue.inputs.remove(position(client_user_message_id)?);
+                let index = match before {
+                    Some(before) => queue
+                        .inputs
+                        .iter()
+                        .position(|queued| &queued.client_user_message_id == before)
+                        .ok_or_else(|| {
+                            Failure::new(
+                                "queued_input_unavailable",
+                                "このメッセージは送信済みか、キューから削除されています。",
+                            )
+                        })?,
+                    None => queue.inputs.len(),
+                };
+                queue.inputs.insert(index, input);
             }
             QueueChange::Steer {
                 client_user_message_id,

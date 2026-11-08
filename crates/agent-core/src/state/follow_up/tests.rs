@@ -97,6 +97,30 @@ fn the_alternate_does_the_opposite_of_the_preference_for_one_message() {
 }
 
 #[test]
+fn reordering_moves_before_the_message_it_lands_ahead_of() {
+    let ids: Vec<ClientInputId> = ["a", "b", "c"].map(Into::into).into();
+    let moved = |id: &str, steps| match reorder(&ids, &id.into(), steps) {
+        Some(QueueAction::Move {
+            client_user_message_id,
+            before,
+        }) => {
+            assert_eq!(client_user_message_id.as_str(), id);
+            Some(before.map(|before| before.to_string()))
+        }
+        None => None,
+        Some(other) => panic!("unexpected {other:?}"),
+    };
+    assert_eq!(moved("a", 1), Some(Some("c".into())));
+    assert_eq!(moved("a", 2), Some(None));
+    assert_eq!(moved("a", 9), Some(None));
+    assert_eq!(moved("c", -1), Some(Some("b".into())));
+    assert_eq!(moved("c", -9), Some(Some("a".into())));
+    assert_eq!(moved("b", 0), None);
+    assert_eq!(moved("a", -1), None);
+    assert_eq!(moved("missing", 1), None);
+}
+
+#[test]
 fn enter_sends_as_the_send_shortcut_allows() {
     for (shortcut, one_line, multiline) in [
         (SendShortcut::Enter, true, true),
@@ -252,7 +276,7 @@ fn an_edit_ends_when_its_message_leaves_the_queue() {
 }
 
 #[test]
-fn removing_steering_and_resuming_ask_the_host() {
+fn removing_moving_steering_and_resuming_ask_the_host() {
     let mut state = snapshot(thread(true, true, vec![queued("waiting", "old text")]), "");
     for (action, change) in [
         (
@@ -264,6 +288,16 @@ fn removing_steering_and_resuming_ask_the_host() {
             },
         ),
         (QueueAction::Resume, QueueChange::Resume),
+        (
+            QueueAction::Move {
+                client_user_message_id: "waiting".into(),
+                before: None,
+            },
+            QueueChange::Move {
+                client_user_message_id: "waiting".into(),
+                before: None,
+            },
+        ),
         (
             QueueAction::Remove {
                 client_user_message_id: "waiting".into(),

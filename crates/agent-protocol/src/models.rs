@@ -144,6 +144,9 @@ pub struct Turn {
     pub error: Option<ExecutionError>,
     pub started_at_ms: Option<u64>,
     pub completed_at_ms: Option<u64>,
+    /// Started by input that waited in the Host's queue behind another turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
 }
 impl Turn {
     /// Reused turn IDs describe the same occurrence only when their items overlap.

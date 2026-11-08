@@ -1,0 +1,25 @@
+# Queued messages are reordered by dragging their grip, as T3 Code's queue,
+# run in that order after the turn, and each says it waited in the queue.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[groups] 順番を入れ替えます"
+press 送信
+expect "./gradlew test" 20000
+type "AI に依頼する" "一番目"
+press メッセージをキューに追加
+type "AI に依頼する" "二番目"
+press メッセージをキューに追加
+type "AI に依頼する" "三番目"
+press メッセージをキューに追加
+expect "三番目" after "二番目" 10000
+drag "キューのメッセージを並べ替え（ドラッグ、または矢印キー）" -56 after "二番目"
+expect "一番目" after "三番目" 10000
+expect "二番目" after "一番目"
+screenshot reordered
+fixture /release-inputs
+expect_absent "キューのメッセージを折りたたむ" 30000
+expect "この発言へ移動: 二番目" 30000
+expect "この発言へ移動: 一番目" after "この発言へ移動: 三番目"
+expect "この発言へ移動: 二番目" after "この発言へ移動: 一番目"
+expect "実行中の作業の後に送信しました"
+screenshot ran

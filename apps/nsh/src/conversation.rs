@@ -47,6 +47,8 @@ struct Row {
     time: Option<String>,
     /// A message sent while its turn worked; only the first of a run says so.
     steer: bool,
+    /// The message waited in the queue, then started its turn.
+    queued: bool,
     error: Option<TurnErrorPresentation>,
 }
 
@@ -83,6 +85,7 @@ fn project(
                 content: ConversationRowContent::User { item: item.clone() },
                 timestamp_ms: item.data.timestamp_ms,
                 steer: false,
+                queued: false,
             }, None)
         }))
         .chain(conversation.session_rows.iter().cloned().map(|row| (row, None)))
@@ -93,7 +96,7 @@ fn project(
                 | ConversationRowContent::Response { item, .. } => item.data.image_sources.clone(),
                 _ => Vec::new(),
             };
-            let steer = row.steer;
+            let (steer, queued) = (row.steer, row.queued);
             let time = row
                 .timestamp_ms
                 .and_then(|ms| i64::try_from(ms).ok())
@@ -144,6 +147,7 @@ fn project(
                 progress,
                 time,
                 steer,
+                queued,
                 error,
             })
         })
@@ -310,6 +314,10 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                 .child(when(
                                     move || row.with(|row| row.as_ref().is_some_and(|row| row.steer)),
                                     steer_marker,
+                                ))
+                                .child(when(
+                                    move || row.with(|row| row.as_ref().is_some_and(|row| row.queued)),
+                                    queued_marker,
                                 ))
                                 .child(when(
                                     move || {
@@ -754,6 +762,18 @@ fn error_card(error: Memo<Option<TurnErrorPresentation>>) -> View {
                     .text_color(colors::MUTED)
             },
         ))
+}
+
+/// Marks a message that waited in the queue before its turn (T3 Code's
+/// "Queued", which has no icon).
+fn queued_marker() -> View {
+    use crate::ui::colors;
+    view()
+        .mr_1()
+        .mb_1()
+        .text_color(colors::MUTED)
+        .label(tr("実行中の作業の後に送信しました"))
+        .child(text(tr("キューから送信")).text_size(px(12.0)))
 }
 
 /// Marks a message that steered the working turn (T3 Code's "Steer").

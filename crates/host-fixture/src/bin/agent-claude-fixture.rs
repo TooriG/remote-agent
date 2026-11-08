@@ -455,28 +455,25 @@ impl Fixture {
             "the Host gives a working response input only as a steer"
         );
         if waiting {
-            // A steer stops the streaming response, which Claude Code ends as
-            // aborted; the response goes on to answer the steer, which it saves
-            // as a command taken into that response.
+            // A priority "now" message cuts the streaming response as Claude
+            // Code's send-now does: it saves the interruption marker stamped
+            // `interruptedBySendNow`, ends the response as aborted, and runs the
+            // message as the next prompt.
+            native(
+                &self.session,
+                json!({"type":"user","interruptedBySendNow":true,
+                    "message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}),
+            );
             output(
                 json!({"type":"result","subtype":"error_during_execution","session_id":self.session,
                     "is_error":true,"terminal_reason":"aborted_streaming","errors":[]}),
             );
-            native(
-                &self.session,
-                json!({"type":"attachment","attachment":{
-                    "type":"queued_command","commandMode":"prompt","origin":{"kind":"human"},"source_uuid":value["uuid"],
-                    "prompt":value["message"]["content"]
-                }}),
-            );
-            output(value.clone());
-        } else {
-            emit(
-                &self.session,
-                json!({"type":"system","subtype":"init","session_id":self.session,"user_message_uuids":[value["uuid"]]}),
-            );
-            emit(&self.session, value.clone());
         }
+        emit(
+            &self.session,
+            json!({"type":"system","subtype":"init","session_id":self.session,"user_message_uuids":[value["uuid"]]}),
+        );
+        emit(&self.session, value.clone());
         let content = value["message"]["content"].clone();
         self.inputs.push(
             json!({"content":content,"model":self.model,"effort":self.effort,"process":self.process}),

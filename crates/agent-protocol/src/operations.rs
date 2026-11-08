@@ -718,6 +718,11 @@ pub enum QueueChange {
     Remove {
         client_user_message_id: crate::ids::ClientInputId,
     },
+    /// Moves waiting input before `before`, or to the end without it.
+    Move {
+        client_user_message_id: crate::ids::ClientInputId,
+        before: Option<crate::ids::ClientInputId>,
+    },
     /// Moves waiting input into the running turn now.
     Steer {
         client_user_message_id: crate::ids::ClientInputId,

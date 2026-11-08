@@ -524,6 +524,7 @@ pub(crate) fn parse_turn(mut value: Value) -> Result<Turn, serde_json::Error> {
             .map(|error| execution_error(error, error["willRetry"] == true)),
         started_at_ms: field(&value, "startedAtMs")?,
         completed_at_ms: field(&value, "completedAtMs")?,
+        queued: false,
     };
     if value["itemsView"] == "notLoaded" {
         turn.items = None;

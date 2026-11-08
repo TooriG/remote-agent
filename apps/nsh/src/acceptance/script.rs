@@ -18,6 +18,9 @@
 //!   until some element's text contains `<text>`, or none does.
 //! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
 //!   that element; positive lines move the content up, toward its end.
+//! - `drag <label> <points> [after <anchor>] [timeout-ms]`: drags that element
+//!   with the left button by `points` down (negative: up), in steps, as a
+//!   pointer would.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
@@ -51,6 +54,8 @@ pub(crate) enum Step {
     ExpectAbsent(Find),
     /// A wheel of this many lines over the element.
     Scroll(Find, i32),
+    /// A left-button drag of the element by this many points down.
+    Drag(Find, i32),
     Select(Find, String),
     Menu(Find),
     Choose(String),
@@ -164,6 +169,12 @@ fn step(words: &[String]) -> Result<Step, String> {
             lines
                 .parse()
                 .map_err(|_| format!("{lines:?} is not a line count"))?,
+        ),
+        ("drag", [target, points, rest @ ..]) => Step::Drag(
+            find(target, rest)?,
+            points
+                .parse()
+                .map_err(|_| format!("{points:?} is not a distance in points"))?,
         ),
         ("select", [target, text, rest @ ..]) => {
             Step::Select(find(target, rest)?, (*text).to_owned())
@@ -297,7 +308,7 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             scroll 会話 -3\ndrag 並べ替え 28 after 見出し\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
         )
@@ -337,6 +348,14 @@ mod tests {
                         timeout: DEFAULT_TIMEOUT
                     },
                     -3
+                ),
+                Step::Drag(
+                    Find {
+                        text: "並べ替え".into(),
+                        after: Some("見出し".into()),
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    28
                 ),
                 Step::Select(
                     Find {

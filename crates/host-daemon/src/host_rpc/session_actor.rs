@@ -8,6 +8,8 @@ pub(super) struct SessionActor {
     pub(super) request_origins:
         std::collections::BTreeMap<agent_protocol::ids::RequestId, crate::providers::RequestOrigin>,
     pub(super) leases: usize,
+    /// Turns queued input started; their later changes keep that mark.
+    pub(super) queued_turns: HashSet<agent_protocol::ids::TurnId>,
     pub(super) submission_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub(super) subscriptions: std::collections::HashMap<
         uuid::Uuid,

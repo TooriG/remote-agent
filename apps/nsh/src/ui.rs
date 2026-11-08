@@ -119,6 +119,7 @@ impl Icon {
     pub(crate) const QUEUE: Self = icon!(ListPlus, "text.badge.plus");
     pub(crate) const STEER_NOW: Self = icon!(CornerUpRight, "arrowshape.turn.up.right");
     pub(crate) const QUEUED: Self = icon!(ListOrdered, "list.number");
+    pub(crate) const GRIP: Self = icon!(GripVertical, "line.3.horizontal");
     pub(crate) const SAVING: Self = icon!(Clock3, "clock");
     pub(crate) const RESUME: Self = icon!(Play, "play.fill");
     /// A filled square, which Lucide's outlined `square` is not.

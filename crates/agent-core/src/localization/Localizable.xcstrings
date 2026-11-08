@@ -16631,6 +16631,24 @@
         "ja": { "stringUnit": { "state": "translated", "value": "キューから削除" } }
       }
     },
+    "キューから送信": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Queued" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "キューから送信" } }
+      }
+    },
+    "実行中の作業の後に送信しました": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Queued behind the active turn" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "実行中の作業の後に送信しました" } }
+      }
+    },
+    "キューのメッセージを並べ替え（ドラッグ、または矢印キー）": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Reorder queued message (drag, or press the arrow keys)" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "キューのメッセージを並べ替え（ドラッグ、または矢印キー）" } }
+      }
+    },
     "キューのメッセージを変更できませんでした": {
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Couldn't change the queued message" } },

@@ -22,4 +22,5 @@ expect "after the turn" after "キューのメッセージ" 10000
 screenshot queued
 fixture /release-inputs
 expect "reply 4: after the turn" 30000
+expect "実行中の作業の後に送信しました"
 expect_absent "キューのメッセージ"

@@ -9,7 +9,7 @@ use agent_protocol::{
 use std::time::Duration;
 
 struct Running {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     host: HostRpcService,
     agent: Arc<NativeAgent>,
     root: SessionRef,
@@ -36,7 +36,7 @@ async fn running() -> Running {
         .router
         .session_change(&root, live(TurnStatus::Running));
     Running {
-        _directory: directory,
+        directory,
         host,
         agent,
         root,
@@ -57,6 +57,36 @@ fn live(status: TurnStatus) -> SessionChange {
 }
 
 impl Running {
+    /// The Host restarts over the same state; the provider's process ended.
+    fn restarted(self) -> Self {
+        let Self {
+            directory, agent, ..
+        } = self;
+        let agent = agent.restarted();
+        let host = HostRpcService::new(
+            [agent.backend()],
+            crate::ProjectStore::new(directory.path().join("worktrees.json")),
+        );
+        let client = host.open_session();
+        let root = Running::session(&agent);
+        Self {
+            directory,
+            host,
+            agent,
+            root,
+            client,
+        }
+    }
+    fn session(agent: &NativeAgent) -> SessionRef {
+        agent
+            .records
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .and_then(|record| record.thread.id.clone())
+            .unwrap()
+    }
     async fn send(&self, id: &str, follow_up: FollowUp) -> op::SubmissionReceipt {
         call(
             &self.host,
@@ -166,10 +196,20 @@ async fn queued_input_waits_for_the_running_turn_and_then_runs_in_order() {
     running.finish(TurnStatus::Completed);
     // Each started input's turn ends before the next one starts.
     running.until_sent(&["first=first", "second=second"]).await;
-    // Their delivery evidence retires once their finished turns echo them.
+    // Their delivery evidence retires once their finished turns echo them,
+    // and their turns show that they waited, as T3 Code labels them.
     let thread = running.thread().await;
     assert_eq!(thread.queue, InputQueue::default());
     assert!(thread.submissions.is_empty());
+    let queued: Vec<_> = thread
+        .turns
+        .iter()
+        .flatten()
+        .filter(|turn| turn.queued)
+        .flat_map(|turn| turn.items.iter().flatten())
+        .filter_map(|item| item.client_input_id.as_ref().map(|id| id.to_string()))
+        .collect();
+    assert_eq!(queued, ["first", "second"]);
 }
 
 #[tokio::test]
@@ -179,6 +219,27 @@ async fn a_steer_joins_the_running_turn_without_waiting_for_the_queue() {
     running.send("steer", FollowUp::Steer).await;
     assert_eq!(running.sent(), ["steer=steer"]);
     assert_eq!(running.queued().await, ["waiting"]);
+    // Waiting input moves before other waiting input, or to the end.
+    running.send("later", FollowUp::Queue).await;
+    for (before, expected) in [
+        (Some("waiting"), ["later", "waiting"]),
+        (None, ["waiting", "later"]),
+    ] {
+        running
+            .change(QueueChange::Move {
+                client_user_message_id: "later".into(),
+                before: before.map(Into::into),
+            })
+            .await
+            .unwrap();
+        assert_eq!(running.queued().await, expected);
+    }
+    running
+        .change(QueueChange::Remove {
+            client_user_message_id: "later".into(),
+        })
+        .await
+        .unwrap();
     // Queued input can steer later, which takes it out of the queue.
     running
         .change(QueueChange::Steer {
@@ -282,4 +343,30 @@ async fn a_failed_turn_holds_the_queue() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(running.sent().is_empty());
     assert!(running.thread().await.queue.held);
+}
+
+#[tokio::test]
+async fn the_queue_survives_a_host_restart_held_until_resumed() {
+    let running = running().await;
+    for id in ["first", "second"] {
+        running.send(id, FollowUp::Queue).await;
+    }
+    let running = running.restarted();
+    let thread = running.thread().await;
+    assert!(
+        thread.queue.held,
+        "the restart ended the turn they waited for"
+    );
+    assert_eq!(running.queued().await, ["first", "second"]);
+    assert_eq!(
+        thread.submissions["first"],
+        SubmissionDelivery::Accepted { turn_id: None }
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(running.sent().is_empty());
+    running.change(QueueChange::Resume).await.unwrap();
+    running.until_sent(&["first=first", "second=second"]).await;
+    // A drained queue leaves nothing to restore.
+    let running = running.restarted();
+    assert_eq!(running.thread().await.queue, InputQueue::default());
 }

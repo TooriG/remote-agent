@@ -5,6 +5,23 @@ use agent_protocol::operations::FollowUp;
 use nsh_core::{GlassEffect, element::input, prelude::*};
 use serde_json::json;
 
+/// A key bound while this view lives; it takes up no space.
+pub(crate) fn shortcut(
+    keystroke: &'static str,
+    when: nsh_core::keymap::When,
+    handler: impl Fn(&str) + 'static,
+) -> View {
+    on_key_with(
+        keystroke,
+        KeyOptions {
+            when,
+            repeat: false,
+        },
+        handler,
+    );
+    view()
+}
+
 /// The modifier the composer's shortcuts name, as T3 Code's copy does.
 pub(crate) fn modifier() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -196,50 +213,71 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         }
     };
     let submit = move || send(false);
-    // T3 Code's composer shortcuts: Mod+Enter sends the alternate while a turn
-    // runs (and sends when the send shortcut needs it), Mod+Shift+Enter steers
-    // the next queued message, and Alt+Up at the start edits the latest one.
+    // T3 Code's composer shortcuts, bound only while their `when` holds so the
+    // keys otherwise reach the text: Mod+Enter in the focused composer sends
+    // (the alternate while a turn runs); Mod+Shift+Enter steers the first
+    // queued message outside the terminal; Alt+Up with the caret at the start
+    // of the focused composer edits the latest queued message.
     let caret_at_start = signal(true);
-    #[cfg(desktop)]
-    {
-        let always = || KeyOptions {
-            when: nsh_core::keymap::When::Always,
-            repeat: false,
-        };
-        on_key_with("mod+enter", always(), move |_| {
-            if focused.get_untracked() {
-                send(follow_up.with_untracked(|f| f.active));
-            }
-        });
-        on_key_with("mod+shift+enter", always(), move |_| {
-            if let Some(id) = follow_up.with_untracked(|f| {
-                f.can_steer
-                    .then(|| f.queue.iter().find(|row| !row.pending))
-                    .flatten()
-                    .map(|row| row.id.clone())
-            }) {
-                queue(QueueAction::Steer {
-                    client_user_message_id: id,
-                });
-            }
-        });
-        on_key_with("alt+up", always(), move |_| {
-            if focused.get_untracked()
-                && caret_at_start.get_untracked()
-                && let Some(id) = follow_up.with_untracked(|f| {
-                    f.editing
-                        .is_none()
-                        .then(|| f.queue.iter().rev().find(|row| !row.pending))
-                        .flatten()
-                        .map(|row| row.id.clone())
+    let steerable = move || {
+        follow_up.with(|f| {
+            f.can_steer
+                .then(|| f.queue.iter().find(|row| !row.pending))
+                .flatten()
+                .map(|row| row.id.clone())
+        })
+    };
+    let editable = move || {
+        follow_up.with(|f| {
+            (f.editing.is_none() && !f.busy)
+                .then(|| f.queue.iter().rev().find(|row| !row.pending))
+                .flatten()
+                .map(|row| row.id.clone())
+        })
+    };
+    let steer_first = move |_: &str| {
+        if let Some(id) = follow_up.with_untracked(|f| {
+            f.queue
+                .iter()
+                .find(|row| !row.pending)
+                .map(|row| row.id.clone())
+        }) {
+            queue(QueueAction::Steer {
+                client_user_message_id: id,
+            });
+        }
+    };
+    let shortcuts = move || {
+        use nsh_core::keymap::When;
+        view()
+            .absolute()
+            .child(when(focused, move || {
+                shortcut("mod+enter", When::Always, move |_| {
+                    send(follow_up.with_untracked(|f| f.active))
                 })
-            {
-                queue(QueueAction::Edit {
-                    client_user_message_id: id,
-                });
-            }
-        });
-    }
+            }))
+            .child(when(
+                move || focused.get() && caret_at_start.get() && editable().is_some(),
+                move || {
+                    shortcut("alt+up", When::Always, move |_| {
+                        if let Some(id) = editable() {
+                            queue(QueueAction::Edit {
+                                client_user_message_id: id,
+                            });
+                        }
+                    })
+                },
+            ))
+            // The composer, or no text or hosted view such as the terminal.
+            .child(when(
+                move || steerable().is_some() && focused.get(),
+                move || shortcut("mod+shift+enter", When::Always, steer_first),
+            ))
+            .child(when(
+                move || steerable().is_some() && !focused.get(),
+                move || shortcut("mod+shift+enter", When::NotEditing, steer_first),
+            ))
+    };
     let prompt = move || -> String {
         answering.with(|question| {
             question
@@ -718,6 +756,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             },
         ))
         .child(when(is_desktop, desktop_context))
+        .child(when(is_desktop, shortcuts))
         .child(when(
             move || follow_up.with(|f| !f.queue.is_empty()),
             move || crate::queue::queued(connection),

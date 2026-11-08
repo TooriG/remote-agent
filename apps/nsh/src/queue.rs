@@ -82,6 +82,51 @@ pub(crate) fn queued(connection: Connection) -> View {
         }))
 }
 
+/// A queued message's height, which a drag moves it by per row.
+const ROW_HEIGHT: f32 = 28.0;
+
+/// T3 Code's grip: dragging it moves its message by whole rows, and the arrow
+/// keys move it by one while it has the keyboard focus.
+fn grip(dragging: Signal<bool>, reorder: impl Fn(i32) + Copy + 'static) -> View {
+    let focused = signal(false);
+    view()
+        .w(px(24.0))
+        .h(px(24.0))
+        .items_center()
+        .justify_center()
+        .rounded(px(ui::RADIUS))
+        .text_color(colors::MUTED)
+        .hover(|s| s.bg(colors::GHOST_HOVER))
+        .role(AccessibilityRole::Button)
+        .label(tr(
+            "キューのメッセージを並べ替え（ドラッグ、または矢印キー）",
+        ))
+        .on_press(|| {})
+        .on_focus(move || focused.set(true))
+        .on_blur(move || focused.set(false))
+        .on_pan_start(move |_: &PanEvent| dragging.set(true))
+        .on_pan_end(move |event: &PanEvent| {
+            dragging.set(false);
+            if !event.cancelled {
+                reorder((event.translation.y.0 / ROW_HEIGHT).round() as i32);
+            }
+        })
+        .child(ui::icon(Icon::GRIP, 14.0))
+        .child(when(focused, move || {
+            view()
+                .child(crate::composer::shortcut(
+                    "up",
+                    nsh_core::keymap::When::NotEditing,
+                    move |_| reorder(-1),
+                ))
+                .child(crate::composer::shortcut(
+                    "down",
+                    nsh_core::keymap::When::NotEditing,
+                    move |_| reorder(1),
+                ))
+        }))
+}
+
 /// One waiting message: its text and what can be done with it.
 fn row(
     follow_up: Memo<agent_core::presentation::composer::FollowUpControls>,
@@ -100,13 +145,27 @@ fn row(
             }
         })
     };
+    // The row being dragged dims, as in T3 Code; it moves when released.
+    let dragging = signal(false);
+    let reorder = move |steps: i32| {
+        let ids: Vec<_> = follow_up.with_untracked(|f| {
+            f.queue
+                .iter()
+                .filter(|row| !row.pending)
+                .map(|row| row.id.clone())
+                .collect()
+        });
+        if let Some(action) = agent_core::state::follow_up::reorder(&ids, &id(), steps) {
+            act(action);
+        }
+    };
     view()
         .flex_row()
         .items_center()
-        .gap_2()
-        .pl_2()
-        .h(px(28.0))
+        .gap_1()
+        .h(px(ROW_HEIGHT))
         .rounded(px(ui::RADIUS))
+        .style_when(move || dragging.get(), |s| s.opacity(0.5))
         .bg(move || {
             if editing() {
                 colors::SELECTED
@@ -114,6 +173,7 @@ fn row(
                 rgba(0x00000000)
             }
         })
+        .child(when(idle, move || grip(dragging, reorder)))
         .child(when(
             move || message.with(|message| message.pending),
             || {

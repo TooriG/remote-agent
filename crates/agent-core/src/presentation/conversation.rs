@@ -64,6 +64,8 @@ pub struct ConversationRow {
     pub timestamp_ms: Option<u64>,
     /// A user message sent while its turn was working, which steered it.
     pub steer: bool,
+    /// A user message that waited in the queue and then started its turn.
+    pub queued: bool,
 }
 
 fn conversation_row_id(
@@ -394,9 +396,11 @@ pub fn project_conversation(
             preparation
                 .is_none_or(|preparation| &preparation.submission.client_user_message_id != *id)
         })
-        // The queue above the composer shows input that waits for a turn.
+        // The queue above the composer shows input that waits for a turn, and
+        // the turn it starts shows it as the Host has it, edits included. Only
+        // a send whose delivery is unknown stays here for its recovery.
         .filter(|(id, pending)| {
-            !(pending.queued && !pending.accepted)
+            (!pending.queued || pending.delivery_unknown)
                 && !source
                     .queue
                     .inputs
@@ -598,6 +602,7 @@ pub fn project_conversation(
             id: format!("request:{}", source.id),
             timestamp_ms: None,
             steer: false,
+            queued: false,
             content: ConversationRowContent::PendingRequest {
                 request: Box::new(request(source)),
             },
@@ -616,6 +621,7 @@ pub fn project_conversation(
             id: "preparation".into(),
             timestamp_ms: None,
             steer: false,
+            queued: false,
             content: ConversationRowContent::Preparation {
                 preparation: preparation_presentation(preparation),
             },
@@ -1043,6 +1049,7 @@ fn render_turn(
     };
     use ConversationRowContent::*;
     let steering = std::cell::Cell::new(false);
+    let queued_shown = std::cell::Cell::new(false);
     let mut rows = Vec::new();
     let mut occurrences = HashMap::new();
     let mut push = |mut content: ConversationRowContent| {
@@ -1085,12 +1092,16 @@ fn render_turn(
             }),
             _ => None,
         };
-        let steer = matches!(content, User { .. }) && steering.get();
+        let user = matches!(content, User { .. });
+        let steer = user && steering.get();
+        // The message that started a turn after waiting in the queue.
+        let queued = user && !steer && source.queued && !queued_shown.replace(true);
         rows.push(ConversationRow {
             id,
             content,
             timestamp_ms,
             steer,
+            queued,
         });
     };
     if let Some(text) = handoff {
@@ -1886,6 +1897,41 @@ mod tests {
                 .clone(),
             &previous.cloned(),
         )
+    }
+
+    #[test]
+    fn a_turn_queued_input_started_labels_its_message_and_not_its_steers() {
+        let user = |id: &str| {
+            json!({"id":id,"status":"completed","clientInputId":id,
+            "body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}})
+        };
+        let answer = |id: &str| {
+            json!({"id":id,"status":"completed","clientInputId":null,
+            "body":{"inline":{"body":{"assistantText":{"text":id,"phase":"final"}}}}})
+        };
+        for queued in [false, true] {
+            let mut snapshot = Snapshot::default();
+            Arc::make_mut(&mut snapshot.sessions.conversations).insert(
+                agent_protocol::session::SessionRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "thread".into(),
+                },
+                Arc::new(
+                    serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},
+                        "turns":[{"id":"turn","status":"completed","queued":queued,
+                            "items":[user("waited"),answer("first"),user("steered"),answer("second")]}]}))
+                    .unwrap(),
+                ),
+            );
+            let rendered = project_snapshot(snapshot, None);
+            let marks: Vec<_> = rendered.turns[0]
+                .rows
+                .iter()
+                .filter(|row| matches!(row.content, ConversationRowContent::User { .. }))
+                .map(|row| (row.queued, row.steer))
+                .collect();
+            assert_eq!(marks, [(queued, false), (false, true)]);
+        }
     }
 
     #[test]
