@@ -17,7 +17,7 @@
 //! running) and one entry per step with `line`, `source`, `status` (`passed`,
 //! `failed` or `skipped`), `message`, `elapsedMs` and the step's `artifact` file;
 //! `evidence` names the screenshot and tree written when a step fails.
-use super::script::{Find, Key, Line, Step};
+use super::script::{Find, Key, Line, Modifiers, Step};
 use objc2::{
     MainThreadMarker, Message, msg_send,
     rc::Retained,
@@ -25,10 +25,10 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSBitmapImageFileType, NSEvent, NSEventModifierFlags, NSEventType, NSMenu,
-    NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification, NSModalResponseOK,
-    NSOpenPanel, NSPasteboard, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting,
-    NSScreen, NSView, NSWindow,
+    NSApplication, NSBitmapImageFileType, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
+    NSMenu, NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification,
+    NSModalResponseOK, NSOpenPanel, NSPasteboard, NSPasteboardItem, NSPasteboardTypeString,
+    NSPasteboardWriting, NSSavePanel, NSScreen, NSView, NSWindow,
 };
 use objc2_core_graphics::{CGEvent, CGScrollEventUnit};
 use objc2_foundation::{
@@ -222,9 +222,12 @@ fn limit(step: &Step) -> Duration {
         | Step::Select(find, _)
         | Step::Menu(find)
         | Step::Drag(find, _)
+        | Step::Click(_, find)
         | Step::Expect(find)
         | Step::ExpectAbsent(find) => find.timeout,
-        Step::Wait(duration) | Step::ExpectClipboard(_, duration) => *duration,
+        Step::Wait(duration)
+        | Step::ExpectClipboard(_, duration)
+        | Step::ExpectFile(_, duration) => *duration,
         _ => super::script::DEFAULT_TIMEOUT,
     }
 }
@@ -271,10 +274,16 @@ fn attempt(
             select(tree, index, text)
                 .map(|()| format!("selected {text:?} in {}", tree.nodes[index].describe()))
         }),
-        Step::Menu(find) => context_menu(&Tree::read(mtm, menus), find),
+        Step::Menu(find) => click(&Tree::read(mtm, menus), find, Click::Secondary),
+        Step::Click(modifiers, find) => click(
+            &Tree::read(mtm, menus),
+            find,
+            Click::Primary(flags(modifiers)),
+        ),
         Step::Drag(from, to) => drag(&Tree::read(mtm, menus), from, to),
         Step::Drop => done(release()),
         Step::Choose(path) => choose(path, mtm),
+        Step::ExpectFile(path, _) => file_written(path),
         Step::ExpectClipboard(text, _) => {
             let copied = Clipboard::text();
             if copied.contains(text.as_str()) {
@@ -428,10 +437,12 @@ enum Target {
         index: isize,
         root: Retained<NSMenu>,
     },
-    /// A right click on a view at a point of its window.
-    ContextMenu {
+    /// A mouse click on an element of `view` (the element itself, or one
+    /// AppKit's text views expose, as a link), placed when it is made.
+    Click {
+        element: Retained<AnyObject>,
         view: Retained<NSView>,
-        point: NSPoint,
+        click: Click,
     },
     /// A press at a point of a window, moved to another and held there.
     Drag {
@@ -464,7 +475,7 @@ impl Target {
             Self::MenuItem { menu, index, .. } => menu
                 .itemAtIndex(*index)
                 .is_some_and(|item| item.isEnabled()),
-            Self::ContextMenu { .. } | Self::Link { .. } | Self::Drag { .. } => true,
+            Self::Click { .. } | Self::Link { .. } | Self::Drag { .. } => true,
         }
     }
 
@@ -501,19 +512,11 @@ impl Target {
                 }
                 HELD.with_borrow_mut(|held| *held = Some((window.clone(), *to)));
             }
-            Self::ContextMenu { view, point } => {
-                let Some(window) = view.window() else {
-                    return;
-                };
-                let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-                    NSEventType::RightMouseDown, *point, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 1, 1.0,
-                );
-                if let Some(event) = event
-                    && let Some(menu) = view.menuForEvent(&event)
-                {
-                    NSMenu::popUpContextMenu_withEvent_forView(&menu, &event, view);
-                }
-            }
+            Self::Click {
+                element,
+                view,
+                click,
+            } => click.send(element.clone(), view.clone()),
         }
     }
 }
@@ -820,21 +823,10 @@ fn post_key(key: &Key, mtm: MainThreadMarker) -> Result<(), String> {
         .keyWindow()
         .or_else(|| main_window(mtm))
         .ok_or("no window takes keys")?;
-    let mut flags = NSEventModifierFlags::empty();
-    for (on, flag) in [
-        (key.command, NSEventModifierFlags::Command),
-        (key.shift, NSEventModifierFlags::Shift),
-        (key.option, NSEventModifierFlags::Option),
-        (key.control, NSEventModifierFlags::Control),
-        // Arrow and function keys, as AppKit reports them.
-        (
-            (123..=126).contains(&key.code) || key.code == 109,
-            NSEventModifierFlags::NumericPad | NSEventModifierFlags::Function,
-        ),
-    ] {
-        if on {
-            flags |= flag;
-        }
+    let mut flags = flags(&key.modifiers);
+    // Arrow and function keys, as AppKit reports them.
+    if (123..=126).contains(&key.code) || key.code == 109 {
+        flags |= NSEventModifierFlags::NumericPad | NSEventModifierFlags::Function;
     }
     let characters = NSString::from_str(&key.characters);
     for kind in [NSEventType::KeyDown, NSEventType::KeyUp] {
@@ -845,6 +837,22 @@ fn post_key(key: &Key, mtm: MainThreadMarker) -> Result<(), String> {
         app.postEvent_atStart(&event, false);
     }
     Ok(())
+}
+
+/// The flags of the modifier keys `held`, as AppKit reports them.
+fn flags(held: &Modifiers) -> NSEventModifierFlags {
+    let mut flags = NSEventModifierFlags::empty();
+    for (on, flag) in [
+        (held.command, NSEventModifierFlags::Command),
+        (held.shift, NSEventModifierFlags::Shift),
+        (held.option, NSEventModifierFlags::Option),
+        (held.control, NSEventModifierFlags::Control),
+    ] {
+        if on {
+            flags |= flag;
+        }
+    }
+    flags
 }
 
 /// A mouse wheel over the element's center, handed to its window without moving
@@ -947,36 +955,33 @@ fn select(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// A right click on the first element `find` names: on its selected text, if
-/// it has some, as the selection's own menu shows there.
-fn context_menu(tree: &Tree, find: &Find) -> Attempt {
+/// A mouse click on the first element `find` names, as the window takes one.
+fn click(tree: &Tree, find: &Find, click: Click) -> Attempt {
     let index = match tree.labelled(find) {
         Ok(matches) => matches[0],
         Err(reason) => return Attempt::Pending(reason),
     };
     let node = &tree.nodes[index];
-    let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
-        return Attempt::Failed(format!("{} shows no context menu", node.describe()));
+    let Target::Element(element) = &node.target else {
+        return Attempt::Failed(format!("{} takes no click", node.describe()));
     };
-    let Some(view) = object.downcast_ref::<NSView>() else {
-        return Attempt::Failed(format!("{} is not a view", node.describe()));
+    // A link in text is an element of its text view, not a view.
+    let Some(view) =
+        tree.lineage(index)
+            .into_iter()
+            .find_map(|index| match &tree.nodes[index].target {
+                Target::Element(object) => object.downcast_ref::<NSView>().map(NSView::retain),
+                _ => None,
+            })
+    else {
+        return Attempt::Failed(format!("{} is in no view", node.describe()));
     };
-    let selected = responds(object, sel!(accessibilitySelectedTextRange))
-        .then(|| -> NSRange { unsafe { msg_send![&**object, accessibilitySelectedTextRange] } })
-        .filter(|range| range.length > 0);
-    let frame: NSRect = match selected {
-        Some(range) => unsafe { msg_send![&**object, accessibilityFrameForRange: range] },
-        None => unsafe { msg_send![&**object, accessibilityFrame] },
-    };
-    let frame = window.convertRectFromScreen(frame);
     Attempt::Press(
-        format!("opened the context menu of {}", node.describe()),
-        Target::ContextMenu {
-            view: view.retain(),
-            point: NSPoint::new(
-                frame.origin.x + frame.size.width / 2.0,
-                frame.origin.y + frame.size.height / 2.0,
-            ),
+        format!("clicked {}", node.describe()),
+        Target::Click {
+            element: element.clone(),
+            view,
+            click,
         },
     )
 }
@@ -1041,6 +1046,134 @@ fn mouse(window: &NSWindow, kind: NSEventType, at: NSPoint) {
     }
 }
 
+/// Which button a click presses, and the modifier keys it holds.
+#[derive(Clone, Copy, PartialEq)]
+enum Click {
+    Primary(NSEventModifierFlags),
+    /// A right click: on an element's selected text, if it has some, as the
+    /// selection's own menu shows there.
+    Secondary,
+}
+
+impl Click {
+    /// Queues the click as a user's comes: AppKit handles it as the current
+    /// event then, for which NSH's root commits the scroll offsets it shows
+    /// before it hit tests (`hitTest:`), so AppKit's views inside it place
+    /// the click as NSH does. The click is placed on `element` when it is
+    /// taken from the queue, where the element shows then; a primary click's
+    /// release follows it there, for the tracking loop of a text view's link.
+    /// A secondary press opens its menu, which the next steps choose from.
+    fn send(self, element: Retained<AnyObject>, view: Retained<NSView>) {
+        let Some(window) = view.window() else {
+            return;
+        };
+        let app = NSApplication::sharedApplication(MainThreadMarker::from(&*window));
+        let (press, release, flags) = match self {
+            Self::Primary(flags) => (
+                NSEventType::LeftMouseDown,
+                Some(NSEventType::LeftMouseUp),
+                flags,
+            ),
+            Self::Secondary => (
+                NSEventType::RightMouseDown,
+                None,
+                NSEventModifierFlags::empty(),
+            ),
+        };
+        let number = window.windowNumber();
+        let event = move |kind, point| {
+            NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                kind, point, flags, objc2_foundation::NSProcessInfo::processInfo().systemUptime(),
+                number, None, 0, 1, 1.0,
+            )
+        };
+        let monitor = Rc::new(RefCell::new(None::<Retained<AnyObject>>));
+        let placing = monitor.clone();
+        let queue = app.clone();
+        let place = block2::RcBlock::new(move |queued: NonNull<NSEvent>| -> *mut NSEvent {
+            // SAFETY: AppKit hands the monitor a live event.
+            let kind = unsafe { queued.as_ref() }.r#type();
+            if kind != press {
+                return queued.as_ptr();
+            }
+            if let Some(monitor) = placing.borrow_mut().take() {
+                // SAFETY: the monitor this handler belongs to, removed once.
+                unsafe { NSEvent::removeMonitor(&monitor) };
+            }
+            let point = shown_point(&element, &view, &window, self);
+            if let Some(release) = release.and_then(|kind| event(kind, point)) {
+                queue.postEvent_atStart(&release, false);
+            }
+            event(press, point).map_or(queued.as_ptr(), Retained::autorelease_return)
+        });
+        // SAFETY: the handler returns the event to handle, as AppKit asks.
+        *monitor.borrow_mut() = unsafe {
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown,
+                &place,
+            )
+        };
+        if let Some(queued) = event(press, NSPoint::new(0.0, 0.0)) {
+            app.postEvent_atStart(&queued, false);
+        }
+    }
+}
+
+/// The middle of `element` (of its selected text, for a secondary click)
+/// where it shows now, in `window`'s coordinates. NSH's scroll views show a
+/// new offset as their containers' layer transforms until they rest, and
+/// commit it to the views' bounds only then: AppKit's geometry, the
+/// accessibility frames included, lags while NSH picks the view under a
+/// click by what shows. So the transforms around `view` move the point as
+/// they move what shows; without them a click while the conversation still
+/// scrolls lands where the element was.
+fn shown_point(element: &AnyObject, view: &NSView, window: &NSWindow, click: Click) -> NSPoint {
+    let selected = (click == Click::Secondary
+        && responds(element, sel!(accessibilitySelectedTextRange)))
+    .then(|| -> NSRange { unsafe { msg_send![element, accessibilitySelectedTextRange] } })
+    .filter(|range| range.length > 0);
+    let frame: NSRect = match selected {
+        Some(range) => unsafe { msg_send![element, accessibilityFrameForRange: range] },
+        None => unsafe { msg_send![element, accessibilityFrame] },
+    };
+    let frame = window.convertRectFromScreen(frame);
+    let mut point = NSPoint::new(
+        frame.origin.x + frame.size.width / 2.0,
+        frame.origin.y + frame.size.height / 2.0,
+    );
+    let mut ancestor = superview(view);
+    while let Some(container) = ancestor {
+        let (x, y) = sublayer_offset(&container);
+        if (x, y) != (0.0, 0.0) {
+            let local = container.convertPoint_fromView(point, None);
+            point = container.convertPoint_toView(NSPoint::new(local.x + x, local.y + y), None);
+        }
+        ancestor = superview(&container);
+    }
+    point
+}
+
+/// How far `view`'s layer shows its sublayers moved: an NSH scroll view's
+/// offset that its bounds do not have yet.
+fn sublayer_offset(view: &NSView) -> (f64, f64) {
+    let layer: Option<Retained<AnyObject>> = unsafe { msg_send![view, layer] };
+    let Some(layer) = layer else {
+        return (0.0, 0.0);
+    };
+    let translation = |axis: &str| {
+        let path = NSString::from_str(&format!("sublayerTransform.translation.{axis}"));
+        let value: Option<Retained<NSNumber>> =
+            unsafe { msg_send![&*layer, valueForKeyPath: &*path] };
+        value.map_or(0.0, |value| value.doubleValue())
+    };
+    (translation("x"), translation("y"))
+}
+
+fn superview(view: &NSView) -> Option<Retained<NSView>> {
+    // SAFETY: a getter on the main thread, where the driver runs.
+    unsafe { view.superview() }
+}
+
 thread_local! {
     /// What the open panel answers once `choose` ends it.
     static CHOSEN: RefCell<Option<Retained<NSArray<NSURL>>>> =
@@ -1053,42 +1186,97 @@ unsafe extern "C-unwind" fn chosen_urls(_: *mut AnyObject, _: Sel) -> *mut NSArr
     Retained::autorelease_return(CHOSEN.with_borrow(|urls| urls.clone().unwrap_or_default()))
 }
 
-/// Picks `path` in the app's open panel once it shows: the panel answers it as
-/// the user's choice and closes as its Open button would.
-fn choose(path: &str, mtm: MainThreadMarker) -> Attempt {
-    let path = match path.strip_prefix(super::script::STATE_DIRECTORY) {
-        Some(rest) => match std::env::var("AGENT_STATE_DIR") {
-            Ok(directory) => format!("{directory}{rest}"),
-            Err(_) => return Attempt::Failed("AGENT_STATE_DIR is not set".into()),
-        },
-        None => path.to_owned(),
-    };
-    if !std::path::Path::new(&path).exists() {
-        return Attempt::Failed(format!("{path} does not exist"));
+/// The save panel's `URL` while the driver chooses, as `chosen_urls`.
+unsafe extern "C-unwind" fn chosen_url(_: *mut AnyObject, _: Sel) -> *mut NSURL {
+    CHOSEN.with_borrow(|urls| {
+        urls.as_ref()
+            .and_then(|urls| urls.firstObject())
+            .map_or(std::ptr::null_mut(), Retained::autorelease_return)
+    })
+}
+
+/// A step's path, a leading `$AGENT_STATE_DIR` being the fixture Host's directory.
+fn resolve(path: &str) -> Result<String, String> {
+    match path.strip_prefix(super::script::STATE_DIRECTORY) {
+        Some(rest) => std::env::var("AGENT_STATE_DIR")
+            .map(|directory| format!("{directory}{rest}"))
+            .map_err(|_| "AGENT_STATE_DIR is not set".to_owned()),
+        None => Ok(path.to_owned()),
     }
+}
+
+/// Picks `path` in the app's open or save panel once one shows: the panel
+/// answers it as the user's choice and closes as its Open or Save button would.
+/// An open panel's file must exist; a save panel's folder must.
+fn choose(path: &str, mtm: MainThreadMarker) -> Attempt {
+    let path = match resolve(path) {
+        Ok(path) => path,
+        Err(reason) => return Attempt::Failed(reason),
+    };
     let Some((panel, parent)) = NSApplication::sharedApplication(mtm)
         .windows()
         .iter()
         .filter(|window| window.isVisible())
-        .filter_map(|window| window.downcast::<NSOpenPanel>().ok())
+        .filter_map(|window| window.downcast::<NSSavePanel>().ok())
         .find_map(|panel| panel.sheetParent().map(|parent| (panel, parent)))
     else {
-        return Attempt::Pending("no open panel shows".into());
+        return Attempt::Pending("no file panel shows".into());
     };
+    let opening = panel.downcast_ref::<NSOpenPanel>().is_some();
+    let needed = if opening {
+        Some(std::path::Path::new(&path))
+    } else {
+        std::path::Path::new(&path).parent()
+    };
+    if !needed.is_some_and(std::path::Path::exists) {
+        return Attempt::Failed(format!("{path} has nothing to choose"));
+    }
     let url = NSURL::fileURLWithPath(&NSString::from_str(&path));
     CHOSEN.set(Some(NSArray::from_retained_slice(&[url])));
-    let Some(method) = panel.class().instance_method(sel!(URLs)) else {
-        return Attempt::Failed("the open panel has no URLs".into());
+    let (selector, answer) = if opening {
+        (
+            sel!(URLs),
+            // SAFETY: the replacement takes and returns what `URLs` does.
+            unsafe {
+                std::mem::transmute::<
+                    unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut NSArray<NSURL>,
+                    objc2::runtime::Imp,
+                >(chosen_urls)
+            },
+        )
+    } else {
+        (
+            sel!(URL),
+            // SAFETY: the replacement takes and returns what `URL` does.
+            unsafe {
+                std::mem::transmute::<
+                    unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut NSURL,
+                    objc2::runtime::Imp,
+                >(chosen_url)
+            },
+        )
     };
-    // SAFETY: the replacement takes and returns what `URLs` does.
-    unsafe {
-        method.set_implementation(std::mem::transmute::<
-            unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut NSArray<NSURL>,
-            objc2::runtime::Imp,
-        >(chosen_urls));
-    }
+    let Some(method) = panel.class().instance_method(selector) else {
+        return Attempt::Failed(format!("the panel has no {selector:?}"));
+    };
+    // SAFETY: `answer` has the method's signature.
+    unsafe { method.set_implementation(answer) };
     parent.endSheet_returnCode(&panel, NSModalResponseOK);
     Attempt::Passed(format!("chose {path}"), None)
+}
+
+/// Whether the file at `path` exists and has content yet.
+fn file_written(path: &str) -> Attempt {
+    let path = match resolve(path) {
+        Ok(path) => path,
+        Err(reason) => return Attempt::Failed(reason),
+    };
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.len() > 0 => {
+            Attempt::Passed(format!("{path} has {} bytes", metadata.len()), None)
+        }
+        _ => Attempt::Pending(format!("{path} is not written")),
+    }
 }
 
 /// The clipboard's items, each as its data by type.

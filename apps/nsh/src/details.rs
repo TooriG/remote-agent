@@ -3,13 +3,14 @@ use crate::{
     Connection,
     shared::Shared,
     ui::{self, Enabled, Icon, colors},
+    workbench::{Reveal, Workbench},
 };
 use agent_core::{
     presentation::{
         agents::AgentSummary,
         diff::{
-            DiffPanelRow, DiffRow, WorkspaceDiffFile, diff_files, diff_panel_row_ends_card,
-            diff_panel_rows,
+            DiffPanelRow, DiffRow, WorkspaceDiffFile, diff_files, diff_panel_file_row,
+            diff_panel_row_ends_card, diff_panel_rows,
         },
     },
     state::{Intent, operations as op},
@@ -99,6 +100,7 @@ pub(crate) fn workspace_summary(
 
 pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
+    let workspace = use_context::<Workbench>().unwrap();
     let cwd = stored(cwd);
     let host = stored(host);
     let review = computed(move || {
@@ -180,6 +182,38 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
         DiffBody::Message(message) => message,
         _ => String::new(),
     };
+    let list = element_ref();
+    let show_file = move |path: String| {
+        collapsed.update(|collapsed| {
+            collapsed.remove(&path);
+        });
+        let index = files.with_untracked(|files| {
+            rows.with_untracked(|rows| diff_panel_file_row(files.as_ref()?, rows, &path))
+        });
+        if let Some(index) = index {
+            crate::conversation::reveal_row(list, index as u32);
+        }
+    };
+    // The changed-files card's file shows once the files do.
+    effect(move || {
+        if body.get() != DiffBody::Files {
+            return;
+        }
+        if let Some(path) = workspace.take_reveal(|reveal| match reveal {
+            Reveal::DiffFile(path) => Some(path.clone()),
+            Reveal::Page(_) => None,
+        }) {
+            show_file(path);
+        }
+    });
+    let paths = move || {
+        files.with(|files| {
+            files
+                .as_ref()
+                .map(|files| files.iter().map(|file| file.path.clone()).collect())
+                .unwrap_or_else(Vec::new)
+        })
+    };
     view()
         .flex_1()
         .min_h_0()
@@ -202,6 +236,32 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
                         .min_w_0(),
                 )
                 .child(line_counts(move || totals.get()))
+                .child(when(
+                    move || body.get() == DiffBody::Files,
+                    move || {
+                        ui::choice_menu(
+                            "doc.text",
+                            tr("差分のファイルを選択"),
+                            move || tr_format("ファイルを選択 ({0})", [&paths().len()]),
+                            move || {
+                                crate::native::items(
+                                    paths().into_iter().map(|path| (path.clone(), path)),
+                                )
+                            },
+                            move |path| show_file(path.to_owned()),
+                        )
+                    },
+                ))
+                .child(
+                    ui::icon_button(Icon::COPY, tr("差分をコピー"), move || {
+                        if let Some(diff) = review.with_untracked(|review| {
+                            review.as_ref().map(|review| review.diff.clone())
+                        }) {
+                            set_clipboard(diff);
+                        }
+                    })
+                    .enabled(move || review.with(Option::is_some)),
+                )
                 .child(
                     ui::icon_button(Icon::REFRESH, tr("差分を更新"), load).enabled(move || {
                         !pending.get() && connection.settings.with(|p| p.connected())
@@ -259,6 +319,7 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
                     },
                 )
                 .keys(move || rows.get())
+                .element_ref(&list)
                 .estimated_item_size(px(20.0))
                 .content_padding(px(12.0))
                 .flex_1()
@@ -310,7 +371,7 @@ fn line_counts(counts: impl Fn() -> (u64, u64) + Copy + 'static) -> View {
 }
 
 /// A row of a file's card: the header, which folds the card, a line of a hunk, or
-/// the note that the file has no text diff.
+/// the note that the file has no text diff or that the binary file changed.
 fn diff_row(row: Memo<Option<DisplayRow>>, toggle: impl Fn(String) + Copy + 'static) -> View {
     let kind = move || row.with(|row| row.as_ref().map(|row| row.row));
     let header = move || matches!(kind(), Some(DiffPanelRow::File { .. }));
@@ -380,12 +441,23 @@ fn diff_row(row: Memo<Option<DisplayRow>>, toggle: impl Fn(String) + Copy + 'sta
                         .on_press(move || toggle(path()))
                 }))
                 .child(when(
-                    move || matches!(kind(), Some(DiffPanelRow::NoTextDiff { .. })),
-                    || {
-                        text(tr("テキスト差分はありません"))
-                            .text_size(px(12.0))
-                            .text_color(colors::MUTED)
-                            .p_3()
+                    move || {
+                        matches!(
+                            kind(),
+                            Some(DiffPanelRow::NoTextDiff { .. } | DiffPanelRow::Binary { .. })
+                        )
+                    },
+                    move || {
+                        text(move || {
+                            if matches!(kind(), Some(DiffPanelRow::Binary { .. })) {
+                                tr("バイナリファイルが変更されました")
+                            } else {
+                                tr("テキスト差分はありません")
+                            }
+                        })
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED)
+                        .p_3()
                     },
                 ))
                 .child(when(

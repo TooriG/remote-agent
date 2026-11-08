@@ -1,7 +1,11 @@
 //! The browser's controls send displayed-page-scoped operations to the Host's browser;
 //! the page itself stays the platform's web view or the Host's rendered image.
 use crate::l10n::{localized, tr};
-use crate::{Connection, native, shared::Shared, workbench::Workbench};
+use crate::{
+    Connection, native,
+    shared::Shared,
+    workbench::{Reveal, Workbench},
+};
 use agent_core::state::DraftKey;
 use agent_protocol::{browser::*, session::SessionRef};
 use base64::Engine;
@@ -44,6 +48,7 @@ pub(crate) fn screen() -> impl IntoElement {
 
 fn viewer(thread: SessionRef) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
+    let workspace = use_context::<Workbench>().unwrap();
     let host = stored(connection.host.get_untracked());
     let scope = stored(thread.to_string());
     let thread = stored(thread);
@@ -195,6 +200,18 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
         }
         Err(reason) => failure.set(Some(reason)),
     };
+    // A link opened in the in-app browser loads once the browser takes input.
+    effect(move || {
+        if !accepts_input.get() {
+            return;
+        }
+        if let Some(url) = workspace.take_reveal(|reveal| match reveal {
+            Reveal::Page(url) => Some(url.clone()),
+            Reveal::DiffFile(_) => None,
+        }) {
+            send(BrowserAction::Navigate { url });
+        }
+    });
     let insert = move || {
         let text = input_text.get_untracked();
         if !composing.get_untracked() && !text.is_empty() && send(BrowserAction::Type { text }) {

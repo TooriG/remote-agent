@@ -60,7 +60,7 @@ final class MessageTests: XCTestCase {
                                         sideChat: false))
             _ = view.text.textView(view.text, clickedOnLink: "src/main.rs:4", at: label)
             XCTAssertEqual(actions.last?["text"] as? String, "src/main.rs:4")
-            XCTAssertEqual(actions.last?["modifier"] as? Bool, false)
+            XCTAssertEqual(actions.last?["command"] as? Bool, false)
             let menu = try view.text.fileMenu(XCTUnwrap(run.file).menu, link: "src/main.rs:4")
             XCTAssertEqual(menu.items.map(\.title), ["フルパスをコピー", "エディターで開く"])
             XCTAssertEqual(menu.items[1].submenu?.items.first?.title, "VS Code")

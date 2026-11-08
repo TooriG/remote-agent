@@ -10,6 +10,17 @@ pub(crate) struct Workbench {
     application: Stored<Arc<Application>>,
     pub scope: Memo<PanelScope>,
     pub state: Memo<PanelState>,
+    /// What the panel just opened shows once it is ready; it clears it then.
+    reveal: Signal<Option<Reveal>>,
+}
+
+/// What a panel shows first, as the desktop client's surfaces did.
+#[derive(Clone, PartialEq)]
+pub(crate) enum Reveal {
+    /// The Diff panel's file, unfolded and scrolled to.
+    DiffFile(String),
+    /// The browser's page, loaded in it.
+    Page(String),
 }
 
 impl Workbench {
@@ -22,6 +33,7 @@ impl Workbench {
             application: connection.application,
             scope,
             state,
+            reveal: signal(None),
         }
     }
 
@@ -29,6 +41,25 @@ impl Workbench {
         self.application.with(|application| {
             application.open_panel(self.scope.get_untracked(), kind, path, line)
         });
+    }
+
+    /// Opens the Diff panel of `cwd`, scrolled to `file` when one is given.
+    pub fn review(self, cwd: String, file: Option<String>) {
+        self.open(PanelKind::Diff, Some(cwd), None);
+        self.reveal.set(file.map(Reveal::DiffFile));
+    }
+
+    /// Opens `url` in the in-app browser.
+    pub fn browse(self, url: String) {
+        self.open(PanelKind::Browser, None, None);
+        self.reveal.set(Some(Reveal::Page(url)));
+    }
+
+    /// Takes what `reveal` holds when `take` accepts it.
+    pub fn take_reveal<T>(self, take: impl Fn(&Reveal) -> Option<T>) -> Option<T> {
+        let taken = self.reveal.with(|reveal| reveal.as_ref().and_then(&take))?;
+        self.reveal.set(None);
+        Some(taken)
     }
 
     pub fn hide(self) {

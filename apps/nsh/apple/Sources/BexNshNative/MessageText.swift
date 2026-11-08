@@ -37,6 +37,9 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
     final class MessageTextView: NSTextView, NSTextViewDelegate {
         var action: (([String: Any]) -> Void)?
         var document = MessageDocument.empty
+        /// The modifier keys of the click being handled: a link opens from
+        /// within it, where `NSApp.currentEvent` may be another event.
+        private var clickModifiers: NSEvent.ModifierFlags = []
 
         init() {
             let storage = NSTextStorage()
@@ -71,6 +74,12 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         @available(*, unavailable)
         required init?(coder _: NSCoder) {
             fatalError("init(coder:) is unavailable")
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            clickModifiers = event.modifierFlags
+            defer { clickModifiers = [] }
+            super.mouseDown(with: event)
         }
 
         override func menu(for event: NSEvent) -> NSMenu? {
@@ -136,9 +145,10 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let chip = index < (textStorage?.length ?? 0)
                 ? textStorage?.attribute(.messageFile, at: index, effectiveRange: nil) as? MessageFileLink : nil
             let url = chip?.link ?? (link as? URL)?.absoluteString ?? (link as? String) ?? ""
-            // ⌘ sends a file to the editor, as the desktop client's chips do.
-            let modifier = NSApp?.currentEvent?.modifierFlags.contains(.command) ?? false
-            action?(["action": "link", "text": url, "target": document.target, "modifier": modifier])
+            // Command-click sends a file to the editor and a web page to the in-app
+            // browser, as the desktop client's links did.
+            action?(["action": "link", "text": url, "target": document.target,
+                     "command": clickModifiers.contains(.command)])
             return true
         }
 

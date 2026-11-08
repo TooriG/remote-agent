@@ -103,6 +103,7 @@ pub(crate) struct Surroundings {
     pub connection: Connection,
     pub files: crate::files::Browser,
     pub preview: crate::media::Preview,
+    pub workspace: crate::workbench::Workbench,
 }
 
 impl Surroundings {
@@ -112,7 +113,28 @@ impl Surroundings {
             connection: use_context::<Connection>().unwrap(),
             files: use_context::<crate::files::Browser>().unwrap(),
             preview: use_context::<crate::media::Preview>().unwrap(),
+            workspace: use_context::<crate::workbench::Workbench>().unwrap(),
         }
+    }
+
+    /// Opens a link clicked in `target`'s text, `command` (⌘, Ctrl off the
+    /// Mac) held or not, as the desktop client's links did: a web page in the
+    /// in-app browser with it; on the desktop, a file by its primary action,
+    /// which the editor takes with it; anything else as the file browser does.
+    fn open_link(self, link: String, target: Target, command: bool) {
+        if command && (link.starts_with("https://") || link.starts_with("http://")) {
+            return self.workspace.browse(link);
+        }
+        #[cfg(desktop)]
+        crate::file_actions::press(self.connection, self.files, target.link(link), command);
+        #[cfg(not(desktop))]
+        self.files.open(
+            link,
+            target.cwd,
+            target.home,
+            target.host,
+            self.connection.client.get(),
+        );
     }
 }
 
@@ -228,7 +250,10 @@ fn target(connection: Connection) -> Memo<String> {
 /// What the native text reports: a selection quoted or asked about in a side
 /// chat, a link pressed, or an item of a file chip's menu chosen.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-fn native_action(connection: Connection, files: crate::files::Browser, data: &Value) {
+fn native_action(surroundings: Surroundings, data: &Value) {
+    let Surroundings {
+        connection, files, ..
+    } = surroundings;
     let Some(text) = data["text"].as_str().filter(|s| !s.is_empty()) else {
         return;
     };
@@ -272,12 +297,10 @@ fn native_action(connection: Connection, files: crate::files::Browser, data: &Va
                 text.into(),
             );
         }),
-        Some("link") => open_link(
-            connection,
-            files,
-            target,
+        Some("link") => surroundings.open_link(
             text.into(),
-            data["modifier"].as_bool().unwrap_or(false),
+            target,
+            data["command"].as_bool().unwrap_or(false),
         ),
         #[cfg(desktop)]
         Some("file") => crate::file_actions::choose(
@@ -287,30 +310,6 @@ fn native_action(connection: Connection, files: crate::files::Browser, data: &Va
             data["id"].as_str().unwrap_or_default(),
         ),
         _ => {}
-    }
-}
-
-/// A press on a link of the content: on the desktop, the desktop client's primary action for
-/// a file, which `modifier` (⌘, Ctrl elsewhere) sends to the editor.
-fn open_link(
-    connection: Connection,
-    files: crate::files::Browser,
-    target: Target,
-    link: String,
-    modifier: bool,
-) {
-    #[cfg(desktop)]
-    crate::file_actions::press(connection, files, target.link(link), modifier);
-    #[cfg(not(desktop))]
-    {
-        let _ = modifier;
-        files.open(
-            link,
-            target.cwd,
-            target.home,
-            target.host,
-            connection.client.get(),
-        );
     }
 }
 
@@ -359,19 +358,13 @@ fn view_parts(
                             })
                         })
                         .on_native_event(move |event: &NativeEvent| {
-                            native_action(connection, files, &event.data)
+                            native_action(surroundings, &event.data)
                         })
                         .min_h(px(20.0))
                 };
                 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
                 let message = move || {
-                    drawn::message(
-                        part,
-                        move || kind() == Kind::Activity,
-                        target,
-                        connection,
-                        files,
-                    )
+                    drawn::message(part, move || kind() == Kind::Activity, target, surroundings)
                 };
                 frame(part, move || message().w_full().into_element())
             }
@@ -686,8 +679,8 @@ fn table(
 /// are TextKit's menu, which these texts do not have.
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod drawn {
-    use super::{Part, Target};
-    use crate::{Connection, ui::colors};
+    use super::{Part, Surroundings, Target};
+    use crate::ui::colors;
     use nsh_core::{
         element::{ImageSrc, rgb},
         prelude::*,
@@ -698,20 +691,24 @@ mod drawn {
         part: ReadSignal<(usize, Part)>,
         secondary: impl Fn() -> bool + Copy + 'static,
         target: Memo<String>,
-        connection: Connection,
-        files: crate::files::Browser,
+        surroundings: Surroundings,
     ) -> View {
         let target = move || serde_json::from_str::<Target>(&target.get_untracked()).ok();
         let links = Links {
-            open: move |link: String, modifier: bool| {
+            open: move |link: String, command: bool| {
                 if let Some(target) = target() {
-                    super::open_link(connection, files, target, link, modifier);
+                    surroundings.open_link(link, target, command);
                 }
             },
             choose: move |link: String, id: String| {
                 #[cfg(desktop)]
                 if let Some(target) = target() {
-                    crate::file_actions::choose(connection, files, target.link(link), &id);
+                    crate::file_actions::choose(
+                        surroundings.connection,
+                        surroundings.files,
+                        target.link(link),
+                        &id,
+                    );
                 }
                 #[cfg(not(desktop))]
                 let _ = (link, id);

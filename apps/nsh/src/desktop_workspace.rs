@@ -305,7 +305,7 @@ fn row(glyph: crate::ui::Icon, title: impl Fn() -> String + 'static) -> nsh_base
 }
 
 /// The conversation's changed files above its composer, as T3 Code's card: the
-/// totals and the first files, each opening the diff.
+/// totals and the first files, each opening the diff at itself.
 pub(crate) fn review_card() -> impl IntoElement {
     use crate::ui::colors;
     let connection = use_context::<Connection>().unwrap();
@@ -318,12 +318,13 @@ pub(crate) fn review_card() -> impl IntoElement {
             .with(|p| p.snapshot.composer_review(expanded))
     });
     let connected = move || connection.composer.with(|p| p.controls.connected);
-    let open = move || {
+    let review_file = move |file: Option<String>| {
         let cwd = connection
             .composer
             .with_untracked(|p| p.controls.navigation.cwd.clone());
-        workspace.open(PanelKind::Diff, Some(cwd), None);
+        workspace.review(cwd, file);
     };
+    let open = move || review_file(None);
     let folded = move || review.with(|r| r.as_ref().and_then(|r| r.folded));
     when(
         move || review.with(Option::is_some),
@@ -337,7 +338,7 @@ pub(crate) fn review_card() -> impl IntoElement {
                 .bg(colors::RAISED)
                 .text_color(colors::FOREGROUND)
                 .child(review_summary(review, connected, open))
-                .child(review_files(review, open))
+                .child(review_files(review, review_file))
                 .child(when(
                     move || folded().is_some(),
                     move || review_toggle(expanded, folded),
@@ -390,10 +391,10 @@ fn review_summary(
         )
 }
 
-/// The listed files, each with its lines; any of them opens the diff.
+/// The listed files, each with its lines; each opens the diff at itself.
 fn review_files(
     review: Memo<Option<ComposerReview>>,
-    open: impl Fn() + Copy + 'static,
+    open: impl Fn(Option<String>) + Copy + 'static,
 ) -> impl IntoElement {
     use crate::ui::colors;
     scroll().max_h(px(252.0)).child(view().py_1().child(each(
@@ -415,7 +416,10 @@ fn review_files(
                 .px_3()
                 .h(px(36.0))
                 .hover(|s| s.bg(colors::GHOST_HOVER))
-                .on_press(open)
+                .on_press({
+                    let path = path.clone();
+                    move || open(Some(path.clone()))
+                })
                 .child(
                     text(path)
                         .flex_1()

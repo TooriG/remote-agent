@@ -1,0 +1,13 @@
+# A conversation image's menu saves the image where the user chooses,
+# without opening the viewer.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[generated-images] [immediate] 生成画像を表示します"
+press 送信
+expect "生成画像を表示しました。" 30000
+expect_absent "画像を読み込み中…" 20000
+menu 画像を拡大
+press 画像を名前を付けて保存…
+choose "$AGENT_STATE_DIR/menu image.png"
+expect_file "$AGENT_STATE_DIR/menu image.png"
+expect_absent 倍率をリセット
