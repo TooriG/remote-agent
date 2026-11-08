@@ -100,6 +100,9 @@ pub struct Thread {
     pub requests: BTreeMap<crate::ids::RequestId, Arc<crate::requests::Request>>,
     #[serde(default)]
     pub submissions: BTreeMap<crate::ids::ClientInputId, crate::session::SubmissionDelivery>,
+    /// Input waiting in the Host's queue for the running turn, in order.
+    #[serde(default)]
+    pub queue: crate::operations::InputQueue,
     pub preparation: Option<crate::session::SessionPreparation>,
     pub id: Option<crate::session::SessionRef>,
     /// The public identity remains stable across provider handoffs.
@@ -766,6 +769,7 @@ mod tests {
                     model: None,
                     effort: None,
                     service_tier: None,
+                    follow_up: Default::default(),
                 },
                 status: PreparationStatus::Preparing,
                 stage: crate::session::PreparationStage::Workspace,

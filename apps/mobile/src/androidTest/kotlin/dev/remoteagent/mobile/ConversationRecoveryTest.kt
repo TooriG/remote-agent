@@ -72,7 +72,7 @@ class ConversationRecoveryTest {
                     ) delay(10)
                     perform(Intent.NewChat(cwd)).getOrThrow()
                     perform(Intent.SetDraftText(model.draftKey, "Recovery fixture input")).getOrThrow()
-                    perform(Intent.Submit(null, UUID.randomUUID().toString())).getOrThrow()
+                    perform(Intent.Submit(null, UUID.randomUUID().toString(), false)).getOrThrow()
                     val id = requireNotNull(model.snapshot.navigation().threadId)
                     while (true) {
                         val thread = model.snapshot.threadJson(id)
@@ -112,7 +112,7 @@ class ConversationRecoveryTest {
                     assertEquals("preserved draft", model.snapshot.draft(DraftKey.Session(id)).text)
                     assertNull(model.notice)
                     verifyImageAttachment(model, context, ::perform)
-                    perform(Intent.Submit(id, UUID.randomUUID().toString())).getOrThrow()
+                    perform(Intent.Submit(id, UUID.randomUUID().toString(), false)).getOrThrow()
                     while (true) {
                         val thread = model.snapshot.threadJson(id)
                         val turns = thread.optJSONArray("turns")

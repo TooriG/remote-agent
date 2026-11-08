@@ -138,6 +138,8 @@ struct Running {
     turn_id: agent_protocol::ids::TurnId,
     input: mpsc::Sender<Command>,
     interrupt: watch::Receiver<Option<Result<(), String>>>,
+    /// The response answered and only background work remains.
+    answered: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub(crate) struct Command {
@@ -556,9 +558,14 @@ impl Claude {
         Ok(())
     }
 
-    async fn additional_input(
+    /// Sends input to the running process. A steer goes into the running
+    /// response, which takes it at once and stops its streaming and running
+    /// tools, as T3 Code steers Claude; without one, a response that answered
+    /// and only runs background work takes the input as its next prompt.
+    async fn send_running(
         &self,
         id: &str,
+        steer: Option<&str>,
         input: &[op::Input],
         client_id: &str,
     ) -> Result<Option<agent_protocol::ids::TurnId>, OperationError> {
@@ -566,21 +573,35 @@ impl Claude {
             return Err("Host is shutting down".into());
         }
         let record = self.record(id).await?;
-        let content = input_content(input).await?;
+        let content: Value = input_content(input).await?.into();
         let state = record.lock().await;
         let running = state
             .running
             .as_ref()
             .ok_or("Claudeは実行中ではありません。")?;
+        let changed = match steer {
+            Some(turn) => running.turn_id.as_str() != turn,
+            None => !running.answered.load(std::sync::atomic::Ordering::SeqCst),
+        };
+        if changed {
+            return Err("Claudeの実行対象が変わりました。会話を更新してください。".into());
+        }
         let sender = running.input.clone();
         drop(state);
         let id = client_id.to_owned();
         let (delivered, receipt) = tokio::sync::oneshot::channel();
         sender
             .send(Command {
-                value: SdkInput::Message {
-                    id: id.clone(),
-                    content: content.into(),
+                value: if steer.is_some() {
+                    SdkInput::Steer {
+                        id: id.clone(),
+                        content,
+                    }
+                } else {
+                    SdkInput::Message {
+                        id: id.clone(),
+                        content,
+                    }
                 },
                 user: Some(Item {
                     id: id.clone().into(),
@@ -604,7 +625,7 @@ impl Claude {
                 delivery: agent_transport::peer::Delivery::Unknown,
             })?
             .map_err(|_| OperationError {
-                message: "Claude exited before confirming additional input".into(),
+                message: "Claude exited before confirming the input".into(),
                 delivery: agent_transport::peer::Delivery::Unknown,
             })?
             .map_err(|message| OperationError {
@@ -727,10 +748,12 @@ impl Claude {
         state.model = model.clone();
         let (input, receiver) = mpsc::channel(32);
         let (interrupt, interrupted) = watch::channel(None);
+        let answered = Arc::<std::sync::atomic::AtomicBool>::default();
         state.running = Some(Running {
             turn_id: turn_id.clone(),
             input: input.clone(),
             interrupt: interrupted,
+            answered: answered.clone(),
         });
         drop(state);
         let target = SessionRef {
@@ -751,6 +774,7 @@ impl Claude {
             stop: self.stop.child_token(),
             stream: None,
             interrupt,
+            answered,
             model,
             effort: effort.map(str::to_owned),
             auth_revision,
@@ -777,11 +801,30 @@ struct Worker {
     stop: CancellationToken,
     stream: Option<String>,
     interrupt: watch::Sender<Option<Result<(), String>>>,
+    answered: Arc<std::sync::atomic::AtomicBool>,
     model: String,
     effort: Option<String>,
 }
 
 impl Worker {
+    /// Publishes whether the response answered while background work runs on,
+    /// so waiting input can start as its next prompt.
+    async fn observe_answered(&self, response: &ResponseState) -> Result<(), String> {
+        let answered = response.answered() && !response.finished() && !response.interrupted();
+        let was = self
+            .answered
+            .swap(answered, std::sync::atomic::Ordering::SeqCst);
+        if answered && !was {
+            emit(
+                &self.events,
+                AgentChange::Answered {
+                    session: self.session.clone(),
+                },
+            )
+            .await?;
+        }
+        Ok(())
+    }
     fn current_turn(&self) -> Option<&Turn> {
         self.live
             .turns
@@ -903,8 +946,12 @@ impl Worker {
                     command = input.recv() => {
                         let command = command.ok_or("Claude input queue is closed")?;
                         let stops = matches!(command.value, SdkInput::Interrupt { .. });
+                        let steers = matches!(command.value, SdkInput::Steer { .. });
                         if let Some(id) = self.deliver_command(&mut process, command, response.delivery()).await? {
                             response.accept(id);
+                            if steers {
+                                response.steer();
+                            }
                         }
                         // A requested stop owns the response's terminal result,
                         // which can reach the Host before its acknowledgement.
@@ -953,6 +1000,7 @@ impl Worker {
                     MessageDisposition::Failed => return self.fail_turn(&message).await,
                     MessageDisposition::Interrupted => return Ok(()),
                 }
+                self.observe_answered(&response).await?;
                 // A result ends a response. SDK idle covers background agents,
                 // but not background shells and monitors, which Claude answers
                 // after they finish; accepted input must be consumed before idle.
@@ -1822,12 +1870,9 @@ impl Agent for Claude {
     fn data_recipient(&self) -> &'static str {
         "Anthropic"
     }
-    fn running_input(&self) -> crate::providers::RunningInput {
-        crate::providers::RunningInput::Queue
-    }
     fn capabilities(&self) -> agent_protocol::session::Capabilities {
         agent_protocol::session::Capabilities {
-            additional_input: true,
+            steer: true,
             fork: true,
             rename: false,
             model_change: true,
@@ -1985,6 +2030,17 @@ impl Agent for Claude {
             needs_reload: false,
         })
     }
+    async fn answered(&self, id: &str) -> bool {
+        let Some(record) = self.records.lock().await.get(id).cloned() else {
+            return false;
+        };
+        record
+            .lock()
+            .await
+            .running
+            .as_ref()
+            .is_some_and(|running| running.answered.load(std::sync::atomic::Ordering::SeqCst))
+    }
     async fn submit(
         &self,
         input: &op::Submission,
@@ -1994,15 +2050,19 @@ impl Agent for Claude {
     ) -> Result<op::SubmissionReceipt, Failure> {
         use crate::providers::SubmissionTarget;
         let turn_id = match route {
-            SubmissionTarget::Steer(_) => {
-                return Err(Failure::new(
-                    "unsupported_operation",
-                    "this provider accepts queued input",
-                ));
-            }
-            SubmissionTarget::Queue => {
-                self.additional_input(
+            SubmissionTarget::Steer(turn) => {
+                self.send_running(
                     &input.thread_id.id,
+                    Some(turn),
+                    &input.input,
+                    &input.client_user_message_id,
+                )
+                .await?
+            }
+            SubmissionTarget::Next => {
+                self.send_running(
+                    &input.thread_id.id,
+                    None,
                     &input.input,
                     &input.client_user_message_id,
                 )
@@ -2267,6 +2327,7 @@ mod execution_tests {
                 turn_id: "owned-turn".into(),
                 input,
                 interrupt,
+                answered: Default::default(),
             });
         }
         let state = Agent::state(&claude, &session.id).await.unwrap();
@@ -2337,6 +2398,7 @@ mod execution_tests {
             turn_id: "turn".into(),
             input,
             interrupt,
+            answered: Default::default(),
         });
         let mut cursor = None;
         let mut observed = Vec::new();
@@ -2396,7 +2458,7 @@ mod execution_tests {
     }
 
     #[tokio::test]
-    async fn queued_input_requires_write_confirmation_to_prove_delivery() {
+    async fn a_steer_requires_its_turn_and_write_confirmation_to_prove_delivery() {
         let directory = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(directory.path()).unwrap();
         let claude = Claude::load(
@@ -2420,15 +2482,28 @@ mod execution_tests {
                 turn_id: "turn".into(),
                 input,
                 interrupt,
+                answered: Default::default(),
             });
             if !enqueued {
                 receiver.close();
             }
             let parts = [op::Input::Text {
-                text: "additional input".into(),
+                text: "steer".into(),
             }];
+            // A turn that ended or changed takes no steer, and only a response
+            // that answered takes input as its next prompt.
+            for steer in [Some("earlier"), None] {
+                assert_eq!(
+                    claude
+                        .send_running(&session.id, steer, &parts, "input")
+                        .await
+                        .unwrap_err()
+                        .delivery,
+                    agent_transport::peer::Delivery::NotSent
+                );
+            }
             let (result, ()) = tokio::join!(
-                claude.additional_input(&session.id, &parts, "input"),
+                claude.send_running(&session.id, Some("turn"), &parts, "input"),
                 async move {
                     if enqueued {
                         // Once accepted by the worker queue, closing the receipt
@@ -2548,6 +2623,7 @@ mod execution_tests {
                     turn_id: "turn".into(),
                     input: input.clone(),
                     interrupt: interrupted,
+                    answered: Default::default(),
                 }),
                 idle: None,
             })),
@@ -2565,6 +2641,7 @@ mod execution_tests {
             stop: CancellationToken::new(),
             stream: None,
             interrupt,
+            answered: Default::default(),
             model: "default".into(),
             effort: None,
         };

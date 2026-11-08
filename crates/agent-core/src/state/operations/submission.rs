@@ -62,6 +62,7 @@ impl Operation for Dictate {
             draft,
             self.client_user_message_id.clone(),
             Some(clear_draft.clone()),
+            snapshot.input.composer_preferences.follow_up,
         );
         *snapshot = next;
         if effects.is_empty() {
@@ -254,6 +255,7 @@ pub struct SendSubmission {
     pub thread_id: crate::session::SessionRef,
     pub client_user_message_id: agent_protocol::ids::ClientInputId,
     pub draft: Arc<Draft>,
+    pub follow_up: agent_protocol::operations::FollowUp,
 }
 #[derive(Debug)]
 pub enum SubmissionProgress {
@@ -318,6 +320,7 @@ impl Operation for SendSubmission {
                 model: self.draft.model.clone(),
                 effort: self.draft.effort.clone(),
                 service_tier: self.draft.service_tier.clone(),
+                follow_up: self.follow_up,
             })
             .await?;
         Ok(SubmissionProgress::Sent(reply.turn_id))

@@ -252,7 +252,6 @@ struct Threads {
 
 const THREAD_START: &str = "thread/start";
 const TURN_START: &str = "turn/start";
-const QUEUE_INPUT: &str = "thread/queue/add";
 
 fn thread_id(params: &Value) -> &str {
     params["threadId"].as_str().unwrap_or("")
@@ -742,26 +741,6 @@ impl Threads {
         Ok(())
     }
 
-    fn queue(&self, context: &Context, id: &Value, params: &Value) -> Result<()> {
-        let thread_id = thread_id(params);
-        let active = self.active_turn(thread_id);
-        let Some(turn) = active else {
-            context.error(id, -32602, "no active turn")?;
-            return Ok(());
-        };
-        context.trace(
-            QUEUE_INPUT,
-            json!({"hasExpectedTurnId":params.get("expectedTurnId").is_some()}),
-        )?;
-        context.respond(
-            id,
-            &json!({"queuedSubmission":{"id":"fixture-queued-input"}}),
-        )?;
-        context.turn_event("turn/started", thread_id, &turn.borrow())?;
-        context.stream_item(thread_id,&turn,json!({"id":params["clientUserMessageId"],"clientId":params["clientUserMessageId"],"type":"userMessage","content":params["input"]}))?;
-        Ok(())
-    }
-
     fn control_turn(
         &self,
         context: &Rc<Context>,
@@ -1027,7 +1006,6 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                 "thread/fork" => threads.fork(&context, id, params)?,
                 "thread/unsubscribe" => threads.unsubscribe(&context, id, params)?,
                 TURN_START => threads.start_turn(&context, id, params).await?,
-                QUEUE_INPUT => threads.queue(&context, id, params)?,
                 "turn/interrupt" | "turn/steer" => threads.control_turn(&context, id, method, params)?,
                 "thread/items/list" | "thread/turns/list" => threads.history_page(&context, id, method, params)?,
                 "thread/read" | "thread/resume" => threads.read(&context, id, method, params)?,

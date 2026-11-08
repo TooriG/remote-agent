@@ -282,7 +282,7 @@ internal fun ThreadComposer(
                     FilledIconButton(
                         onClick = {
                             onSend()
-                            perform(Intent.Submit(navigation.threadId, UUID.randomUUID().toString())) {}
+                            perform(Intent.Submit(navigation.threadId, UUID.randomUUID().toString(), false)) {}
                         },
                         enabled =
                             controls.provider != null &&

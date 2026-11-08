@@ -510,6 +510,7 @@ mod tests {
                 Event::Intent(Intent::Submit {
                     thread_id: None,
                     client_user_message_id: "input".into(),
+                    alternate: false,
                 }),
             );
             assert!(effects.is_empty());

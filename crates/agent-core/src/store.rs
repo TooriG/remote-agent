@@ -2152,6 +2152,7 @@ mod tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: false,
+                queued: false,
             }),
         );
         let effects = operation.apply(&mut snapshot, opened.unwrap());
@@ -2525,6 +2526,7 @@ mod tests {
             .dispatch(Intent::Submit {
                 thread_id: None,
                 client_user_message_id: "input".into(),
+                alternate: false,
             })
             .await;
         assert!(matches!(result, Err(PeerError::InvalidMessage(_))));
@@ -2547,6 +2549,7 @@ mod tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: false,
+                queued: false,
             })
         };
         let mut current = Snapshot {

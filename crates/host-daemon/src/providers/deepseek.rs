@@ -2,7 +2,7 @@
 //! BEX speaks its standard ACP v1 stdio interface and checkpoints display state.
 use crate::providers::{
     AccountCommand, AccountReply, Agent, AgentChange, AgentEvent, AnswerSource, Failure, Identity,
-    RequestOrigin, RunningInput, SessionListScope, SessionPage, SessionSummary, SubmissionState,
+    RequestOrigin, SessionListScope, SessionPage, SessionSummary, SubmissionState,
     SubmissionTarget, emit,
 };
 use agent_protocol::{
@@ -878,12 +878,9 @@ impl Agent for DeepSeek {
     fn data_recipient(&self) -> &'static str {
         "DeepSeek Harness（選択したAPI事業者：DeepSeek / OpenRouter / NanoGPT / OpenCode / OpenAI / Google / Anthropic / Groq / Mistral AI / xAI、およびモデル提供元）"
     }
-    fn running_input(&self) -> RunningInput {
-        RunningInput::Queue
-    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            additional_input: false,
+            steer: false,
             fork: false,
             rename: true,
             model_change: true,
@@ -1066,7 +1063,7 @@ impl Agent for DeepSeek {
         if !matches!(route, SubmissionTarget::Start { .. }) {
             return Err(Failure::new(
                 "unsupported_operation",
-                "Harness accepts input after the running task finishes",
+                "Harness cannot steer a running task",
             ));
         }
         let id = input.thread_id.id.clone();

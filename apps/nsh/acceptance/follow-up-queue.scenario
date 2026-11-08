@@ -1,0 +1,20 @@
+# A message sent while a turn works waits in the queue above the composer, as
+# T3 Code's default follow-up behavior, then runs as the next turn.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[groups] 作業が終わるまで続けます"
+press 送信
+expect "./gradlew test" 20000
+type "AI に依頼する" "終わったら次を確認します"
+expect "メッセージをキューに追加"
+press メッセージをキューに追加
+expect "キューのメッセージ" 10000
+expect "終わったら次を確認します" after "キューのメッセージ"
+expect "コンポーザーで編集"
+expect "キューから削除"
+expect_absent "実行中の作業に追加で指示しました"
+screenshot queued
+fixture /release-inputs
+expect_absent "キューのメッセージ" 30000
+expect "この発言へ移動: 終わったら次を確認します" 30000
+screenshot ran

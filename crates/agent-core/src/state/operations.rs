@@ -236,9 +236,20 @@ pub enum Intent {
         thread_id: DraftKey,
         service_tier: String,
     },
+    /// `alternate` does the opposite of the follow-up behavior for this message
+    /// (T3 Code's Mod+Enter or Ctrl/⌘-click while a turn runs). While a queued
+    /// message is edited, the composer's text replaces it instead.
     Submit {
         thread_id: Option<crate::session::SessionRef>,
         client_user_message_id: agent_protocol::ids::ClientInputId,
+        alternate: bool,
+    },
+    SetComposerPreferences {
+        preferences: crate::state::ComposerPreferences,
+    },
+    Queue {
+        thread_id: crate::session::SessionRef,
+        action: crate::state::follow_up::QueueAction,
     },
     RestoreUnknownSubmission {
         client_user_message_id: agent_protocol::ids::ClientInputId,
@@ -332,6 +343,10 @@ pub enum OperationKey {
     Interrupt {
         session: crate::session::SessionRef,
         turn: agent_protocol::ids::TurnId,
+    },
+    /// A change to a conversation's queued messages.
+    Queue {
+        session: crate::session::SessionRef,
     },
     Request {
         id: agent_protocol::ids::RequestId,

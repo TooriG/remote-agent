@@ -37,6 +37,8 @@ final class MobileSessionStorage: ClientStorage, ClientPlatform, @unchecked Send
                 return UserDefaults.standard.data(forKey: "bex.model-preferences") ?? Data()
             case .editorPreferences:
                 return UserDefaults.standard.data(forKey: "bex.editor-preferences") ?? Data()
+            case .composerPreferences:
+                return UserDefaults.standard.data(forKey: "bex.composer-preferences") ?? Data()
             }
         }
     }
@@ -47,6 +49,7 @@ final class MobileSessionStorage: ClientStorage, ClientPlatform, @unchecked Send
             case .localState: try bytes.write(to: location(), options: .atomic)
             case .modelPreferences: UserDefaults.standard.set(bytes, forKey: "bex.model-preferences")
             case .editorPreferences: UserDefaults.standard.set(bytes, forKey: "bex.editor-preferences")
+            case .composerPreferences: UserDefaults.standard.set(bytes, forKey: "bex.composer-preferences")
             }
         }
     }

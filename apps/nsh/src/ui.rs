@@ -60,7 +60,6 @@ impl Icon {
     pub(crate) const CHECK: Self = icon!(Check, "checkmark");
     pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown, "chevron.down");
     pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight, "chevron.right");
-    #[cfg(desktop)]
     pub(crate) const CHEVRON_UP: Self = icon!(ChevronUp, "chevron.up");
     pub(crate) const CLOSE: Self = icon!(X, "xmark");
     pub(crate) const COPY: Self = icon!(Copy, "doc.on.doc");
@@ -116,6 +115,12 @@ impl Icon {
     pub(crate) const SERVER: Self = icon!(Server, "server.rack");
     pub(crate) const BOT: Self = icon!(Bot, "cpu");
     pub(crate) const STEER: Self = icon!(Redo2, "arrow.uturn.forward");
+    /// T3 Code's follow-up actions and the queue above its composer.
+    pub(crate) const QUEUE: Self = icon!(ListPlus, "text.badge.plus");
+    pub(crate) const STEER_NOW: Self = icon!(CornerUpRight, "arrowshape.turn.up.right");
+    pub(crate) const QUEUED: Self = icon!(ListOrdered, "list.number");
+    pub(crate) const SAVING: Self = icon!(Clock3, "clock");
+    pub(crate) const RESUME: Self = icon!(Play, "play.fill");
     /// A filled square, which Lucide's outlined `square` is not.
     pub(crate) const STOP: Self = Self {
         markup: include_str!("../assets/stop.svg"),
@@ -322,7 +327,7 @@ pub(crate) fn icon_button_sized(
 }
 
 /// A hint over a control, as the desktop client's tooltips.
-fn tooltip(label: impl IntoReactive<SharedString>) -> AnyElement {
+pub(crate) fn tooltip(label: impl IntoReactive<SharedString>) -> AnyElement {
     view()
         .px_2()
         .py_1()
@@ -374,6 +379,26 @@ pub(crate) fn row_text_button(
     ghost(
         title.clone(),
         view().child(text(title).text_size(px(14.0)).number_of_lines(1)),
+    )
+    .h(px(24.0))
+    .px_2()
+    .on_press(press)
+}
+
+/// A small ghost button with an icon and a label drawn by NSH, as a queued
+/// message's Steer above T3 Code's composer.
+pub(crate) fn row_labeled_button(
+    glyph: Icon,
+    title: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
+    let title = title.into_reactive();
+    ghost(
+        title.clone(),
+        view()
+            .gap_1()
+            .child(icon(glyph, 14.0))
+            .child(text(title).text_size(px(12.0)).number_of_lines(1)),
     )
     .h(px(24.0))
     .px_2()

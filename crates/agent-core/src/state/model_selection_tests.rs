@@ -25,7 +25,7 @@ fn restart(snapshot: &Snapshot) -> Snapshot {
             Ok(match key {
                 StorageKey::LocalState => self.local.clone(),
                 StorageKey::ModelPreferences => self.models.clone(),
-                StorageKey::EditorPreferences => Vec::new(),
+                StorageKey::EditorPreferences | StorageKey::ComposerPreferences => Vec::new(),
             })
         }
         fn save(&self, _: StorageKey, _: Vec<u8>) -> Result<(), crate::client::AgentError> {

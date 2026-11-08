@@ -170,6 +170,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
                 .dispatch(Intent::Submit {
                     thread_id: Some(thread_id),
                     client_user_message_id: client_message_id.into(),
+                    alternate: false,
                 })
                 .await?
             else {

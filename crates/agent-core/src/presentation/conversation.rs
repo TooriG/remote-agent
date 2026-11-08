@@ -394,6 +394,15 @@ pub fn project_conversation(
             preparation
                 .is_none_or(|preparation| &preparation.submission.client_user_message_id != *id)
         })
+        // The queue above the composer shows input that waits for a turn.
+        .filter(|(id, pending)| {
+            !(pending.queued && !pending.accepted)
+                && !source
+                    .queue
+                    .inputs
+                    .iter()
+                    .any(|input| &input.client_user_message_id == *id)
+        })
         .map(|(id, pending)| (id.clone(), pending.clone()))
         .collect();
     pending.sort_by_key(|(_, pending)| pending.sequence);
@@ -768,6 +777,7 @@ mod preparation_tests {
                 model: None,
                 effort: None,
                 service_tier: None,
+                follow_up: Default::default(),
             },
             status: PreparationStatus::Preparing,
             stage: PreparationStage::Workspace,
@@ -813,6 +823,7 @@ mod preparation_tests {
                     model: None,
                     effort: None,
                     service_tier: None,
+                    follow_up: Default::default(),
                 },
                 status: PreparationStatus::Preparing,
                 stage: PreparationStage::Workspace,
@@ -834,6 +845,7 @@ mod preparation_tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: false,
+                queued: false,
             }),
         );
         let prepared = project_conversation(
@@ -2006,6 +2018,7 @@ mod tests {
                     after_item_id: None,
                     accepted,
                     delivery_unknown: false,
+                    queued: false,
                 }),
             );
         }
@@ -2583,7 +2596,7 @@ mod tests {
                         [(
                             agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() },
                             Arc::new(
-                                serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"capabilities":{"additionalInput":true,"fork":false,"rename":false,"modelChange":false},"turns":[{"id":"before","status":status,"items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"before","phase":"unknown"}}}}}]}]}))
+                                serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"capabilities":{"steer":true,"fork":false,"rename":false,"modelChange":false},"turns":[{"id":"before","status":status,"items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"before","phase":"unknown"}}}}}]}]}))
                                 .unwrap(),
                             ),
                         )]
@@ -2615,6 +2628,8 @@ mod tests {
                             id: "thread".into(),
                         }),
                         client_user_message_id: id.into(),
+                        // Input joins a running turn as a steer.
+                        alternate: status == "running",
                     }),
                 )
                 .0;
@@ -2707,6 +2722,7 @@ mod tests {
                         id: "thread".into(),
                     }),
                     client_user_message_id: id.into(),
+                    alternate: false,
                 }),
             )
             .0;
@@ -2766,6 +2782,7 @@ mod tests {
                     after_item_id: Some("echo".into()),
                     accepted: false,
                     delivery_unknown: true,
+                    queued: false,
                 }),
             );
         }
@@ -2830,6 +2847,7 @@ mod tests {
                 after_item_id: None,
                 accepted,
                 delivery_unknown,
+                queued: false,
             }),
         );
         let rendered = project_snapshot(snapshot, None);
@@ -2872,6 +2890,7 @@ mod tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: false,
+                queued: false,
             }),
         );
         let sending = project_snapshot(snapshot.clone(), None);
@@ -3027,6 +3046,7 @@ mod tests {
                 after_item_id: None,
                 accepted: true,
                 delivery_unknown: false,
+                queued: false,
             })
         };
         Arc::make_mut(&mut snapshot.sessions.pending_submissions)

@@ -63,6 +63,7 @@ impl Storage {
             StorageKey::LocalState => self.host_directory().join("state.json"),
             StorageKey::ModelPreferences => self.root.join("model-preferences.json"),
             StorageKey::EditorPreferences => self.root.join("editor-preferences.json"),
+            StorageKey::ComposerPreferences => self.root.join("composer-preferences.json"),
         }
     }
 }

@@ -226,6 +226,12 @@ pub(crate) enum Input {
         id: String,
         content: Value,
     },
+    /// A message the running response takes at once, stopping its streaming
+    /// and running tools (SDK priority "now"), as T3 Code steers Claude.
+    Steer {
+        id: String,
+        content: Value,
+    },
     Answer {
         request_id: String,
         response: Option<Value>,

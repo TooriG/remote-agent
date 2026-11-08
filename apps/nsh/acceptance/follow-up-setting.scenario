@@ -1,0 +1,26 @@
+# Choosing Steer as the follow-up behavior makes a plain send steer the working
+# turn, and ⌘Enter then queues instead, as T3 Code's setting does.
+expect "何に取り組みますか？" 30000
+press 設定を開く
+expect "フォローアップの動作"
+expect "送信ショートカット"
+press "キュー ▾"
+press 追加の指示
+expect "追加の指示 ▾"
+screenshot setting
+press 閉じる
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[groups] 設定どおりに送ります"
+press 送信
+expect "./gradlew test" 20000
+type "AI に依頼する" "そのまま指示します"
+expect "追加の指示を送信"
+press 追加の指示を送信
+expect "実行中の作業に追加で指示しました" 10000
+type "AI に依頼する" "これは後で送ります"
+key cmd+return
+expect "キューのメッセージ" 10000
+expect "これは後で送ります" after "キューのメッセージ"
+screenshot both
+fixture /release-inputs
+expect_absent "キューのメッセージ" 30000

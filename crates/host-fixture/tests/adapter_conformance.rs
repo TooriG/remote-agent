@@ -44,29 +44,32 @@ async fn finished(events: &mut Reader) -> Turn {
 }
 // Native completion and a deferred input echo may arrive independently.
 // Both must be observed before checking the persisted conversation.
+/// The turn that ran `input`, once that turn finished.
 async fn finished_with_input(events: &mut Reader, input: &ClientInputId) -> TurnId {
-    let mut completed = None;
-    let mut echoed = false;
-    while completed.is_none() || !echoed {
-        let items = match change(events).await {
-            SessionChange::Turn {
-                turn,
-                completed: done,
-            } => {
-                if done {
+    let mut owner = None;
+    let mut finished = std::collections::HashSet::new();
+    loop {
+        let (turn_id, items) = match change(events).await {
+            SessionChange::Turn { turn, completed } => {
+                if completed {
                     assert_eq!(turn.status, TurnStatus::Completed);
-                    completed = Some(turn.id);
+                    finished.insert(turn.id.clone());
                 }
-                turn.items.unwrap_or_default()
+                (turn.id, turn.items.unwrap_or_default())
             }
-            SessionChange::Item { item, .. } => vec![item],
-            _ => Vec::new(),
+            SessionChange::Item { turn_id, item } => (turn_id, vec![item]),
+            _ => continue,
         };
-        echoed |= items
+        if items
             .iter()
-            .any(|item| item.client_input_id.as_ref() == Some(input));
+            .any(|item| item.client_input_id.as_ref() == Some(input))
+        {
+            owner = Some(turn_id);
+        }
+        if let Some(owner) = owner.as_ref().filter(|owner| finished.contains(*owner)) {
+            return owner.clone();
+        }
     }
-    completed.unwrap()
 }
 
 fn submission(session: &SessionRef, text: &str) -> op::Submission {
@@ -77,6 +80,7 @@ fn submission(session: &SessionRef, text: &str) -> op::Submission {
         model: None,
         effort: None,
         service_tier: None,
+        follow_up: op::FollowUp::Queue,
     }
 }
 fn prompt(provider: ProviderKind, scenario: &str) -> &str {
@@ -656,9 +660,11 @@ async fn scenarios(provider: ProviderKind) {
         }
     }
 
-    // Additional input is accepted once while the initial turn is still live.
-    // Native adapters may steer or queue; the Host's routing matrix is tested separately.
-    for interrupt in [false, true] {
+    // Input sent while the initial turn is live runs once: a steer joins that
+    // turn, and queued input waits in the Host and runs as the next turn. A
+    // stop holds the queue until it is resumed. The routing matrix is tested
+    // with the Host's submission decisions.
+    for case in ["steer", "queue", "stop"] {
         let session = create(&local.peer, provider, &root).await;
         let (_, mut events) = open(&local.peer, &session).await;
         let initial = submission(&session, prompt(provider, "wait"));
@@ -674,43 +680,74 @@ async fn scenarios(provider: ProviderKind) {
                 break;
             }
         }
-        if interrupt {
+        let follow_up = op::Submission {
+            follow_up: if case == "steer" {
+                op::FollowUp::Steer
+            } else {
+                op::FollowUp::Queue
+            },
+            ..submission(&session, &format!("{case} follow-up"))
+        };
+        let receipt = local.peer.call(&follow_up).await.unwrap();
+        let id = &follow_up.client_user_message_id;
+        if case == "steer" {
+            assert_eq!(receipt.turn_id.as_ref(), Some(&turn));
+        } else {
+            assert!(receipt.turn_id.is_none());
+            let (opened, _) = open(&local.peer, &session).await;
+            assert_eq!(
+                opened.response.thread.queue.inputs,
+                std::slice::from_ref(&follow_up)
+            );
+        }
+        if case == "stop" {
             local
                 .peer
                 .call(&op::Interrupt {
                     thread_id: session.clone(),
-                    turn_id: turn,
+                    turn_id: turn.clone(),
                 })
                 .await
                 .unwrap();
             assert_eq!(finished(&mut events).await.status, TurnStatus::Interrupted);
+            let (opened, _) = open(&local.peer, &session).await;
+            assert!(opened.response.thread.queue.held);
+            assert_eq!(
+                opened.response.thread.queue.inputs,
+                std::slice::from_ref(&follow_up)
+            );
+            local
+                .peer
+                .call(&op::ChangeQueue {
+                    thread_id: session.clone(),
+                    change: op::QueueChange::Resume,
+                })
+                .await
+                .unwrap();
         } else {
-            let additional = submission(&session, "queued follow-up");
-            local.peer.call(&additional).await.unwrap();
-            if provider == ProviderKind::Codex {
-                std::fs::write(root.join("release-inputs"), "").unwrap();
-            }
-            let turn_id =
-                finished_with_input(&mut events, &additional.client_user_message_id).await;
-            let (history, _) = open(&local.peer, &session).await;
-            let turn = history
-                .response
-                .thread
-                .turns
+            std::fs::write(root.join("release-inputs"), "").unwrap();
+        }
+        let turn_id = finished_with_input(&mut events, id).await;
+        assert_eq!(turn_id == turn, case == "steer");
+        let (history, _) = open(&local.peer, &session).await;
+        assert_eq!(history.response.thread.queue, Default::default());
+        let saved = history
+            .response
+            .thread
+            .turns
+            .iter()
+            .flatten()
+            .find(|saved| saved.id == turn_id)
+            .unwrap();
+        assert_eq!(
+            saved
+                .items
                 .iter()
                 .flatten()
-                .find(|saved| saved.id == turn_id)
-                .unwrap();
-            assert_eq!(
-                turn.items
-                    .iter()
-                    .flatten()
-                    .filter(|item| item.client_input_id.as_ref()
-                        == Some(&additional.client_user_message_id))
-                    .count(),
-                1
-            );
-        }
+                .filter(|item| item.client_input_id.as_ref() == Some(id))
+                .count(),
+            1
+        );
     }
     // Approval and questions use only the choices supplied by the adapter.
     for scenario in ["approval", "question"] {
@@ -1376,7 +1413,7 @@ async fn title_lists_stop_after_visible_sections_and_merge_provider_pages_in_ord
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn codex_queues_when_the_native_turn_is_not_observed() {
+async fn codex_queues_input_for_a_running_turn_it_has_not_observed() {
     let directory = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(directory.path()).unwrap();
     std::fs::write(
@@ -1415,19 +1452,18 @@ async fn codex_queues_when_the_native_turn_is_not_observed() {
         .await
         .unwrap();
     let session = SessionRef::new(ProviderKind::Codex, "external".into()).unwrap();
-    let input = submission(&session, "queued for unobserved turn");
+    // Even a steer waits for a running turn the Host has not observed.
+    let input = op::Submission {
+        follow_up: op::FollowUp::Steer,
+        ..submission(&session, "queued for unobserved turn")
+    };
     assert!(local.peer.call(&input).await.unwrap().turn_id.is_none());
     let (opened, _) = open(&local.peer, &session).await;
-    assert!(opened.response.thread.turns.iter().flatten().any(|turn| {
-        turn.items
-            .iter()
-            .flatten()
-            .any(|item| item.client_input_id.as_ref() == Some(&input.client_user_message_id))
-    }));
+    assert_eq!(opened.response.thread.queue.inputs, [input]);
     let trace = std::fs::read_to_string(root.join("rpc-trace.jsonl")).unwrap();
-    assert!(trace.lines().any(|line| {
+    assert!(!trace.lines().any(|line| {
         let event: serde_json::Value = serde_json::from_str(line).unwrap();
-        event["method"] == "thread/queue/add" && event["hasExpectedTurnId"] == false
+        event["method"] == "turn/steer" || event["method"] == "turn/start"
     }));
     local.close().await;
     host.close().await.unwrap();

@@ -674,12 +674,9 @@ impl Agent for Codex {
     fn data_recipient(&self) -> &'static str {
         "OpenAI"
     }
-    fn running_input(&self) -> crate::providers::RunningInput {
-        crate::providers::RunningInput::SteerOrQueue
-    }
     fn capabilities(&self) -> agent_protocol::session::Capabilities {
         agent_protocol::session::Capabilities {
-            additional_input: true,
+            steer: true,
             fork: true,
             rename: true,
             model_change: true,
@@ -991,10 +988,12 @@ impl Agent for Codex {
                     .await?;
                 Some(turn.into())
             }
-            SubmissionTarget::Queue => {
-                let reply: Value = self.request("thread/queue/add", &params).await?;
-                native_turn_id(reply["queuedSubmission"]["id"].as_str())?;
-                None
+            // A Codex turn that runs has not answered.
+            SubmissionTarget::Next => {
+                return Err(Failure::new(
+                    "unsupported_operation",
+                    "Codex starts the next turn after the running one",
+                ));
             }
             SubmissionTarget::Start { cwd } => {
                 self.resume(&input.thread_id.id, Some(cwd), browser, reload)

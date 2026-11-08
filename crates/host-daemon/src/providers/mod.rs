@@ -125,19 +125,18 @@ pub(crate) struct RequestOrigin {
     pub source: Arc<dyn AnswerSource>,
 }
 
-/// The Host chooses the input route after reading native state and overlaying
-/// its live execution; providers execute it. Client caches never choose a route.
+/// What a provider does with input: steer its running turn, or start a turn.
+/// The Host chooses after reading native state and overlaying its live
+/// execution, and keeps input queued behind a running turn itself.
 #[derive(Debug, PartialEq)]
 pub(crate) enum SubmissionTarget<'a> {
     Steer(&'a str),
-    Queue,
-    Start { cwd: &'a str },
-}
-/// How a provider accepts additional input while a turn is running.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum RunningInput {
-    SteerOrQueue,
-    Queue,
+    /// The running turn answered and only its background work remains; its
+    /// process takes this input as its next prompt ([`Agent::answered`]).
+    Next,
+    Start {
+        cwd: &'a str,
+    },
 }
 
 pub(crate) struct SessionSummary {
@@ -302,7 +301,6 @@ pub(crate) trait Agent: Identity {
         ))
     }
     fn data_recipient(&self) -> &'static str;
-    fn running_input(&self) -> RunningInput;
     fn capabilities(&self) -> Capabilities;
     /// The items an opened turn shows before its details are read. Providers
     /// whose opened histories include activity keep every item.
@@ -352,6 +350,11 @@ pub(crate) trait Agent: Identity {
         browser: Option<Value>,
     ) -> Result<ThreadResponse, Failure>;
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure>;
+    /// The running turn answered and only background work keeps it running,
+    /// so its process takes the next prompt now ([`SubmissionTarget::Next`]).
+    async fn answered(&self, _id: &str) -> bool {
+        false
+    }
     /// False is an explicit unsupported operation, before any history mutation.
     /// Other failures may have delivered history and must not be blindly retried.
     async fn inject_history(
@@ -442,6 +445,11 @@ pub(crate) enum AgentChange {
     Renamed {
         session: SessionRef,
         name: Option<String>,
+    },
+    /// The running turn answered and only background work remains
+    /// ([`Agent::answered`]); input waiting for it can start.
+    Answered {
+        session: SessionRef,
     },
     Stopped {
         provider: agent_protocol::session::ProviderKind,

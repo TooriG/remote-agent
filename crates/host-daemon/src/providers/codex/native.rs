@@ -885,7 +885,7 @@ mod tests {
         assert_eq!(parse_thread(json!({"id":"child", "parentThreadId":"parent", "name":"", "agentNickname":"", "agentRole":"reviewer"})).unwrap().name.as_deref(), Some("reviewer"));
         assert_eq!(parse_thread(json!({"id":"child", "parentThreadId":"parent", "name":"Named", "agentNickname":"Curie"})).unwrap().name.as_deref(), Some("Named"));
         assert!(
-            agent_protocol::session::input_unavailable_reason(&child)
+            agent_protocol::session::direct_input_unavailable_reason(child.can_accept_direct_input)
                 .unwrap()
                 .contains("閲覧専用")
         );

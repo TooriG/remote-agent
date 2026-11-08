@@ -34,7 +34,7 @@ class MessageActionsTest {
                 .put("id", id)
                 .put(
                     "capabilities",
-                    JSONObject("""{"fork":true,"additionalInput":true,"rename":false,"modelChange":false}"""),
+                    JSONObject("""{"fork":true,"steer":true,"rename":false,"modelChange":false}"""),
                 )
                 .put(
                     "turns",

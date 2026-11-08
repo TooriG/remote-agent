@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 struct DeviceDisk {
     models: Mutex<Vec<u8>>,
     editor: Mutex<Vec<u8>>,
+    composer: Mutex<Vec<u8>>,
     writes: AtomicUsize,
     fail_models: AtomicBool,
 }
@@ -23,6 +24,7 @@ impl ClientStorage for Storage {
             StorageKey::LocalState => self.local.lock().unwrap().clone(),
             StorageKey::ModelPreferences => self.device.models.lock().unwrap().clone(),
             StorageKey::EditorPreferences => self.device.editor.lock().unwrap().clone(),
+            StorageKey::ComposerPreferences => self.device.composer.lock().unwrap().clone(),
         })
     }
     fn save(&self, key: StorageKey, bytes: Vec<u8>) -> Result<(), AgentError> {
@@ -41,6 +43,7 @@ impl ClientStorage for Storage {
                 *self.device.models.lock().unwrap() = bytes;
             }
             StorageKey::EditorPreferences => *self.device.editor.lock().unwrap() = bytes,
+            StorageKey::ComposerPreferences => *self.device.composer.lock().unwrap() = bytes,
         }
         self.device.writes.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -358,6 +361,7 @@ async fn corrupted_state_or_preferences_are_rejected_without_writing() {
         StorageKey::LocalState,
         StorageKey::ModelPreferences,
         StorageKey::EditorPreferences,
+        StorageKey::ComposerPreferences,
     ] {
         let storage = Arc::new(Storage::default());
         match key {
@@ -367,6 +371,9 @@ async fn corrupted_state_or_preferences_are_rejected_without_writing() {
             }
             StorageKey::EditorPreferences => {
                 *storage.device.editor.lock().unwrap() = b"invalid".to_vec()
+            }
+            StorageKey::ComposerPreferences => {
+                *storage.device.composer.lock().unwrap() = b"invalid".to_vec()
             }
         }
         assert!(

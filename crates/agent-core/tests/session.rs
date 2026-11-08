@@ -488,6 +488,7 @@ fn local_storage_keeps_user_work_without_host_caches() {
                         after_item_id: None,
                         accepted: false,
                         delivery_unknown: true,
+                        queued: false,
                     }),
                 )]
                 .into(),

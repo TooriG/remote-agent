@@ -97,6 +97,7 @@ contracts! {
     ForkSession, "host/session/fork" => (op::ForkSession, m::ThreadResponse) [clone, op::ForkSession::validate],
     Submit, "host/session/submit" => (op::Submission, op::SubmissionReceipt) [clone],
     Interrupt, "host/session/interrupt" => (op::Interrupt, m::Empty) [clone],
+    ChangeQueue, "host/session/queue/change" => (op::ChangeQueue, m::Empty) [clone],
     ReadPermissionSettings, "host/permissions/read" => (crate::permissions::ReadPermissionSettings, crate::permissions::PermissionSettings) [clone],
     UpdatePermissionSettings, "host/permissions/update" => (crate::permissions::UpdatePermissionSettings, crate::permissions::PermissionSettings) [clone],
     ComposerCatalog, "host/composer/catalog" => (op::LoadComposerCatalog, crate::composer::ComposerCatalog) [clone],

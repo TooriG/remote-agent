@@ -189,6 +189,7 @@ rl.on('line', line => {
                     }),
                     effort: Some("high".into()),
                     service_tier: Some("fast".into()),
+                    follow_up: Default::default(),
                 },
             )
             .await

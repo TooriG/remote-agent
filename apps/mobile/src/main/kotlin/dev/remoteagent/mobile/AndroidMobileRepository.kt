@@ -76,6 +76,7 @@ internal class AndroidMobileRepository(private val context: Context) {
                 StorageKey.LOCAL_STATE -> AtomicFile(File(directory, "agent-snapshot-${encodedId(id)}.json"))
                 StorageKey.MODEL_PREFERENCES -> AtomicFile(File(directory, "model-preferences.json"))
                 StorageKey.EDITOR_PREFERENCES -> AtomicFile(File(directory, "editor-preferences.json"))
+                StorageKey.COMPOSER_PREFERENCES -> AtomicFile(File(directory, "composer-preferences.json"))
             }
 
         override fun load(key: StorageKey): ByteArray = access {

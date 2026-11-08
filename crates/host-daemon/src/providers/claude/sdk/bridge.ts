@@ -5,7 +5,9 @@ import type { Options, SDKUserMessage, PermissionResult, ElicitationResult, McpS
 
 type Initialize = { type: "initialize"; cwd: string; program: string; model?: string;
   effort?: Options["effort"]; browser?: McpServerConfig; sessionId?: string; resume?: boolean; probe?: boolean };
-type Command = { type: "message"; id: SDKUserMessage["uuid"]; content: SDKUserMessage["message"]["content"] }
+// A steer is a message the running response takes at once ("now" stops its
+// streaming and running tools); other messages wait for the next turn boundary.
+type Command = { type: "message" | "steer"; id: SDKUserMessage["uuid"]; content: SDKUserMessage["message"]["content"] }
   | { type: "answer"; requestId: string; error?: string; response: unknown }
   | { type: "interrupt"; requestId: string } | { type: "usage" };
 
@@ -116,9 +118,11 @@ export async function runBridge(lines: AsyncIterable<string>, emit: (event: Reco
         if (line.done) return;
         const command = JSON.parse(line.value) as Command;
         switch (command.type) {
-          case "message": {
+          case "message":
+          case "steer": {
             const message: SDKUserMessage = { type: "user", uuid: command.id, session_id: config.sessionId ?? "",
-              message: { role: "user", content: command.content }, parent_tool_use_id: null };
+              message: { role: "user", content: command.content }, parent_tool_use_id: null,
+              ...(command.type === "steer" ? { priority: "now" as const } : {}) };
             messages.push(message);
             wake?.();
             break;

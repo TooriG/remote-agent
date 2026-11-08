@@ -278,3 +278,83 @@ fn the_review_card_folds_past_three_files_and_needs_a_conversation_with_changes(
         "a new draft has no card"
     );
 }
+
+#[test]
+fn follow_up_controls_name_the_send_and_list_the_queue_the_host_holds() {
+    let queued = |id: &str| agent_protocol::operations::Submission {
+        thread_id: session(),
+        client_user_message_id: id.into(),
+        input: vec![agent_protocol::operations::Input::Text {
+            text: format!("{id} text"),
+        }],
+        model: None,
+        effort: None,
+        service_tier: None,
+        follow_up: FollowUp::Queue,
+    };
+    for (running, steer, held, active, default, alternate) in [
+        (true, true, false, true, FollowUp::Queue, FollowUp::Steer),
+        // A provider that cannot steer queues both ways.
+        (true, false, false, true, FollowUp::Queue, FollowUp::Queue),
+        // Input waits behind the queue until it starts.
+        (false, true, false, true, FollowUp::Queue, FollowUp::Queue),
+        // A held queue waits for the user; a send starts a turn.
+        (false, true, true, false, FollowUp::Steer, FollowUp::Steer),
+    ] {
+        let mut snapshot = snapshot();
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(
+            session(),
+            Arc::new(Thread {
+                id: Some(session()),
+                capabilities: Some(crate::session::Capabilities {
+                    steer,
+                    ..Default::default()
+                }),
+                turns: Some(vec![Arc::new(Turn {
+                    id: "turn".into(),
+                    status: if running {
+                        TurnStatus::Running
+                    } else {
+                        TurnStatus::Completed
+                    },
+                    ..Default::default()
+                })]),
+                queue: agent_protocol::operations::InputQueue {
+                    inputs: vec![queued("waiting")],
+                    held,
+                },
+                ..Default::default()
+            }),
+        );
+        crate::state::set_draft_text(&mut snapshot, session().into(), "sending".into());
+        let (snapshot, _) = crate::state::reduce(
+            &snapshot,
+            crate::state::Event::Intent(crate::state::Intent::Submit {
+                thread_id: Some(session()),
+                client_user_message_id: "sending".into(),
+                alternate: false,
+            }),
+        );
+        let controls = presentation(&snapshot).controls.follow_up.clone();
+        assert_eq!(controls.active, active, "running {running}, held {held}");
+        assert_eq!(controls.default_action, default);
+        assert_eq!(controls.alternate_action, alternate);
+        assert_eq!(controls.held, held);
+        assert_eq!(controls.can_steer, running && steer);
+        // The Host's queue first, then a send it has not acknowledged yet.
+        let rows: Vec<_> = controls
+            .queue
+            .iter()
+            .map(|row| (row.id.as_str(), row.text.as_str(), row.pending))
+            .collect();
+        let expected: &[_] = if running || !held {
+            &[
+                ("waiting", "waiting text", false),
+                ("sending", "sending", true),
+            ]
+        } else {
+            &[("waiting", "waiting text", false)]
+        };
+        assert_eq!(rows, expected, "running {running}, held {held}");
+    }
+}

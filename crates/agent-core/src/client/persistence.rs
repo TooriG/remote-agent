@@ -3,7 +3,7 @@
 use super::{AgentError, error};
 use crate::{
     persistence::{EditorPreferences, merge_model_preferences},
-    state::{ModelPreferences, Snapshot},
+    state::{ComposerPreferences, ModelPreferences, Snapshot},
 };
 use futures_util::{
     FutureExt,
@@ -22,6 +22,7 @@ pub enum StorageKey {
     LocalState,
     ModelPreferences,
     EditorPreferences,
+    ComposerPreferences,
 }
 
 /// Runs on blocking workers. Each adapter is scoped to one Host/window; the
@@ -44,23 +45,52 @@ pub enum RestoreError {
 struct Preferences {
     models: ModelPreferences,
     editor: EditorPreferences,
+    composer: ComposerPreferences,
 }
 impl Preferences {
     fn capture(snapshot: &Snapshot) -> Self {
         Self {
             models: snapshot.catalog.model_preferences.clone(),
             editor: EditorPreferences::capture(snapshot),
+            composer: snapshot.input.composer_preferences,
         }
     }
     fn apply(&self, snapshot: &mut Snapshot) {
         snapshot.catalog.model_preferences = self.models.clone();
         snapshot.files.preferred_editor = self.editor.preferred;
+        snapshot.input.composer_preferences = self.composer;
     }
 }
+
+/// One preference payload and the one last written for it.
+struct Stored<T> {
+    current: T,
+    saved: Option<T>,
+}
+impl<T: Clone + Default + PartialEq + serde::Serialize + serde::de::DeserializeOwned> Stored<T> {
+    fn load(storage: &dyn ClientStorage, key: StorageKey) -> Result<Self, AgentError> {
+        let bytes = storage.load(key)?;
+        let saved: Option<T> = (!bytes.is_empty())
+            .then(|| serde_json::from_slice(&bytes).map_err(error))
+            .transpose()?;
+        Ok(Self {
+            current: saved.clone().unwrap_or_default(),
+            saved,
+        })
+    }
+    fn persist(&mut self, storage: &dyn ClientStorage, key: StorageKey) -> Result<(), AgentError> {
+        if self.saved.as_ref() != Some(&self.current) {
+            storage.save(key, serde_json::to_vec(&self.current).map_err(error)?)?;
+            self.saved = Some(self.current.clone());
+        }
+        Ok(())
+    }
+}
+
 struct DeviceState {
-    current: Preferences,
-    saved_models: Option<ModelPreferences>,
-    saved_editor: Option<EditorPreferences>,
+    models: Stored<ModelPreferences>,
+    editor: Stored<EditorPreferences>,
+    composer: Stored<ComposerPreferences>,
 }
 
 /// Share this owner between simultaneous views and successive Host sessions.
@@ -74,28 +104,17 @@ impl DevicePreferences {
     fn load(&self, storage: &dyn ClientStorage) -> Result<Preferences, AgentError> {
         let mut state = self.state.lock().unwrap();
         let state = Self::initialize(&mut state, storage)?;
-        Ok(state.current.clone())
+        Ok(state.current())
     }
     fn initialize<'a>(
         state: &'a mut Option<DeviceState>,
         storage: &dyn ClientStorage,
     ) -> Result<&'a mut DeviceState, AgentError> {
         if state.is_none() {
-            let models = storage.load(StorageKey::ModelPreferences)?;
-            let editor = storage.load(StorageKey::EditorPreferences)?;
-            let saved_models: Option<ModelPreferences> = (!models.is_empty())
-                .then(|| serde_json::from_slice(&models).map_err(error))
-                .transpose()?;
-            let saved_editor: Option<EditorPreferences> = (!editor.is_empty())
-                .then(|| serde_json::from_slice(&editor).map_err(error))
-                .transpose()?;
             *state = Some(DeviceState {
-                current: Preferences {
-                    models: saved_models.clone().unwrap_or_default(),
-                    editor: saved_editor.clone().unwrap_or_default(),
-                },
-                saved_models,
-                saved_editor,
+                models: Stored::load(storage, StorageKey::ModelPreferences)?,
+                editor: Stored::load(storage, StorageKey::EditorPreferences)?,
+                composer: Stored::load(storage, StorageKey::ComposerPreferences)?,
             });
         }
         Ok(state.as_mut().unwrap())
@@ -111,10 +130,13 @@ impl DevicePreferences {
             Ok(state) => state,
             Err(reason) => return (before, Err(reason)),
         };
-        state.current.models =
-            merge_model_preferences(&state.current.models, &before.models, &after.models);
+        state.models.current =
+            merge_model_preferences(&state.models.current, &before.models, &after.models);
         if before.editor != after.editor {
-            state.current.editor = after.editor.clone();
+            state.editor.current = after.editor.clone();
+        }
+        if before.composer != after.composer {
+            state.composer.current = after.composer;
         }
         let result = state.persist(storage);
         (after, result)
@@ -122,22 +144,19 @@ impl DevicePreferences {
 }
 
 impl DeviceState {
+    fn current(&self) -> Preferences {
+        Preferences {
+            models: self.models.current.clone(),
+            editor: self.editor.current.clone(),
+            composer: self.composer.current,
+        }
+    }
     fn persist(&mut self, storage: &dyn ClientStorage) -> Result<(), AgentError> {
-        if self.saved_models.as_ref() != Some(&self.current.models) {
-            storage.save(
-                StorageKey::ModelPreferences,
-                serde_json::to_vec(&self.current.models).map_err(error)?,
-            )?;
-            self.saved_models = Some(self.current.models.clone());
-        }
-        if self.saved_editor.as_ref() != Some(&self.current.editor) {
-            storage.save(
-                StorageKey::EditorPreferences,
-                serde_json::to_vec(&self.current.editor).map_err(error)?,
-            )?;
-            self.saved_editor = Some(self.current.editor.clone());
-        }
-        Ok(())
+        self.models.persist(storage, StorageKey::ModelPreferences)?;
+        self.editor
+            .persist(storage, StorageKey::EditorPreferences)?;
+        self.composer
+            .persist(storage, StorageKey::ComposerPreferences)
     }
 }
 

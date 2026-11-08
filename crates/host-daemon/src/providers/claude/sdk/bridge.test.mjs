@@ -186,6 +186,31 @@ test("persistent SDK input stays open across results and additional messages", a
   await consumed;
 });
 
+test("a steer reaches the running query at once while other input waits its turn", async () => {
+  const input = channel();
+  const output = channel();
+  const reader = output[Symbol.asyncIterator]();
+  const received = [];
+  let consumed;
+  input.push(JSON.stringify({ type: "initialize", cwd: "/fixture", sessionId: "session" }));
+  const bridge = runBridge(input, () => {}, ({ prompt }) => {
+    consumed = (async () => { for await (const message of prompt) received.push(message); })();
+    return {
+      async initializationResult() { return {}; },
+      next: reader.next.bind(reader),
+      close() { output.close(); },
+    };
+  });
+  input.push(JSON.stringify({ type: "message", id: "first", content: "wait" }));
+  input.push(JSON.stringify({ type: "steer", id: "steer", content: [{ type: "text", text: "change course" }] }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(received.map(({ uuid, priority }) => [uuid, priority]), [["first", undefined], ["steer", "now"]]);
+  assert.deepEqual(received[1].message, { role: "user", content: [{ type: "text", text: "change course" }] });
+  input.close();
+  await bridge;
+  await consumed;
+});
+
 test("managed MCP policy retains probe isolation without the incompatible strict flag", () => {
   const managed = probeOptions(true, { PATH: "/fixture/bin" });
   const { strictMcpConfig, ...isolated } = probeOptions(false, { PATH: "/fixture/bin" });

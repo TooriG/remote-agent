@@ -135,7 +135,7 @@ impl SessionRouter {
         bindings: &[(SessionRef, ProviderKind)],
     ) -> Result<(), String> {
         match change {
-            AgentChange::TaskParent { .. } => {}
+            AgentChange::TaskParent { .. } | AgentChange::Answered { .. } => {}
             AgentChange::Session { session, change } => self.session_change(&session, change),
             AgentChange::Request {
                 session,
@@ -258,6 +258,27 @@ impl SessionRouter {
         self.prune(target, &actor);
         receipt
     }
+    /// The conversation's input waiting for its running turn.
+    pub(super) fn queue(&self, target: &SessionRef) -> agent_protocol::operations::InputQueue {
+        let Some(actor) = self.existing(target) else {
+            return Default::default();
+        };
+        let queue = lock_state(&actor).timeline.queue.clone();
+        self.prune(target, &actor);
+        queue
+    }
+    /// Input waits and nothing holds the queue.
+    pub(super) fn queue_ready(&self, target: &SessionRef) -> bool {
+        self.existing(target).is_some_and(|actor| {
+            let owned = lock_state(&actor);
+            !owned.timeline.queue.held && !owned.timeline.queue.inputs.is_empty()
+        })
+    }
+    pub(super) fn running(&self, target: &SessionRef) -> bool {
+        self.existing(target).is_some_and(|actor| {
+            lock_state(&actor).timeline.status == agent_protocol::models::SessionStatus::Running
+        })
+    }
 
     pub(super) fn begin_submission(&self, target: &SessionRef, id: &str) -> Result<(), Failure> {
         if id.is_empty() || id.len() > 256 {
@@ -278,7 +299,11 @@ impl SessionRouter {
         }
         if owned.timeline.submissions.len() >= 128 {
             owned.timeline.submissions.retain(|_, delivery| {
-                *delivery != agent_protocol::session::SubmissionDelivery::Rejected
+                !matches!(
+                    delivery,
+                    agent_protocol::session::SubmissionDelivery::Rejected
+                        | agent_protocol::session::SubmissionDelivery::Withdrawn
+                )
             });
         }
         if owned.timeline.submissions.len() >= 128 {

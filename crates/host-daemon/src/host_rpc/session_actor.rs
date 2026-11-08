@@ -79,6 +79,7 @@ impl SessionActor {
             self.timeline.status = agent_protocol::models::SessionStatus::Unknown;
         }
         !self.timeline.submissions.is_empty()
+            || !self.timeline.queue.inputs.is_empty()
             || self
                 .timeline
                 .preparation
@@ -122,6 +123,7 @@ impl SessionActor {
         }
         thread.requests = self.timeline.requests.clone();
         thread.submissions = self.timeline.submissions.clone();
+        thread.queue = self.timeline.queue.clone();
         if let Some(preparation) = &self.timeline.preparation {
             thread.preparation = preparation.clone();
         }

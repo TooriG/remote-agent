@@ -574,6 +574,7 @@ mod tests {
                 StorageKey::EditorPreferences => {
                     return Ok(self.editor_preferences.lock().unwrap().clone());
                 }
+                StorageKey::ComposerPreferences => return Ok(Vec::new()),
                 StorageKey::LocalState => {}
             }
             self.loads.fetch_add(1, Ordering::SeqCst);
@@ -594,6 +595,10 @@ mod tests {
                     serde_json::from_slice::<crate::persistence::EditorPreferences>(&bytes)
                         .unwrap();
                     *self.editor_preferences.lock().unwrap() = bytes;
+                    return Ok(());
+                }
+                StorageKey::ComposerPreferences => {
+                    serde_json::from_slice::<crate::state::ComposerPreferences>(&bytes).unwrap();
                     return Ok(());
                 }
                 StorageKey::LocalState => {}
