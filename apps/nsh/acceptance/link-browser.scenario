@@ -1,12 +1,22 @@
 # Command-click on a web link in an answer opens it in the in-app browser
-# rather than the default browser. The browser loads pages only while the app
-# is active, which the runner does not force, so the page itself is not read.
+# rather than the default browser, which loads it: the answer links to the
+# fixture Host's loopback page, whose title the browser's tab menu lists.
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
-type "AI に依頼する" "[generated-images] [immediate] 生成画像を表示します"
+type "AI に依頼する" "[web-link] [immediate] $AGENT_FIXTURE_ORIGIN/browser-page を開きます"
 press 送信
-expect "生成画像を表示しました。" 30000
+expect "ページへのリンクです。" 30000
 expect_absent "ブラウザの URL"
-click cmd Webサイトを開く
+click cmd 検証ページを開く
 expect "ブラウザの URL" after ツールを閉じる 10000
+expect "/browser-page" after "ブラウザの URL" 10000
+# The page's own address comes with the Host's frame, as does its button for
+# the default browser.
+expect 既定のブラウザで開く 10000
+# The menu lists the tabs as they were when it opened, and a page's title
+# reaches it through the Host's next read.
+wait 1500
+press ブラウザのメニュー
+expect 検証ページ 10000
+key escape
 screenshot browser

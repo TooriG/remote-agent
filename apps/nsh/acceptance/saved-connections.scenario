@@ -1,6 +1,8 @@
 # A PC added from its pasted invitation is saved beside this PC and can be
-# removed again; SSH refuses a destination that would be read as an option
-# before it starts. The PC added here is the fixture Host itself.
+# removed again, and stays removed when the app starts again; SSH refuses a
+# destination that would be read as an option before it starts. The PC added
+# here is the fixture Host itself.
+# iOS: testSimulatorRemovesHostAndRequiresPairingAfterRelaunch
 expect "何に取り組みますか？" 30000
 press 設定を開く
 press 環境
@@ -25,3 +27,9 @@ expect "保存した接続を削除"
 screenshot saved
 press 保存した接続を削除
 expect_absent "保存した接続を削除" 30000
+relaunch
+press 設定を開く 30000
+press 環境
+expect "作業する環境と、このPCへ接続する端末を管理します。" 10000
+expect 接続方法
+expect_absent "保存した接続を削除"

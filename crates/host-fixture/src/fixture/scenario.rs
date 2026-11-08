@@ -431,6 +431,9 @@ fn response_content<'a>(
         include_str!("../../../agent-core/tests/fixtures/markdown/document.md").to_owned()
     } else if prompt.contains("[mermaid]") {
         "流れを図にしました。\n\n```mermaid\nflowchart LR\n  Request[依頼] --> Build[実装]\n  Build --> Check[検証]\n```".to_owned()
+    } else if let Some(url) = web_address(prompt).filter(|_| prompt.contains("[web-link]")) {
+        // The prompt's address, as the scenario's own loopback page.
+        format!("ページへのリンクです。\n\n[検証ページを開く](<{url}>)")
     } else if prompt.contains("[file-paths]") {
         // The workspace's file at a line, a file under a caption, and a folder.
         "確認したファイルです。\n\n- `hello.txt:2`\n- [子ファイル](nested/child.txt)\n- [nested](./nested)".to_owned()
@@ -475,6 +478,13 @@ fn response_content<'a>(
     }
 }
 
+/// The first web address among the prompt's words.
+fn web_address(prompt: &str) -> Option<&str> {
+    prompt
+        .split_whitespace()
+        .find(|word| word.starts_with("http://") || word.starts_with("https://"))
+}
+
 fn gallery(home: &Path, thread: &SharedThread) -> Result<()> {
     let mut older = Vec::with_capacity(6);
     let mut pixels = vec![0; 128 * 128 * 3];
@@ -512,6 +522,18 @@ fn gallery(home: &Path, thread: &SharedThread) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_web_link_answer_names_the_prompts_address() {
+        let prompt = "[web-link] [immediate] http://127.0.0.1:9/browser-page を開きます";
+        assert_eq!(web_address(prompt), Some("http://127.0.0.1:9/browser-page"));
+        assert_eq!(web_address("[web-link] ページを開きます"), None);
+        let content = response_content(Path::new("/tmp"), prompt, "", "", None);
+        assert!(
+            content
+                .text
+                .contains("[検証ページを開く](<http://127.0.0.1:9/browser-page>)")
+        );
+    }
     #[test]
     fn question_answers_match_the_ui_choice_and_skip_contracts() {
         let choice = json!({"answers":{"continue":{"answers":["続ける"]}}});

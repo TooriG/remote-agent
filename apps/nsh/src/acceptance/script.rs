@@ -136,7 +136,10 @@ impl Step {
     /// Whether the runner takes the step before the app starts, as a scenario's
     /// leading lines.
     pub(crate) fn prepares(&self) -> bool {
-        matches!(self, Self::Fixture(_) | Self::FirstLaunch | Self::WithoutCodex)
+        matches!(
+            self,
+            Self::Fixture(_) | Self::FirstLaunch | Self::WithoutCodex
+        )
     }
 }
 
@@ -584,7 +587,7 @@ mod tests {
             ]
         );
         assert_eq!(lines[0].number, 2);
-        assert_eq!(lines[2].source, "press \"新しい チャット\"");
+        assert_eq!(lines[3].source, "press \"新しい チャット\"");
     }
 
     #[test]

@@ -1,0 +1,32 @@
+# In the file list beside an open file, Command-click adds a row to the
+# selection and Shift-click extends it to the row pressed, as the desktop
+# client's tree did; a drag takes every selected row into the composer.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "ツールを確認します"
+press 送信
+expect "シミュレータで完了しました。" 30000
+press 右パネルを切り替え
+press ファイル after ツールを閉じる
+press hello.txt after ツールを閉じる
+expect "日本語のファイル" after ツールを閉じる
+# The list beside the open file follows its search field.
+expect nested after ファイルを検索
+click cmd nested after ファイルを検索
+click cmd hello.txt after ファイルを検索
+drag nested "AI に依頼する" after ファイルを検索
+expect "2 個の項目"
+screenshot two-selected
+drop
+expect "[nested](nested)"
+expect "[hello.txt](hello.txt)"
+# A plain press selects the folder alone and opens it; Shift-click then takes
+# every row down to hello.txt, the folder's file among them.
+press nested after ファイルを検索
+expect child.txt after ファイルを検索
+click shift hello.txt after ファイルを検索
+drag child.txt "AI に依頼する" after ファイルを検索
+expect "3 個の項目"
+drop
+expect "[child.txt](nested/child.txt)"
+screenshot range-selected
