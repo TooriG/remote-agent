@@ -45,6 +45,11 @@ private final class HostTerminalView: SwiftTerm.TerminalView {
         super.init()
         view.terminalDelegate = self
         view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        #if os(macOS)
+            // The Mac window is drawn dark by the app, not by the system appearance.
+            view.nativeBackgroundColor = NSColor(srgbRed: 0x08 / 255, green: 0x08 / 255, blue: 0x08 / 255, alpha: 1)
+            view.nativeForegroundColor = NSColor(srgbRed: 0xE6 / 255, green: 0xE6 / 255, blue: 0xE6 / 255, alpha: 1)
+        #endif
         #if os(iOS)
             view.accessibilityIdentifier = "terminal.screen"
         #endif

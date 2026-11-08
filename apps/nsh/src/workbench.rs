@@ -82,7 +82,8 @@ fn symbol(kind: PanelKind) -> &'static str {
     match kind {
         PanelKind::Browser => "globe",
         PanelKind::Terminal => "terminal",
-        PanelKind::Files | PanelKind::File => "folder",
+        PanelKind::Files => "folder",
+        PanelKind::File => "doc",
         PanelKind::Diff => "arrow.left.arrow.right",
         PanelKind::SideChat => "bubble.left.and.bubble.right",
         PanelKind::Agents => "network",
@@ -96,7 +97,8 @@ fn tool_icon(kind: PanelKind) -> ui::Icon {
     match kind {
         PanelKind::Browser => Icon::GLOBE,
         PanelKind::Terminal => Icon::TERMINAL,
-        PanelKind::Files | PanelKind::File => Icon::FOLDER,
+        PanelKind::Files => Icon::FOLDER,
+        PanelKind::File => Icon::FILE_TEXT,
         PanelKind::Diff => Icon::REPLACE,
         PanelKind::SideChat => Icon::BOT,
         PanelKind::Agents => Icon::NETWORK,
