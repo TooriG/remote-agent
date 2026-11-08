@@ -17,7 +17,7 @@
 //! running) and one entry per step with `line`, `source`, `status` (`passed`,
 //! `failed` or `skipped`), `message`, `elapsedMs` and the step's `artifact` file;
 //! `evidence` names the screenshot and tree written when a step fails.
-use super::script::{Find, Key, Line, Step};
+use super::script::{Composition, Find, Key, Line, Step};
 use objc2::{
     MainThreadMarker, Message, msg_send,
     rc::Retained,
@@ -28,12 +28,13 @@ use objc2_app_kit::{
     NSApplication, NSBitmapImageFileType, NSEvent, NSEventModifierFlags, NSEventType, NSMenu,
     NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification, NSModalResponseOK,
     NSOpenPanel, NSPasteboard, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting,
-    NSScreen, NSView, NSWindow,
+    NSResponder, NSScreen, NSView, NSWindow,
 };
 use objc2_core_graphics::{CGEvent, CGScrollEventUnit};
 use objc2_foundation::{
-    NSArray, NSAttributedString, NSData, NSDictionary, NSNotification, NSNotificationCenter,
-    NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer, NSURL,
+    NSArray, NSAttributedString, NSData, NSDictionary, NSNotFound, NSNotification,
+    NSNotificationCenter, NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes,
+    NSString, NSTimer, NSURL,
 };
 use serde_json::{Value, json};
 use std::{
@@ -218,6 +219,7 @@ fn limit(step: &Step) -> Duration {
     match step {
         Step::Press(find)
         | Step::Type(find, _)
+        | Step::Compose(find, _)
         | Step::Scroll(find, _)
         | Step::Select(find, _)
         | Step::Menu(find)
@@ -258,6 +260,12 @@ fn attempt(
             insert(tree, index, text)
                 .map(|()| format!("typed into {}", tree.nodes[index].describe()))
         }),
+        Step::Compose(find, composition) => {
+            on_element(&Tree::read(mtm, menus), find, |tree, index| {
+                compose(tree, index, composition)
+                    .map(|()| format!("{composition:?} in {}", tree.nodes[index].describe()))
+            })
+        }
         Step::Scroll(find, lines) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             scroll(tree, index, *lines, mtm).map(|()| {
                 format!(
@@ -748,6 +756,40 @@ fn text(object: &AnyObject, selector: Sel) -> Option<String> {
 }
 
 fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
+    let responder = editor(tree, index)?;
+    let text = NSString::from_str(text);
+    let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
+    Ok(())
+}
+
+/// Takes `composition` as AppKit hands an input method's work to the focused
+/// text view: no input source changes, so the user's is never touched.
+fn compose(tree: &Tree, index: usize, composition: &Composition) -> Result<(), String> {
+    let responder = editor(tree, index)?;
+    // No replacement range: the marked text, or else the selection.
+    let marked = NSRange::new(NSNotFound as usize, 0);
+    match composition {
+        Composition::Mark(text) => {
+            let caret = NSRange::new(text.encode_utf16().count(), 0);
+            let text = NSString::from_str(text);
+            let _: () = unsafe {
+                msg_send![&*responder, setMarkedText: &*text, selectedRange: caret, replacementRange: marked]
+            };
+        }
+        Composition::Commit(text) => {
+            let text = NSString::from_str(text);
+            let _: () =
+                unsafe { msg_send![&*responder, insertText: &*text, replacementRange: marked] };
+        }
+        Composition::Unmark => {
+            let _: () = unsafe { msg_send![&*responder, unmarkText] };
+        }
+    }
+    Ok(())
+}
+
+/// The focused text view editing the element's text.
+fn editor(tree: &Tree, index: usize) -> Result<Retained<NSResponder>, String> {
     let node = &tree.nodes[index];
     let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
         return Err(format!("{} takes no text", node.describe()));
@@ -768,12 +810,13 @@ fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
     let responder = window
         .firstResponder()
         .ok_or("the window has no first responder")?;
-    if !responds(&responder, sel!(insertText:)) {
+    if !responds(
+        &responder,
+        sel!(setMarkedText:selectedRange:replacementRange:),
+    ) {
         return Err(format!("{} does not edit text", node.describe()));
     }
-    let text = NSString::from_str(text);
-    let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
-    Ok(())
+    Ok(responder)
 }
 
 /// Focuses `view`, or the first view inside it that takes the focus (a field in
