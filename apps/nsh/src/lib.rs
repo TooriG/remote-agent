@@ -14,6 +14,8 @@ mod desktop;
 #[cfg(desktop)]
 mod desktop_workspace;
 mod details;
+#[cfg(desktop)]
+mod devices;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod dictation;
 mod editor;
@@ -27,6 +29,8 @@ mod media;
 mod model_controls;
 mod native;
 mod notices;
+#[cfg(desktop)]
+mod onboarding;
 #[cfg(desktop)]
 mod permissions;
 mod projects;
@@ -345,8 +349,14 @@ fn app_content(
                     desktop::quit();
                 }
             });
+            // The first-run setup and the project import take the window's
+            // content, the sidebar included.
+            let setup = computed(move || state.with(|state| state.onboarding.page().is_some()));
             let tools = move || {
-                !settings.get() && !hosts.with(Vec::is_empty) && workspace.state.with(|s| s.open)
+                !settings.get()
+                    && !setup.get()
+                    && !hosts.with(Vec::is_empty)
+                    && workspace.state.with(|s| s.open)
             };
             let layout = move || workspace.state.with(|s| s.layout);
             let details = signal(true);
@@ -446,7 +456,7 @@ fn app_content(
                         .flex_row()
                         .accessibility_elements_hidden(move || settings.get())
                         .child(when(
-                            move || sidebar.get(),
+                            move || sidebar.get() && !setup.get(),
                             move || sidebar::sidebar(hosts, move || toolbar_action("compose")),
                         ))
                         .child(
@@ -455,7 +465,14 @@ fn app_content(
                                 .min_w_0()
                                 .child(notices())
                                 .child(when(move || hosts.with(Vec::is_empty), connections::hero))
-                                .child(when(move || !hosts.with(Vec::is_empty), main)),
+                                .child(when(
+                                    move || !hosts.with(Vec::is_empty) && setup.get(),
+                                    move || onboarding::page(hosts),
+                                ))
+                                .child(when(
+                                    move || !hosts.with(Vec::is_empty) && !setup.get(),
+                                    main,
+                                )),
                         ),
                 )
                 .child(when(

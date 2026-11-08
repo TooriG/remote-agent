@@ -19,6 +19,8 @@ use std::{
 };
 
 mod panes;
+#[cfg(desktop)]
+mod ssh;
 mod transfers;
 pub(crate) use transfers::{AttachmentSource, LocalFile};
 
@@ -123,7 +125,7 @@ impl Client {
         } else {
             serde_json::from_slice(&bytes).map_err(error)?
         };
-        hosts.retain(saved);
+        hosts.retain(|host| saved(&host.id));
         if let Some(scope) = &self.local {
             hosts.insert(0, local_profile(scope).await?);
             // WSL is optional: saved Hosts restore without it.
@@ -312,9 +314,7 @@ impl Client {
         &self,
         host: &str,
     ) -> Option<agent_protocol::models::WorktreeSettings> {
-        self.sessions
-            .session(host.into())?
-            .snapshot()
+        self.snapshot(host)?
             .files
             .workspace
             .settings
@@ -421,7 +421,7 @@ impl Client {
         let path = self.root.join("hosts.json");
         let saved = next
             .iter()
-            .filter(|host| saved(host))
+            .filter(|host| saved(&host.id))
             .cloned()
             .collect::<Vec<_>>();
         if let Err(reason) = tokio::task::spawn_blocking(move || {
@@ -441,6 +441,85 @@ impl Client {
             .await
             .map_err(error)?;
         Ok(id)
+    }
+
+    /// Forgets a paired Host: it leaves the saved list and its session closes,
+    /// then its files and device key on this device are deleted.
+    pub fn remove(self: &Arc<Self>, host: String) {
+        let owner = self.clone();
+        self.spawn(async move {
+            if let Err(reason) = owner.remove_host(host).await {
+                owner.report(reason);
+            }
+        });
+    }
+
+    async fn remove_host(&self, id: String) -> Result<(), AgentError> {
+        let mut hosts = self.hosts.lock().await;
+        let Some(profile) = hosts
+            .iter()
+            .find(|host| host.id == id && saved(&host.id))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(error("client is closing"));
+        }
+        let next = hosts
+            .iter()
+            .filter(|host| host.id != id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let path = self.root.join("hosts.json");
+        let kept = next
+            .iter()
+            .filter(|host| saved(&host.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        tokio::task::spawn_blocking(move || agent_local_host::save_private_json(&path, &kept))
+            .await
+            .map_err(error)?
+            .map_err(error)?;
+        *hosts = next.clone();
+        // Its last publication precedes the list without it, which drops it.
+        let closed = match self.sessions.remove(id) {
+            Some(session) => session.shutdown().await,
+            None => Ok(()),
+        };
+        self.updates
+            .send(Update::Hosts(next))
+            .await
+            .map_err(error)?;
+        drop(hosts);
+        // A session that may still save keeps its files.
+        closed?;
+        let storage = Storage {
+            root: self.root.clone(),
+            host: profile,
+            handed: self.handed.clone(),
+        };
+        tokio::task::spawn_blocking(move || storage.forget())
+            .await
+            .map_err(error)?
+    }
+
+    /// A server's invitation over the user's SSH, for this device to confirm.
+    #[cfg(desktop)]
+    pub fn ssh_invitation(
+        &self,
+        destination: String,
+    ) -> async_channel::Receiver<Result<agent_protocol::models::Invitation, String>> {
+        let (send, receive) = async_channel::bounded(1);
+        self.spawn(async move {
+            let _ = send.send(ssh::invitation(&destination).await).await;
+        });
+        receive
+    }
+
+    /// The Host's latest state, which its publication follows.
+    pub fn snapshot(&self, host: &str) -> Option<Arc<agent_core::state::Snapshot>> {
+        Some(self.sessions.session(host.into())?.snapshot())
     }
 
     pub fn scene(&self, active: bool) {
@@ -512,9 +591,10 @@ impl Client {
     }
 }
 
-/// Paired Hosts are saved; this PC's and its WSL distros' are found again.
-fn saved(host: &Host) -> bool {
-    host.id != LOCAL && agent_local_host::wsl::host_distro(&host.id).is_none()
+/// Paired Hosts are saved, and can be removed; this PC's and its WSL distros'
+/// are found again.
+pub(crate) fn saved(host: &str) -> bool {
+    host != LOCAL && agent_local_host::wsl::host_distro(host).is_none()
 }
 
 /// This machine's Host where it runs or will start, before it is ready.
@@ -634,6 +714,58 @@ mod tests {
             };
             assert_eq!(hosts.len(), 1);
             assert!(hosts[0] == remote);
+            client.shutdown().await.unwrap();
+        });
+    }
+
+    #[test]
+    fn a_removed_host_leaves_the_saved_list_and_its_files_while_this_pc_stays() {
+        let directory = tempfile::tempdir().unwrap();
+        let remote = saved_host(directory.path());
+        let hosts_files = directory.path().join("hosts");
+        let files = || std::fs::read_dir(&hosts_files).unwrap().count();
+        assert_eq!(files(), 1);
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
+        runtime.block_on(async {
+            let Update::Hosts(hosts) = incoming.recv().await.unwrap() else {
+                panic!("profiles must be published first");
+            };
+            assert!(hosts == [remote.clone()]);
+            // This PC's Host is found again on each launch: nothing removes it.
+            client.remove(LOCAL.into());
+            client.remove(remote.id.clone());
+            let remaining = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    match incoming.recv().await.unwrap() {
+                        Update::Hosts(hosts) => return hosts,
+                        Update::Error(reason) => panic!("removal failed: {reason}"),
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .expect("the removal was not published");
+            assert!(remaining.is_empty());
+            assert!(client.snapshot(&remote.id).is_none());
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while files() > 0 {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("the removed Host's files remain");
+            client.shutdown().await.unwrap();
+        });
+        drop(client);
+        drop(runtime);
+        // The next launch restores no removed Host.
+        let (runtime, client, incoming) = Client::new(directory.path().into(), None).unwrap();
+        runtime.block_on(async {
+            let Update::Hosts(hosts) = incoming.recv().await.unwrap() else {
+                panic!("profiles must be published first");
+            };
+            assert!(hosts.is_empty());
+            assert!(client.snapshot(&remote.id).is_none());
             client.shutdown().await.unwrap();
         });
     }

@@ -1,0 +1,27 @@
+# A PC added from its pasted invitation is saved beside this PC and can be
+# removed again; SSH refuses a destination that would be read as an option
+# before it starts. The PC added here is the fixture Host itself.
+expect "何に取り組みますか？" 30000
+press 設定を開く
+press 環境
+press 接続方法
+press SSHで接続
+type user@your-server "-oProxyCommand=x"
+press 接続 after SSH接続先
+expect "SSH接続先に user@server またはSSHのホスト名を入力してください。"
+press 接続方法
+press 接続情報を貼り付け
+press 接続用QRを表示 30000
+press 招待をコピー 30000
+paste 接続情報
+press 接続先を確認
+expect "メッセージ・添付ファイル・作業に必要なプロジェクトの内容を、このPCと利用するAIサービスに送信します。"
+press 同意して接続
+# Pairing closes the settings on the added PC.
+expect_absent "作業する環境と、このPCへ接続する端末を管理します。" 30000
+press 設定を開く
+press 環境
+expect "保存した接続を削除"
+screenshot saved
+press 保存した接続を削除
+expect_absent "保存した接続を削除" 30000

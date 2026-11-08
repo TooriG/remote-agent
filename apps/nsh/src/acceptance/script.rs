@@ -5,6 +5,9 @@
 //!   (`crates/host-fixture/src/pairing.rs`). The runner posts leading ones before
 //!   the app starts; the driver posts later ones when it reaches them
 //!   (`/release-inputs` while a turn waits).
+//! - `first-launch`: the app starts as on its first launch, showing its setup.
+//!   Without it the runner marks the setup done, as a returning user's. It
+//!   comes before the other steps, beside the leading `fixture` lines.
 //! - `press <label> [after <anchor>] [timeout-ms]`: presses the first element
 //!   whose label, title, value, identifier or placeholder is `<label>`, or an item
 //!   of an open menu; a link in text is clicked. A `*` at either end of `<label>` matches any text there
@@ -13,6 +16,8 @@
 //!   same name in the conversation).
 //! - `type <label> <text> [after <anchor>] [timeout-ms]`: focuses that element
 //!   and inserts `<text>`.
+//! - `paste <label> [after <anchor>] [timeout-ms]`: focuses that element and
+//!   inserts the clipboard's text, as the Edit menu's Paste does.
 //! - `key <name>`: a key with optional modifiers, as `return`, `escape`, `cmd+,`
 //!   or `shift+f10`.
 //! - `click <modifiers> <label> [after <anchor>] [timeout-ms]`: a mouse click
@@ -53,10 +58,13 @@ pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) enum Step {
     /// A control path the runner posted before the app started.
     Fixture(String),
+    /// The runner left the setup to show, as on a first launch.
+    FirstLaunch,
     /// A control path the driver posts when it reaches the step.
     Control(String),
     Press(Find),
     Type(Find, String),
+    Paste(Find),
     Key(Key),
     Click(Modifiers, Find),
     Expect(Find),
@@ -122,12 +130,17 @@ pub(crate) fn parse(script: &str) -> Result<Vec<Line>, String> {
         let mut step = words(source)
             .and_then(|words| step(&words))
             .map_err(|reason| format!("line {number}: {reason}"))?;
-        if let Step::Fixture(path) = &step
-            && lines
-                .iter()
-                .any(|line: &Line| !matches!(line.step, Step::Fixture(_)))
-        {
-            step = Step::Control(path.clone());
+        let started = lines
+            .iter()
+            .any(|line: &Line| !matches!(line.step, Step::Fixture(_) | Step::FirstLaunch));
+        match &step {
+            Step::Fixture(path) if started => step = Step::Control(path.clone()),
+            Step::FirstLaunch if started => {
+                return Err(format!(
+                    "line {number}: first-launch comes before the other steps"
+                ));
+            }
+            _ => {}
         }
         lines.push(Line {
             number,
@@ -178,8 +191,10 @@ fn step(words: &[String]) -> Result<Step, String> {
     let arguments: Vec<&str> = words[1..].iter().map(String::as_str).collect();
     Ok(match (words[0].as_str(), arguments.as_slice()) {
         ("fixture", [path]) if path.starts_with('/') => Step::Fixture((*path).to_owned()),
+        ("first-launch", []) => Step::FirstLaunch,
         ("press", [target, rest @ ..]) => Step::Press(find(target, rest)?),
         ("type", [target, text, rest @ ..]) => Step::Type(find(target, rest)?, (*text).to_owned()),
+        ("paste", [target, rest @ ..]) => Step::Paste(find(target, rest)?),
         ("key", [name]) => Step::Key(key(name)?),
         ("click", [held, target, rest @ ..]) => Step::Click(
             if *held == "none" {
@@ -343,9 +358,9 @@ mod tests {
     #[test]
     fn steps_take_quoted_labels_and_optional_timeouts() {
         let lines = parse(
-            "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
+            "# Comment\nfixture /external-conversation\nfirst-launch\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             paste 接続情報\nscroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
@@ -356,6 +371,7 @@ mod tests {
             steps,
             [
                 Step::Fixture("/external-conversation".into()),
+                Step::FirstLaunch,
                 Step::Press(Find {
                     text: "新しい チャット".into(),
                     after: None,
@@ -376,6 +392,11 @@ mod tests {
                 }),
                 Step::ExpectAbsent(Find {
                     text: "x".into(),
+                    after: None,
+                    timeout: DEFAULT_TIMEOUT
+                }),
+                Step::Paste(Find {
+                    text: "接続情報".into(),
                     after: None,
                     timeout: DEFAULT_TIMEOUT
                 }),
@@ -428,7 +449,7 @@ mod tests {
             ]
         );
         assert_eq!(lines[0].number, 2);
-        assert_eq!(lines[1].source, "press \"新しい チャット\"");
+        assert_eq!(lines[2].source, "press \"新しい チャット\"");
     }
 
     #[test]
@@ -539,6 +560,10 @@ mod tests {
             (
                 "fixture release-inputs",
                 "line 1: unknown step or wrong arguments: fixture",
+            ),
+            (
+                "expect x\nfirst-launch",
+                "line 2: first-launch comes before the other steps",
             ),
         ] {
             assert_eq!(parse(script).unwrap_err(), reason, "{script}");

@@ -179,17 +179,30 @@ fn select(mut scenarios: Vec<PathBuf>, filters: &[String]) -> Result<Vec<PathBuf
     Ok(scenarios)
 }
 
-/// The control paths a scenario's leading `fixture` lines post before the app
-/// starts; the app's driver posts the later ones.
-fn fixture_paths(script: &str) -> Vec<String> {
+/// A scenario's leading lines, which prepare the run before the app starts.
+fn preparation(script: &str) -> impl Iterator<Item = &str> {
     script
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map_while(|line| line.strip_prefix("fixture "))
+        .take_while(|line| line.starts_with("fixture ") || *line == FIRST_LAUNCH)
+}
+
+/// The control paths a scenario's leading `fixture` lines post before the app
+/// starts; the app's driver posts the later ones.
+fn fixture_paths(script: &str) -> Vec<String> {
+    preparation(script)
+        .filter_map(|line| line.strip_prefix("fixture "))
         .map(|path| path.trim().trim_matches('"').to_owned())
         .collect()
 }
+
+/// The step that keeps the app's first-run setup; without it the app starts
+/// as a returning user's, whose setup ended.
+const FIRST_LAUNCH: &str = "first-launch";
+/// What the app saves in its data once its setup ends
+/// (`apps/nsh/src/application/onboarding.rs`).
+const SETUP_COMPLETED: &str = "nsh-client/onboarding.completed";
 
 async fn scenario(
     path: &Path,
@@ -229,6 +242,11 @@ async fn scenario(
         let port: u16 = fs::read_to_string(&port)?.trim().parse()?;
         for path in fixture_paths(&script) {
             post(port, &path).await?;
+        }
+        if !preparation(&script).any(|line| line == FIRST_LAUNCH) {
+            let completed = host.join(SETUP_COMPLETED);
+            fs::create_dir_all(completed.parent().expect("the marker has a directory"))?;
+            fs::write(completed, "completed\n")?;
         }
         let log = File::create(output.join("app.log"))?;
         let mut command = Command::new(&tools.app);
@@ -406,10 +424,18 @@ mod tests {
     fn only_leading_fixture_lines_are_posted_before_the_app_starts() {
         assert_eq!(
             fixture_paths(
-                "# fixture /comment\nfixture /external-conversation\n\n  fixture \"/list-fixture\"\nexpect fixture\nfixture /release-inputs\n"
+                "# fixture /comment\nfixture /external-conversation\nfirst-launch\n\n  fixture \"/list-fixture\"\nexpect fixture\nfixture /release-inputs\n"
             ),
             ["/external-conversation", "/list-fixture"]
         );
+    }
+
+    #[test]
+    fn only_a_leading_first_launch_keeps_the_setup() {
+        let first = |script| preparation(script).any(|line| line == FIRST_LAUNCH);
+        assert!(first("fixture /list-fixture\nfirst-launch\nexpect x\n"));
+        assert!(!first("fixture /list-fixture\nexpect x\n"));
+        assert!(!first("expect x\nfirst-launch\n"));
     }
 
     #[test]

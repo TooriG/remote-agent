@@ -343,7 +343,7 @@ fn update_channel(connection: Connection) -> View {
 }
 
 /// The UI language. Choosing one makes the whole window again in it.
-fn language(connection: Connection) -> ui::Control {
+pub(crate) fn language(connection: Connection) -> ui::Control {
     const LANGUAGES: [(UiLanguage, &str); 2] = [
         (UiLanguage::Japanese, "日本語"),
         (UiLanguage::English, "English"),
@@ -507,10 +507,34 @@ fn provider_row(
 fn environments(connection: Connection, hosts: Memo<Vec<Host>>) -> View {
     view()
         .gap_8()
-        .child(ui::card(vec![ui::setting(
-            move || SharedString::from(environment::host_name(connection)),
-            move || environment::connection_status(connection),
-            environment::connection_switch(connection),
-        )]))
+        .child(ui::card(vec![
+            ui::setting(
+                move || SharedString::from(environment::host_name(connection)),
+                move || environment::connection_status(connection),
+                environment::connection_switch(connection),
+            ),
+            ui::setting(
+                tr("プロジェクトの取り込み"),
+                || {
+                    tr("CodexとClaude Codeの履歴から選べます。元の会話をそのまま再開できます。")
+                        .to_owned()
+                },
+                ui::text_button(
+                    tr("既存のプロジェクトを取り込む"),
+                    move || {
+                        connection.application.with(|app| {
+                            app.navigate(Navigation::Settings(false));
+                            app.open_import();
+                        })
+                    },
+                )
+                .enabled(move || connection.settings.with(|p| p.connected())),
+            ),
+        ]))
         .child(crate::connections::screen(hosts))
+        // Phones reach this PC's own Host.
+        .child(when(
+            move || hosts.with(|hosts| hosts.iter().any(|host| host.id == crate::client::LOCAL)),
+            crate::devices::section,
+        ))
 }

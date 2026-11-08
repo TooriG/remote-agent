@@ -18,6 +18,8 @@ mod worktrees;
 pub(crate) use worktrees::{WorktreeAction, WorktreeEditor};
 mod connections;
 pub(crate) use connections::{ListRequest, ListScope, ListSource};
+#[cfg(desktop)]
+mod onboarding;
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct Host {
@@ -78,6 +80,9 @@ pub(crate) struct State {
     /// The update's worker waits for this app to end its event loop.
     #[cfg(desktop)]
     pub quitting: bool,
+    /// The desktop's first-run setup and its project import.
+    #[cfg(desktop)]
+    pub onboarding: agent_core::presentation::onboarding::Onboarding,
     uploads: BTreeMap<uuid::Uuid, (String, DraftKey)>,
 }
 
@@ -106,6 +111,8 @@ impl Default for State {
             update: None,
             #[cfg(desktop)]
             quitting: false,
+            #[cfg(desktop)]
+            onboarding: Default::default(),
             uploads: BTreeMap::new(),
         }
     }
@@ -137,6 +144,9 @@ impl State {
                         name: host.name,
                     })
                     .collect();
+                let hosts = &self.hosts;
+                self.publications
+                    .retain(|id, _| hosts.iter().any(|host| &host.id == id));
                 self.resolve_selection();
             }
             Update::Presentation { host, value } => {
@@ -216,6 +226,8 @@ pub(crate) struct Application {
     runtime: tokio::runtime::Handle,
     jobs: tokio_util::task::TaskTracker,
     selection_path: PathBuf,
+    #[cfg(desktop)]
+    onboarding_path: PathBuf,
     /// Only the desktop settings change the language.
     #[cfg(any(desktop, test))]
     language_path: PathBuf,
@@ -258,6 +270,8 @@ impl Application {
                 |width| agent_core::presentation::files::explorer_width(width, f32::INFINITY),
             );
         #[cfg(desktop)]
+        let onboarding_path = root.join(onboarding::COMPLETED);
+        #[cfg(desktop)]
         let scope = local.clone();
         let (runtime, client, incoming) = Client::new(root, local)?;
         #[cfg(desktop)]
@@ -274,6 +288,10 @@ impl Application {
             language,
             #[cfg(any(desktop, test))]
             explorer_width,
+            #[cfg(desktop)]
+            onboarding: agent_core::presentation::onboarding::Onboarding::new(
+                onboarding_path.is_file(),
+            ),
             ..State::default()
         }));
         let application = Arc::new(Self {
@@ -284,6 +302,8 @@ impl Application {
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
             selection_path,
+            #[cfg(desktop)]
+            onboarding_path,
             #[cfg(any(desktop, test))]
             language_path,
             #[cfg(any(desktop, test))]

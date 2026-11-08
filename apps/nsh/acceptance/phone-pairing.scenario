@@ -1,0 +1,17 @@
+# The environment settings show this PC's invitation as a QR code a phone
+# scans or as text to copy, and the devices this PC allowed, which can be
+# disconnected.
+fixture /paired-device
+expect "何に取り組みますか？" 30000
+press 設定を開く
+press 環境
+expect "スマートフォンから接続" 10000
+expect "検証 iPhone" 30000
+press 接続用QRを表示
+expect "BexアプリでQRを読み取る" 30000
+press 招待をコピー
+expect_clipboard "expiresAt"
+screenshot invitation
+press 接続を解除 after 接続を許可した端末
+expect "接続を許可した端末はありません。" 30000
+expect_absent "検証 iPhone"
