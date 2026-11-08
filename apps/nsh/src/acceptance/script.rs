@@ -61,6 +61,10 @@
 //!   element is labelled `<label>` and every one lies whole inside its window.
 //! - `window <width> <height>`: resizes the main window's content to that many
 //!   points.
+//! - `paint <text> <budget-ms>`: verifies that visible TextKit glyphs completed
+//!   drawing within the budget after the last press, scroll or fixture action.
+//! - `paint_stream <text> <budget-ms>`: native drawing measured from the
+//!   timestamp sent with a `[render-stream]` fixture delta.
 //! - `drag_by <label> <points> [after <anchor>] [timeout-ms]`: drags that
 //!   element with the left button by `points` down (negative: up), in steps,
 //!   as a pointer would, and releases it.
@@ -153,6 +157,10 @@ pub(crate) enum Step {
     Window(f64, f64),
     /// A left-button drag of the element by this many points down.
     DragBy(Find, i32),
+    /// TextKit drew the text within the budget after the last action.
+    Paint(String, Duration),
+    /// TextKit drew a streamed delta within the budget after its emission.
+    PaintStream(String, Duration),
     Select(Find, String),
     Menu(Find),
     Hover(Find),
@@ -337,6 +345,10 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("unmark", [target, rest @ ..]) => Step::Compose(find(target, rest)?, Composition::Unmark),
         ("window", [width, height]) => Step::Window(points(width)?, points(height)?),
         ("scroll", [target, lines, rest @ ..]) => wheel(target, lines, rest)?,
+        ("paint", [text, budget]) => Step::Paint((*text).to_owned(), milliseconds(budget)?),
+        ("paint_stream", [text, budget]) => {
+            Step::PaintStream((*text).to_owned(), milliseconds(budget)?)
+        }
         ("drag_by", [target, points, rest @ ..]) => Step::DragBy(
             find(target, rest)?,
             points
@@ -584,7 +596,7 @@ mod tests {
              scroll 会話 -3\nscroll 画像 2 held cmd after 見出し\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nexpect_inside 送信 1000\nselect 回答 Needle\nmenu 回答 after 見出し\nhover 回答\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png contains \"a.txt:2\"\n\
              expect_clipboard \"a b\" 500\ncopy \"a\\nb\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
-             fixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\ndump tree_1\nwindow 1280 800\ncapture state_1\n",
+             fixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\ndump tree_1\nwindow 1280 800\ncapture state_1\npaint visible 100\npaint_stream delta 100\n",
         )
         .unwrap();
         let steps: Vec<_> = lines.iter().map(|line| line.step.clone()).collect();
@@ -762,6 +774,8 @@ mod tests {
                 Step::Dump("tree_1".into()),
                 Step::Window(1280.0, 800.0),
                 Step::Capture("state_1".into()),
+                Step::Paint("visible".into(), Duration::from_millis(100)),
+                Step::PaintStream("delta".into(), Duration::from_millis(100)),
             ]
         );
         assert_eq!(lines[0].number, 2);

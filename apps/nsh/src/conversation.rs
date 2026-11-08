@@ -193,6 +193,9 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     let top_row = signal(0_usize);
     let width = signal(0_f32);
     let padding = move || lane_padding(window().width.0);
+    // The lane's width, which message text lays out to: reused cells must not
+    // keep a width measured for another row.
+    let column_width = computed(move || (width.get() - 2.0 * padding()).clamp(0.0, LANE_WIDTH));
     spawn(async move {
         loop {
             timer(std::time::Duration::from_secs(1)).await;
@@ -220,18 +223,20 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     });
     // Shared, so that a row reads it cheaply through `try_get`.
     let rows = computed(move || {
-        Shared(std::sync::Arc::new(connection.conversation.with(
-            |conversation| {
-                conversation
-                    .as_ref()
-                    .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
-                    .unwrap_or_default()
-            },
-        )))
+        let projected = connection.conversation.with(|conversation| {
+            conversation
+                .as_ref()
+                .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
+                .unwrap_or_default()
+        });
+        #[cfg(all(target_os = "macos", debug_assertions))]
+        crate::acceptance::rows_ready(projected.len());
+        Shared(std::sync::Arc::new(projected))
     });
     effect(move || {
         target.get();
-        if rows.with(|rows| !rows.is_empty())
+        if column_width.get() > 0.0
+            && rows.with(|rows| !rows.is_empty())
             && following.get()
             && !dragging.get()
             && !scroll_pending.get()
@@ -252,7 +257,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             .context
             .with(|p| p.opening().is_none().then(|| p.history()).flatten())
     });
-    let column = view();
+    let column = view().label(tr("会話の履歴"));
     #[cfg(desktop)]
     let column = column.child(surroundings.selection_bar());
     column
@@ -311,285 +316,340 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                     .unwrap_or_default()
             })
         }))
-        .child(
-            virtual_list(
-                move || rows.with(|rows| rows.len()),
-                move |at| {
-                    // The list's cells can outlive the list's own values while a
-                    // conversation closes: a row then reads as none.
-                    let row = computed(move || {
-                        rows.try_get()
-                            .and_then(|rows| rows.get(at.index()).cloned())
-                    });
-                    let user =
-                        move || row.with(|r| r.as_ref().is_some_and(|r| r.kind == Kind::User));
-                    let kind = move || row.with(|r| r.as_ref().map_or(Kind::Response, |r| r.kind));
-                    let detail =
-                        computed(move || row.with(|r| r.as_ref().and_then(|r| r.detail.clone())));
-                    let error =
-                        computed(move || row.with(|r| r.as_ref().and_then(|r| r.error.clone())));
-                    let status = computed(move || row.with(|r| r.as_ref().and_then(|r| r.status)));
-                    let label = move || {
-                        row.with(|row| {
-                            row.as_ref().map(|row| {
-                                row.progress
-                                    .as_ref()
-                                    .map(|progress| {
-                                        progress
-                                            .label(
-                                                crate::l10n::language(),
-                                                clock
-                                                    .get()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_secs_f64(),
-                                            )
-                                            .into()
-                                    })
-                                    .unwrap_or_else(|| row.body.clone())
+        .child(when(
+            move || column_width.get() > 0.0 && rows.with(|rows| !rows.is_empty()),
+            move || {
+                virtual_list(
+                    move || rows.with(|rows| rows.len()),
+                    move |at| {
+                        let binding = stored((target.get_untracked(), None::<(usize, String)>));
+                        let row = computed(move || {
+                            // A splice updates the data before the recycled slot's
+                            // Position. Resolve its retained key in this snapshot
+                            // so a live answer never briefly becomes another row.
+                            let rows = rows.try_get()?;
+                            let scope = target.get();
+                            let position = at.index();
+                            let (previous_scope, previous) = binding.get();
+                            let previous = previous.filter(|_| previous_scope == scope);
+                            let retained = previous
+                                .as_ref()
+                                .and_then(|(_, id)| rows.iter().position(|row| &row.id == id));
+                            let index = agent_core::presentation::conversation::retained_row_index(
+                                previous.as_ref().map(|(position, _)| *position),
+                                position,
+                                retained,
+                                rows.len(),
+                            );
+                            let row = index.and_then(|index| rows.get(index)).cloned();
+                            binding.replace((
+                                scope,
+                                row.as_ref().map(|row| (position, row.id.clone())),
+                            ));
+                            row
+                        });
+                        let user =
+                            move || row.with(|r| r.as_ref().is_some_and(|r| r.kind == Kind::User));
+                        let kind =
+                            move || row.with(|r| r.as_ref().map_or(Kind::Response, |r| r.kind));
+                        let detail = computed(move || {
+                            row.with(|r| r.as_ref().and_then(|r| r.detail.clone()))
+                        });
+                        let error = computed(move || {
+                            row.with(|r| r.as_ref().and_then(|r| r.error.clone()))
+                        });
+                        let status =
+                            computed(move || row.with(|r| r.as_ref().and_then(|r| r.status)));
+                        let label = move || {
+                            row.with(|row| {
+                                row.as_ref().map(|row| {
+                                    row.progress
+                                        .as_ref()
+                                        .map(|progress| {
+                                            progress
+                                                .label(
+                                                    crate::l10n::language(),
+                                                    clock
+                                                        .get()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs_f64(),
+                                                )
+                                                .into()
+                                        })
+                                        .unwrap_or_else(|| row.body.clone())
+                                })
                             })
-                        })
-                    };
-                    view()
-                        .w_full()
-                        .items_center()
-                        .px(move || px(padding()))
-                        .py_3()
-                        .child(
-                            view()
-                                .group()
-                                .w_full()
-                                .max_w(px(LANE_WIDTH))
-                                .items_start()
-                                .style_when(user, |s| s.items_end())
-                                .child(when(
-                                    move || {
-                                        row.with(|row| row.as_ref().is_some_and(|row| row.steer))
-                                    },
-                                    steer_marker,
-                                ))
-                                .child(when(
-                                    move || {
-                                        row.with(|row| row.as_ref().is_some_and(|row| row.queued))
-                                    },
-                                    queued_marker,
-                                ))
-                                .child(when(
-                                    move || {
-                                        row.with(|row| {
-                                            row.as_ref().is_some_and(|row| {
-                                                row.activity.as_ref().is_some_and(|activity| {
-                                                    activity.activity_can_collapse
+                        };
+                        view()
+                            .w_full()
+                            .items_center()
+                            .px(move || px(padding()))
+                            .py_3()
+                            .child(
+                                view()
+                                    .group()
+                                    .w_full()
+                                    .max_w(px(LANE_WIDTH))
+                                    .items_start()
+                                    .style_when(user, |s| s.items_end())
+                                    .child(when(
+                                        move || {
+                                            row.with(|row| {
+                                                row.as_ref().is_some_and(|row| row.steer)
+                                            })
+                                        },
+                                        steer_marker,
+                                    ))
+                                    .child(when(
+                                        move || {
+                                            row.with(|row| {
+                                                row.as_ref().is_some_and(|row| row.queued)
+                                            })
+                                        },
+                                        queued_marker,
+                                    ))
+                                    .child(when(
+                                        move || {
+                                            row.with(|row| {
+                                                row.as_ref().is_some_and(|row| {
+                                                    row.activity.as_ref().is_some_and(|activity| {
+                                                        activity.activity_can_collapse
+                                                    })
                                                 })
                                             })
-                                        })
-                                    },
-                                    move || {
-                                        let open = move || {
-                                            row.with(|row| {
-                                                row.as_ref()
-                                                    .and_then(|row| row.activity.as_ref())
-                                                    .is_some_and(|activity| {
-                                                        expanded.with(|all| {
-                                                            activity_is_expanded(
-                                                                &activity.status,
-                                                                all.get(&activity.id).cloned(),
-                                                            )
-                                                        })
-                                                    })
-                                            })
-                                        };
-                                        view()
-                                            .w_full()
-                                            .child(fold_row(
-                                                move || label().unwrap_or_default().to_string(),
-                                                open,
-                                                move || {
-                                                    if let Some(activity) =
-                                                        row.with_untracked(|row| {
-                                                            row.as_ref().and_then(|row| {
-                                                                row.activity.clone()
-                                                            })
-                                                        })
-                                                    {
-                                                        let opening =
-                                                            !expanded.with_untracked(|all| {
+                                        },
+                                        move || {
+                                            let open = move || {
+                                                row.with(|row| {
+                                                    row.as_ref()
+                                                        .and_then(|row| row.activity.as_ref())
+                                                        .is_some_and(|activity| {
+                                                            expanded.with(|all| {
                                                                 activity_is_expanded(
                                                                     &activity.status,
                                                                     all.get(&activity.id).cloned(),
                                                                 )
-                                                            });
-                                                        following.set(false);
-                                                        expanded.update(|all| {
-                                                            if opening {
-                                                                all.insert(
-                                                                    activity.id.clone(),
-                                                                    activity.status,
-                                                                );
-                                                            } else {
-                                                                all.remove(&activity.id);
-                                                            }
-                                                        });
-                                                        if opening
-                                                            && let Some(load) = activity.load_items
-                                                        {
-                                                            connection.dispatch(
-                                                                Intent::LoadTurnItems(load),
-                                                            );
-                                                        }
-                                                        if opening {
-                                                            reveal_row(list, at.index() as u32);
-                                                        }
-                                                    }
-                                                },
-                                            ))
-                                            .child(work_load_failure(connection, row, open))
-                                    },
-                                ))
-                                .child(when(
-                                    move || detail.get().is_some(),
-                                    move || {
-                                        crate::activity::details(
-                                            surroundings,
-                                            detail,
-                                            expanded_items,
-                                            list,
-                                            at,
-                                            following,
-                                        )
-                                    },
-                                ))
-                                .child(when(
-                                    move || status.get().is_some(),
-                                    move || {
-                                        crate::activity::status(status, move || {
-                                            label().unwrap_or_default().to_string()
-                                        })
-                                    },
-                                ))
-                                .child(
-                                    view()
-                                        .max_w(relative(1.0))
-                                        .style_when(user, |s| {
-                                            s.max_w(relative(0.9))
-                                                .px(px(16.0))
-                                                .py(px(14.0))
-                                                .rounded(px(22.0))
-                                                .bg(move || theme().muted)
-                                        })
-                                        .style_when(move || !user(), |s| s.w_full())
-                                        .child(when(
-                                            move || error.with(Option::is_some),
-                                            move || error_card(error),
-                                        ))
-                                        .child(when(
-                                            move || {
-                                                row.with(|row| {
-                                                    row.as_ref().is_some_and(|row| {
-                                                        !row.activity.as_ref().is_some_and(
-                                                            |activity| {
-                                                                activity.activity_can_collapse
-                                                            },
-                                                        ) && row.detail.is_none()
-                                                            && row.error.is_none()
-                                                            && row.status.is_none()
-                                                    })
+                                                            })
+                                                        })
                                                 })
-                                            },
-                                            move || {
-                                                crate::rich_text::message(
-                                                    surroundings,
-                                                    move || label().map(|text| text.to_string()),
-                                                    kind,
-                                                )
-                                            },
-                                        )),
-                                )
-                                .child(each(
-                                    move || {
-                                        row.with(|row| {
-                                            row.as_ref()
-                                                .map(|row| row.images.clone())
-                                                .unwrap_or_default()
-                                        })
-                                    },
-                                    |source: &String| source.clone(),
-                                    move |source, _| {
-                                        crate::media::image_view(
-                                            connection,
-                                            surroundings.preview,
-                                            move || source.get(),
-                                            320.0,
-                                            240.0,
-                                        )
-                                    },
-                                ))
-                                .child(when(
-                                    move || {
-                                        row.with(|row| row.as_ref().is_some_and(|row| row.actions))
-                                    },
-                                    move || response_actions(connection, row),
-                                ))
-                                .child(when(user, move || user_actions(connection, row)))
-                                .child(when(
-                                    move || {
-                                        row.with(|row| {
-                                            row.as_ref().is_some_and(|row| row.unresolved.is_some())
-                                        })
-                                    },
-                                    move || unresolved_actions(connection, row),
-                                )),
-                        )
-                        .child(when(
-                            move || {
-                                row.with(|row| row.as_ref().is_some_and(|row| row.retry.is_some()))
-                            },
-                            move || {
-                                crate::ui::row_text_button(tr("再試行"), move || {
-                                    following.set(true);
-                                    if let Some(retry) = row.with_untracked(|row| {
-                                        row.as_ref().and_then(|row| row.retry.clone())
-                                    }) {
-                                        connection.dispatch(Intent::RetryPreparation(retry));
-                                    }
-                                })
-                            },
-                        ))
-                },
-            )
-            .keys(move || rows.with(|rows| rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>()))
-            .element_ref(&list)
-            .label(SharedString::from(tr("この会話")))
-            .estimated_item_size(px(170.0))
-            .follow_end(px(FOLLOW_END_THRESHOLD))
-            .on_scroll_drag_start(move |_: &Point<Points>| {
-                dragging.replace(true);
-            })
-            .on_scroll(move |event: &ScrollEvent| {
-                // As T3 Code's, the selection's actions go while it scrolls.
-                #[cfg(desktop)]
-                surroundings.selection.dismiss();
-                if dragging.get() {
-                    following.set(
-                        event.offset.y + event.size.height
-                            >= event.content_size.height - px(FOLLOW_END_THRESHOLD),
-                    );
-                }
-            })
-            .on_scroll_end(move |_: &Point<Points>| {
-                dragging.replace(false);
-            })
-            .on_momentum_end(move |_: &Point<Points>| {
-                dragging.replace(false);
-            })
-            .on_viewable_items_change(move |items: &ViewableItems| {
-                if let Some((first, _)) = items.viewable {
-                    top_row.set(first);
-                }
-            })
-            .flex_1()
-            .min_h_0(),
-        )
+                                            };
+                                            view()
+                                                .w_full()
+                                                .child(fold_row(
+                                                    move || label().unwrap_or_default().to_string(),
+                                                    open,
+                                                    move || {
+                                                        if let Some(activity) =
+                                                            row.with_untracked(|row| {
+                                                                row.as_ref().and_then(|row| {
+                                                                    row.activity.clone()
+                                                                })
+                                                            })
+                                                        {
+                                                            let opening =
+                                                                !expanded.with_untracked(|all| {
+                                                                    activity_is_expanded(
+                                                                        &activity.status,
+                                                                        all.get(&activity.id)
+                                                                            .cloned(),
+                                                                    )
+                                                                });
+                                                            following.set(false);
+                                                            expanded.update(|all| {
+                                                                if opening {
+                                                                    all.insert(
+                                                                        activity.id.clone(),
+                                                                        activity.status,
+                                                                    );
+                                                                } else {
+                                                                    all.remove(&activity.id);
+                                                                }
+                                                            });
+                                                            if opening
+                                                                && let Some(load) =
+                                                                    activity.load_items
+                                                            {
+                                                                connection.dispatch(
+                                                                    Intent::LoadTurnItems(load),
+                                                                );
+                                                            }
+                                                            if opening {
+                                                                reveal_row(list, at.index() as u32);
+                                                            }
+                                                        }
+                                                    },
+                                                ))
+                                                .child(work_load_failure(connection, row, open))
+                                        },
+                                    ))
+                                    .child(when(
+                                        move || detail.get().is_some(),
+                                        move || {
+                                            crate::activity::details(
+                                                surroundings,
+                                                detail,
+                                                expanded_items,
+                                                list,
+                                                at,
+                                                following,
+                                                column_width,
+                                            )
+                                        },
+                                    ))
+                                    .child(when(
+                                        move || status.get().is_some(),
+                                        move || {
+                                            crate::activity::status(status, move || {
+                                                label().unwrap_or_default().to_string()
+                                            })
+                                        },
+                                    ))
+                                    .child(
+                                        view()
+                                            .max_w(relative(1.0))
+                                            .style_when(user, |s| {
+                                                s.max_w(relative(0.9))
+                                                    .px(px(16.0))
+                                                    .py(px(14.0))
+                                                    .rounded(px(22.0))
+                                                    .bg(move || theme().muted)
+                                            })
+                                            .style_when(move || !user(), |s| s.w_full())
+                                            .child(when(
+                                                move || error.with(Option::is_some),
+                                                move || error_card(error),
+                                            ))
+                                            .child(when(
+                                                move || {
+                                                    row.with(|row| {
+                                                        row.as_ref().is_some_and(|row| {
+                                                            !row.activity.as_ref().is_some_and(
+                                                                |activity| {
+                                                                    activity.activity_can_collapse
+                                                                },
+                                                            ) && row.detail.is_none()
+                                                                && row.error.is_none()
+                                                                && row.status.is_none()
+                                                        })
+                                                    })
+                                                },
+                                                move || {
+                                                    crate::rich_text::message(
+                                                        surroundings,
+                                                        move || {
+                                                            label().map(|text| text.to_string())
+                                                        },
+                                                        kind,
+                                                        move || {
+                                                            if user() {
+                                                                (column_width.get() * 0.9 - 32.0)
+                                                                    .max(0.0)
+                                                            } else {
+                                                                column_width.get()
+                                                            }
+                                                        },
+                                                    )
+                                                },
+                                            )),
+                                    )
+                                    .child(each(
+                                        move || {
+                                            row.with(|row| {
+                                                row.as_ref()
+                                                    .map(|row| row.images.clone())
+                                                    .unwrap_or_default()
+                                            })
+                                        },
+                                        |source: &String| source.clone(),
+                                        move |source, _| {
+                                            crate::media::image_view(
+                                                connection,
+                                                surroundings.preview,
+                                                move || source.get(),
+                                                320.0,
+                                                240.0,
+                                            )
+                                        },
+                                    ))
+                                    .child(when(
+                                        move || {
+                                            row.with(|row| {
+                                                row.as_ref().is_some_and(|row| row.actions)
+                                            })
+                                        },
+                                        move || response_actions(connection, row),
+                                    ))
+                                    .child(when(user, move || user_actions(connection, row)))
+                                    .child(when(
+                                        move || {
+                                            row.with(|row| {
+                                                row.as_ref()
+                                                    .is_some_and(|row| row.unresolved.is_some())
+                                            })
+                                        },
+                                        move || unresolved_actions(connection, row),
+                                    )),
+                            )
+                            .child(when(
+                                move || {
+                                    row.with(|row| {
+                                        row.as_ref().is_some_and(|row| row.retry.is_some())
+                                    })
+                                },
+                                move || {
+                                    crate::ui::row_text_button(tr("再試行"), move || {
+                                        following.set(true);
+                                        if let Some(retry) = row.with_untracked(|row| {
+                                            row.as_ref().and_then(|row| row.retry.clone())
+                                        }) {
+                                            connection.dispatch(Intent::RetryPreparation(retry));
+                                        }
+                                    })
+                                },
+                            ))
+                    },
+                )
+                // Start with the latest row in the first layout. Creating an empty
+                // list and jumping after its first commit first mounts older cells
+                // at placeholder heights and measures content the reader never sees.
+                .initial_scroll_index(rows.with_untracked(|rows| rows.len().saturating_sub(1)))
+                .keys(move || {
+                    rows.with(|rows| rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>())
+                })
+                .element_ref(&list)
+                .label(SharedString::from(tr("この会話")))
+                .estimated_item_size(px(170.0))
+                .follow_end(px(FOLLOW_END_THRESHOLD))
+                .on_scroll_drag_start(move |_: &Point<Points>| {
+                    dragging.replace(true);
+                })
+                .on_scroll(move |event: &ScrollEvent| {
+                    // As T3 Code's, the selection's actions go while it scrolls.
+                    #[cfg(desktop)]
+                    surroundings.selection.dismiss();
+                    if dragging.get() {
+                        following.set(
+                            event.offset.y + event.size.height
+                                >= event.content_size.height - px(FOLLOW_END_THRESHOLD),
+                        );
+                    }
+                })
+                .on_scroll_end(move |_: &Point<Points>| {
+                    dragging.replace(false);
+                })
+                .on_momentum_end(move |_: &Point<Points>| {
+                    dragging.replace(false);
+                })
+                .on_viewable_items_change(move |items: &ViewableItems| {
+                    if let Some((first, _)) = items.viewable {
+                        top_row.set(first);
+                    }
+                })
+                .flex_1()
+                .min_h_0()
+            },
+        ))
         .child(when(is_desktop, move || {
             minimap(rows, top_row, list, following, move || {
                 agent_core::presentation::conversation::minimap_persistent(width.get(), padding())

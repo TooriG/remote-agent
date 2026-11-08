@@ -15,6 +15,8 @@ mod images;
 pub mod rows;
 mod work;
 pub use work::{LiveActivity, WorkRowLabel};
+mod row_binding;
+pub use row_binding::retained_row_index;
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.

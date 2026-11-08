@@ -160,6 +160,7 @@ pub(crate) fn content(
     surroundings: Surroundings,
     blocks: impl Fn() -> Vec<MarkdownBlock> + 'static,
     kind: impl Fn() -> Kind + Copy + 'static,
+    max_width: impl Fn() -> f32 + Copy + 'static,
 ) -> nsh_core::element::View {
     let content = computed(move || parts(blocks(), &[], &|_| None));
     view_parts(
@@ -167,6 +168,7 @@ pub(crate) fn content(
         move || content.get(),
         target(surroundings.connection),
         kind,
+        computed(max_width),
     )
 }
 
@@ -176,6 +178,7 @@ pub(crate) fn message(
     surroundings: Surroundings,
     source: impl Fn() -> Option<String> + 'static,
     kind: impl Fn() -> Kind + Copy + 'static,
+    max_width: impl Fn() -> f32 + Copy + 'static,
 ) -> nsh_core::element::View {
     let connection = surroundings.connection;
     let document = computed(move || {
@@ -223,6 +226,7 @@ pub(crate) fn message(
         move || content.get(),
         target(connection),
         kind,
+        computed(max_width),
     )
 }
 
@@ -376,6 +380,7 @@ fn view_parts(
     parts: impl Fn() -> Vec<Part> + 'static,
     target: Memo<String>,
     kind: impl Fn() -> Kind + Copy + 'static,
+    max_width: Memo<f32>,
 ) -> nsh_core::element::View {
     let Surroundings {
         connection, files, ..
@@ -390,8 +395,11 @@ fn view_parts(
                 .bg(crate::ui::colors::BORDER)
                 .into_element(),
             Part::Text(_) | Part::Code { .. } => {
+                // Reused cells lay text out to the lane, not a width measured
+                // for another row; unwrapped code keeps its lines.
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
-                let message = move || {
+                let message = move |wrap: Signal<bool>| {
+                    let is_code = move || part.with(|(_, part)| matches!(part, Part::Code { .. }));
                     native("bex.messageText")
                         .prop("data", move || {
                             part.with(|(_, part)| {
@@ -400,7 +408,8 @@ fn view_parts(
                                 };
                                 json!({"blocks": blocks, "secondary": kind() == Kind::Activity,
                         "role": if kind() == Kind::User { "user" } else { "assistant" },
-                        "target": target.get(), "sideChat": connection.pane.is_none()})
+                        "target": target.get(), "sideChat": connection.pane.is_none(),
+                        "maxWidth": if is_code() && !wrap.get() { 1_000_000.0 } else { (max_width.get() - if is_code() { 34.0 } else { 0.0 }).max(0.0) }})
                             })
                         })
                         .on_native_event(move |event: &NativeEvent| {
@@ -409,10 +418,10 @@ fn view_parts(
                         .min_h(px(20.0))
                 };
                 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-                let message = move || {
+                let message = move |_: Signal<bool>| {
                     drawn::message(part, move || kind() == Kind::Activity, target, surroundings)
                 };
-                frame(part, move || message().w_full().into_element())
+                frame(part, move |wrap| message(wrap).w_full().into_element())
             }
             Part::Image(_) => crate::media::image_view(
                 surroundings.connection,
@@ -444,7 +453,7 @@ fn view_parts(
                 );
             })
             .into_element(),
-            Part::Table { .. } => table(surroundings, part, target, kind).into_element(),
+            Part::Table { .. } => table(surroundings, part, target, kind, max_width).into_element(),
         },
     ))
 }
@@ -455,7 +464,7 @@ fn view_parts(
 /// asked for; the drawing enlarges and its source copies.
 fn frame(
     part: ReadSignal<(usize, Part)>,
-    message: impl Fn() -> AnyElement + Copy + 'static,
+    message: impl Fn(Signal<bool>) -> AnyElement + Copy + 'static,
 ) -> AnyElement {
     let code = move || part.with(|(_, part)| matches!(part, Part::Code { .. }));
     let diagram = computed(move || {
@@ -486,11 +495,11 @@ fn frame(
         }))
         .child(when(
             move || !code() || (shown_code() && wrap.get()),
-            message,
+            move || message(wrap),
         ))
         .child(when(
             move || shown_code() && !wrap.get(),
-            move || scroll().horizontal().w_full().child(message()),
+            move || scroll().horizontal().w_full().child(message(wrap)),
         ))
         .child(when(drawn, move || {
             // The drawing keeps its proportions and never grows past its own
@@ -615,6 +624,7 @@ fn table(
     part: ReadSignal<(usize, Part)>,
     target: Memo<String>,
     kind: impl Fn() -> Kind + Copy + 'static,
+    max_width: Memo<f32>,
 ) -> impl IntoElement {
     use crate::ui::colors;
     let copy = move |markdown: bool| {
@@ -679,6 +689,18 @@ fn table(
                                         move || cell.with(|(_, parts)| parts.clone()),
                                         target,
                                         kind,
+                                        computed(move || {
+                                            let columns =
+                                                row.with(|(_, cells)| cells.len()).max(1) as f32;
+                                            if compact.get() {
+                                                1_000_000.0
+                                            } else {
+                                                ((max_width.get() - 2.0 - (columns - 1.0))
+                                                    / columns
+                                                    - 24.0)
+                                                    .max(0.0)
+                                            }
+                                        }),
                                     ))
                             },
                         ))
@@ -1139,7 +1161,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true}),
+            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true, "maxWidth": 400}),
             expected
         );
     }

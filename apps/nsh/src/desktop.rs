@@ -129,7 +129,7 @@ pub fn run() -> std::process::ExitCode {
     // Windows' pages are the Host's rendered images; no local renderer starts.
     #[cfg(windows)]
     let _ = local_directory;
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", debug_assertions))]
     let acceptance = match crate::acceptance::from_environment(
         objc2::MainThreadMarker::new().expect("the app starts on the main thread"),
     ) {
@@ -146,7 +146,7 @@ pub fn run() -> std::process::ExitCode {
     if let Err(reason) = runtime.block_on(application.shutdown()) {
         return fail(&reason.to_string());
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", debug_assertions))]
     if acceptance.is_some_and(|passed| !passed.get()) {
         return std::process::ExitCode::FAILURE;
     }

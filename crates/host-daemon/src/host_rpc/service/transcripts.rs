@@ -5,6 +5,9 @@ use agent_protocol::session::SessionRef;
 use conversations::HistoryUse;
 use futures_util::FutureExt;
 
+#[cfg(test)]
+mod tests;
+
 /// Every transcript window, including older pages, holds at most this many turns.
 pub(super) const WINDOW_TURNS: usize = 10;
 

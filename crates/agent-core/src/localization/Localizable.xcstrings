@@ -6081,6 +6081,22 @@
         }
       }
     },
+    "会話の履歴": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話の履歴"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation history"
+          }
+        }
+      }
+    },
     "会話を検索": {
       "localizations": {
         "ja": {

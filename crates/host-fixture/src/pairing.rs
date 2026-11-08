@@ -165,13 +165,17 @@ fn route(
         return Ok((204, Vec::new()));
     }
     if let Some((
-        kind @ ("/long-conversation" | "/viewport-conversation" | "/reading-conversation"),
+        kind @ ("/long-conversation"
+        | "/viewport-conversation"
+        | "/reading-conversation"
+        | "/render-conversation"),
         id,
     )) = path.rsplit_once('/')
     {
         let (history, name) = match kind {
             "/viewport-conversation" => ("viewport", "Long conversation"),
             "/reading-conversation" => ("reading", "Reading conversation"),
+            "/render-conversation" => ("render", "Long conversation"),
             _ => ("long", "Long conversation"),
         };
         write_json(

@@ -75,8 +75,10 @@ struct MessageDocument: Decodable, Equatable {
     let role: String
     let target: String
     let sideChat: Bool
+    let maxWidth: Double
 
-    static let empty = MessageDocument(blocks: [], secondary: false, role: "assistant", target: "", sideChat: false)
+    static let empty = MessageDocument(blocks: [], secondary: false, role: "assistant", target: "", sideChat: false,
+                                       maxWidth: 0)
 }
 
 @MainActor enum MessageAttributes {

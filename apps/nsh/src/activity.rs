@@ -24,6 +24,7 @@ pub(crate) fn details(
     list: ElementRef,
     at: Position,
     following: Signal<bool>,
+    column_width: Memo<f32>,
 ) -> impl Element {
     let connection = surroundings.connection;
     let open = move || {
@@ -197,6 +198,7 @@ pub(crate) fn details(
                         })
                     },
                     || crate::conversation::Kind::Response,
+                    move || (column_width.get() - 28.0).max(0.0),
                 ))
         }))
 }
