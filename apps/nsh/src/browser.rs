@@ -5,7 +5,7 @@ use crate::{Connection, native, shared::Shared, workbench::Workbench};
 use agent_core::state::DraftKey;
 use agent_protocol::{browser::*, session::SessionRef};
 use base64::Engine;
-use nsh_core::{AutoCapitalize, KeyboardType, element::input, platform::Lifecycle, prelude::*};
+use nsh_core::{AutoCapitalize, KeyboardType, element::input, prelude::*};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 
@@ -78,7 +78,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
         }
     });
     let accepts_input = computed(move || {
-        ready.get() && lifecycle() == Lifecycle::Active && connection_failure.get().is_none()
+        ready.get() && native::shown() && connection_failure.get().is_none()
     });
     let request = move |action| {
         frame.with_untracked(|frame| BrowserRequest {
@@ -114,7 +114,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
         true
     };
     effect(move || {
-        if lifecycle() != Lifecycle::Active {
+        if !native::shown() {
             while incoming.with(|queue| queue.try_recv().is_ok()) {}
             answering.set(false);
             set_keyboard(false);

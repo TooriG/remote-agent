@@ -18704,6 +18704,70 @@
           }
         }
       }
+    },
+    "{0}を選択中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} selected"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}を選択中"
+          }
+        }
+      }
+    },
+    "{0}を使う": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use {0}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}を使う"
+          }
+        }
+      }
+    },
+    "{0}からサインアウト": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign out of {0}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}からサインアウト"
+          }
+        }
+      }
+    },
+    "{0}を閉じる": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close {0}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0}を閉じる"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -25,6 +25,25 @@ impl RowIndicators {
     }
 }
 
+/// Whether the app keeps its Host work going now (its connection, a sign-in's
+/// polling). An iPhone app does only in the foreground, where the system lets
+/// it run; a desktop app does all the time, since the user works in other apps
+/// (the browser that signs in) while it waits.
+pub(crate) fn in_use() -> bool {
+    cfg!(desktop) || lifecycle() == nsh_core::platform::Lifecycle::Active
+}
+
+/// Whether the user can see the app's content: on the desktop while any of its
+/// window shows, on the iPhone only in the foreground.
+pub(crate) fn shown() -> bool {
+    use nsh_core::platform::Lifecycle;
+    match lifecycle() {
+        Lifecycle::Active => true,
+        Lifecycle::Inactive => cfg!(desktop),
+        _ => false,
+    }
+}
+
 pub fn items(choices: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Value {
     json!(
         choices

@@ -1,0 +1,28 @@
+# Adding a Codex account completes its device-code sign-in while the app waits
+# behind the browser the user signs in with, and selects it. The first account
+# can be chosen again, and the added one is signed out of once the confirmation
+# is accepted, not when it is cancelled.
+# iOS: testSimulatorSwitchesCodexAccountsAndForksConversation (switching), testSimulatorSignsInDirectlyFromModelSettings (sign-out confirmation)
+expect "何に取り組みますか？" 30000
+press 設定を開く
+press プロバイダー
+expect "desktop@example.invalidを選択中" 10000
+press アカウントを追加
+expect "TEST-CODE" 10000
+# The fixture's browser sign-in completes after its delay.
+expect "second@example.invalidを選択中" 20000
+expect "desktop@example.invalidを使う"
+expect_absent "TEST-CODE"
+screenshot added
+press "desktop@example.invalidを使う"
+expect "desktop@example.invalidを選択中" 10000
+expect "second@example.invalidを使う"
+press "second@example.invalidからサインアウト"
+expect "サインアウトしますか？"
+press キャンセル after "サインアウトしますか？"
+expect_absent "サインアウトしますか？"
+expect "second@example.invalidを使う"
+press "second@example.invalidからサインアウト"
+press サインアウト after "サインアウトしますか？"
+expect_absent "second@example.invalid" 10000
+expect "desktop@example.invalidを選択中"

@@ -19,7 +19,7 @@ press ツールを追加
 press エージェント
 expect "0 件が実行中" 10000
 expect "サブエージェントが起動するとここに表示されます。"
-press タブを閉じる after エージェント
+press エージェントを閉じる
 expect_absent "0 件が実行中"
 expect ターミナル
 press ツールを閉じる

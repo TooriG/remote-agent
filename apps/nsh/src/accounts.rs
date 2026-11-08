@@ -3,7 +3,7 @@ use crate::ui::{self, Enabled};
 use crate::{Connection, native};
 use agent_core::state::{Intent, operations as op};
 use agent_protocol::{dsh::KeyProvider, session::ProviderKind};
-use nsh_core::{element::input, platform::Lifecycle, prelude::*};
+use nsh_core::{element::input, prelude::*};
 
 pub(crate) fn icon(provider: ProviderKind) -> &'static str {
     match provider {
@@ -176,12 +176,14 @@ fn account_row(
         publication
             .with(|p| account.with(|a| p.settings.account_is_selected(a.provider, a.id.clone())))
     };
+    let name = move || account.with(|a| a.email.as_ref().unwrap_or(&a.id).clone());
     let actions = view().flex_row().gap_2()
-        .child(ui::text_button(move || SharedString::from(if selected() { tr("選択中") } else { tr("このアカウントを使う") }), move || {
+        .child(ui::labelled_text_button(move || SharedString::from(if selected() { tr("選択中") } else { tr("このアカウントを使う") }),
+            move || SharedString::from(if selected() { tr_format("{0}を選択中", [&name()]) } else { tr_format("{0}を使う", [&name()]) }), move || {
             let (provider, id) = account.with_untracked(|a| (a.provider, a.id.clone()));
             perform(Intent::SelectAccount(op::SelectAccount { provider, id }));
         }).enabled(move || !busy.get() && !selected()))
-        .child(ui::text_button(tr("サインアウト"), move || {
+        .child(ui::labelled_text_button(tr("サインアウト"), move || SharedString::from(tr_format("{0}からサインアウト", [&name()])), move || {
             let (provider, id) = account.with_untracked(|a| (a.provider, a.id.clone()));
             spawn(async move {
                 if nsh_base::alert_dialog().title(tr("サインアウトしますか？"))
@@ -208,9 +210,7 @@ fn account_row(
                             .min_w_0()
                             .gap_1()
                             .child(
-                                text(move || {
-                                    account.with(|a| a.email.as_ref().unwrap_or(&a.id).clone())
-                                })
+                                text(name)
                                 .text_size(px(14.0))
                                 .font_weight(FontWeight::MEDIUM),
                             )
@@ -312,12 +312,12 @@ fn login_panel(
         (
             connection.host.get(),
             login.get(),
-            lifecycle(),
+            native::in_use(),
             connection.settings.with(|p| p.connected()),
         )
     });
     effect(move || {
-        let (host, Some(login), Lifecycle::Active, true) = target.get() else {
+        let (host, Some(login), true, true) = target.get() else {
             return;
         };
         retry.get();
