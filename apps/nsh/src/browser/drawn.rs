@@ -312,29 +312,29 @@ fn data_panel(
                         .child(button(
                             tr("保存パスワード → Keychain").into(),
                             ActionTone::Secondary,
-                            BrowserAction::ImportPasswords { profile: profile.id },
+                            BrowserAction::ImportPasswords {
+                                profile: profile.id,
+                            },
                         )),
                 )
         })
         .collect();
     if imports.is_empty() {
-        imports.push(note(tr("取り込めるブラウザプロファイルがありません。").into()));
+        imports.push(note(
+            tr("取り込めるブラウザプロファイルがありません。").into(),
+        ));
     }
     sections.push((tr("接続先のブラウザから取り込む").to_owned(), imports));
     if !import_errors.is_empty() {
         let errors = import_errors
             .into_iter()
             .map(|error| {
-                view()
-                    .gap_1()
-                    .p_3()
-                    .child(text(error.browser))
-                    .child(
-                        text(localized(error.message))
-                            .text_size(px(12.0))
-                            .text_color(colors::MUTED)
-                            .selectable(true),
-                    )
+                view().gap_1().p_3().child(text(error.browser)).child(
+                    text(localized(error.message))
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED)
+                        .selectable(true),
+                )
             })
             .collect();
         sections.push((tr("読み取れなかったブラウザ").to_owned(), errors));
@@ -401,22 +401,17 @@ fn data_panel(
                 .child(ui::text_button(tr("閉じる"), close)),
         )
         .child(
-            scroll().flex_1().min_h_0().child(
-                sections
-                    .into_iter()
-                    .fold(view().gap_4().p_4(), |content, (title, rows)| {
-                        content.child(
-                            view()
-                                .gap_2()
-                                .child(
-                                    text(title)
-                                        .text_size(px(12.0))
-                                        .text_color(colors::MUTED),
-                                )
-                                .child(ui::card(rows)),
-                        )
-                    }),
-            ),
+            scroll().flex_1().min_h_0().child(sections.into_iter().fold(
+                view().gap_4().p_4(),
+                |content, (title, rows)| {
+                    content.child(
+                        view()
+                            .gap_2()
+                            .child(text(title).text_size(px(12.0)).text_color(colors::MUTED))
+                            .child(ui::card(rows)),
+                    )
+                },
+            )),
         )
 }
 

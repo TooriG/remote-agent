@@ -6,10 +6,7 @@ use nsh_platform_windows::{ComponentContext, Components, NativeComponent, Wheel}
 use std::rc::Rc;
 
 pub(crate) fn register(components: &Components) {
-    components.register(
-        "bex.wheel",
-        Rc::new(|context| Box::new(WheelArea(context))),
-    );
+    components.register("bex.wheel", Rc::new(|context| Box::new(WheelArea(context))));
 }
 
 /// Draws nothing; its view keeps presses and moves, it takes the wheel.

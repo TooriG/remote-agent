@@ -67,14 +67,20 @@ mod tests {
     fn other_rates_keep_the_duration_and_the_tone() {
         for rate in [8_000, 16_000, 44_100, 48_000, 96_000] {
             let output = transcription_pcm(vec![0.; 1013], rate).unwrap();
-            assert_eq!(output.len() / 2, (1013_usize * 24_000).div_ceil(rate as usize));
+            assert_eq!(
+                output.len() / 2,
+                (1013_usize * 24_000).div_ceil(rate as usize)
+            );
             assert!(output.iter().all(|byte| *byte == 0));
             // A 1 kHz tone at 0.3 keeps its energy (0.3² / 2) and its cycles.
             let tone = |frame: usize| {
                 0.3 * (std::f32::consts::TAU * 1000. * frame as f32 / rate as f32).sin()
             };
             let output = transcription_pcm((0..4093).map(tone).collect(), rate).unwrap();
-            assert_eq!(output.len() / 2, (4093_usize * 24_000).div_ceil(rate as usize));
+            assert_eq!(
+                output.len() / 2,
+                (4093_usize * 24_000).div_ceil(rate as usize)
+            );
             let frames = output.len() / 2;
             let body: Vec<f32> = output
                 .as_chunks::<2>()
@@ -85,12 +91,18 @@ mod tests {
                 .map(|bytes| f32::from(i16::from_le_bytes(*bytes)) / 32768.)
                 .collect();
             let energy = body.iter().map(|sample| sample * sample).sum::<f32>() / body.len() as f32;
-            assert!((energy - 0.045).abs() < 0.002, "rate={rate} energy={energy}");
+            assert!(
+                (energy - 0.045).abs() < 0.002,
+                "rate={rate} energy={energy}"
+            );
             let cycles = body
                 .windows(2)
                 .filter(|pair| pair[0] <= 0. && pair[1] > 0.)
                 .count();
-            assert!(cycles.abs_diff(body.len() / 24) <= 1, "rate={rate} cycles={cycles}");
+            assert!(
+                cycles.abs_diff(body.len() / 24) <= 1,
+                "rate={rate} cycles={cycles}"
+            );
         }
     }
 }

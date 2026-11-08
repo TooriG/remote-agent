@@ -165,7 +165,8 @@ impl Screen {
                     if cell.flags.contains(Flags::INVERSE) {
                         std::mem::swap(&mut foreground, &mut background);
                     }
-                    if selection.is_some_and(|range| range.contains(Point::new(line, Column(column))))
+                    if selection
+                        .is_some_and(|range| range.contains(Point::new(line, Column(column))))
                     {
                         background = SELECTION;
                     }
@@ -324,7 +325,8 @@ impl Key {
                 .map(|(_, name)| name)
                 .collect::<String>();
             keys.extend(
-                Cursor::ALL.map(|(name, key)| (format!("{prefix}{name}"), Self::Cursor(key, modifier))),
+                Cursor::ALL
+                    .map(|(name, key)| (format!("{prefix}{name}"), Self::Cursor(key, modifier))),
             );
         }
         keys.extend(
@@ -352,7 +354,9 @@ impl Key {
             Self::Escape => b"\x1b".to_vec(),
             Self::Tab => b"\t".to_vec(),
             Self::BackTab => b"\x1b[Z".to_vec(),
-            Self::Cursor(key, 1) if mode.app_cursor => format!("\x1bO{}", key.suffix()).into_bytes(),
+            Self::Cursor(key, 1) if mode.app_cursor => {
+                format!("\x1bO{}", key.suffix()).into_bytes()
+            }
             Self::Cursor(key, 1) => format!("\x1b[{}", key.suffix()).into_bytes(),
             Self::Cursor(key, modifier) => {
                 format!("\x1b[1;{modifier}{}", key.suffix()).into_bytes()
@@ -497,10 +501,17 @@ impl Screen {
 
     /// Mouse `button` (0 the left one, 32 a drag, 35 a move, 64 and 65 the
     /// wheel) at `cell`, as the program asked to hear it.
-    fn report(&self, button: u8, (column, row): (usize, usize), held: Modifiers, released: bool) -> Vec<u8> {
+    fn report(
+        &self,
+        button: u8,
+        (column, row): (usize, usize),
+        held: Modifiers,
+        released: bool,
+    ) -> Vec<u8> {
         let column = column.min(self.term.columns() - 1) + 1;
         let row = row.min(self.term.screen_lines() - 1) + 1;
-        let code = button + u8::from(held.shift) * 4 + u8::from(held.alt) * 8 + u8::from(held.ctrl) * 16;
+        let code =
+            button + u8::from(held.shift) * 4 + u8::from(held.alt) * 8 + u8::from(held.ctrl) * 16;
         let mode = self.term.mode();
         if mode.contains(TermMode::SGR_MOUSE) {
             let end = if released { 'm' } else { 'M' };
@@ -509,14 +520,26 @@ impl Screen {
         let code = if released { 3 } else { code };
         if mode.contains(TermMode::UTF8_MOUSE) {
             let position = |value: usize| char::from_u32(value as u32 + 32).unwrap_or(' ');
-            return format!("\x1b[M{}{}{}", char::from(code + 32), position(column), position(row))
-                .into_bytes();
+            return format!(
+                "\x1b[M{}{}{}",
+                char::from(code + 32),
+                position(column),
+                position(row)
+            )
+            .into_bytes();
         }
         // The classic encoding has a byte for each coordinate.
         if column > 223 || row > 223 {
             return Vec::new();
         }
-        vec![0x1b, b'[', b'M', code + 32, column as u8 + 32, row as u8 + 32]
+        vec![
+            0x1b,
+            b'[',
+            b'M',
+            code + 32,
+            column as u8 + 32,
+            row as u8 + 32,
+        ]
     }
 }
 /// Typed or pasted text as the terminal reads it: line breaks as returns, or
@@ -686,8 +709,12 @@ mod draw {
             }
         };
         let pointer = {
-            let (press, hover, release, wheel) =
-                (update.clone(), update.clone(), update.clone(), update.clone());
+            let (press, hover, release, wheel) = (
+                update.clone(),
+                update.clone(),
+                update.clone(),
+                update.clone(),
+            );
             crate::native::wheel_area(move |scroll: crate::native::Scroll| {
                 let held = Modifiers {
                     shift: scroll.shift,
@@ -884,7 +911,10 @@ mod tests {
         assert_eq!(up.bytes(screen.mode()), b"\x1bOA");
         assert_eq!(Key::Control('c').bytes(screen.mode()), [3]);
         // Modified cursor keys stay in xterm's CSI form in either mode.
-        assert_eq!(Key::Cursor(Cursor::Left, 5).bytes(screen.mode()), b"\x1b[1;5D");
+        assert_eq!(
+            Key::Cursor(Cursor::Left, 5).bytes(screen.mode()),
+            b"\x1b[1;5D"
+        );
         let keystrokes = Key::bindings()
             .into_iter()
             .map(|(keystroke, _)| keystroke)
@@ -893,11 +923,19 @@ mod tests {
             assert!(!keystrokes.iter().any(|keystroke| keystroke == kept));
         }
         let unique = keystrokes.iter().collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(unique.len(), keystrokes.len(), "each keystroke sends one key");
+        assert_eq!(
+            unique.len(),
+            keystrokes.len(),
+            "each keystroke sends one key"
+        );
         // The grid binds each of them on Windows, which panics on one it
         // cannot parse or the platform keeps.
         use nsh_core::{keymap::Keystroke, platform::Os};
-        for keystroke in keystrokes.iter().map(String::as_str).chain(["ctrl+shift+c"]) {
+        for keystroke in keystrokes
+            .iter()
+            .map(String::as_str)
+            .chain(["ctrl+shift+c"])
+        {
             let parsed = Keystroke::parse(keystroke, Os::Windows).unwrap();
             assert_eq!(parsed.reserved(Os::Windows), None, "{keystroke}");
         }
@@ -937,12 +975,18 @@ mod tests {
         assert!(screen.wheel(-LINE_HEIGHT / 2.0, (0, 0), none).is_empty());
         let frame = screen.frame();
         assert_eq!((text(&frame, 0), text(&frame, 1)), ("2".into(), "3".into()));
-        assert_eq!(frame.cursor, None, "the cursor stays with the program's lines");
+        assert_eq!(
+            frame.cursor, None,
+            "the cursor stays with the program's lines"
+        );
         screen.scroll_to_bottom();
         assert_eq!(text(&screen.frame(), 1), "4");
         // A full-screen program that asks for arrows gets them instead.
         screen.feed(&[output(2, b"\x1b[?1049h\x1b[?1007h", None)]);
-        assert_eq!(screen.wheel(-LINE_HEIGHT * 2.0, (0, 0), none), b"\x1b[A\x1b[A");
+        assert_eq!(
+            screen.wheel(-LINE_HEIGHT * 2.0, (0, 0), none),
+            b"\x1b[A\x1b[A"
+        );
         assert_eq!(screen.wheel(LINE_HEIGHT, (0, 0), none), b"\x1b[B");
     }
 
@@ -959,7 +1003,10 @@ mod tests {
         assert_eq!(screen.press((2, 1), 1, none), b"\x1b[<0;3;2M");
         assert_eq!(screen.hover((4, 1), none), b"\x1b[<32;5;2M");
         assert_eq!(screen.release((4, 1), none), b"\x1b[<0;5;2m");
-        assert!(screen.hover((5, 1), none).is_empty(), "a drag ends with its release");
+        assert!(
+            screen.hover((5, 1), none).is_empty(),
+            "a drag ends with its release"
+        );
         assert_eq!(screen.wheel(-LINE_HEIGHT, (0, 0), none), b"\x1b[<64;1;1M");
         let ctrl = Modifiers {
             ctrl: true,
@@ -972,8 +1019,14 @@ mod tests {
         // The classic encoding: a byte per value, offset by 32.
         let mut classic = Screen::new(TerminalSize { cols: 10, rows: 3 });
         classic.feed(&[output(1, b"\x1b[?1000h", None)]);
-        assert_eq!(classic.press((0, 2), 1, none), [0x1b, b'[', b'M', 32, 33, 35]);
-        assert_eq!(classic.release((0, 2), none), [0x1b, b'[', b'M', 35, 33, 35]);
+        assert_eq!(
+            classic.press((0, 2), 1, none),
+            [0x1b, b'[', b'M', 32, 33, 35]
+        );
+        assert_eq!(
+            classic.release((0, 2), none),
+            [0x1b, b'[', b'M', 35, 33, 35]
+        );
     }
 
     #[test]
@@ -990,7 +1043,11 @@ mod tests {
         assert_eq!(frame.rows[0][0].text, "hello");
         assert_eq!(frame.rows[0][0].background, Some(SELECTION));
         screen.hover((10, 0), none);
-        assert_eq!(screen.selection().as_deref(), Some("hello"), "the release ended it");
+        assert_eq!(
+            screen.selection().as_deref(),
+            Some("hello"),
+            "the release ended it"
+        );
         assert!(screen.clear_selection());
         assert_eq!(screen.selection(), None);
         // A double click takes the word.

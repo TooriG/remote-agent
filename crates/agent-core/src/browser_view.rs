@@ -66,7 +66,7 @@ pub fn input_focus(
 
 /// Where a pointer at (`x`, `y`) on a page image shown at `scale` is in the
 /// page's own coordinates; `None` off the `width` × `height` page.
-pub fn page_point(x: f64, y: f64, scale: f64, width: u32, height: u32) -> Option<(f64, f64)> {
+fn page_point(x: f64, y: f64, scale: f64, width: u32, height: u32) -> Option<(f64, f64)> {
     if !(scale.is_finite() && scale > 0.) {
         return None;
     }
