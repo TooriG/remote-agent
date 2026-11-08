@@ -176,7 +176,7 @@ async fn explaining_a_selection_starts_a_conversation_that_asks_at_once(#[case] 
     let (explained, explaining) = created.pop().unwrap();
     let submit = read_after_reviews(&mut reader, &mut writer).await;
     assert_eq!(submit["method"], "host/session/submit");
-    assert_eq!(submit["params"]["session"]["id"], explained.id.as_str());
+    assert_eq!(submit["params"]["threadId"]["id"], explained.id.as_str());
     assert_eq!(
         submit["params"]["input"][0]["text"]["text"],
         "次の選択範囲について詳しく説明してください。\n\n日本語 Needle"
