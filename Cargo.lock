@@ -283,6 +283,7 @@ dependencies = [
  "block2 0.6.2",
  "chrono",
  "libloading",
+ "lucide-static-svg",
  "native-browser",
  "nsh-base",
  "nsh-core",
@@ -6274,6 +6275,12 @@ dependencies = [
  "serde_json",
  "serde_repr",
 ]
+
+[[package]]
+name = "lucide-static-svg"
+version = "1.70.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a8d78317bcd7d06125036296760564725489ad5004c3ad74b24a229d81e9435"
 
 [[package]]
 name = "lyon"

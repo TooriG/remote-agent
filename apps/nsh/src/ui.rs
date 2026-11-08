@@ -37,89 +37,83 @@ pub(crate) struct Icon {
     symbol: &'static str,
 }
 
+/// A Lucide icon, its markup taken from the catalog at compile time: nothing
+/// looks icons up at run time, so the linker can drop the rest of the catalog.
 macro_rules! icon {
-    ($file:literal) => {
+    ($lucide:ident $(, $symbol:literal)?) => {
         Icon {
-            markup: include_str!($file),
-        }
-    };
-    ($file:literal, $symbol:literal) => {
-        Icon {
-            markup: include_str!($file),
-            #[cfg(target_os = "macos")]
-            symbol: $symbol,
+            markup: lucide_static_svg::Icon::$lucide.svg_str(),
+            $(
+                #[cfg(target_os = "macos")]
+                symbol: $symbol,
+            )?
         }
     };
 }
 
 impl Icon {
-    pub(crate) const ARROW_DOWN: Self = icon!("../assets/icons/arrow-down.svg", "arrow.down");
-    pub(crate) const ARROW_UP: Self = icon!("../assets/icons/arrow-up.svg", "arrow.up");
-    pub(crate) const FORK: Self = icon!("../../desktop/assets/branch.svg", "arrow.triangle.branch");
+    pub(crate) const ARROW_DOWN: Self = icon!(ArrowDown, "arrow.down");
+    pub(crate) const ARROW_UP: Self = icon!(ArrowUp, "arrow.up");
+    pub(crate) const FORK: Self = icon!(GitBranch, "arrow.triangle.branch");
     #[cfg(target_os = "macos")]
-    pub(crate) const CHECK: Self = icon!("../assets/icons/check.svg", "checkmark");
-    pub(crate) const CHEVRON_DOWN: Self = icon!("../assets/icons/chevron-down.svg", "chevron.down");
-    pub(crate) const CHEVRON_RIGHT: Self =
-        icon!("../assets/icons/chevron-right.svg", "chevron.right");
+    pub(crate) const CHECK: Self = icon!(Check, "checkmark");
+    pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown, "chevron.down");
+    pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight, "chevron.right");
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub(crate) const CLOSE: Self = icon!("../assets/icons/x.svg", "xmark");
-    pub(crate) const COPY: Self = icon!("../assets/icons/copy.svg", "doc.on.doc");
+    pub(crate) const CLOSE: Self = icon!(X, "xmark");
+    pub(crate) const COPY: Self = icon!(Copy, "doc.on.doc");
     #[cfg(target_os = "macos")]
-    pub(crate) const DETAILS: Self = icon!(
-        "../../desktop/assets/square-menu.svg",
-        "list.bullet.rectangle"
-    );
-    pub(crate) const DIFF: Self = icon!("../../desktop/assets/diff.svg", "plusminus");
-    pub(crate) const ELLIPSIS: Self = icon!("../assets/icons/ellipsis.svg", "ellipsis");
-    pub(crate) const WRENCH: Self = icon!("../assets/icons/wrench.svg", "wrench.adjustable");
-    pub(crate) const TERMINAL: Self =
-        icon!("../assets/icons/square-terminal.svg", "apple.terminal");
-    pub(crate) const FILE_PEN: Self = icon!("../assets/icons/file-pen.svg", "square.and.pencil");
-    pub(crate) const BRAIN: Self = icon!("../assets/icons/brain.svg", "brain");
+    pub(crate) const DETAILS: Self = icon!(SquareMenu, "list.bullet.rectangle");
+    pub(crate) const DIFF: Self = icon!(Diff, "plusminus");
+    pub(crate) const ELLIPSIS: Self = icon!(Ellipsis, "ellipsis");
+    pub(crate) const WRENCH: Self = icon!(Wrench, "wrench.adjustable");
+    pub(crate) const TERMINAL: Self = icon!(SquareTerminal, "apple.terminal");
+    pub(crate) const FILE_PEN: Self = icon!(FilePen, "square.and.pencil");
+    pub(crate) const BRAIN: Self = icon!(Brain, "brain");
     #[cfg(target_os = "macos")]
-    pub(crate) const REPLACE: Self = icon!("../assets/icons/replace.svg", "arrow.left.arrow.right");
+    pub(crate) const REPLACE: Self = icon!(Replace, "arrow.left.arrow.right");
     #[cfg(target_os = "macos")]
-    pub(crate) const FOLDER_OPEN: Self = icon!("../assets/icons/folder-open.svg", "folder");
+    pub(crate) const FOLDER_OPEN: Self = icon!(FolderOpen, "folder");
     #[cfg(target_os = "macos")]
-    pub(crate) const FILE_TEXT: Self = icon!("../assets/icons/file-text.svg", "doc");
+    pub(crate) const FILE_TEXT: Self = icon!(FileText, "doc");
     #[cfg(target_os = "macos")]
-    pub(crate) const EXTERNAL_LINK: Self =
-        icon!("../assets/icons/external-link.svg", "arrow.up.right.square");
-    pub(crate) const FOLDER: Self = icon!("../assets/icons/folder.svg", "folder");
-    pub(crate) const FOLDER_PLUS: Self =
-        icon!("../../desktop/assets/folder-plus.svg", "folder.badge.plus");
-    pub(crate) const LOADER: Self = icon!("../assets/icons/loader.svg", "progress.indicator");
-    pub(crate) const MERGE: Self = icon!("../../desktop/assets/merge.svg", "arrow.triangle.merge");
+    pub(crate) const EXTERNAL_LINK: Self = icon!(ExternalLink, "arrow.up.right.square");
+    pub(crate) const FOLDER: Self = icon!(Folder, "folder");
+    pub(crate) const FOLDER_PLUS: Self = icon!(FolderPlus, "folder.badge.plus");
+    pub(crate) const LOADER: Self = icon!(Loader, "progress.indicator");
+    pub(crate) const MERGE: Self = icon!(GitMerge, "arrow.triangle.merge");
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub(crate) const MICROPHONE: Self = icon!("../../desktop/assets/microphone.svg", "mic");
+    pub(crate) const MICROPHONE: Self = icon!(Mic, "mic");
     #[cfg(not(target_os = "macos"))]
-    pub(crate) const MONITOR: Self = icon!("../../desktop/assets/monitor.svg");
-    pub(crate) const NEW_CHAT: Self =
-        icon!("../../desktop/assets/square-pen.svg", "square.and.pencil");
-    pub(crate) const PENCIL: Self = icon!("../../desktop/assets/pencil.svg", "pencil");
+    pub(crate) const MONITOR: Self = icon!(Monitor);
+    pub(crate) const NEW_CHAT: Self = icon!(SquarePen, "square.and.pencil");
+    pub(crate) const PENCIL: Self = icon!(Pencil, "pencil");
     #[cfg(target_os = "macos")]
-    pub(crate) const PANEL_LEFT_CLOSE: Self =
-        icon!("../assets/icons/panel-left-close.svg", "sidebar.left");
+    pub(crate) const PANEL_LEFT_CLOSE: Self = icon!(PanelLeftClose, "sidebar.left");
     #[cfg(target_os = "macos")]
-    pub(crate) const PANEL_LEFT_OPEN: Self =
-        icon!("../assets/icons/panel-left-open.svg", "sidebar.left");
+    pub(crate) const PANEL_LEFT_OPEN: Self = icon!(PanelLeftOpen, "sidebar.left");
     #[cfg(target_os = "macos")]
-    pub(crate) const PANEL_RIGHT: Self = icon!("../assets/icons/panel-right.svg", "sidebar.right");
-    pub(crate) const PLUS: Self = icon!("../assets/icons/plus.svg", "plus");
+    pub(crate) const PANEL_RIGHT: Self = icon!(PanelRight, "sidebar.right");
+    pub(crate) const PLUS: Self = icon!(Plus, "plus");
     #[cfg(target_os = "macos")]
-    pub(crate) const REFRESH: Self = icon!("../assets/icons/rotate-cw.svg", "arrow.clockwise");
+    pub(crate) const REFRESH: Self = icon!(RotateCw, "arrow.clockwise");
     #[cfg(target_os = "macos")]
-    pub(crate) const SETTINGS: Self = icon!("../assets/icons/settings.svg", "gearshape");
+    pub(crate) const SETTINGS: Self = icon!(Settings, "gearshape");
     #[cfg(target_os = "macos")]
-    pub(crate) const SLIDERS: Self = icon!("../assets/icons/settings-2.svg", "slider.horizontal.3");
+    pub(crate) const SLIDERS: Self = icon!(Settings2, "slider.horizontal.3");
     #[cfg(target_os = "macos")]
-    pub(crate) const FOLDER_TREE: Self = icon!("../assets/icons/folder-tree.svg", "folder");
+    pub(crate) const FOLDER_TREE: Self = icon!(FolderTree, "folder");
     #[cfg(target_os = "macos")]
-    pub(crate) const SERVER: Self = icon!("../assets/icons/server.svg", "server.rack");
+    pub(crate) const SERVER: Self = icon!(Server, "server.rack");
     #[cfg(target_os = "macos")]
-    pub(crate) const BOT: Self = icon!("../assets/icons/bot.svg", "cpu");
-    pub(crate) const STEER: Self = icon!("../assets/icons/redo-2.svg", "arrow.uturn.forward");
-    pub(crate) const STOP: Self = icon!("../../desktop/assets/stop.svg", "stop.fill");
+    pub(crate) const BOT: Self = icon!(Bot, "cpu");
+    pub(crate) const STEER: Self = icon!(Redo2, "arrow.uturn.forward");
+    /// A filled square, which Lucide's outlined `square` is not.
+    pub(crate) const STOP: Self = Self {
+        markup: include_str!("../../desktop/assets/stop.svg"),
+        #[cfg(target_os = "macos")]
+        symbol: "stop.fill",
+    };
 }
 
 impl Icon {
