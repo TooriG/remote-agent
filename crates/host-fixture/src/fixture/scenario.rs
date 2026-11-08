@@ -164,6 +164,15 @@ fn complete(context: &Context, thread_id: &str, turn: &Turn, index: usize) -> Re
     )
 }
 
+/// An item that is whole when it starts, as Codex's commentary, a summarized
+/// thought or a finished command: Codex still completes each, and clients
+/// that build items from their completion (T3 Code) show nothing before it.
+fn stream_whole(context: &Context, thread_id: &str, turn: &Turn, item: Value) -> Result<()> {
+    context.stream_item(thread_id, turn, item)?;
+    let index = turn.borrow()["items"].as_array().unwrap().len() - 1;
+    complete(context, thread_id, turn, index)
+}
+
 pub(super) struct ScenarioTurn {
     pub context: Rc<Context>,
     pub thread: SharedThread,
@@ -282,17 +291,19 @@ impl ScenarioTurn {
         if prompt.starts_with("Background command completed") {
             return report_background(context, &thread_id, thread, turn, suffix);
         }
-        context.stream_item(
+        stream_whole(
+            context,
             &thread_id,
             turn,
             json!({"id":format!("fixture-commentary-{suffix}"),"type":"agentMessage",
         "text":"シミュレータで確認しています…","phase":"commentary"}),
         )?;
-        context.stream_item(
-        &thread_id,
-        turn,
-        json!({"id":format!("fixture-reasoning-{suffix}"),"type":"reasoning","summary":["確認中"]}),
-    )?;
+        stream_whole(
+            context,
+            &thread_id,
+            turn,
+            json!({"id":format!("fixture-reasoning-{suffix}"),"type":"reasoning","summary":["確認中"]}),
+        )?;
         if prompt.contains("[thinking]") && !self.think(&thread_id, &turn_id).await? {
             return context.finish(thread, turn, "interrupted", None);
         }
@@ -383,17 +394,31 @@ impl ScenarioTurn {
             }
         }
         if prompt.contains("[groups]") {
-            context.stream_item(
+            stream_whole(
+                context,
                 &thread_id,
                 turn,
                 json!({"id":format!("fixture-progress-{suffix}"),"type":"agentMessage",
             "text":"最初の確認が終わりました。次のコマンドを確認します。","phase":"commentary"}),
             )?;
-            context.stream_item(&thread_id, turn, json!({"id":format!("fixture-next-command-{suffix}"),"type":"commandExecution",
-            "command":"pwd","aggregatedOutput":"GROUP_DETAIL_OUTPUT","status":"completed","exitCode":0}))?;
+            // The next command runs until the inputs are released.
+            let index = turn.borrow()["items"].as_array().unwrap().len();
+            context.stream_item(
+                &thread_id,
+                turn,
+                json!({"id":format!("fixture-next-command-{suffix}"),"type":"commandExecution",
+            "command":"pwd","aggregatedOutput":"GROUP_DETAIL_OUTPUT","status":"inProgress"}),
+            )?;
             if !wait_for_release(&context.home, stop).await {
                 return context.finish(thread, turn, "interrupted", None);
             }
+            {
+                let mut turn = turn.borrow_mut();
+                let command = &mut turn["items"][index];
+                command["status"] = "completed".into();
+                command["exitCode"] = 0.into();
+            }
+            complete(context, &thread_id, turn, index)?;
         }
         if scenario == "failed" {
             let error =
