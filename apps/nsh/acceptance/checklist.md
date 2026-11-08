@@ -43,8 +43,8 @@ first; the note says which), **n/a** (no Mac equivalent).
 | DeviceNavigationUITests.testPhysicalDeviceCanPairWithManualPayload | n/a | physical device |
 | DictationUITests.testSimulatorDictationContinuesPastThirtySecondsAndReachesHost | not yet | recording needs the system's microphone permission, whose prompt reaches the user running the scenarios; the driver can only decline it |
 | DictationUITests.testSimulatorDictationPermissionDenialPreservesDraftAndSend | covered | dictation-denied (`microphone deny`) |
-| HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | not yet | the reading position is not observable: NSH's conversation list gives accessibility no scroll area or position, only the rows it has made |
-| HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | not yet | `scroll` works, but the reading position is not observable (as above) |
+| HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | blocked | on the NSH patch that gives a scrolled list its position (Accessibility rows below) |
+| HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | blocked | as above; `scroll` already works |
 | HistoryUITests.testSimulatorRendersVisualizationAndReopensIt | partial | visualization (the Mac offers the file and opens it in the tool panel, as the desktop client did; only the iPhone renders it inline) |
 | HistoryUITests.testSimulatorRendersMarkdownTableAndReopensIt | covered | markdown-table |
 | HistoryUITests.testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText | covered | long-markdown |
@@ -73,7 +73,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | SynchronizationUITests.testSimulatorFetchesNewTaskWhenReturningToList | n/a | the Mac sidebar is always shown |
 | SynchronizationUITests.testSimulatorMarksUnseenCompletionUntilOpened | covered | unseen-completion |
 | SynchronizationUITests.testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt | covered | queued-input |
-| TurnUITests.testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions | not yet | the reading position is not observable (as above) |
+| TurnUITests.testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions | blocked | on the NSH patch that gives a scrolled list its position (Accessibility rows below) |
 | TurnUITests.testSimulatorSelectsPluginAndSkillFromComposer | covered | composer (skills; the fixture lists no plugins) |
 | TurnUITests.testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft | covered | message-actions |
 | TurnUITests.testSimulatorOpensSideChatWithoutLosingOriginalDraft | covered | side-chat |
@@ -108,6 +108,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Settings: accounts, updates, worktree editing | partial | accounts, account-sign-in, account-claude, account-switch, worktree-settings; updates not yet: アップデートを確認 opens the releases page in the default browser, outside the app |
 | Accessibility: the settings overlay is modal, message roles | covered | settings-modal, send-message |
 | Accessibility: VoiceOver reads in the visual order | blocked | on an NSH patch. NSH's virtual list keeps its cells by recycling slot (nsh-core `core/components.rs`, `VirtualListState::cells`), and nsh-platform-macos `src/view.rs` `accessibility_children` (the `accessibilityChildren` override) returns AppKit's subview order, so a recycled list reads in slot order: a conversation reads a turn's "3秒 作業しました" before the user's message above it. The fix: in that override, for a virtual list's cell container, return the cells sorted by row position (frame top first, in the flipped view's coordinates), the rest unchanged. The sidebar, main column, header, composer (left to right), right panel, settings and sheets already read in visual order |
+| Accessibility: a scrolled list says where it is | blocked | on an NSH patch. NSH scrolls its own views (`ViewKind::Scroll`, also every list), and nsh-platform-macos `src/access.rs` `base_role` gives them no scroll role (`Role::None` with `ViewKind::Scroll` falls to `Ax::Group`/`Ax::Generic`), so VoiceOver and the driver see no scroll area or position in a conversation. The fix: map `ViewKind::Scroll` to `AXScrollArea` there, give it a vertical scroll bar whose value is the offset over the scrollable length, and post its value change from `src/scroll.rs` `moved_to`, which already reports each new offset. Until then the reading-position rows (HistoryUITests, TurnUITests) stay blocked |
 | Onboarding without a Host | n/a | the desktop app always lists this PC's Host and starts it when needed, so the Mac never lacks one; pairing another PC is in the environment settings (environment-settings) |
 | Keyboard shortcuts | partial | composer (Return sends), terminal-paste (⌘V), model-picker (Escape closes it); the desktop client's completion keys are missing: with the completion list open, Return sends the draft instead of choosing, and Escape leaves the list open (GPUI's composer `completion_key`); owned by nsh-parity-composer |
-| Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet: the desktop client drew Mermaid blocks (core's `markdown_diagram`), NSH shows them as code |
+| Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet: the desktop client drew Mermaid blocks (core's `markdown_diagram`), NSH shows them as code; nsh-restore-gpui-features restores them |
