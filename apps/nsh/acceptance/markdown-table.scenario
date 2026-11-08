@@ -1,5 +1,6 @@
-# A Markdown table shows its cells, copies itself as Markdown or CSV, compacts
-# its cells, and shows again when the conversation is reopened.
+# A Markdown table shows its cells, copies itself as Markdown or CSV from its
+# copy menu, compacts its cells, and shows again when the conversation is
+# reopened.
 # iOS: testSimulatorRendersMarkdownTableAndReopensIt
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
@@ -7,8 +8,10 @@ type "AI に依頼する" "[markdown-table] [immediate] 表を表示します"
 press 送信
 expect "Codexハーネス＋Claude接続" 30000
 expect "両者の機能差をBexが吸収する必要"
+press 表をコピー
 press Markdownをコピー
 expect_clipboard "| 構成 | 利点 | 負担 |"
+press 表をコピー
 press CSVをコピー
 expect_clipboard "\"構成\",\"利点\",\"負担\""
 press セルをコンパクトに表示

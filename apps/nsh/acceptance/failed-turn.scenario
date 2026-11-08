@@ -4,7 +4,7 @@ expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
 type "AI に依頼する" "[failed] 失敗を確認します"
 press 送信
-expect "コンテキストの上限に達しました" 20000
+expect "プロバイダーエラー" 20000
 expect "context is full"
 expect "./gradlew test"
 expect_absent "シミュレータで完了しました。"

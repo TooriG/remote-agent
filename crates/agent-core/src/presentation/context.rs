@@ -466,10 +466,7 @@ mod chrome_tests {
         let failure = |category, retrying: bool| ExecutionError {
             category,
             message: "context is full".into(),
-            retry: retrying.then_some(RetryEvidence {
-                retrying: true,
-                overloaded: false,
-            }),
+            retry: retrying.then_some(RetryEvidence { retrying: true }),
             ..Default::default()
         };
         let turn = |status, error| models::Turn {

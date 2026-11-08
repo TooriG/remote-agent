@@ -1857,15 +1857,11 @@ fn execution_error(message: &Value, retrying: bool) -> ExecutionError {
         })
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| "Claude Codeの実行に失敗しました。".into());
-    let overloaded = category == ErrorCategory::Overloaded;
     ExecutionError {
         category,
         message: text,
         provider_code: code.map(str::to_owned),
-        retry: retrying.then_some(RetryEvidence {
-            retrying,
-            overloaded,
-        }),
+        retry: retrying.then_some(RetryEvidence { retrying }),
         ..Default::default()
     }
 }
@@ -3751,13 +3747,8 @@ for await (const line of createInterface({input: process.stdin})) {
             assert_eq!(execution_error(&message, false).category, category);
         }
         let retry = execution_error(&json!({"error":"overloaded","error_status":503}), true);
-        assert_eq!(
-            retry.retry,
-            Some(RetryEvidence {
-                retrying: true,
-                overloaded: true,
-            })
-        );
+        assert_eq!(retry.category, ErrorCategory::Overloaded);
+        assert_eq!(retry.retry, Some(RetryEvidence { retrying: true }));
         for status in ["allowed", "allowed_warning"] {
             assert!(
                 usage_limit_error(

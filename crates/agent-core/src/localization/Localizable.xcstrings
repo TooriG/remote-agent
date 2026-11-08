@@ -2273,22 +2273,6 @@
         }
       }
     },
-    "この作業中はメッセージを追加できません": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "この作業中はメッセージを追加できません"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Messages cannot be added during this task"
-          }
-        }
-      }
-    },
     "この応答": {
       "localizations": {
         "ja": {
@@ -3409,22 +3393,6 @@
         }
       }
     },
-    "コンテキストの上限に達しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コンテキストの上限に達しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Context limit reached"
-          }
-        }
-      }
-    },
     "コンテキストを圧縮中…": {
       "localizations": {
         "ja": {
@@ -3745,70 +3713,6 @@
         }
       }
     },
-    "サンドボックスエラー": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "サンドボックスエラー"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sandbox error"
-          }
-        }
-      }
-    },
-    "サーバーが混み合っています": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "サーバーが混み合っています"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server is busy"
-          }
-        }
-      }
-    },
-    "サーバーが混み合っています。再接続しています": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "サーバーが混み合っています。再接続しています"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server is busy. Reconnecting"
-          }
-        }
-      }
-    },
-    "サーバーエラー": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "サーバーエラー"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server error"
-          }
-        }
-      }
-    },
     "スキップする": {
       "localizations": {
         "ja": {
@@ -3837,22 +3741,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Section"
-          }
-        }
-      }
-    },
-    "セッションの上限に達しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "セッションの上限に達しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Session limit reached"
           }
         }
       }
@@ -3981,22 +3869,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Send requests and delegate work in the main conversation. These are this PC's task threads."
-          }
-        }
-      }
-    },
-    "タスクを元に戻せませんでした": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "タスクを元に戻せませんでした"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not restore task"
           }
         }
       }
@@ -5809,38 +5681,6 @@
         }
       }
     },
-    "リクエストの上限に達しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "リクエストの上限に達しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Request limit reached"
-          }
-        }
-      }
-    },
-    "リクエストを処理できません": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "リクエストを処理できません"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not process request"
-          }
-        }
-      }
-    },
     "リポジトリからの相対パスを1行に1つ指定します（例: .env、config/local）。存在しないパスはスキップします。": {
       "localizations": {
         "ja": {
@@ -7393,22 +7233,6 @@
         }
       }
     },
-    "再接続しています": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "再接続しています"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reconnecting"
-          }
-        }
-      }
-    },
     "再検索": {
       "localizations": {
         "ja": {
@@ -8177,22 +8001,6 @@
         }
       }
     },
-    "安全ポリシーにより停止しました": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "安全ポリシーにより停止しました"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stopped by safety policy"
-          }
-        }
-      }
-    },
     "完了": {
       "localizations": {
         "ja": {
@@ -8685,22 +8493,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disconnect"
-          }
-        }
-      }
-    },
-    "接続エラー": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "接続エラー"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connection error"
           }
         }
       }
@@ -11389,22 +11181,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Close details"
-          }
-        }
-      }
-    },
-    "認証が必要です": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "認証が必要です"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Authentication required"
           }
         }
       }
@@ -18275,176 +18051,466 @@
     },
     "送信ショートカット": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Send shortcut" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "送信ショートカット" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send shortcut"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信ショートカット"
+          }
+        }
       }
     },
     "Enter でプロンプトを送信するか改行するかを選択します。": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Choose when Enter sends a prompt or inserts a new line" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "Enter でプロンプトを送信するか改行するかを選択します。" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose when Enter sends a prompt or inserts a new line"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter でプロンプトを送信するか改行するかを選択します。"
+          }
+        }
       }
     },
     "フォローアップの動作": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Follow-up behavior" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "フォローアップの動作" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Follow-up behavior"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォローアップの動作"
+          }
+        }
       }
     },
     "{0} + Enter（複数行のとき）": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "{0} + Enter for multiline prompts" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "{0} + Enter（複数行のとき）" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} + Enter for multiline prompts"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} + Enter（複数行のとき）"
+          }
+        }
       }
     },
     "常に {0} + Enter": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "{0} + Enter always" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "常に {0} + Enter" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} + Enter always"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "常に {0} + Enter"
+          }
+        }
       }
     },
     "1行のプロンプトは {0} + Enter、複数行のプロンプトは {0} + Shift + Enter で、そのメッセージだけ逆の動作になります。": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Press {0} + Enter for single-line prompts or {0} + Shift + Enter for multiline prompts to do the opposite for one message." } },
-        "ja": { "stringUnit": { "state": "translated", "value": "1行のプロンプトは {0} + Enter、複数行のプロンプトは {0} + Shift + Enter で、そのメッセージだけ逆の動作になります。" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press {0} + Enter for single-line prompts or {0} + Shift + Enter for multiline prompts to do the opposite for one message."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1行のプロンプトは {0} + Enter、複数行のプロンプトは {0} + Shift + Enter で、そのメッセージだけ逆の動作になります。"
+          }
+        }
       }
     },
     "{0} + Shift + Enter で、そのメッセージだけ逆の動作になります。": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Press {0} + Shift + Enter to do the opposite for one message." } },
-        "ja": { "stringUnit": { "state": "translated", "value": "{0} + Shift + Enter で、そのメッセージだけ逆の動作になります。" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press {0} + Shift + Enter to do the opposite for one message."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} + Shift + Enter で、そのメッセージだけ逆の動作になります。"
+          }
+        }
       }
     },
     "{0} + Enter で、そのメッセージだけ逆の動作になります。": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Press {0} + Enter to do the opposite for one message." } },
-        "ja": { "stringUnit": { "state": "translated", "value": "{0} + Enter で、そのメッセージだけ逆の動作になります。" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press {0} + Enter to do the opposite for one message."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} + Enter で、そのメッセージだけ逆の動作になります。"
+          }
+        }
       }
     },
     "エージェントの実行中に送るメッセージを、キューに追加するか実行中の作業に追加で指示するかを選択します。": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Queue follow-ups while the agent runs or steer the current run. " } },
-        "ja": { "stringUnit": { "state": "translated", "value": "エージェントの実行中に送るメッセージを、キューに追加するか実行中の作業に追加で指示するかを選択します。" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queue follow-ups while the agent runs or steer the current run. "
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントの実行中に送るメッセージを、キューに追加するか実行中の作業に追加で指示するかを選択します。"
+          }
+        }
       }
     },
     "キュー": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Queue" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キュー" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queue"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キュー"
+          }
+        }
       }
     },
     "スレッドを再開": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Resume thread" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "スレッドを再開" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume thread"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スレッドを再開"
+          }
+        }
       }
     },
     "キューのメッセージを更新": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Update queued message" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューのメッセージを更新" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update queued message"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューのメッセージを更新"
+          }
+        }
       }
     },
     "メッセージをキューに追加": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Queue message" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "メッセージをキューに追加" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queue message"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メッセージをキューに追加"
+          }
+        }
       }
     },
     "追加の指示を送信": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Steer message" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "追加の指示を送信" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steer message"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "追加の指示を送信"
+          }
+        }
       }
     },
     "キューに追加": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "queue" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューに追加" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "queue"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューに追加"
+          }
+        }
       }
     },
     "追加で指示": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "steer" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "追加で指示" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "steer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "追加で指示"
+          }
+        }
       }
     },
     "クリックで{0}、Ctrl/⌘-クリックまたは {1} で{2}": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Click to {0}, Ctrl/⌘-click or {1} to {2}" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "クリックで{0}、Ctrl/⌘-クリックまたは {1} で{2}" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click to {0}, Ctrl/⌘-click or {1} to {2}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリックで{0}、Ctrl/⌘-クリックまたは {1} で{2}"
+          }
+        }
       }
     },
     "キューのメッセージを折りたたむ": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Collapse queued messages" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューのメッセージを折りたたむ" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse queued messages"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューのメッセージを折りたたむ"
+          }
+        }
       }
     },
     "キューのメッセージを展開": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Expand queued messages" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューのメッセージを展開" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand queued messages"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューのメッセージを展開"
+          }
+        }
       }
     },
     "キューのメッセージ": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Queued" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューのメッセージ" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューのメッセージ"
+          }
+        }
       }
     },
     "キューのメッセージ {0}件": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "{0} queued messages" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューのメッセージ {0}件" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} queued messages"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューのメッセージ {0}件"
+          }
+        }
       }
     },
     "添付 {0}件": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "{0} attachments" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "添付 {0}件" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} attachments"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添付 {0}件"
+          }
+        }
       }
     },
     "キューへ保存中": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Saving queued message" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューへ保存中" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saving queued message"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューへ保存中"
+          }
+        }
       }
     },
     "コンポーザーで編集": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Edit in the composer" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "コンポーザーで編集" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit in the composer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンポーザーで編集"
+          }
+        }
       }
     },
     "キューから削除": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Remove from queue" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューから削除" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove from queue"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューから削除"
+          }
+        }
       }
     },
     "キューから送信": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Queued" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューから送信" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューから送信"
+          }
+        }
       }
     },
     "実行中の作業の後に送信しました": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Queued behind the active turn" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "実行中の作業の後に送信しました" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued behind the active turn"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "実行中の作業の後に送信しました"
+          }
+        }
       }
     },
     "キューのメッセージを並べ替え（ドラッグ、または矢印キー）": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Reorder queued message (drag, or press the arrow keys)" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューのメッセージを並べ替え（ドラッグ、または矢印キー）" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reorder queued message (drag, or press the arrow keys)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューのメッセージを並べ替え（ドラッグ、または矢印キー）"
+          }
+        }
       }
     },
     "キューのメッセージを変更できませんでした": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Couldn't change the queued message" } },
-        "ja": { "stringUnit": { "state": "translated", "value": "キューのメッセージを変更できませんでした" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't change the queued message"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キューのメッセージを変更できませんでした"
+          }
+        }
       }
     },
     "Claudeのバックグラウンドのエージェントやコマンドが実行中のため、モデルや設定を変更するとそれらが終了します。完了を待つか停止してから、もう一度送信してください。": {
@@ -18459,6 +18525,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Claudeのバックグラウンドのエージェントやコマンドが実行中のため、モデルや設定を変更するとそれらが終了します。完了を待つか停止してから、もう一度送信してください。"
+          }
+        }
+      }
+    },
+    "プロバイダーを再試行しています": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロバイダーを再試行しています"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retrying provider"
+          }
+        }
+      }
+    },
+    "プロバイダーエラー": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロバイダーエラー"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Provider error"
+          }
+        }
+      }
+    },
+    "ユーザーが実行を中断しました": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ユーザーが実行を中断しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run interrupted by user"
           }
         }
       }

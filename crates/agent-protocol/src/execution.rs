@@ -84,7 +84,6 @@ pub struct ExecutionError {
 #[serde(rename_all = "camelCase")]
 pub struct RetryEvidence {
     pub retrying: bool,
-    pub overloaded: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

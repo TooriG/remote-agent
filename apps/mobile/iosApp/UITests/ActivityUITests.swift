@@ -145,7 +145,7 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         startSimulatorConversation(app, promptText: "[retry] Retry stream")
 
-        let retrying = app.staticTexts["サーバーが混み合っています。再接続しています"]
+        let retrying = app.staticTexts["プロバイダーを再試行しています"]
         XCTAssertTrue(retrying.waitUntilExists(timeout: 10), "Retrying stream error was not visible")
         XCTAssertFalse(prefixedElement(app, prefix: "item.fixture-command-").exists)
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 15))
@@ -161,7 +161,7 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         startSimulatorConversation(app, promptText: "[failed] Fail turn")
 
-        XCTAssertTrue(app.staticTexts["コンテキストの上限に達しました"].waitUntilExists(timeout: 15))
+        XCTAssertTrue(app.staticTexts["プロバイダーエラー"].waitUntilExists(timeout: 15))
         XCTAssertFalse(prefixedElement(app, prefix: "item.fixture-command-").exists)
         let group = prefixedButton(app, prefix: "turn.activity.fixture-turn-")
         XCTAssertTrue(group.exists)

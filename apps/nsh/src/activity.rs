@@ -284,6 +284,8 @@ pub(crate) fn status(
     view()
         .w_full()
         .min_h(px(24.0))
+        // T3 Code's work log row: `py-0.5`.
+        .py(px(2.0))
         .px(px(2.0))
         .flex_row()
         .items_center()

@@ -173,6 +173,7 @@ pub(crate) fn content(
         target(surroundings.connection),
         kind,
         computed(max_width),
+        None,
     )
 }
 
@@ -231,6 +232,7 @@ pub(crate) fn message(
         target(connection),
         kind,
         computed(max_width),
+        None,
     )
 }
 
@@ -379,12 +381,15 @@ impl Target {
     }
 }
 
+/// `cell`: a table's cell, `header` or `body`, whose text is T3 Code's
+/// smaller table text.
 fn view_parts(
     surroundings: Surroundings,
     parts: impl Fn() -> Vec<Part> + 'static,
     target: Memo<String>,
     kind: impl Fn() -> Kind + Copy + 'static,
     max_width: Memo<f32>,
+    cell: Option<&'static str>,
 ) -> nsh_core::element::View {
     let Surroundings {
         connection, files, ..
@@ -412,7 +417,7 @@ fn view_parts(
                                 };
                                 json!({"blocks": blocks, "secondary": kind() == Kind::Activity,
                         "role": if kind() == Kind::User { "user" } else { "assistant" },
-                        "target": target.get(), "sideChat": connection.pane.is_none(),
+                        "target": target.get(), "sideChat": connection.pane.is_none(), "cell": cell,
                         "maxWidth": if is_code() && !wrap.get() { 1_000_000.0 } else { (max_width.get() - if is_code() { 2.0 * CODE_INSET } else { 0.0 }).max(0.0) },
                         // The selection menu's items, which TextKit shows.
                         "menu": {"quote": tr("チャットに追加"), "sideChat": tr("サイドチャットで質問")}})
@@ -425,7 +430,13 @@ fn view_parts(
                 };
                 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
                 let message = move |_: Signal<bool>| {
-                    drawn::message(part, move || kind() == Kind::Activity, target, surroundings)
+                    drawn::message(
+                        part,
+                        move || kind() == Kind::Activity,
+                        target,
+                        surroundings,
+                        cell,
+                    )
                 };
                 frame(part, move |wrap| message(wrap).w_full().into_element())
             }
@@ -735,6 +746,7 @@ fn table(
                                             (max_width.get() / columns - 24.0).max(0.0)
                                         }
                                     }),
+                                    Some(if header { "header" } else { "body" }),
                                 ))
                         },
                     ))
@@ -743,35 +755,65 @@ fn table(
     };
     view()
         .w_full()
-        .gap_2()
         .child(when(move || !compact.get(), frame))
         .child(when(
             move || compact.get(),
             move || scroll().horizontal().w_full().child(frame()),
         ))
+        // T3 Code's table actions below it: the cells' wrapping at its start,
+        // copying as Markdown or CSV from a menu at its end.
         .child(
             view()
+                .mt(px(2.0))
                 .flex_row()
-                .justify_end()
-                .gap_2()
-                .child(crate::ui::row_text_button(
-                    move || {
-                        SharedString::from(if compact.get() {
-                            tr("セルを折り返す")
+                .justify_between()
+                .child(each(
+                    move || vec![compact.get()],
+                    |compact: &bool| *compact,
+                    move |shown, _| {
+                        let compact_now = shown.get_untracked();
+                        let button = crate::ui::icon_button_sized(
+                            if compact_now {
+                                crate::ui::Icon::MAXIMIZE
+                            } else {
+                                crate::ui::Icon::MINIMIZE
+                            },
+                            tr(if compact_now {
+                                "セルを折り返す"
+                            } else {
+                                "セルをコンパクトに表示"
+                            }),
+                            24.0,
+                            12.0,
+                            move || compact.update(|compact| *compact = !*compact),
+                        )
+                        .text_color(crate::conversation::look::MUTED);
+                        // Wrapped cells are T3 Code's pressed, `secondary` state.
+                        if compact_now {
+                            button
                         } else {
-                            tr("セルをコンパクトに表示")
-                        })
+                            button.bg(crate::ui::colors::SELECTED)
+                        }
                     },
-                    move || compact.update(|compact| *compact = !*compact),
                 ))
-                .child(crate::ui::row_text_button(
-                    tr("Markdownをコピー"),
-                    move || copy(true),
-                ))
-                .child(crate::ui::row_text_button(
-                    tr("CSVをコピー"),
-                    move || copy(false),
-                )),
+                .child(
+                    crate::ui::icon_button_sized(
+                        crate::ui::Icon::COPY,
+                        tr("表をコピー"),
+                        24.0,
+                        12.0,
+                        move || {
+                            crate::ui::popup(
+                                &serde_json::json!([
+                                    {"id": "markdown", "title": tr("Markdownをコピー")},
+                                    {"id": "csv", "title": tr("CSVをコピー")},
+                                ]),
+                                move |id| copy(id == "markdown"),
+                            )
+                        },
+                    )
+                    .text_color(crate::conversation::look::MUTED),
+                ),
         )
 }
 
@@ -794,6 +836,7 @@ mod drawn {
         secondary: impl Fn() -> bool + Copy + 'static,
         target_json: Memo<String>,
         surroundings: Surroundings,
+        cell: Option<&'static str>,
     ) -> View {
         let target = move || serde_json::from_str::<Target>(&target_json.get_untracked()).ok();
         let links = Links {
@@ -831,7 +874,7 @@ mod drawn {
                 })
             },
             |(index, block): &(usize, Value)| (*index, block.to_string()),
-            move |block, _| paragraph(block.get_untracked().1, secondary(), links),
+            move |block, _| paragraph(block.get_untracked().1, secondary(), links, cell),
         ))
     }
 
@@ -901,8 +944,14 @@ mod drawn {
         choose: C,
     }
 
-    /// One paragraph of the document `rich_text::paragraph` writes.
-    fn paragraph<O, C>(block: Value, secondary: bool, links: Links<O, C>) -> View
+    /// One paragraph of the document `rich_text::paragraph` writes, in a
+    /// table's `cell` (`header` or `body`) or not.
+    fn paragraph<O, C>(
+        block: Value,
+        secondary: bool,
+        links: Links<O, C>,
+        cell: Option<&'static str>,
+    ) -> View
     where
         O: Fn(String, bool) + Copy + 'static,
         C: Fn(String, String) + Copy + 'static,
@@ -913,6 +962,7 @@ mod drawn {
             Some(2) => 18.0,
             Some(3) => 16.0,
             _ if code => 13.0,
+            _ if cell.is_some() => 12.0,
             _ => 14.0,
         };
         let mut line = text("").text_size(px(size)).text_color(if secondary {
@@ -920,7 +970,7 @@ mod drawn {
         } else {
             colors::FOREGROUND
         });
-        if block["header"].is_u64() {
+        if block["header"].is_u64() || cell == Some("header") {
             line = line.font_weight(FontWeight::SEMIBOLD);
         }
         if code {
@@ -1195,7 +1245,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true, "maxWidth": 400,
+            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true, "cell": null, "maxWidth": 400,
                 "menu": {"quote": "チャットに追加", "sideChat": "サイドチャットで質問"}}),
             expected
         );

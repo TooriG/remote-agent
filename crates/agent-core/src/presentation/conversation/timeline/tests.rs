@@ -103,6 +103,12 @@ fn names(rows: &[TurnRow]) -> Vec<String> {
             TurnRow::Thinking => "thinking".into(),
             TurnRow::Requested { label, approval } => format!("requested {label} {approval}"),
             TurnRow::Retrying { label } => format!("retrying {label}"),
+            TurnRow::Actions(row) => match &row.content {
+                ConversationRowContent::Response { item, .. } => {
+                    format!("actions {}", item.data.body.clone().unwrap_or_default())
+                }
+                _ => "actions".into(),
+            },
             TurnRow::Interrupted => "interrupted".into(),
         })
         .collect()
@@ -206,32 +212,58 @@ fn failed_work_stays_open_a_row_each_and_an_interrupted_turn_says_so() {
         names(&turn_rows(&interrupted, &HashMap::new(), &HashSet::new())),
         ["user u", "group Ran 1 command false", "interrupted"]
     );
-    let commented = turn(
-        UiLanguage::English,
-        "interrupted",
-        vec![
-            user("u"),
-            text("checking", "commentary"),
-            reasoning("planning"),
-            command("./gradlew test", "running"),
-        ],
-        None,
-    );
+    // The answer's actions follow the work that ends the settled turn.
+    let commented = vec![
+        user("u"),
+        text("checking", "commentary"),
+        reasoning("planning"),
+        command("./gradlew test", "running"),
+    ];
+    let interrupted = turn(UiLanguage::English, "interrupted", commented.clone(), None);
+    let rows = turn_rows(&interrupted, &HashMap::new(), &HashSet::new());
     assert_eq!(
-        names(&turn_rows(&commented, &HashMap::new(), &HashSet::new())),
+        names(&rows),
         [
             "user u",
             "message checking",
             "group Ran 1 command false",
+            "actions checking",
             "interrupted"
+        ]
+    );
+    let actions = |row: &TurnRow| match row {
+        TurnRow::Row(row) | TurnRow::Actions(row) => matches!(
+            row.content,
+            ConversationRowContent::Response {
+                show_actions: true,
+                ..
+            }
+        ),
+        _ => false,
+    };
+    assert_eq!(
+        rows.iter().map(actions).collect::<Vec<_>>(),
+        [false, false, false, true, false]
+    );
+    let error = json!({"message":"context is full","category":"contextLimit"});
+    let failed = turn(UiLanguage::English, "failed", commented, Some(error));
+    assert_eq!(
+        names(&turn_rows(&failed, &HashMap::new(), &HashSet::new())),
+        [
+            "user u",
+            "message checking",
+            "work planning",
+            "work ./gradlew test",
+            "error context is full",
+            "actions checking"
         ]
     );
 }
 
 #[test]
-fn a_retry_is_the_live_work_named_by_its_error() {
+fn a_retry_is_the_live_work() {
     let error = json!({"message":"stream disconnected","category":"overloaded",
-        "details":null,"providerCode":null,"retry":{"retrying":true,"overloaded":true}});
+        "details":null,"providerCode":null,"retry":{"retrying":true}});
     let turn = turn(
         UiLanguage::English,
         "running",
@@ -240,7 +272,7 @@ fn a_retry_is_the_live_work_named_by_its_error() {
     );
     assert_eq!(
         names(&turn_rows(&turn, &HashMap::new(), &HashSet::new())),
-        ["user u", "working", "retrying Server is busy. Reconnecting"]
+        ["user u", "working", "retrying Retrying provider"]
     );
 }
 

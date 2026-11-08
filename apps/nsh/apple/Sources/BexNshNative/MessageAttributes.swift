@@ -78,6 +78,8 @@ struct MessageDocument: Decodable, Equatable {
     let maxWidth: Double
     /// The selection menu's items in the app's language.
     let menu: MessageMenuTitles
+    /// A table's cell, `header` or `body`, whose text is smaller.
+    var cell: String? = nil
 
     static let empty = MessageDocument(blocks: [], secondary: false, role: "assistant", target: "", sideChat: false,
                                        maxWidth: 0, menu: MessageMenuTitles(quote: "", sideChat: ""))
@@ -92,13 +94,13 @@ struct MessageMenuTitles: Decodable, Equatable {
 
 @MainActor enum MessageAttributes {
     /// `answer`: an assistant's text, which T3 Code draws at 80% of the
-    /// foreground on the Mac.
+    /// foreground on the Mac. `cell`: a table's cell (`header` or `body`).
     static func text(_ blocks: [MessageParagraph], secondary: Bool, dark: Bool,
-                     answer: Bool = false) -> NSAttributedString {
+                     answer: Bool = false, cell: String? = nil) -> NSAttributedString {
         let result = NSMutableAttributedString(string: "")
         for (index, block) in blocks.enumerated() {
             let start = result.length
-            let size = Self.size(block)
+            let size = Self.size(block, cell: cell)
             if let marker = block.marker {
                 result.append(NSAttributedString(string: marker + " ", attributes: [
                     .font: font(size: size, mono: block.code, bold: false, italic: false),
@@ -107,7 +109,7 @@ struct MessageMenuTitles: Decodable, Equatable {
             }
             for (position, run) in block.runs.enumerated() {
                 var attributes = attributes(
-                    run, size: size, code: block.code, heading: block.header != nil,
+                    run, size: size, code: block.code, heading: block.header != nil || cell == "header",
                     secondary: secondary, answer: answer, dark: dark
                 )
                 if caption(block.runs, at: position) {
@@ -171,10 +173,11 @@ struct MessageMenuTitles: Decodable, Equatable {
     }
 
     /// A block's text size: on the Mac T3 Code's `.chat-markdown` (14 pt
-    /// text, 13 pt code, headings from 20 pt).
-    private static func size(_ block: MessageParagraph) -> CGFloat {
+    /// text, 12 pt in a table's cells, 13 pt code, headings from 20 pt).
+    private static func size(_ block: MessageParagraph, cell: String?) -> CGFloat {
         #if os(macOS)
-            let (base, headings): (CGFloat, [CGFloat]) = (block.code ? 13 : 14, [20, 18, 16, 14, 14, 14])
+            let text: CGFloat = cell == nil ? 14 : 12
+            let (base, headings): (CGFloat, [CGFloat]) = (block.code ? 13 : text, [20, 18, 16, 14, 14, 14])
         #else
             let (base, headings): (CGFloat, [CGFloat]) = (block.code ? 15 : 18, [26, 23, 21, 19, 18, 18])
         #endif
@@ -190,10 +193,11 @@ struct MessageMenuTitles: Decodable, Equatable {
 
         /// Half the extra height of the first block's lines: CSS centres a
         /// line's glyphs in it where TextKit puts them at its bottom.
-        static func halfLeading(_ blocks: [MessageParagraph]) -> CGFloat {
+        static func halfLeading(_ blocks: [MessageParagraph], cell: String? = nil) -> CGFloat {
             guard let block = blocks.first else { return 0 }
-            let size = Self.size(block)
-            let font = font(size: size, mono: block.code, bold: block.header != nil, italic: false)
+            let size = Self.size(block, cell: cell)
+            let font = font(size: size, mono: block.code, bold: block.header != nil || cell == "header",
+                            italic: false)
             return max(0, (lineHeight(block, size: size) - (font.ascender - font.descender)) / 2)
         }
     #endif

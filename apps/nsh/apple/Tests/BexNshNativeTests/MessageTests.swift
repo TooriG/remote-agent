@@ -170,6 +170,30 @@ final class MessageTests: XCTestCase {
             }
         }
 
+        @MainActor func testTableCellsUseT3CodesSmallerTextTheirHeaderSemibold() throws {
+            let run = MessageRun(text: "構成", strong: false, emphasis: false, strikethrough: false, code: false,
+                                 link: nil, darkColor: nil, lightColor: nil)
+            let block = MessageParagraph(header: nil, marker: nil, code: false, quoted: false,
+                                         depth: 0, alignment: "left", runs: [run])
+            for (cell, bold) in [("header", true), ("body", false)] {
+                let text = MessageAttributes.text([block], secondary: false, dark: true, answer: true, cell: cell)
+                let font = try XCTUnwrap(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+                // `.chat-markdown table`: 0.75rem, its `thead th` weight 600.
+                XCTAssertEqual(font.pointSize, 12, cell)
+                let traits = font.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
+                let weight = traits?[.weight] as? CGFloat ?? 0
+                XCTAssertEqual(weight >= NSFont.Weight.semibold.rawValue, bold, cell)
+                let view = MessageTextContainer()
+                var heights: [CGFloat] = []
+                view.send = { if let height = $0["measuredHeight"] as? CGFloat { heights.append(height) } }
+                view.update(MessageDocument(blocks: [block], secondary: false, role: "assistant", target: "t",
+                                            sideChat: false, maxWidth: 600,
+                                            menu: MessageMenuTitles(quote: "", sideChat: ""), cell: cell))
+                // 12 points at `leading-relaxed`: 19.5.
+                XCTAssertEqual(heights.last, 20, cell)
+            }
+        }
+
         @MainActor func testRecycledTextReportsOnlyTheHeightAtItsNewColumnsWidth() throws {
             let run = MessageRun(text: String(repeating: "A long response retains its reading position. ", count: 80),
                                  strong: false, emphasis: false, strikethrough: false, code: false,

@@ -388,7 +388,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let content = MessageAttributes.text(document.blocks, secondary: document.secondary,
                                                  dark: effectiveAppearance
                                                      .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
-                                                 answer: document.role == "assistant")
+                                                 answer: document.role == "assistant", cell: document.cell)
             let range = text.selectedRange()
             let keep = range.length > 0 && NSMaxRange(range) <= content.length && NSMaxRange(range) <= text.string.utf16
                 .count
@@ -398,7 +398,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             if RenderProbe.enabled { text.preparePaints(for: content.string) }
             #endif
             text.textStorage?.setAttributedString(content)
-            text.halfLeading = MessageAttributes.halfLeading(document.blocks)
+            text.halfLeading = MessageAttributes.halfLeading(document.blocks, cell: document.cell)
             // The natural size comes from TextKit's own layout, whose glyphs the
             // wrapped layout below reuses, rather than a second typesetting pass.
             if let container = text.textContainer, let manager = text.layoutManager {

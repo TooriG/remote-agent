@@ -160,9 +160,6 @@ pub(crate) fn execution_error(value: &Value, retrying: bool) -> ExecutionError {
             _ => category,
         };
     }
-    let overloaded = category == ErrorCategory::Overloaded
-        || matches!(status.as_u64(), Some(429 | 503))
-        || matches!(status.as_str(), Some("429" | "503"));
     ExecutionError {
         category,
         message: value["message"]
@@ -172,10 +169,7 @@ pub(crate) fn execution_error(value: &Value, retrying: bool) -> ExecutionError {
             .unwrap_or_else(|| "native execution failed without a message".into()),
         details: value["additionalDetails"].as_str().map(str::to_owned),
         provider_code: code.map(str::to_owned),
-        retry: retrying.then_some(RetryEvidence {
-            retrying,
-            overloaded,
-        }),
+        retry: retrying.then_some(RetryEvidence { retrying }),
     }
 }
 
@@ -1105,7 +1099,7 @@ mod tests {
             true,
         );
         assert_eq!(error.category, ErrorCategory::RateLimited);
-        assert!(error.retry.unwrap().overloaded);
+        assert_eq!(error.retry, Some(RetryEvidence { retrying: true }));
         let future = json!({"futureFailure":{"detail":[1,{"unknown":true}]}});
         assert_eq!(
             execution_error(

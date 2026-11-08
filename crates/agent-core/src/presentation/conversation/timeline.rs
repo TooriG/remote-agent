@@ -45,8 +45,12 @@ pub enum TurnRow {
     /// live row names: what an approval is for, or that input is requested.
     Requested { label: String, approval: bool },
     /// The provider stream dropped and is being retried, which the error's
-    /// title says (the server is busy, reconnecting).
+    /// title says.
     Retrying { label: String },
+    /// The actions (fork, copy, time) of the settled turn's last answer when
+    /// work ends the turn below it: as T3 Code's, they follow that work and
+    /// stay in view.
+    Actions(ConversationRow),
     /// The turn was interrupted.
     Interrupted,
 }
@@ -165,10 +169,52 @@ pub fn turn_rows(
             out.retain(|row| !matches!(row, TurnRow::Live { .. } | TurnRow::Thinking));
         }
     }
+    trailing_actions(&mut out);
     if status == TurnStatus::Interrupted {
         out.push(TurnRow::Interrupted);
     }
     out
+}
+
+/// As T3 Code's settled turn that ends in work after its last answer, the
+/// answer and that work read as one response: the answer's actions move
+/// below the work.
+fn trailing_actions(out: &mut Vec<TurnRow>) {
+    let answer = out.iter().rposition(|row| {
+        matches!(
+            row,
+            TurnRow::Row(ConversationRow {
+                content: ConversationRowContent::Response {
+                    show_actions: true,
+                    ..
+                },
+                ..
+            })
+        )
+    });
+    let Some(answer) = answer else { return };
+    let work = out[answer + 1..]
+        .iter()
+        .take_while(|row| match row {
+            TurnRow::Group { .. } | TurnRow::Work { .. } => true,
+            TurnRow::Row(row) => matches!(row.content, ConversationRowContent::Error { .. }),
+            _ => false,
+        })
+        .count();
+    let Some(TurnRow::Row(row)) = out.get_mut(answer).filter(|_| work > 0) else {
+        return;
+    };
+    let actions = row.clone();
+    if let ConversationRowContent::Response {
+        show_actions,
+        fork_turn_id,
+        ..
+    } = &mut row.content
+    {
+        *show_actions = false;
+        *fork_turn_id = None;
+    }
+    out.insert(answer + 1 + work, TurnRow::Actions(actions));
 }
 
 /// A request's live row, as T3 Code's: an approval by what it is for, other

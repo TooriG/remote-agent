@@ -340,7 +340,9 @@ fn app_content(
                 && connection.conversation.with(Option::is_none)
                 && connection.context.with(|p| p.opening().is_none())
         });
-        // As T3 Code's draft hero, a new conversation centers its composer.
+        // As T3 Code's draft hero, a new conversation centers its composer;
+        // a conversation's composer lies over the timeline's end, which
+        // scrolls under it.
         view()
             .flex_1()
             .min_w_0()
@@ -348,7 +350,17 @@ fn app_content(
             .style_when(move || welcome.get(), |s| s.justify_center())
             .child(when(move || !welcome.get(), move || timeline.list()))
             .child(when(move || welcome.get(), hero))
-            .child(composer::composer(following))
+            .child(
+                view()
+                    .style_when(
+                        move || !welcome.get(),
+                        |s| s.absolute().left(px(0.0)).right(px(0.0)).bottom(px(0.0)),
+                    )
+                    .on_layout(move |bounds: &nsh_core::Bounds<nsh_core::Points>| {
+                        timeline.cover(bounds.size.height.0)
+                    })
+                    .child(composer::composer(following)),
+            )
             .child(when(
                 move || !welcome.get(),
                 move || timeline.minimap(canvas),

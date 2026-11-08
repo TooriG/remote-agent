@@ -75,6 +75,8 @@ enum Shape {
     Live,
     /// The turn's error.
     Error,
+    /// The settled turn's answer's actions, below the work that ends it.
+    Actions,
     /// The turn was interrupted.
     Interrupted,
 }
@@ -310,6 +312,15 @@ fn turn_row(row: TurnRow, key: &str, turn: &RenderedTurn) -> Option<Row> {
             row.body = label.into();
             row
         }
+        TurnRow::Actions(row) => {
+            // The answer's actions alone: not an answer to show or name again.
+            let mut shown = source_row(row)?;
+            shown.id = format!("actions:{}", shown.id);
+            shown.kind = Kind::Activity;
+            shown.shape = Shape::Actions;
+            shown.images.clear();
+            shown
+        }
         TurnRow::Interrupted => Row::new(
             format!("interrupted:{key}"),
             Kind::Activity,
@@ -441,6 +452,9 @@ pub(crate) struct Timeline {
     viewable: Signal<Option<(usize, usize)>>,
     /// The timeline's width, its lane centred in it.
     width: Signal<f32>,
+    /// The height of what lies over the timeline's end (the composer), which
+    /// the end scrolls clear of.
+    inset: Signal<f32>,
 }
 
 impl Timeline {
@@ -472,6 +486,15 @@ impl Timeline {
             rows,
             viewable: signal(None),
             width: signal(0.0),
+            inset: signal(0.0),
+        }
+    }
+
+    /// As T3 Code's composer overlay: what lies over the timeline's end,
+    /// `height` tall, which the timeline's end and its way back clear.
+    pub(crate) fn cover(self, height: f32) {
+        if self.inset.get_untracked() != height {
+            self.inset.set(height);
         }
     }
 
@@ -500,6 +523,7 @@ fn list(timeline: Timeline) -> impl IntoElement {
         rows,
         viewable,
         width,
+        inset,
     } = timeline;
     let surroundings = crate::rich_text::Surroundings::current();
     let connection = surroundings.connection;
@@ -735,7 +759,12 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                 // T3 Code's spacer above the first row.
                                 px(if at.index() == 0 { 24.0 } else { 0.0 })
                             })
-                            .pb(move || px(row.with(|row| row.as_ref().map_or(0.0, |row| row.gap))))
+                            .pb(move || {
+                                // The last row ends clear of what lies over the end.
+                                let last = at.index() + 1 == rows.with(|rows| rows.len());
+                                px(row.with(|row| row.as_ref().map_or(0.0, |row| row.gap))
+                                    + if last { inset.get() } else { 0.0 })
+                            })
                             .child(
                                 view()
                                     .group()
@@ -845,15 +874,26 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                     .child(when(
                                         move || detail.get().is_some(),
                                         move || {
-                                            crate::activity::details(
-                                                surroundings,
-                                                detail,
-                                                expanded_items,
-                                                list,
-                                                at,
-                                                following,
-                                                column_width,
-                                            )
+                                            // T3 Code's work log row: `py-0.5`,
+                                            // none in an open group's list.
+                                            view()
+                                                .w_full()
+                                                .py(move || {
+                                                    let member = matches!(
+                                                        shape(),
+                                                        Some(Shape::Work { member: true })
+                                                    );
+                                                    px(if member { 0.0 } else { 2.0 })
+                                                })
+                                                .child(crate::activity::details(
+                                                    surroundings,
+                                                    detail,
+                                                    expanded_items,
+                                                    list,
+                                                    at,
+                                                    following,
+                                                    column_width,
+                                                ))
                                         },
                                     ))
                                     .child(when(
@@ -929,10 +969,16 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                     .child(when(
                                         move || {
                                             row.with(|row| {
-                                                row.as_ref().is_some_and(|row| row.actions)
+                                                row.as_ref().is_some_and(|row| {
+                                                    row.actions && row.shape != Shape::Actions
+                                                })
                                             })
                                         },
-                                        move || response_actions(connection, row),
+                                        move || response_actions(connection, row, false),
+                                    ))
+                                    .child(when(
+                                        move || shape() == Some(Shape::Actions),
+                                        move || response_actions(connection, row, true),
                                     ))
                                     .child(when(user, move || user_actions(connection, row)))
                                     .child(when(
@@ -1015,7 +1061,7 @@ fn list(timeline: Timeline) -> impl IntoElement {
                     .accessibility_label(Some(SharedString::from(label)))
                     .absolute()
                     .self_center()
-                    .bottom(px(10.0))
+                    .bottom(move || px(10.0 + inset.get()))
                     .h(px(24.0))
                     .px_2()
                     .flex_row()
@@ -1318,18 +1364,8 @@ fn group_row(
         .flex_row()
         .items_center()
         .min_h(px(24.0))
-        .py(move || {
-            px(
-                if row.with(|row| {
-                    row.as_ref()
-                        .is_some_and(|row| row.shape == Shape::Group { open: true })
-                }) {
-                    0.0
-                } else {
-                    2.0
-                },
-            )
-        })
+        // T3 Code's work log row, open or not: `py-0.5`.
+        .py(px(2.0))
         .px(px(2.0))
         .rounded(px(6.0))
         .on_press(toggle)
@@ -1388,6 +1424,13 @@ fn interrupted_row(label: impl Fn() -> String + 'static) -> View {
                     text(label)
                         .text_size(px(11.0))
                         .font_weight(FontWeight::MEDIUM),
+                )
+                // T3 Code's detail, the Host's reason; Bex's turns stop at
+                // the user's word.
+                .child(
+                    text(format!("·\u{a0}{}", tr("ユーザーが実行を中断しました")))
+                        .text_size(px(11.0))
+                        .opacity(0.7),
                 ),
         )
         .child(rule())
@@ -1616,8 +1659,9 @@ fn action(
 }
 
 /// An answer's actions, as T3 Code's meta row under it while the pointer is
-/// over the answer: fork from here, copy, its time.
-fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
+/// over the answer: fork from here, copy, its time. `trailing` the work that
+/// ends its turn, they stay in view, closer to that work.
+fn response_actions(connection: Connection, row: Memo<Option<Row>>, trailing: bool) -> View {
     use crate::ui::{Enabled, Icon};
     let fork = move || row.with(|row| row.as_ref().and_then(|row| row.fork.clone()));
     let thread = move || {
@@ -1640,7 +1684,7 @@ fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
         .flex_row()
         .items_center()
         .gap_2()
-        .opacity(0.0)
+        .opacity(if trailing { 1.0 } else { 0.0 })
         .group_hover(|s| s.opacity(1.0))
         .child(when(
             move || fork().is_some(),
@@ -1671,7 +1715,7 @@ fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
         .child(time(row));
     view()
         .px(px(4.0))
-        .mt(px(6.0))
+        .mt(px(if trailing { 2.0 } else { 6.0 }))
         .gap_1()
         .child(actions)
         .child(when(

@@ -5,7 +5,7 @@ expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
 type "AI に依頼する" "[retry] 再接続を確認します"
 press 送信
-expect "サーバーが混み合っています。再接続しています" 20000
+expect "プロバイダーを再試行しています" 20000
 screenshot reconnecting
 expect "シミュレータで完了しました。" 30000
-expect_absent "サーバーが混み合っています。再接続しています"
+expect_absent "プロバイダーを再試行しています"

@@ -1046,10 +1046,7 @@ mod update_tests {
             let previous = Turn {
                 error: Some(ExecutionError {
                     message: "retry failed".into(),
-                    retry: Some(RetryEvidence {
-                        retrying,
-                        overloaded: false,
-                    }),
+                    retry: Some(RetryEvidence { retrying }),
                     ..Default::default()
                 }),
                 ..Default::default()

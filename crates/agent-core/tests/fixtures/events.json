@@ -393,8 +393,7 @@
             "details": null,
             "providerCode": null,
             "retry": {
-              "retrying": true,
-              "overloaded": false
+              "retrying": true
             },
             "retryAfterSeconds": null
           }

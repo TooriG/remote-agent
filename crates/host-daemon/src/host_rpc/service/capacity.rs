@@ -191,10 +191,7 @@ impl HostRpcService {
                 turn.completed_at_ms = None;
                 turn.duration_ms = None;
                 if let Some(error) = &mut turn.error {
-                    error.retry = Some(RetryEvidence {
-                        retrying: true,
-                        overloaded: true,
-                    });
+                    error.retry = Some(RetryEvidence { retrying: true });
                 }
                 *completed = false;
                 if !scheduled {

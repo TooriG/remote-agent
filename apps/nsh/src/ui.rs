@@ -66,6 +66,8 @@ impl Icon {
     pub(crate) const GIT_FORK: Self = icon!(GitFork);
     pub(crate) const UNDO: Self = icon!(Undo2);
     pub(crate) const WRAP: Self = icon!(TextWrap);
+    pub(crate) const MAXIMIZE: Self = icon!(Maximize2);
+    pub(crate) const MINIMIZE: Self = icon!(Minimize2);
     pub(crate) const WARNING: Self = icon!(TriangleExclamationPoint);
     pub(crate) const CHECK: Self = icon!(Check);
     pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown);

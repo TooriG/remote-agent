@@ -601,7 +601,7 @@ id = "error-title"
 what = "Turn error: title"
 kind = "text"
 t3 = "[data-timeline-row-kind=work] span.font-medium.text-destructive"
-nsh = { text = "Context limit reached" }
+nsh = { text = "Provider error" }
 
 [[element]]
 id = "error-detail"
@@ -630,8 +630,7 @@ what = "Retrying stream notice"
 kind = "text"
 group = "live"
 t3 = "[data-timeline-row-kind=work-live] .truncate"
-# Bex names the retry by its error (the server is busy), T3 Code as a retry.
-nsh = { contains = "Reconnecting" }
+nsh = { contains = "Retrying provider" }
 
 [[element]]
 id = "approval-panel"
@@ -734,10 +733,13 @@ nsh = { text = "Submit", role = "AXButton" }
 
 [[element]]
 id = "markdown-body"
-what = "Markdown answer body (NSH draws it as one text view)"
+what = "Markdown answer body"
 kind = "text"
 t3 = "[data-timeline-row-kind=message][data-message-role=assistant].pb-4 .chat-markdown"
-nsh = { contains = "見出し", role = "AXTextArea" }
+# NSH draws a text view for each run of text between a code block, an image
+# and a table: the body is the column holding them (the first text view's
+# fifth ancestor), as T3 Code's `.chat-markdown` holds its blocks.
+nsh = { contains = "見出し", role = "AXTextArea", up = 5 }
 
 [[element]]
 id = "markdown-code"
@@ -908,25 +910,35 @@ reason = "composer keeps Bex's own design"
 approved = "2026-11-08"
 by = "the user"
 
-# The live rows' shimmer: NSH sweeps the label by recolouring its spans on a
-# timer (`apps/nsh/src/shimmer.rs`), which the capture cannot list as a Core
-# Animation; where the band is when each side is captured decides the
+# The live rows' shimmer: NSH sweeps T3 Code's band (4.5rem of the foreground
+# over the muted label, 2.2 s in 30 steps) by recolouring the label's spans
+# on a timer (`apps/nsh/src/shimmer.rs`), which the capture cannot list as a
+# Core Animation; where the band is when each side is captured decides the
 # strongest colour measured.
 [[approved]]
 group = "live"
 metrics = ["animation", "text or glyph colour"]
-reason = "a timer-driven shimmer: not a layer animation, and its colour depends on the band's phase at capture"
+reason = "a measurement artefact: the same band swept on a timer, not a layer animation, its colour at capture set by the band's phase"
 approved = "2026-11-09"
-by = "pending the user's confirmation"
+by = "the coordinator"
 
 # Bex-only: T3 Code shows a turn's changed files only from its checkpoints,
 # which the fixture project does not make; Bex keeps its card.
 [[approved]]
 group = "bex-only"
 metrics = ["present"]
-reason = "Bex's changed-files card, kept by the user's decision"
+reason = "Bex's changed-files card: a Bex-only feature, which the never-drop rule keeps"
 approved = "2026-11-09"
-by = "pending the user's confirmation"
+by = "the coordinator"
+
+# T3 Code counts the provider's attempts in brackets ("Retrying provider
+# (1)"); Bex's Host reports that it retries, not which attempt.
+[[approved]]
+element = "retry-notice"
+metrics = ["text extent (drawn)"]
+reason = "Bex's Host reports no attempt count for T3 Code's bracketed attempt"
+approved = "2026-11-09"
+by = "the map (a protocol difference)"
 
 [[approved]]
 element = "question-submit"

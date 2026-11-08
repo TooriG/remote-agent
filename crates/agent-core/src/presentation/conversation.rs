@@ -1297,8 +1297,19 @@ fn render_turn(
     if let Some(text) = handoff {
         push(ProviderHandoff { text });
     }
-    for segment in project_items(language, &source, order.len(), metadata) {
-        let segment = &segment;
+    let segments: Vec<_> = project_items(language, &source, order.len(), metadata).collect();
+    // As T3 Code's, the turn's last message is its terminal one, which a
+    // settled turn's actions belong to.
+    let responses = |segment: &super::Segment| -> Vec<usize> {
+        (segment.start..segment.end)
+            .filter(|&index| segment.role(index, metadata(index)) == Role::Response)
+            .collect()
+    };
+    let terminal = segments
+        .iter()
+        .rev()
+        .find_map(|segment| responses(segment).last().copied());
+    for segment in &segments {
         // A later segment of a turn starts with a message sent while it worked.
         steering.set(segment.start > 0);
         let group = |role| {
@@ -1364,13 +1375,14 @@ fn render_turn(
                 });
             }
         }
-        let mut responses = group(Role::Response).peekable();
-        while let Some(item) = responses.next() {
+        for index in responses(segment) {
+            let item = render(index);
+            let terminal = Some(index) == terminal;
             // A provider message can end while the response is still running.
-            let show_actions =
-                source.status != models::TurnStatus::Running && item.data.kind == "agent";
-            let can_fork =
-                supports_fork && show_actions && segment.last && responses.peek().is_none();
+            // Commentary that ends a turn stopped before its answer has them.
+            let show_actions = source.status != models::TurnStatus::Running
+                && (item.data.kind == "agent" || terminal && item.data.kind == "commentary");
+            let can_fork = supports_fork && show_actions && terminal;
             if item.data.deferred {
                 push(Activity {
                     item,
@@ -1634,39 +1646,24 @@ pub fn request_input_default(body: agent_protocol::requests::RequestBody) -> Str
     };
     serde_json::to_string_pretty(&value).expect("request defaults serialize")
 }
+/// A turn's error, titled as T3 Code's work log titles a provider's error:
+/// its retry, a usage limit, or a provider error, which the message explains.
 fn turn_error(language: UiLanguage, error: &models::ExecutionError) -> TurnErrorPresentation {
-    use models::ErrorCategory::*;
     let retrying = error.retry.as_ref().is_some_and(|retry| retry.retrying);
+    let is_usage_limit = !retrying && error.category == models::ErrorCategory::UsageLimit;
     let title = if retrying {
-        if error.retry.as_ref().is_some_and(|retry| retry.overloaded) {
-            "サーバーが混み合っています。再接続しています"
-        } else {
-            "再接続しています"
-        }
+        "プロバイダーを再試行しています"
+    } else if is_usage_limit {
+        "利用上限に達しました"
     } else {
-        match error.category {
-            ContextLimit => "コンテキストの上限に達しました",
-            SessionLimit => "セッションの上限に達しました",
-            UsageLimit => "利用上限に達しました",
-            Overloaded => "サーバーが混み合っています",
-            RateLimited => "リクエストの上限に達しました",
-            Policy => "安全ポリシーにより停止しました",
-            Internal => "サーバーエラー",
-            Auth => "認証が必要です",
-            InvalidInput => "リクエストを処理できません",
-            Rollback => "タスクを元に戻せませんでした",
-            Sandbox => "サンドボックスエラー",
-            InputUnavailable => "この作業中はメッセージを追加できません",
-            Network => "接続エラー",
-            Other | Provider(_) => "エラー",
-        }
+        "プロバイダーエラー"
     };
     TurnErrorPresentation {
         title: language.text(title).into(),
         message: language.text(&error.message).into(),
         details: error.details.clone(),
         is_reconnecting: retrying,
-        is_usage_limit: !retrying && matches!(error.category, UsageLimit),
+        is_usage_limit,
     }
 }
 
@@ -3720,22 +3717,30 @@ mod tests {
         assert_eq!(rendered.queued[0].data.body.as_deref(), Some("queued text"));
     }
     #[test]
-    fn retry_error_titles_use_host_evidence_without_reinterpreting_native_codes() {
-        let error = turn_error(
-            UiLanguage::Japanese,
-            &models::ExecutionError {
-                category: models::ErrorCategory::Network,
-                message: "retry".into(),
-                retry: Some(models::RetryEvidence {
-                    retrying: true,
-                    overloaded: true,
-                }),
-                ..Default::default()
-            },
+    fn errors_are_titled_as_t3_codes_provider_errors() {
+        let error = |category, retrying: bool| {
+            turn_error(
+                UiLanguage::English,
+                &models::ExecutionError {
+                    category,
+                    message: "retry".into(),
+                    retry: retrying.then_some(models::RetryEvidence { retrying }),
+                    ..Default::default()
+                },
+            )
+        };
+        let retry = error(models::ErrorCategory::UsageLimit, true);
+        assert_eq!(retry.title, "Retrying provider");
+        assert!(retry.is_reconnecting);
+        assert_eq!(retry.message, "retry");
+        assert_eq!(
+            error(models::ErrorCategory::UsageLimit, false).title,
+            "Usage limit reached"
         );
-        assert_eq!(error.title, "サーバーが混み合っています。再接続しています");
-        assert!(error.is_reconnecting);
-        assert_eq!(error.message, "retry");
+        assert_eq!(
+            error(models::ErrorCategory::ContextLimit, false).title,
+            "Provider error"
+        );
     }
 
     #[test]
@@ -3762,10 +3767,7 @@ mod tests {
             UiLanguage::Japanese,
             &models::ExecutionError {
                 category: models::ErrorCategory::UsageLimit,
-                retry: Some(models::RetryEvidence {
-                    retrying: true,
-                    overloaded: false,
-                }),
+                retry: Some(models::RetryEvidence { retrying: true }),
                 ..Default::default()
             },
         );
