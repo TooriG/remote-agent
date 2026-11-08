@@ -615,7 +615,7 @@ fn desktop_row(
                         .hover(|s| s.bg(colors::GHOST_HOVER))
                         .active(|s| s.bg(colors::SELECTED))
                         .on_press(move || activate("expand", &toggle, None))
-                        .child(project_icon(&row))
+                        .child(project_icon(row.png.as_deref(), row.glyph.clone(), 16.0))
                         .child(row_label(row.title.clone())),
                 )
                 .child(
@@ -699,9 +699,14 @@ fn row_label(title: String) -> impl IntoElement {
         .label(title)
 }
 
-fn project_icon(row: &Row) -> AnyElement {
+/// A project's own icon, else its monogram on its colour, `size` points square.
+pub(crate) fn project_icon(
+    png: Option<&[u8]>,
+    glyph: Option<(String, u32)>,
+    size: f32,
+) -> AnyElement {
     use base64::Engine;
-    if let Some(png) = &row.png {
+    if let Some(png) = png {
         let source = format!(
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(png)
@@ -709,8 +714,8 @@ fn project_icon(row: &Row) -> AnyElement {
         // Named as an image, so assistive technologies and the acceptance
         // checks tell the project's own icon from the monogram.
         return image(source)
-            .w(px(16.0))
-            .h(px(16.0))
+            .w(px(size))
+            .h(px(size))
             .flex_shrink_0()
             .object_fit(ResizeMode::Contain)
             .rounded(px(4.0))
@@ -718,11 +723,11 @@ fn project_icon(row: &Row) -> AnyElement {
             .label(tr("プロジェクトのアイコン"))
             .into_element();
     }
-    let (monogram, color) = row.glyph.clone().unwrap_or_default();
+    let (monogram, color) = glyph.unwrap_or_default();
     let color = nsh_core::element::rgb(color);
     view()
-        .w(px(16.0))
-        .h(px(16.0))
+        .w(px(size))
+        .h(px(size))
         .flex_shrink_0()
         .rounded(px(4.0))
         .items_center()
@@ -730,7 +735,7 @@ fn project_icon(row: &Row) -> AnyElement {
         .bg(color.opacity(0.15))
         .child(
             text(monogram)
-                .text_size(px(8.0))
+                .text_size(px(size / 2.0))
                 .font_weight(FontWeight::BOLD)
                 .text_color(color),
         )

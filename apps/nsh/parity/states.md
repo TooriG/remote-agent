@@ -34,9 +34,9 @@ reason). Reasons recur:
 
 | State | Source | Status |
 |---|---|---|
-| Breadcrumb: project / chat title | `chat/ChatHeader.tsx`, `WorkspaceBreadcrumb.tsx` | covered: `turn-finished`, `turn-live`, `turn-thinking`, `draft` (`header-title`) |
+| Breadcrumb: project / chat title | `chat/ChatHeader.tsx`, `WorkspaceBreadcrumb.tsx` | covered: `turn-finished`, `turn-live`, `turn-thinking`, `draft` (`header-project`, `header-title`, `header-new-chat`) |
 | Title actions menu (rename, fork, archive…) | `ChatHeader.tsx` thread actions | not yet: not mapped |
-| Panel layout controls: details, terminal, right panel, maximize | `chat/PanelLayoutControls.tsx` | covered: `turn-finished` (details and right panel toggles); terminal drawer toggle and maximize not yet: NSH has no counterpart controls mapped |
+| Panel layout controls: details, terminal, right panel, maximize | `chat/PanelLayoutControls.tsx` | covered: `turn-finished` (details, terminal and right panel toggles); maximize not yet: it shows only with the right panel open |
 | Thread relationships (parent/child, agents) | `chat/ThreadRelationshipsControl.tsx` | not yet: fixture (no subagent threads) |
 
 ## Banners above the timeline and composer

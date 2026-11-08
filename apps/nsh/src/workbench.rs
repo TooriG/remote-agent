@@ -167,6 +167,12 @@ fn tools() -> Vec<PanelTool> {
         .collect()
 }
 
+/// Whether the tool `key` names can open now.
+#[cfg(desktop)]
+pub(crate) fn tool_enabled(key: &str) -> bool {
+    tools().iter().any(|tool| tool.key == key && tool.enabled)
+}
+
 pub(crate) fn open_tool(key: &str) {
     let workspace = use_context::<Workbench>().unwrap();
     let connection = use_context::<Connection>().unwrap();

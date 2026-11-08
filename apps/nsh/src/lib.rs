@@ -283,6 +283,8 @@ fn app_content(
             .with(|p| p.title())
             .unwrap_or_else(|| tr("新しいチャット").into())
     });
+    #[cfg(desktop)]
+    let project = computed(move || connection.context.with(|p| p.workspace_project()));
     let list = move || {
         threads::list(query, move || {
             dismiss_keyboard();
@@ -412,27 +414,37 @@ fn app_content(
                                 .flex_1()
                                 .min_w_0()
                                 .child(sidebar::conversation_header(
-                                    title,
                                     sidebar,
-                                    tools,
-                                    details,
-                                    details_inline,
                                     move || navigate(Navigation::ToggleSidebar(window().width.0)),
-                                    move || {
-                                        application.with(|application| {
-                                            application.set_panel_open(
-                                                workspace.scope.get_untracked(),
-                                                true,
-                                            )
-                                        })
-                                    },
-                                ))
-                                .child(view().flex_1().min_h_0().flex_row().child(content()).child(
-                                    when(
-                                        move || details.get() && details_inline(),
-                                        desktop_workspace::card,
+                                    sidebar::breadcrumb(title, project, move || {
+                                        toolbar_action("compose")
+                                    }),
+                                    sidebar::panel_toggles(
+                                        details,
+                                        details_inline,
+                                        tools,
+                                        move || {
+                                            application.with(|application| {
+                                                application.set_panel_open(
+                                                    workspace.scope.get_untracked(),
+                                                    true,
+                                                )
+                                            })
+                                        },
                                     ),
                                 ))
+                                .child(
+                                    view()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .flex_row()
+                                        .child(content())
+                                        .child(when(
+                                            move || details.get() && details_inline(),
+                                            desktop_workspace::card,
+                                        ))
+                                        .child(notices::thread_error()),
+                                )
                         },
                     ))
                     .child(when(tools, move || {

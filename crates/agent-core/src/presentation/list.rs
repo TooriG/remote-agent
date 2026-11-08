@@ -400,6 +400,31 @@ impl Snapshot {
     }
 }
 impl Snapshot {
+    /// The listed project whose first folder is `directory`, named and marked
+    /// as the sidebar shows it.
+    pub(crate) fn directory_project(&self, directory: &str) -> Option<ProjectSummary> {
+        let project = self
+            .lists
+            .threads
+            .as_ref()?
+            .projects
+            .iter()
+            .find(|project| {
+                project
+                    .roots
+                    .first()
+                    .is_some_and(|root| !directory.is_empty() && root.path == directory)
+            })?;
+        let name = self
+            .lists
+            .project_preferences
+            .get(&self.connection.storage_scope)
+            .and_then(|preferences| preferences.get(&project.id))
+            .and_then(|preferences| preferences.name.as_deref())
+            .unwrap_or(&project.name);
+        Some(project_summary(project, name))
+    }
+
     /// The selected folder is separate from the provider's execution directory.
     pub fn selected_directory(&self, pane: &crate::state::PaneState) -> String {
         let thread = pane

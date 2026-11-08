@@ -28,7 +28,7 @@ description = "A new chat in the project before anything is sent: the hero and t
 nsh = ["press \"New chat in this project\"", "expect \"Ask AI\""]
 t3 = []
 column = "composer"
-elements = ["header-new-chat", "composer", "composer-placeholder", "composer-send", "composer-attach", "composer-model", "composer-mode", "composer-dictation", "composer-context-strip", "draft-hero", "draft-hero-project", "draft-without-project"]
+elements = ["window", "header", "header-project", "header-new-chat", "composer", "composer-placeholder", "composer-send", "composer-attach", "composer-model", "composer-mode", "composer-dictation", "composer-context-strip", "draft-hero", "draft-hero-project", "draft-without-project"]
 
 [[state]]
 name = "composer-draft"
@@ -55,7 +55,7 @@ description = "A running turn before any work or text arrives: T3 shows its work
 nsh = ["send [delayed-input] 考える様子を確認します", "expect \"考える様子を確認します\" 20000", "wait 1500"]
 t3 = [{ send = "[delayed-input] 考える様子を確認します" }, { waitFor = "[data-timeline-row-kind=thinking]" }]
 column = "composer"
-elements = ["composer", "header-title", "user-bubble", "user-text", "working-header", "thinking-row", "composer-stop"]
+elements = ["composer", "window", "header", "header-project", "header-title", "user-bubble", "user-text", "working-header", "thinking-row", "composer-stop"]
 
 [[state]]
 name = "turn-live"
@@ -64,7 +64,7 @@ description = "A running turn with a command in flight: the working header and t
 nsh = ["send [groups] ライブの作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000"]
 t3 = [{ send = "[groups] ライブの作業を確認します" }, { waitText = "Running pwd" }]
 column = "composer"
-elements = ["composer", "header-title", "user-bubble", "user-text", "working-header", "live-row", "live-row-icon", "live-commentary", "live-done-group", "composer-stop", "changed-files-card"]
+elements = ["composer", "window", "header", "header-project", "header-title", "user-bubble", "user-text", "working-header", "live-row", "live-row-icon", "live-commentary", "live-done-group", "composer-stop", "changed-files-card"]
 
 [[state]]
 name = "turn-finished"
@@ -73,7 +73,7 @@ description = "A finished turn: the user's message, the folded work row, the ans
 nsh = ["send [groups] 完了した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000"]
 t3 = [{ send = "[groups] 完了した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }, { waitMs = 1500 }]
 column = "composer"
-elements = ["composer", "composer-send", "header-title", "header-details-toggle", "header-panel-toggle", "user-bubble", "user-text", "user-copy", "user-edit", "user-time", "work-toggle", "assistant-text", "assistant-copy", "assistant-fork", "assistant-time", "changed-files-card"]
+elements = ["composer", "composer-send", "window", "header", "header-project", "header-title", "header-details-toggle", "header-terminal-toggle", "header-panel-toggle", "user-bubble", "user-text", "user-copy", "user-edit", "user-time", "work-toggle", "assistant-text", "assistant-copy", "assistant-fork", "assistant-time", "changed-files-card"]
 
 [[state]]
 name = "turn-hover"
@@ -109,7 +109,7 @@ description = "A turn that failed: its work and the error in the timeline, and T
 nsh = ["send [failed] 失敗を確認します", "expect \"context is full\" 20000"]
 t3 = [{ send = "[failed] 失敗を確認します" }, { waitText = "Provider error" }]
 column = "composer"
-elements = ["composer", "user-bubble", "error-banner", "error-title", "error-detail", "error-copy", "tool-row"]
+elements = ["composer", "window", "header", "user-bubble", "error-banner", "error-title", "error-detail", "error-copy", "tool-row"]
 
 [[state]]
 name = "turn-interrupted"
@@ -133,7 +133,7 @@ elements = ["composer", "working-header", "retry-notice"]
 name = "approval"
 screen = "Conversation"
 description = "A command waiting for approval: the request above the composer."
-nsh = ["send [approval] 承認を確認します", "expect \"echo fixture\" 20000"]
+nsh = ["send [approval] 承認を確認します", "expect \"結合テストの承認確認\" 20000"]
 t3 = [{ send = "[approval] 承認を確認します" }, { waitText = "Command approval" }]
 column = "composer"
 elements = ["composer", "approval-panel", "approval-title", "approval-command", "approval-accept", "approval-decline", "working-header", "approval-live-row"]
@@ -145,7 +145,7 @@ description = "A question from the agent: its options above the composer."
 nsh = ["send [request] 質問を確認します", "expect \"このまま続けますか？\" 20000"]
 t3 = [{ send = "[request] 質問を確認します" }, { waitText = "このまま続けますか？" }]
 column = "composer"
-elements = ["composer", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-submit", "composer-placeholder", "working-header", "question-live-row"]
+elements = ["composer", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-dismiss", "question-submit", "composer-placeholder", "working-header", "question-live-row"]
 
 [[state]]
 name = "markdown-document"
@@ -211,8 +211,9 @@ what = "Composer surface"
 kind = "box"
 group = "composer"
 t3 = "[data-chat-composer-surface]"
-# The sidebar's search field is the window's first input pad.
-nsh = { class = "NshInputPad", nth = 1, up = "background" }
+# The surface filled behind the field and its footer, whose access mode control
+# every state shows (a question takes the attach button away).
+nsh = { text = "Change approval mode", up = "background" }
 
 [[element]]
 id = "composer-placeholder"
@@ -331,19 +332,47 @@ kind = "text"
 t3 = "main h1 + p button"
 nsh = { text = "Start without a project" }
 
+# What the window's own edges place (the header's toggles at its end) is
+# measured from the window.
+[[element]]
+id = "window"
+what = "Window"
+kind = "box"
+t3 = "body"
+nsh = { class = "NSView" }
+anchor = "window"
+
+[[element]]
+id = "header"
+what = "Header bar"
+kind = "box"
+t3 = "header[data-chat-header]"
+nsh = { text = "Toggle terminal drawer", up = 3 }
+anchor = "window"
+
+[[element]]
+id = "header-project"
+what = "Header: project"
+kind = "text"
+t3 = "header nav li:first-child [data-slot=workspace-breadcrumb-text]"
+nsh = { text = "検証プロジェクト", role = "AXStaticText", nth = 1 }
+anchor = "header"
+
 [[element]]
 id = "header-new-chat"
 what = "Header: new chat title"
 kind = "text"
 t3 = "header h2 [data-slot=workspace-breadcrumb-text]"
 nsh = { text = "New chat", role = "AXStaticText" }
+anchor = "header"
 
 [[element]]
 id = "header-title"
 what = "Header: chat title"
 kind = "text"
 t3 = "header h2 [data-slot=workspace-breadcrumb-text]"
-nsh = { contains = "を確認します", role = "AXStaticText" }
+nsh = { text = "Simulator conversation", role = "AXStaticText" }
+anchor = "header"
 
 [[element]]
 id = "header-details-toggle"
@@ -351,6 +380,15 @@ what = "Header: details panel toggle"
 kind = "icon"
 t3 = "button[aria-label='Toggle thread details panel']"
 nsh = { text = "Toggle thread details" }
+anchor = "window"
+
+[[element]]
+id = "header-terminal-toggle"
+what = "Header: terminal toggle"
+kind = "icon"
+t3 = "button[aria-label='Toggle terminal drawer']"
+nsh = { text = "Toggle terminal drawer" }
+anchor = "window"
 
 [[element]]
 id = "header-panel-toggle"
@@ -358,6 +396,7 @@ what = "Header: right panel toggle"
 kind = "icon"
 t3 = "button[aria-label='Toggle right panel']"
 nsh = { text = "Toggle right panel" }
+anchor = "window"
 
 [[element]]
 id = "user-bubble"
@@ -551,7 +590,11 @@ id = "error-banner"
 what = "Error banner above the timeline"
 kind = "box"
 t3 = "button[aria-label='Dismiss error'] ~ *, [role=alert]"
-nsh = {}
+nsh = { text = "Dismiss error", up = 1 }
+anchor = "header"
+# Centred beside the sidebar, which keeps GPUI's 272-point width (T3's is
+# 256): the header is 16 points narrower, so the banner starts 8 further in.
+tolerance = { position = 8.5 }
 
 [[element]]
 id = "error-title"
@@ -595,43 +638,50 @@ id = "approval-panel"
 what = "Approval request panel"
 kind = "box"
 t3 = "[data-slot=composer-banner]"
-nsh = { contains = "Waiting for command approval", up = "background" }
+nsh = { text = "Command approval", up = 3 }
+# The banners attach to the composer's top edge: measured from it.
+anchor = "composer"
 
 [[element]]
 id = "approval-title"
 what = "Approval: title"
 kind = "text"
 t3 = "[data-slot=composer-banner] .text-warning"
-nsh = { contains = "Waiting for command approval" }
+nsh = { text = "Command approval" }
+anchor = "composer"
 
 [[element]]
 id = "approval-command"
-what = "Approval: command detail"
+what = "Approval: the request's reason (or command)"
 kind = "text"
 t3 = "code[aria-label=Command]"
-nsh = { contains = "echo fixture" }
+nsh = { text = "結合テストの承認確認", role = "AXStaticText" }
+anchor = "composer"
 
 [[element]]
 id = "approval-accept"
 what = "Approval: approve button"
 kind = "text"
 t3 = "[data-slot=composer-banner] button:has(span.max-w-40)"
-nsh = { text = "承認", role = "AXButton" }
+nsh = { text = "Approve", role = "AXButton" }
 t3_nth = 1
+anchor = "composer"
 
 [[element]]
 id = "approval-decline"
 what = "Approval: decline button"
 kind = "text"
 t3 = "[data-slot=composer-banner] button:has(span.max-w-40)"
-nsh = { text = "拒否", role = "AXButton" }
+nsh = { text = "Decline", role = "AXButton" }
+anchor = "composer"
 
 [[element]]
 id = "question-panel"
 what = "Question panel"
 kind = "box"
 t3 = "[data-slot=composer-banner]"
-nsh = { text = "このまま続けますか？", up = "background" }
+nsh = { text = "このまま続けますか？", up = 2 }
+anchor = "composer"
 
 [[element]]
 id = "question-header"
@@ -639,6 +689,7 @@ what = "Question: header"
 kind = "text"
 t3 = "[data-slot=composer-banner] span.font-medium.text-muted-foreground"
 nsh = { text = "継続" }
+anchor = "composer"
 
 [[element]]
 id = "question-text"
@@ -646,6 +697,7 @@ what = "Question text"
 kind = "text"
 t3 = "[data-slot=composer-banner] p"
 nsh = { text = "このまま続けますか？" }
+anchor = "composer"
 
 [[element]]
 id = "question-option"
@@ -653,6 +705,7 @@ what = "Question: first option"
 kind = "text"
 t3 = "[data-slot=composer-banner] span.text-sm.font-medium"
 nsh = { text = "続ける", role = "AXStaticText" }
+anchor = "composer"
 
 [[element]]
 id = "question-option-detail"
@@ -660,14 +713,24 @@ what = "Question: first option's description"
 kind = "text"
 t3 = "[data-slot=composer-banner] .text-2xs"
 nsh = { text = "作業を進めます" }
+anchor = "composer"
 
+[[element]]
+id = "question-dismiss"
+what = "Question: dismiss without answering"
+kind = "icon"
+t3 = "[data-pending-user-input-dismiss]"
+nsh = { text = "Dismiss question without answering" }
+anchor = "composer"
+
+# Not in the composer group: the question's actions follow T3, though the
+# composer around them keeps Bex's design.
 [[element]]
 id = "question-submit"
 what = "Question: submit"
 kind = "text"
-group = "composer"
 t3 = "[data-chat-composer-actions] button:last-child"
-nsh = { text = "回答を送信", class = "NSButton" }
+nsh = { text = "Submit", role = "AXButton" }
 
 [[element]]
 id = "markdown-body"
@@ -770,14 +833,14 @@ nsh = { text = "シミュレータで完了しました。" }
 id = "sidebar"
 what = "Sidebar"
 kind = "box"
-nsh = { text = "Close sidebar", up = 4 }
+nsh = { text = "Close sidebar", up = "background" }
 gpui = { x = 0, y = 0, width = 272, source = "view.rs:426 w(px(272.))" }
 
 [[element]]
 id = "sidebar-search-field"
 what = "Search field"
 kind = "box"
-nsh = { text = "Search", class = "NSButton", up = 1 }
+nsh = { text = "Search conversations", up = 1 }
 gpui = { x = 12, height = 24, source = "sidebar.rs:741 Input::small(): h_6 (sizing.rs:285); Sidebar header px_3 (sidebar/mod.rs:441)" }
 
 [[element]]
@@ -793,7 +856,8 @@ gpui = { source = "sidebar.rs:741 Input::small(), input_text_size text_sm (sizin
 id = "sidebar-search-icon"
 what = "Search icon in the search field"
 kind = "icon"
-nsh = { text = "Search", class = "NSButton" }
+# The field's first part, before its input.
+nsh = { text = "Search conversations", up = 1, down = [0] }
 centred_in = "sidebar-search-text"
 # Icon and text are both items_center in the field's row: their drawn centres
 # meet within a point (a line's ink sits a little above its box's centre).
@@ -834,7 +898,9 @@ gpui = { source = "sidebar.rs:778 icon_button(Settings) in a py_2 footer" }
 # `group` it is); `metrics` (the report's names) narrow it, all when omitted.
 # The composer group is the input field, its footer, controls and chips and
 # the model picker's popup, in every state; the approval and question panels
-# above it are still compared.
+# above it, and the question's submit button, are still compared.
+# The others are what the user's decisions and the fixture fix, not the
+# clients' layout.
 
 [[approved]]
 group = "composer"
@@ -861,3 +927,108 @@ metrics = ["present"]
 reason = "Bex's changed-files card, kept by the user's decision"
 approved = "2026-11-09"
 by = "pending the user's confirmation"
+
+[[approved]]
+element = "question-submit"
+metrics = ["text position (drawn)"]
+reason = "it ends the composer's footer, whose width and height keep Bex's design"
+approved = "2026-11-09"
+by = "the map (follows the user's composer decision)"
+
+[[approved]]
+element = "header"
+metrics = ["position", "size"]
+reason = "it starts after the sidebar, which keeps GPUI's 272-point width (T3's is 256)"
+approved = "2026-11-09"
+by = "the map (follows the user's sidebar decision)"
+
+[[approved]]
+element = "window"
+metrics = ["animation"]
+reason = "the window holds every animation on the page; only its frame anchors"
+approved = "2026-11-09"
+by = "the map (a measurement artefact)"
+
+[[approved]]
+element = "header-project"
+metrics = ["text extent (drawn)", "text line height (drawn)"]
+reason = "the fixture names the project 検証プロジェクト for Bex; T3 names it after its folder, project"
+approved = "2026-11-09"
+by = "the map (a fixture artefact)"
+
+[[approved]]
+element = "header-title"
+metrics = ["text position (drawn)", "text extent (drawn)", "text line height (drawn)"]
+reason = "the fixture names the chat Simulator conversation for Bex (T3 titles it with the first message), after the project's differently named crumb"
+approved = "2026-11-09"
+by = "the map (a fixture artefact)"
+
+[[approved]]
+element = "header-new-chat"
+metrics = ["text position (drawn)"]
+reason = "it follows the project's crumb, which the fixture names differently for each client"
+approved = "2026-11-09"
+by = "the map (a fixture artefact)"
+
+[[approved]]
+element = "approval-panel"
+metrics = ["size"]
+reason = "as wide as the composer less T3's inset on each side; the composer's width keeps Bex's design (the heights match)"
+approved = "2026-11-09"
+by = "the map (follows the user's composer decision)"
+
+[[approved]]
+element = "question-panel"
+metrics = ["size"]
+reason = "as wide as the composer less T3's inset on each side; the composer's width keeps Bex's design (the heights match)"
+approved = "2026-11-09"
+by = "the map (follows the user's composer decision)"
+
+[[approved]]
+element = "approval-accept"
+metrics = ["text position (drawn)"]
+reason = "the decisions end the banner, as wide as the composer, whose width keeps Bex's design (the heights match)"
+approved = "2026-11-09"
+by = "the map (follows the user's composer decision)"
+
+[[approved]]
+element = "approval-decline"
+metrics = ["text position (drawn)"]
+reason = "the decisions end the banner, as wide as the composer, whose width keeps Bex's design (the heights match)"
+approved = "2026-11-09"
+by = "the map (follows the user's composer decision)"
+
+[[approved]]
+element = "approval-accept"
+metrics = ["text extent (drawn)", "text line height (drawn)"]
+reason = "T3's side measures the filled button's fill (60 by 20 of its 64 by 24) as its text"
+approved = "2026-11-09"
+by = "the map (a measurement artefact)"
+
+[[approved]]
+element = "question-text"
+metrics = ["text or glyph colour"]
+reason = "Chromium draws regular-weight Japanese text thinner: both declare the foreground at 85% (#d2d2d2 on the banner), which AppKit's ink reaches and Chromium's (#bfbfbf) does not"
+approved = "2026-11-09"
+by = "the map (a platform difference)"
+
+[[approved]]
+element = "approval-command"
+metrics = ["text extent (drawn)", "text or glyph colour"]
+reason = "Japanese in the monospaced system font falls back to a different face in each: AppKit's is narrower and heavier than Chromium's (the same text in the sans-serif face, the question's, matches)"
+approved = "2026-11-09"
+by = "the map (a platform difference)"
+
+[[approved]]
+element = "question-dismiss"
+metrics = ["present"]
+reason = "Bex's Host can skip any question; hiding dismiss would remove skipping"
+approved = "2026-11-09"
+by = "the coordinator"
+
+[[approved]]
+element = "header-new-chat"
+metrics = ["text extent (drawn)"]
+reason = "Bex calls conversations chats everywhere"
+approved = "2026-11-09"
+by = "the user"

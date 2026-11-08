@@ -1,9 +1,9 @@
 //! The desktop sidebar: the window's leading column in the existing desktop client's layout.
-use crate::l10n::tr;
+use crate::l10n::{tr, tr_format};
 use crate::{
     Connection,
     application::{Host, ListRequest, Navigation},
-    ui::{self, Enabled, Icon, Selected, colors},
+    ui::{self, Enabled, Icon, colors},
 };
 use nsh_core::prelude::*;
 use serde_json::json;
@@ -189,59 +189,175 @@ pub(crate) fn header(expanded: bool, toggle: impl Fn() + 'static) -> View {
         )
 }
 
-/// The conversation's title bar: its title and the right panel's toggle; the
-/// sidebar's header when the sidebar is closed.
+/// The conversation's top bar, as T3 Code's (`ChatHeader`): its breadcrumb,
+/// then its panel toggles at the window's end; the sidebar's header first
+/// when the sidebar is closed.
 pub(crate) fn conversation_header(
-    title: Memo<String>,
     sidebar: Memo<bool>,
-    panel_open: impl Fn() -> bool + Copy + 'static,
-    details: Signal<bool>,
-    details_inline: impl Fn() -> bool + Copy + 'static,
     toggle_sidebar: impl Fn() + Copy + 'static,
-    toggle_panel: impl Fn() + Copy + 'static,
+    breadcrumb: impl IntoElement,
+    toggles: impl IntoElement,
 ) -> impl IntoElement {
     view()
-        .h(px(HEADER_HEIGHT))
+        // T3's `--workspace-topbar-height`.
+        .h(px(52.0))
         .flex_shrink_0()
         .flex_row()
         .items_center()
-        .gap_2()
-        .pl_4()
-        // Windows draws its window controls over the title bar's end.
-        .pr(move || px(16.0 + nsh_core::element::desktop::title_bar().right.0))
+        .gap_3()
+        // T3's `--workspace-gutter` before the breadcrumb, and its toggles
+        // 12 points and a pixel from the window's end, where Windows draws
+        // its window controls over the bar.
+        .pl(px(20.0))
+        .pr(move || px(13.0 + nsh_core::element::desktop::title_bar().right.0))
         .window_drag(true)
         .style_when(move || !sidebar.get(), |s| s.pl_0())
         .child(when(
             move || !sidebar.get(),
             move || header(false, toggle_sidebar),
         ))
+        .child(breadcrumb)
         .child(
-            text(move || title.get())
-                .flex_1()
-                .min_w_0()
-                .text_size(px(14.0))
-                .number_of_lines(1),
+            view()
+                .window_drag(false)
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(toggles),
         )
+}
+
+/// T3 Code's panel layout controls: the thread details beside the timeline
+/// (while there is room for them), the terminal, and the right panel (while
+/// it is closed).
+pub(crate) fn panel_toggles(
+    details: Signal<bool>,
+    details_inline: impl Fn() -> bool + Copy + 'static,
+    panel_open: impl Fn() -> bool + Copy + 'static,
+    open_panel: impl Fn() + Copy + 'static,
+) -> impl IntoElement {
+    use agent_core::panels::PanelKind;
+    let workbench = use_context::<crate::workbench::Workbench>().unwrap();
+    let terminal = move || {
+        workbench.state.with(|state| {
+            state.open
+                && state
+                    .selected()
+                    .is_some_and(|surface| surface.kind == PanelKind::Terminal)
+        })
+    };
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
         .child(when(details_inline, move || {
-            view().window_drag(false).child(
-                ui::icon_button(
-                    Icon::DETAILS,
-                    tr("スレッド詳細を切り替え"),
-                    move || details.update(|open| *open = !*open),
-                )
-                .selected_when(move || details.get()),
+            ui::toggle(
+                Icon::DETAILS,
+                tr("スレッド詳細を切り替え"),
+                move || details.get(),
+                move || details.update(|open| *open = !*open),
             )
         }))
+        .child(
+            ui::toggle(
+                Icon::PANEL_BOTTOM,
+                tr("ターミナルを切り替え"),
+                terminal,
+                move || {
+                    if terminal() {
+                        workbench.hide();
+                    } else {
+                        crate::workbench::open_tool("terminal");
+                    }
+                },
+            )
+            .enabled(|| crate::workbench::tool_enabled("terminal")),
+        )
         .child(when(
             move || !panel_open(),
             move || {
-                view().window_drag(false).child(ui::icon_button(
+                ui::toggle(
                     Icon::PANEL_RIGHT,
                     tr("右パネルを切り替え"),
-                    toggle_panel,
-                ))
+                    panel_open,
+                    open_panel,
+                )
             },
         ))
+}
+
+/// T3 Code's thread breadcrumb: the project, which starts a new chat in it,
+/// a slash, then the chat's title.
+pub(crate) fn breadcrumb(
+    title: Memo<String>,
+    project: Memo<Option<agent_core::presentation::list::ProjectSummary>>,
+    compose: impl Fn() + Copy + 'static,
+) -> impl IntoElement {
+    // Each crumb in T3's `text-sm font-medium`, on one line.
+    fn crumb(content: nsh_core::element::Text) -> nsh_core::element::Text {
+        content
+            .text_size(px(14.0))
+            .line_height(px(20.0))
+            .font_weight(FontWeight::MEDIUM)
+            .number_of_lines(1)
+    }
+    view()
+        .flex_1()
+        .min_w_0()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .child(when(
+            move || project.with(Option::is_some),
+            move || {
+                let name = move || {
+                    project.with(|project| {
+                        project
+                            .as_ref()
+                            .map(|project| project.name.clone())
+                            .unwrap_or_default()
+                    })
+                };
+                view().window_drag(false).flex_shrink(1.0).min_w_0().child(
+                    ui::bare_button(
+                        move || SharedString::from(tr_format("{0}で新しいチャット", [&name()])),
+                        compose,
+                    )
+                    .min_w_0()
+                    .gap(px(6.0))
+                    .text_color(ui::colors::T3_MUTED)
+                    .hover(|s| s.text_color(ui::colors::T3_FOREGROUND))
+                    .child(dynamic(move || {
+                        project.with(|project| {
+                            project.as_ref().map(|project| {
+                                crate::threads::project_icon(
+                                    project.icon.as_ref().map(|icon| icon.dark_png.as_slice()),
+                                    Some((project.monogram.clone(), project.icon_color)),
+                                    14.0,
+                                )
+                            })
+                        })
+                    }))
+                    // T3's `max-w-40`.
+                    .child(crumb(text(name)).min_w_0().max_w(px(160.0))),
+                )
+            },
+        ))
+        .child(when(
+            move || project.with(Option::is_some),
+            move || {
+                view()
+                    .flex_shrink_0()
+                    .accessibility_elements_hidden(true)
+                    .child(crumb(text("/")).text_color(ui::colors::T3_MUTED))
+            },
+        ))
+        .child(
+            crumb(text(move || title.get()))
+                .flex_1()
+                .min_w_0()
+                .text_color(ui::colors::T3_FOREGROUND),
+        )
 }
 
 /// The list's connection: all connections or one, chosen from a popup menu.

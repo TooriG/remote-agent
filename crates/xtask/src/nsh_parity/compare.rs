@@ -821,6 +821,20 @@ gpui = { x = 14, y = 14, width = 16, height = 16, glyph_dx = -20, glyph_dy = 0, 
             ),
             Some(3)
         );
+        // A part no text names: a shown child of the named view's ancestor
+        // (the off-screen row is not counted).
+        assert_eq!(
+            find(
+                NshMatch {
+                    text: Some("Copy".into()),
+                    up: Some(Up::Levels(2)),
+                    down: vec![1],
+                    ..NshMatch::default()
+                },
+                0
+            ),
+            Some(3)
+        );
         assert_eq!(
             find(
                 NshMatch {
