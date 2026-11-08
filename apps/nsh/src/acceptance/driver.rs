@@ -343,17 +343,19 @@ fn apart(tree: &Tree, find: &Find, other: &str) -> Attempt {
     for &a in &first {
         for &b in &second {
             let (one, two) = (tree.frame(a), tree.frame(b));
+            let shared = |start: f64, length: f64, other: f64, other_length: f64| {
+                (start + length).min(other + other_length) - start.max(other)
+            };
+            // AppKit's buttons report a point of their bezel past their bounds.
             if one.size.width > 0.0
                 && one.size.height > 0.0
                 && two.size.width > 0.0
                 && two.size.height > 0.0
-                && one.origin.x < two.origin.x + two.size.width
-                && two.origin.x < one.origin.x + one.size.width
-                && one.origin.y < two.origin.y + two.size.height
-                && two.origin.y < one.origin.y + one.size.height
+                && shared(one.origin.x, one.size.width, two.origin.x, two.size.width) > 1.0
+                && shared(one.origin.y, one.size.height, two.origin.y, two.size.height) > 1.0
             {
                 return Attempt::Pending(format!(
-                    "{} overlaps {}",
+                    "{} ({one:?}) overlaps {} ({two:?})",
                     tree.nodes[a].describe(),
                     tree.nodes[b].describe()
                 ));
@@ -454,6 +456,7 @@ fn fail(driver: &Rc<RefCell<Driver>>, reason: &str, mtm: MainThreadMarker) {
     let evidence: Vec<String> = [
         screenshot(mtm, &output, "failure"),
         dump(&Tree::read(mtm, &menus), &output, "failure-tree"),
+        windows(mtm, &output),
     ]
     .into_iter()
     .filter_map(|written| {
@@ -964,6 +967,31 @@ fn dump(tree: &Tree, output: &Path, name: &str) -> Result<String, String> {
     let file = format!("{name}.txt");
     std::fs::write(output.join(&file), tree.text())
         .map_err(|reason| format!("{file}: {reason}"))?;
+    Ok(file)
+}
+
+/// The app's activation and its windows' states, which say why a tree came
+/// out empty: a hidden app's windows are not visible, nor are minimized ones.
+fn windows(mtm: MainThreadMarker, output: &Path) -> Result<String, String> {
+    let app = NSApplication::sharedApplication(mtm);
+    let mut text = format!(
+        "active={} hidden={} key={}\n",
+        app.isActive(),
+        app.isHidden(),
+        app.keyWindow().is_some()
+    );
+    for window in app.windows() {
+        text.push_str(&format!(
+            "{:?} visible={} miniaturized={} occlusion={:?} frame={:?}\n",
+            window.title().to_string(),
+            window.isVisible(),
+            window.isMiniaturized(),
+            window.occlusionState(),
+            window.frame()
+        ));
+    }
+    let file = "failure-windows.txt".to_owned();
+    std::fs::write(output.join(&file), text).map_err(|reason| format!("{file}: {reason}"))?;
     Ok(file)
 }
 

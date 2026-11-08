@@ -29,7 +29,19 @@ impl Picker {
     }
 }
 
-pub(crate) fn controls() -> View {
+/// The model control's padding at each side of its name, and the name's font.
+#[cfg(desktop)]
+const PADDING: f32 = 8.0;
+#[cfg(desktop)]
+const LABEL_FONT: &str = "14px system-ui";
+
+/// The model control and its picker. On the desktop the control sets `natural`
+/// to its width with the whole name and is `width` wide, its name shortened to
+/// fit; elsewhere it takes its own width.
+pub(crate) fn controls(
+    #[cfg_attr(not(desktop), allow(unused_variables))] natural: Signal<f32>,
+    #[cfg_attr(not(desktop), allow(unused_variables))] width: impl Fn() -> f32 + 'static,
+) -> View {
     let connection = use_context::<Connection>().unwrap();
     let publication = connection.publication;
     let picker = signal(None::<Picker>);
@@ -55,26 +67,55 @@ pub(crate) fn controls() -> View {
                 .unwrap_or_else(|| tr("モデル").into())
         })
     });
-    let trigger = crate::ui::text_button(
-        move || SharedString::from(label.get()),
-        move || {
-            let host = connection.host.get_untracked();
-            picker.set(Some(publication.with_untracked(|p| Picker {
-                id: uuid::Uuid::new_v4().to_string(),
-                host,
-                storage: p.snapshot.connection.storage_scope.clone(),
-                draft: p.settings.draft_key(),
-                provider: p.settings.provider(),
-                query: String::new(),
-            })));
-            connection.dispatch(Intent::ReadProviderSettings(op::ReadProviderSettings {}));
-            connection.dispatch(Intent::ListAccounts(op::ListAccounts {}));
-        },
-    )
-    .enabled(move || {
+    let open = move || {
+        let host = connection.host.get_untracked();
+        picker.set(Some(publication.with_untracked(|p| Picker {
+            id: uuid::Uuid::new_v4().to_string(),
+            host,
+            storage: p.snapshot.connection.storage_scope.clone(),
+            draft: p.settings.draft_key(),
+            provider: p.settings.provider(),
+            query: String::new(),
+        })));
+        connection.dispatch(Intent::ReadProviderSettings(op::ReadProviderSettings {}));
+        connection.dispatch(Intent::ListAccounts(op::ListAccounts {}));
+    };
+    let enabled = move || {
         connection.settings.with(|p| p.connected())
             && !connection.composer.with(|c| c.controls.sending)
-    });
+    };
+    // Drawn by NSH, so that its name shortens with an ellipsis as T3 Code's does.
+    #[cfg(desktop)]
+    let trigger = {
+        use crate::ui::{self, colors};
+        effect(move || natural.set(2.0 * PADDING + measure_text(LABEL_FONT, &label.get()).0));
+        nsh_base::button()
+            .accessibility_label(nsh_core::element::Prop::from(
+                (move || Some(SharedString::from(label.get()))).into_reactive(),
+            ))
+            .enabled(enabled)
+            .on_press(open)
+            .h(px(32.0))
+            .w(move || px(width()))
+            .px(px(PADDING))
+            .flex_row()
+            .items_center()
+            .rounded(px(ui::RADIUS))
+            .text_color(colors::FOREGROUND)
+            .hover(|s| s.bg(colors::GHOST_HOVER))
+            .active(|s| s.bg(colors::SELECTED))
+            .disabled_style(|s| s.opacity(0.5))
+            .child(
+                text(move || label.get())
+                    .text_size(px(14.0))
+                    .truncate()
+                    .flex_1()
+                    .min_w_0(),
+            )
+    };
+    #[cfg(not(desktop))]
+    let trigger =
+        crate::ui::text_button(move || SharedString::from(label.get()), open).enabled(enabled);
     let data = computed(move || {
         picker.with(|picker| {
             picker

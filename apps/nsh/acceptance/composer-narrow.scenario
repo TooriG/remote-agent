@@ -1,6 +1,7 @@
-# As the window narrows, the approval control drops its label as T3 Code's
-# footer does, and no composer control is ever cut off: the window keeps room
-# for the narrowest row and grows back to it when made narrower.
+# As the window narrows, the composer's controls step aside as T3 Code's footer
+# does: the approval control shows only its icon, then moves into the "more"
+# control's menu while the model's name shortens, and last the controls hide.
+# Attaching, dictation and sending stay, and nothing is cut off.
 fixture /long-conversation/composer-narrow
 expect "検証プロジェクト" 30000
 press 検証プロジェクト
@@ -15,21 +16,39 @@ expect_inside 承認方法を変更
 expect_inside "Fixture Model"
 expect_inside 音声をCodexで文字起こし
 expect_inside "AI に依頼する"
-screenshot just-wider-than-640
+screenshot icon
 press 承認方法を変更
+expect "承認を求める"
+key escape
+expect_absent "承認を求める"
+# The approval control moves into the "more" menu; the model's name shortens.
+window 540 760
+expect その他
+expect_absent 承認方法を変更
+expect_inside 送信
+expect_inside ファイルを添付
+expect_inside その他
+expect_inside "Fixture Model"
+expect_inside 音声をCodexで文字起こし
+# The shortened name stays within its control, clear of its neighbours.
+expect_apart "Fixture Model" 音声をCodexで文字起こし
+expect_apart "Fixture Model" その他
+screenshot more
+press その他
 expect "承認を求める"
 expect "フルアクセス"
 key escape
 expect_absent "承認を求める"
-# Narrower than the narrowest row: the window grows back to it.
-window 300 760
+# Last, the controls hide.
+window 480 760
+expect_absent その他
+expect_absent "Fixture Model"
 expect_inside 送信
 expect_inside ファイルを添付
-expect_inside 承認方法を変更
-expect_inside "Fixture Model"
 expect_inside 音声をCodexで文字起こし
-expect_inside "AI に依頼する"
-screenshot narrowest
-# Wide again, the label comes back.
+screenshot hidden
+# Wide again, everything comes back with its label.
 window 1200 760
 expect "カスタム・未設定"
+expect "Fixture Model"
+screenshot wide

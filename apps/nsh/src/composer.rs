@@ -1,6 +1,5 @@
 use crate::l10n::{localized, tr};
 use crate::{Connection, native};
-#[cfg(desktop)]
 use agent_core::presentation::composer::footer;
 use agent_core::state::{Intent, operations as op};
 use nsh_core::{GlassEffect, element::input, prelude::*};
@@ -282,7 +281,11 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             )
             .child(when(
                 move || !collapsed(),
-                || crate::model_controls::controls().col_start(3).row_start(2),
+                || {
+                    crate::model_controls::controls(signal(0.0), || 0.0)
+                        .col_start(3)
+                        .row_start(2)
+                },
             ))
             .child(
                 view()
@@ -351,26 +354,50 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         let inactive = move || {
             !enabled() || (composer.with(|c| c.draft.text.trim().is_empty()) && !stopping())
         };
-        // What the row and the controls that always show measure, so that the
-        // approval control drops its label as T3 Code's does and the window keeps
-        // room for the narrowest row. The row is measured with the window's
-        // width in the same layout.
-        let row = signal(None::<(f32, f32)>);
+        // T3 Code's footer: the controls between attaching and sending fit the
+        // room the row leaves them, as `footer::controls_layout` decides.
+        let row_width = signal(None::<f32>);
         let attach_width = signal(0_f32);
-        let trailing_width = signal(0_f32);
+        let primary_width = signal(0_f32);
+        let model_width = signal(0_f32);
+        // The approval control is the one block after the model control, and
+        // as wide as the "more" control as its icon.
         #[cfg(desktop)]
-        let widths = move |approval: f32| footer::FooterWidths {
-            row: row.get().map_or(0.0, |(row, _)| row),
-            fixed: attach_width.get() + trailing_width.get(),
-            approval,
-            approval_icon: crate::permissions::ICON_WIDTH,
+        let approval_width = signal(0_f32);
+        #[cfg(desktop)]
+        let blocks = move || {
+            use crate::permissions::ICON_WIDTH;
+            (vec![approval_width.get()], vec![ICON_WIDTH], ICON_WIDTH)
         };
+        #[cfg(not(desktop))]
+        let blocks = || (Vec::new(), Vec::new(), 0.0);
+        let room =
+            move || row_width.get().unwrap_or_default() - attach_width.get() - primary_width.get();
+        let measurement = move || {
+            let (blocks, icon_blocks, overflow) = blocks();
+            footer::ControlsMeasurement {
+                gap: 0.0,
+                model: model_width.get(),
+                blocks,
+                icon_blocks,
+                overflow,
+            }
+        };
+        let layout = signal(footer::ControlsLayout::default());
+        effect(move || {
+            if row_width.get().is_some() {
+                let previous = layout.get_untracked();
+                let next = footer::controls_layout(&measurement(), room(), Some(previous));
+                if next != previous {
+                    layout.set(next);
+                }
+            }
+        });
+        let shown = move || layout.with(|layout| layout.visible);
         let controls_row = view()
             .flex_row()
             .items_center()
-            .on_layout(move |bounds: &Bounds<Points>| {
-                row.set(Some((bounds.size.width.0, window().width.0)))
-            })
+            .on_layout(move |bounds: &Bounds<Points>| row_width.set(Some(bounds.size.width.0)))
             .child(
                 view()
                     .on_layout(move |bounds: &Bounds<Points>| attach_width.set(bounds.size.width.0))
@@ -399,28 +426,20 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     )),
             );
         #[cfg(desktop)]
-        let controls_row = controls_row.child(crate::permissions::control(move |approval| {
-            // With its label until the row is laid out.
-            if row.get().is_some() {
-                footer::approval_placement(widths(approval))
-            } else {
-                footer::ApprovalPlacement::Labelled
-            }
-        }));
-        #[cfg(target_os = "macos")]
-        let controls_row = controls_row.child(when(
-            move || connection.pane.is_none() && row.get().is_some(),
-            move || {
-                native("bex.windowMinimum").prop("width", move || {
-                    let (row, window) = row.get().unwrap_or_default();
-                    json!(footer::minimum_window_width(
-                        window,
-                        row,
-                        footer::minimum_row_width(widths(0.0)),
-                    ))
+        let controls_row = controls_row.child(when(shown, move || {
+            use crate::permissions::Look;
+            crate::permissions::control(approval_width, move || {
+                layout.with(|layout| {
+                    if layout.hidden_at(0, 1) {
+                        Look::More
+                    } else if layout.icon_only_at(0, 1) {
+                        Look::Icon
+                    } else {
+                        Look::Labelled
+                    }
                 })
-            },
-        ));
+            })
+        }));
         view()
             .w_full()
             .p(px(7.0))
@@ -437,67 +456,75 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     .child(field().w_full().h(px(40.0))),
             )
             .child(
-                controls_row.child(view().flex_1()).child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .on_layout(move |bounds: &Bounds<Points>| {
-                            trailing_width.set(bounds.size.width.0)
+                controls_row
+                    .child(view().flex_1())
+                    .child(when(shown, move || {
+                        crate::model_controls::controls(model_width, move || {
+                            footer::model_width(&measurement(), room(), layout.get())
                         })
-                        .child(crate::model_controls::controls())
-                        .child(when(
-                            move || answering.with(Option::is_none),
-                            dictation_button,
-                        ))
-                        .child(when(
-                            move || answering.with(Option::is_some),
-                            move || {
-                                ui::text_button(
-                                    move || {
-                                        SharedString::from(answering.with(|q| {
-                                            q.as_ref().map(|q| q.action.clone()).unwrap_or_default()
-                                        }))
-                                    },
-                                    submit,
-                                )
-                                .enabled(enabled)
-                            },
-                        ))
-                        .child(when(
-                            move || answering.with(Option::is_none),
-                            move || {
-                                view()
-                                    .w(px(40.0))
-                                    .h(px(40.0))
-                                    .rounded_full()
-                                    .items_center()
-                                    .justify_center()
-                                    .role(AccessibilityRole::Button)
-                                    .label(move || primary_label.get())
-                                    .bg(move || {
-                                        if inactive() {
-                                            colors::BORDER
-                                        } else {
-                                            rgb(0xffffff)
-                                        }
-                                    })
-                                    .text_color(move || {
-                                        if inactive() {
-                                            colors::MUTED
-                                        } else {
-                                            colors::SIDEBAR
-                                        }
-                                    })
-                                    .style_when(inactive, |s| s.opacity(0.5))
-                                    .on_press(submit)
-                                    .child(when(
-                                        move || !stopping(),
-                                        || ui::icon(Icon::ARROW_UP, 24.0),
-                                    ))
-                                    .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))
-                            },
-                        )),
-                ),
+                    }))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .on_layout(move |bounds: &Bounds<Points>| {
+                                primary_width.set(bounds.size.width.0)
+                            })
+                            .child(when(
+                                move || answering.with(Option::is_none),
+                                dictation_button,
+                            ))
+                            .child(when(
+                                move || answering.with(Option::is_some),
+                                move || {
+                                    ui::text_button(
+                                        move || {
+                                            SharedString::from(answering.with(|q| {
+                                                q.as_ref()
+                                                    .map(|q| q.action.clone())
+                                                    .unwrap_or_default()
+                                            }))
+                                        },
+                                        submit,
+                                    )
+                                    .enabled(enabled)
+                                },
+                            ))
+                            .child(when(
+                                move || answering.with(Option::is_none),
+                                move || {
+                                    view()
+                                        .w(px(40.0))
+                                        .h(px(40.0))
+                                        .rounded_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .role(AccessibilityRole::Button)
+                                        .label(move || primary_label.get())
+                                        .bg(move || {
+                                            if inactive() {
+                                                colors::BORDER
+                                            } else {
+                                                rgb(0xffffff)
+                                            }
+                                        })
+                                        .text_color(move || {
+                                            if inactive() {
+                                                colors::MUTED
+                                            } else {
+                                                colors::SIDEBAR
+                                            }
+                                        })
+                                        .style_when(inactive, |s| s.opacity(0.5))
+                                        .on_press(submit)
+                                        .child(when(
+                                            move || !stopping(),
+                                            || ui::icon(Icon::ARROW_UP, 24.0),
+                                        ))
+                                        .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))
+                                },
+                            )),
+                    ),
             )
     };
     let desktop_context = move || {
