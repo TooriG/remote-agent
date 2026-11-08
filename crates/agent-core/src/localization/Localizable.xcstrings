@@ -13921,6 +13921,22 @@
         }
       }
     },
+    "5時間枠": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5時間枠"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "5-hour allowance"
+          }
+        }
+      }
+    },
     "週間残量 %u%%": {
       "localizations": {
         "ja": {
@@ -14877,6 +14893,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "{0} · Weekly allowance"
+          }
+        }
+      }
+    },
+    "{0} · 5時間枠": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} · 5時間枠"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} · 5-hour allowance"
           }
         }
       }
