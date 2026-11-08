@@ -221,6 +221,7 @@ fn limit(step: &Step) -> Duration {
         | Step::Scroll(find, _)
         | Step::Select(find, _)
         | Step::Menu(find)
+        | Step::Drag(find, _)
         | Step::Expect(find)
         | Step::ExpectAbsent(find) => find.timeout,
         Step::Wait(duration) | Step::ExpectClipboard(_, duration) => *duration,
@@ -271,6 +272,8 @@ fn attempt(
                 .map(|()| format!("selected {text:?} in {}", tree.nodes[index].describe()))
         }),
         Step::Menu(find) => context_menu(&Tree::read(mtm, menus), find),
+        Step::Drag(from, to) => drag(&Tree::read(mtm, menus), from, to),
+        Step::Drop => done(release()),
         Step::Choose(path) => choose(path, mtm),
         Step::ExpectClipboard(text, _) => {
             let copied = Clipboard::text();
@@ -430,6 +433,12 @@ enum Target {
         view: Retained<NSView>,
         point: NSPoint,
     },
+    /// A press at a point of a window, moved to another and held there.
+    Drag {
+        window: Retained<NSWindow>,
+        from: NSPoint,
+        to: NSPoint,
+    },
     /// A link of a text view at a character, which offers no press of its own.
     Link {
         view: Retained<AnyObject>,
@@ -455,7 +464,7 @@ impl Target {
             Self::MenuItem { menu, index, .. } => menu
                 .itemAtIndex(*index)
                 .is_some_and(|item| item.isEnabled()),
-            Self::ContextMenu { .. } | Self::Link { .. } => true,
+            Self::ContextMenu { .. } | Self::Link { .. } | Self::Drag { .. } => true,
         }
     }
 
@@ -471,6 +480,26 @@ impl Target {
             }
             Self::Link { view, link, index } => {
                 let _: () = unsafe { msg_send![&**view, clickedOnLink: &**link, atIndex: *index] };
+            }
+            Self::Drag { window, from, to } => {
+                // A click on an inactive window only activates it: NSH's
+                // views take no first mouse.
+                if let Some(mtm) = MainThreadMarker::new() {
+                    NSApplication::sharedApplication(mtm).activate();
+                }
+                window.makeKeyAndOrderFront(None);
+                mouse(window, NSEventType::LeftMouseDown, *from);
+                // In steps, as a hand moves, so a drag's claim sees it start
+                // and its label follows.
+                for step in 1..=DRAG_STEPS {
+                    let along = f64::from(step) / f64::from(DRAG_STEPS);
+                    let at = NSPoint::new(
+                        from.x + (to.x - from.x) * along,
+                        from.y + (to.y - from.y) * along,
+                    );
+                    mouse(window, NSEventType::LeftMouseDragged, at);
+                }
+                HELD.with_borrow_mut(|held| *held = Some((window.clone(), *to)));
             }
             Self::ContextMenu { view, point } => {
                 let Some(window) = view.window() else {
@@ -797,9 +826,9 @@ fn post_key(key: &Key, mtm: MainThreadMarker) -> Result<(), String> {
         (key.shift, NSEventModifierFlags::Shift),
         (key.option, NSEventModifierFlags::Option),
         (key.control, NSEventModifierFlags::Control),
-        // Arrow keys, as AppKit reports them.
+        // Arrow and function keys, as AppKit reports them.
         (
-            (123..=126).contains(&key.code),
+            (123..=126).contains(&key.code) || key.code == 109,
             NSEventModifierFlags::NumericPad | NSEventModifierFlags::Function,
         ),
     ] {
@@ -950,6 +979,66 @@ fn context_menu(tree: &Tree, find: &Find) -> Attempt {
             ),
         },
     )
+}
+
+/// How many moves a drag takes from its start to its end.
+const DRAG_STEPS: u32 = 12;
+
+thread_local! {
+    /// The window and point of the press a `drag` holds until `drop`.
+    static HELD: RefCell<Option<(Retained<NSWindow>, NSPoint)>> = const { RefCell::new(None) };
+}
+
+/// A press on `from`'s element moved onto `to`'s, once both are shown.
+fn drag(tree: &Tree, from: &Find, to: &Find) -> Attempt {
+    let center = |find: &Find| -> Result<(Retained<NSWindow>, NSPoint), String> {
+        let index = tree.labelled(find)?[0];
+        let node = &tree.nodes[index];
+        let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
+            return Err(format!("{} cannot be dragged to or from", node.describe()));
+        };
+        let frame =
+            window.convertRectFromScreen(unsafe { msg_send![&**object, accessibilityFrame] });
+        Ok((
+            window.clone(),
+            NSPoint::new(
+                frame.origin.x + frame.size.width / 2.0,
+                frame.origin.y + frame.size.height / 2.0,
+            ),
+        ))
+    };
+    match (center(from), center(to)) {
+        (Ok((window, start)), Ok((_, end))) => Attempt::Press(
+            format!("dragged {:?} onto {:?}", from.text, to.text),
+            Target::Drag {
+                window,
+                from: start,
+                to: end,
+            },
+        ),
+        (Err(reason), _) | (_, Err(reason)) => Attempt::Pending(reason),
+    }
+}
+
+/// Releases the press a `drag` holds.
+fn release() -> Result<String, String> {
+    let (window, at) = HELD
+        .with_borrow_mut(Option::take)
+        .ok_or("no drag holds a press")?;
+    mouse(&window, NSEventType::LeftMouseUp, at);
+    Ok(format!("released at {:.0}, {:.0}", at.x, at.y))
+}
+
+/// A left button's `kind` of event at `at` of `window`, handed to it now, as
+/// the system times its events.
+fn mouse(window: &NSWindow, kind: NSEventType, at: NSPoint) {
+    let now = objc2_foundation::NSProcessInfo::processInfo().systemUptime();
+    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        kind, at, NSEventModifierFlags::empty(), now, window.windowNumber(), None, 0, 1, 1.0,
+    );
+    if let Some(event) = event {
+        window.sendEvent(&event);
+    }
 }
 
 thread_local! {

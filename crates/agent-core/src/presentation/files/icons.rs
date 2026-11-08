@@ -1,5 +1,5 @@
 //! File glyph resolution from T3 Code's pierre-icons.ts and @pierre/trees 1.0.0-beta.6.
-//! Sprite artwork and third-party terms are retained in apps/nsh/assets/file-icons.
+//! Sprite artwork and third-party terms are retained in apps/desktop/assets/file-icons.
 
 /// Resolve a literal filename. Markdown positions are removed by the link parser,
 /// so real filenames containing colons retain their own icon classification.
@@ -33,6 +33,29 @@ fn lookup(rules: &[(&str, &'static str)], key: &str) -> Option<&'static str> {
         .binary_search_by_key(&key, |(name, _)| name)
         .ok()
         .map(|index| rules[index].1)
+}
+
+/// Unknown filenames alone may use a sniffed MIME type; a recognized name wins.
+pub fn desktop_metadata_icon(path: &str, mime_type: Option<&str>) -> &'static str {
+    let icon = desktop_file_icon(path);
+    if icon != "file-tree-builtin-default" {
+        return icon;
+    }
+    let path = match mime_type {
+        Some("image/png") => "file.png",
+        Some("image/jpeg") => "file.jpg",
+        Some("image/gif") => "file.gif",
+        Some("image/webp") => "file.webp",
+        Some("application/pdf") => "file.pdf",
+        Some("application/zip") => "file.zip",
+        Some("application/vnd.sqlite3") => "file.sqlite",
+        Some("text/x-python") => "file.py",
+        Some("text/javascript") => "file.js",
+        Some("text/x-ruby") => "file.rb",
+        Some("text/x-shellscript") => "file.sh",
+        _ => return icon,
+    };
+    desktop_file_icon(path)
 }
 
 const CUSTOM_NAMES: &[(&str, &str)] = &[
@@ -315,6 +338,33 @@ const BUILTIN_EXTENSIONS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_only_refines_the_default_file_glyph() {
+        for (mime, expected) in [
+            ("image/png", "file-tree-builtin-image"),
+            ("image/jpeg", "file-tree-builtin-image"),
+            ("image/gif", "file-tree-builtin-image"),
+            ("image/webp", "file-tree-builtin-image"),
+            ("application/pdf", "t3-file-icon-pdf"),
+            ("application/zip", "file-tree-builtin-zip"),
+            ("application/vnd.sqlite3", "file-tree-builtin-database"),
+            ("text/x-python", "file-tree-builtin-python"),
+            ("text/javascript", "file-tree-builtin-javascript"),
+            ("text/x-ruby", "file-tree-builtin-ruby"),
+            ("text/x-shellscript", "file-tree-builtin-bash"),
+            ("unknown", "file-tree-builtin-default"),
+        ] {
+            assert_eq!(desktop_metadata_icon("extensionless", Some(mime)), expected);
+            assert_eq!(
+                desktop_metadata_icon("package.json", Some(mime)),
+                "file-tree-builtin-npm"
+            );
+        }
+        assert_eq!(
+            desktop_metadata_icon("extensionless", None),
+            "file-tree-builtin-default"
+        );
+    }
     #[test]
     fn glyphs_follow_t3_name_extension_and_longest_suffix_precedence() {
         for (path, icon) in [

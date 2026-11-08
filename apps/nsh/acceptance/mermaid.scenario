@@ -1,0 +1,22 @@
+# A complete Mermaid block in an answer shows its drawing in place of its code:
+# it enlarges and shrinks, shows its source on request, and copies its source.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[mermaid] [immediate] 流れを図にします"
+press 送信
+expect "流れを図にしました。" 30000
+expect Mermaidをコピー
+expect_absent "flowchart LR"
+screenshot diagram
+press 拡大
+expect 縮小
+screenshot enlarged
+press 縮小
+press ソース
+expect "flowchart LR"
+expect 図を表示
+screenshot source
+press 図を表示
+expect_absent "flowchart LR"
+press Mermaidをコピー
+expect_clipboard "flowchart LR"

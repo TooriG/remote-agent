@@ -5,10 +5,12 @@ use crate::l10n::tr;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use agent_core::{panels::PanelScope, state::Intent};
 use agent_core::{
-    presentation::markdown::{MarkdownAlignment, MarkdownBlock, MarkdownRun, MarkdownStyle},
+    presentation::markdown::{
+        MarkdownAlignment, MarkdownBlock, MarkdownFileReference, MarkdownRun, MarkdownStyle,
+    },
     state::DraftKey,
 };
-use nsh_core::prelude::*;
+use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::{Value, json};
 
 #[derive(Clone, PartialEq)]
@@ -26,7 +28,61 @@ enum Part {
         label: String,
         source: String,
         blocks: Vec<Value>,
+        /// A complete Mermaid block's drawing, shown in place of its source.
+        diagram: Option<Diagram>,
     },
+}
+
+/// A Mermaid block as Core draws it.
+#[derive(Clone, PartialEq)]
+struct Diagram {
+    svg: String,
+    width: f32,
+    height: f32,
+}
+
+/// What a message's file runs show: the chip each names, if it shows one.
+type Chip<'a> = &'a dyn Fn(&MarkdownFileReference) -> Option<Value>;
+
+thread_local! {
+    /// Drawn Mermaid blocks by their fenced source: a streamed message's
+    /// earlier diagrams are not laid out again for every delta.
+    static DIAGRAMS: std::cell::RefCell<Diagrams> = Default::default();
+}
+
+/// Drawn Mermaid blocks by their code.
+type Diagrams = std::collections::HashMap<String, Option<(String, Diagram)>>;
+
+/// The drawings of `source`'s complete Mermaid blocks, by their code.
+fn diagrams(source: &str) -> Vec<(String, Diagram)> {
+    use agent_core::presentation::markdown::{markdown_diagram, markdown_mermaid_fences};
+    let fences = markdown_mermaid_fences(source);
+    if fences.is_empty() {
+        return Vec::new();
+    }
+    DIAGRAMS.with_borrow_mut(|cache| {
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        fences
+            .into_iter()
+            .filter_map(|fence| {
+                cache
+                    .entry(fence)
+                    .or_insert_with_key(|fence| {
+                        markdown_diagram(fence).map(|diagram| {
+                            let drawing = Diagram {
+                                svg: diagram.svg,
+                                width: diagram.width,
+                                height: diagram.height,
+                            };
+                            (diagram.source, drawing)
+                        })
+                    })
+                    .clone()
+            })
+            .collect()
+    })
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -67,8 +123,91 @@ pub(crate) fn content(
     blocks: impl Fn() -> Vec<MarkdownBlock> + 'static,
     kind: impl Fn() -> Kind + Copy + 'static,
 ) -> nsh_core::element::View {
+    let content = computed(move || parts(blocks(), &[], &|_| None));
+    view_parts(
+        surroundings,
+        move || content.get(),
+        target(surroundings.connection),
+        kind,
+    )
+}
+
+/// A message's Markdown `source`: on the desktop, its file links and paths as
+/// the desktop client's chips, and its complete Mermaid blocks drawn.
+pub(crate) fn message(
+    surroundings: Surroundings,
+    source: impl Fn() -> Option<String> + 'static,
+    kind: impl Fn() -> Kind + Copy + 'static,
+) -> nsh_core::element::View {
     let connection = surroundings.connection;
-    let target = computed(move || {
+    let document = computed(move || {
+        let Some(source) = source() else {
+            return (Vec::new(), Vec::new());
+        };
+        let diagrams = diagrams(&source);
+        #[cfg(desktop)]
+        let blocks = agent_core::presentation::markdown::desktop_markdown_blocks(
+            source,
+            connection
+                .composer
+                .with(|c| c.controls.navigation.cwd.clone()),
+            connection.context.with(|c| c.home()),
+        );
+        #[cfg(not(desktop))]
+        let blocks = agent_core::presentation::markdown::markdown_blocks(source);
+        (blocks, diagrams)
+    });
+    #[cfg(desktop)]
+    let content = {
+        let chips = computed(move || crate::file_actions::Chips::read(connection));
+        let paths = computed(move || {
+            document.with(|(blocks, _)| {
+                let mut paths = Vec::new();
+                for_each_file(blocks, &mut |file| paths.push(file.path.clone()));
+                paths
+            })
+        });
+        effect(move || crate::file_actions::read_metadata(connection, paths.get()));
+        computed(move || {
+            chips.with(|chips| {
+                document.with(|(blocks, diagrams)| {
+                    parts(blocks.clone(), diagrams, &|file| Some(chips.chip(file)))
+                })
+            })
+        })
+    };
+    #[cfg(not(desktop))]
+    let content = computed(move || {
+        document.with(|(blocks, diagrams)| parts(blocks.clone(), diagrams, &|_| None))
+    });
+    view_parts(
+        surroundings,
+        move || content.get(),
+        target(connection),
+        kind,
+    )
+}
+
+/// Every file a document's runs name, its tables' included.
+#[cfg(desktop)]
+fn for_each_file(blocks: &[MarkdownBlock], visit: &mut impl FnMut(&MarkdownFileReference)) {
+    for block in blocks {
+        let runs: Vec<&MarkdownRun> = match block {
+            MarkdownBlock::Paragraph { runs, .. } => runs.iter().collect(),
+            MarkdownBlock::Table { rows, .. } => {
+                rows.iter().flatten().flat_map(|cell| &cell.runs).collect()
+            }
+            MarkdownBlock::Visualization { .. } => Vec::new(),
+        };
+        runs.into_iter()
+            .filter_map(|run| run.file.as_ref())
+            .for_each(&mut *visit);
+    }
+}
+
+/// Where the content's menus and links act: its Host, draft and workspace.
+fn target(connection: Connection) -> Memo<String> {
+    computed(move || {
         let scope = connection.scope.get();
         let (cwd, provider) = connection
             .composer
@@ -83,9 +222,108 @@ pub(crate) fn content(
             provider,
         })
         .expect("display targets contain only serializable values")
-    });
-    let content = computed(move || parts(blocks()));
-    view_parts(surroundings, move || content.get(), target, kind)
+    })
+}
+
+/// What the native text reports: a selection quoted or asked about in a side
+/// chat, a link pressed, or an item of a file chip's menu chosen.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn native_action(connection: Connection, files: crate::files::Browser, data: &Value) {
+    let Some(text) = data["text"].as_str().filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let Some(target) = data["target"]
+        .as_str()
+        .and_then(|s| serde_json::from_str::<Target>(s).ok())
+    else {
+        return;
+    };
+    match data["action"].as_str() {
+        Some("quote") => {
+            let visible = connection.host.get_untracked() == target.host
+                && connection.pane == target.pane
+                && connection
+                    .publication
+                    .with_untracked(|p| p.composer.controls.navigation.draft_key == target.draft);
+            connection.client.with(|client| {
+                client.dispatch(
+                    &target.host,
+                    target.pane,
+                    Intent::QuoteSelection {
+                        storage_scope: target.storage,
+                        thread_id: target.draft,
+                        text: text.into(),
+                    },
+                )
+            });
+            if visible {
+                after_answer(move || connection.composer_ref.focus());
+            }
+        }
+        Some("sideChat") if target.pane.is_none() => connection.application.with(|app| {
+            app.open_side_chat(
+                PanelScope {
+                    host: target.host,
+                    storage: target.storage,
+                    draft: target.draft,
+                },
+                target.cwd,
+                target.provider,
+                text.into(),
+            );
+        }),
+        Some("link") => open_link(
+            connection,
+            files,
+            target,
+            text.into(),
+            data["modifier"].as_bool().unwrap_or(false),
+        ),
+        #[cfg(desktop)]
+        Some("file") => crate::file_actions::choose(
+            connection,
+            files,
+            target.link(text.into()),
+            data["id"].as_str().unwrap_or_default(),
+        ),
+        _ => {}
+    }
+}
+
+/// A press on a link of the content: on the desktop, the desktop client's primary action for
+/// a file, which `modifier` (⌘, Ctrl elsewhere) sends to the editor.
+fn open_link(
+    connection: Connection,
+    files: crate::files::Browser,
+    target: Target,
+    link: String,
+    modifier: bool,
+) {
+    #[cfg(desktop)]
+    crate::file_actions::press(connection, files, target.link(link), modifier);
+    #[cfg(not(desktop))]
+    {
+        let _ = modifier;
+        files.open(
+            link,
+            target.cwd,
+            target.home,
+            target.host,
+            connection.client.get(),
+        );
+    }
+}
+
+#[cfg(desktop)]
+impl Target {
+    fn link(self, link: String) -> crate::file_actions::LinkTarget {
+        crate::file_actions::LinkTarget {
+            link,
+            cwd: self.cwd,
+            home: self.home,
+            host: self.host,
+        }
+    }
 }
 
 fn view_parts(
@@ -107,8 +345,6 @@ fn view_parts(
                 .bg(crate::ui::colors::BORDER)
                 .into_element(),
             Part::Text(_) | Part::Code { .. } => {
-                let is_code = move || part.with(|(_, part)| matches!(part, Part::Code { .. }));
-                let wrap = signal(false);
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 let message = move || {
                     native("bex.messageText")
@@ -123,63 +359,7 @@ fn view_parts(
                             })
                         })
                         .on_native_event(move |event: &NativeEvent| {
-                            let Some(text) = event.data["text"].as_str().filter(|s| !s.is_empty())
-                            else {
-                                return;
-                            };
-                            let Some(target) = event.data["target"]
-                                .as_str()
-                                .and_then(|s| serde_json::from_str::<Target>(s).ok())
-                            else {
-                                return;
-                            };
-                            match event.data["action"].as_str() {
-                                Some("quote") => {
-                                    let visible = connection.host.get_untracked() == target.host
-                                        && connection.pane == target.pane
-                                        && connection.publication.with_untracked(|p| {
-                                            p.composer.controls.navigation.draft_key == target.draft
-                                        });
-                                    connection.client.with(|client| {
-                                        client.dispatch(
-                                            &target.host,
-                                            target.pane,
-                                            Intent::QuoteSelection {
-                                                storage_scope: target.storage,
-                                                thread_id: target.draft,
-                                                text: text.into(),
-                                            },
-                                        )
-                                    });
-                                    if visible {
-                                        after_answer(move || connection.composer_ref.focus());
-                                    }
-                                }
-                                Some("sideChat") if target.pane.is_none() => {
-                                    connection.application.with(|app| {
-                                        app.open_side_chat(
-                                            PanelScope {
-                                                host: target.host,
-                                                storage: target.storage,
-                                                draft: target.draft,
-                                            },
-                                            target.cwd,
-                                            target.provider,
-                                            text.into(),
-                                        );
-                                    })
-                                }
-                                Some("link") => {
-                                    files.open(
-                                        text.into(),
-                                        target.cwd,
-                                        target.home,
-                                        target.host,
-                                        connection.client.get(),
-                                    );
-                                }
-                                _ => {}
-                            }
+                            native_action(connection, files, &event.data)
                         })
                         .min_h(px(20.0))
                 };
@@ -193,78 +373,7 @@ fn view_parts(
                         files,
                     )
                 };
-                view()
-                    .w_full()
-                    .gap_2()
-                    // A code block sits in the desktop client's frame, its language and
-                    // copy action at its top right.
-                    .style_when(
-                        move || part.with(|(_, part)| matches!(part, Part::Code { .. })),
-                        |s| {
-                            s.px_4()
-                                .pt_2()
-                                .pb_4()
-                                .rounded(px(8.0))
-                                .border_1()
-                                .border_color(crate::ui::colors::BORDER)
-                                .bg(crate::ui::colors::SURFACE)
-                        },
-                    )
-                    .child(when(
-                        move || part.with(|(_, part)| matches!(part, Part::Code { .. })),
-                        move || {
-                            view()
-                                .flex_row()
-                                .items_center()
-                                .justify_end()
-                                .gap_2()
-                                .child(
-                                    text(move || {
-                                        part.with(|(_, part)| {
-                                            if let Part::Code { label, .. } = part {
-                                                label.clone()
-                                            } else {
-                                                String::new()
-                                            }
-                                        })
-                                    })
-                                    .max_w(px(220.0))
-                                    .number_of_lines(1)
-                                    .text_size(px(12.0)),
-                                )
-                                .child(crate::ui::row_text_button(
-                                    move || {
-                                        SharedString::from(if wrap.get() {
-                                            tr("折り返し解除")
-                                        } else {
-                                            tr("折り返し")
-                                        })
-                                    },
-                                    move || wrap.update(|wrap| *wrap = !*wrap),
-                                ))
-                                .child(crate::ui::row_icon_button(
-                                    crate::ui::Icon::COPY,
-                                    tr("コードをコピー"),
-                                    move || {
-                                        part.with_untracked(|(_, part)| {
-                                            if let Part::Code { source, .. } = part {
-                                                set_clipboard(source.clone());
-                                            }
-                                        })
-                                    },
-                                ))
-                        },
-                    ))
-                    .child(when(
-                        move || !is_code() || wrap.get(),
-                        move || message().w_full(),
-                    ))
-                    // An unwrapped code block keeps its lines and scrolls sideways.
-                    .child(when(
-                        move || is_code() && !wrap.get(),
-                        move || scroll().horizontal().w_full().child(message()),
-                    ))
-                    .into_element()
+                frame(part, move || message().w_full().into_element())
             }
             Part::Image(_) => crate::media::image_view(
                 surroundings.connection,
@@ -299,6 +408,165 @@ fn view_parts(
             Part::Table { .. } => table(surroundings, part, target, kind).into_element(),
         },
     ))
+}
+
+/// Text as it is, or a code block in the desktop client's frame: its language
+/// and actions at its top right, its lines wrapped or scrolled sideways. A
+/// Mermaid block shows its drawing, at most its own size, until its source is
+/// asked for; the drawing enlarges and its source copies.
+fn frame(
+    part: ReadSignal<(usize, Part)>,
+    message: impl Fn() -> AnyElement + Copy + 'static,
+) -> AnyElement {
+    let code = move || part.with(|(_, part)| matches!(part, Part::Code { .. }));
+    let diagram = computed(move || {
+        part.with(|(_, part)| match part {
+            Part::Code { diagram, .. } => diagram.clone(),
+            _ => None,
+        })
+    });
+    let wrap = signal(false);
+    let source_shown = signal(false);
+    let large = signal(false);
+    let drawn = move || diagram.with(Option::is_some) && !source_shown.get();
+    let shown_code = move || code() && !drawn();
+    view()
+        .w_full()
+        .gap_2()
+        .style_when(code, |s| {
+            s.px_4()
+                .pt_2()
+                .pb_4()
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(crate::ui::colors::BORDER)
+                .bg(crate::ui::colors::SURFACE)
+        })
+        .child(when(code, move || {
+            code_header(part, diagram, wrap, source_shown, large)
+        }))
+        .child(when(
+            move || !code() || (shown_code() && wrap.get()),
+            message,
+        ))
+        .child(when(
+            move || shown_code() && !wrap.get(),
+            move || scroll().horizontal().w_full().child(message()),
+        ))
+        .child(when(drawn, move || {
+            // The drawing keeps its proportions and never grows past its own
+            // size, or past twice the height when enlarged.
+            let size =
+                move || diagram.with(|d| d.as_ref().map_or((1.0, 1.0), |d| (d.width, d.height)));
+            let limit = move || {
+                let (width, height) = size();
+                width
+                    * if large.get() {
+                        640.0
+                    } else {
+                        300.0_f32.min(height)
+                    }
+                    / height
+            };
+            svg(move || {
+                ImageSrc::svg_markup(
+                    &diagram.with(|d| d.as_ref().map(|d| d.svg.clone()).unwrap_or_default()),
+                )
+            })
+            .w_full()
+            .max_w(move || px(limit()))
+            .aspect_ratio(move || {
+                let (width, height) = size();
+                width / height
+            })
+        }))
+        .into_element()
+}
+
+fn code_header(
+    part: ReadSignal<(usize, Part)>,
+    diagram: Memo<Option<Diagram>>,
+    wrap: Signal<bool>,
+    source_shown: Signal<bool>,
+    large: Signal<bool>,
+) -> impl IntoElement {
+    let toggle = |flag: Signal<bool>| move || flag.update(|flag| *flag = !*flag);
+    let mermaid = move || diagram.with(Option::is_some);
+    view()
+        .flex_row()
+        .items_center()
+        .justify_end()
+        .gap_2()
+        .child(
+            text(move || {
+                part.with(|(_, part)| match part {
+                    Part::Code { label, .. } => label.clone(),
+                    _ => String::new(),
+                })
+            })
+            .max_w(px(220.0))
+            .number_of_lines(1)
+            .text_size(px(12.0)),
+        )
+        .child(when(mermaid, move || {
+            crate::ui::row_text_button(
+                move || {
+                    SharedString::from(if source_shown.get() {
+                        tr("図を表示")
+                    } else {
+                        tr("ソース")
+                    })
+                },
+                toggle(source_shown),
+            )
+        }))
+        .child(when(
+            move || mermaid() && !source_shown.get(),
+            move || {
+                crate::ui::row_text_button(
+                    move || {
+                        SharedString::from(if large.get() {
+                            tr("縮小")
+                        } else {
+                            tr("拡大")
+                        })
+                    },
+                    toggle(large),
+                )
+            },
+        ))
+        .child(when(
+            move || !mermaid() || source_shown.get(),
+            move || {
+                crate::ui::row_text_button(
+                    move || {
+                        SharedString::from(if wrap.get() {
+                            tr("折り返し解除")
+                        } else {
+                            tr("折り返し")
+                        })
+                    },
+                    toggle(wrap),
+                )
+            },
+        ))
+        .child(crate::ui::row_icon_button(
+            crate::ui::Icon::COPY,
+            move || {
+                SharedString::from(if mermaid() {
+                    tr("Mermaidをコピー")
+                } else {
+                    tr("コードをコピー")
+                })
+            },
+            move || {
+                part.with_untracked(|(_, part)| {
+                    if let Part::Code { source, .. } = part {
+                        set_clipboard(source.clone());
+                    }
+                })
+            },
+        ))
 }
 
 /// A table in the desktop client's frame: ruled cells, the header row raised, its copy
@@ -420,7 +688,10 @@ fn table(
 mod drawn {
     use super::{Part, Target};
     use crate::{Connection, ui::colors};
-    use nsh_core::{element::rgb, prelude::*};
+    use nsh_core::{
+        element::{ImageSrc, rgb},
+        prelude::*,
+    };
     use serde_json::Value;
 
     pub(super) fn message(
@@ -430,17 +701,21 @@ mod drawn {
         connection: Connection,
         files: crate::files::Browser,
     ) -> View {
-        let open = move |link: String| {
-            let Ok(target) = serde_json::from_str::<Target>(&target.get_untracked()) else {
-                return;
-            };
-            files.open(
-                link,
-                target.cwd,
-                target.home,
-                target.host,
-                connection.client.get(),
-            );
+        let target = move || serde_json::from_str::<Target>(&target.get_untracked()).ok();
+        let links = Links {
+            open: move |link: String, modifier: bool| {
+                if let Some(target) = target() {
+                    super::open_link(connection, files, target, link, modifier);
+                }
+            },
+            choose: move |link: String, id: String| {
+                #[cfg(desktop)]
+                if let Some(target) = target() {
+                    crate::file_actions::choose(connection, files, target.link(link), &id);
+                }
+                #[cfg(not(desktop))]
+                let _ = (link, id);
+            },
         };
         view()
             .w_full()
@@ -459,12 +734,24 @@ mod drawn {
                     })
                 },
                 |(index, block): &(usize, Value)| (*index, block.to_string()),
-                move |block, _| paragraph(block.get_untracked().1, secondary(), open),
+                move |block, _| paragraph(block.get_untracked().1, secondary(), links),
             ))
     }
 
+    /// What a paragraph's links do: `open` a link pressed, ⌘ (Ctrl here)
+    /// held or not, and `choose` an item of a file chip's menu.
+    #[derive(Clone, Copy)]
+    struct Links<O, C> {
+        open: O,
+        choose: C,
+    }
+
     /// One paragraph of the document `rich_text::paragraph` writes.
-    fn paragraph(block: Value, secondary: bool, open: impl Fn(String) + Copy + 'static) -> View {
+    fn paragraph<O, C>(block: Value, secondary: bool, links: Links<O, C>) -> View
+    where
+        O: Fn(String, bool) + Copy + 'static,
+        C: Fn(String, String) + Copy + 'static,
+    {
         let code = block["code"].as_bool().unwrap_or(false);
         let size = match block["header"].as_u64() {
             Some(1) => 22.0,
@@ -516,10 +803,15 @@ mod drawn {
                 span = span.text_color(rgb(color));
             }
             if let Some(link) = run["link"].as_str().map(str::to_owned) {
+                if let Some(chip) = run.get("file") {
+                    line = line.child(chip_span(span, chip, link, links));
+                    continue;
+                }
+                let open = links.open;
                 span = span
                     .text_color(colors::ACCENT)
                     .underline()
-                    .on_press(move || open(link.clone()));
+                    .on_press(move |event: &PressEvent| open(link.clone(), event.modifiers.ctrl));
             }
             line = line.child(span);
         }
@@ -534,18 +826,66 @@ mod drawn {
             )
             .child(line)
     }
+
+    /// A file chip as the desktop client's: its glyph and label in the file's accent, at
+    /// medium weight, its full path and size over it, its menu on a secondary
+    /// press; a press opens it as a link does.
+    fn chip_span<O, C>(label: Text, chip: &Value, link: String, links: Links<O, C>) -> Text
+    where
+        O: Fn(String, bool) + Copy + 'static,
+        C: Fn(String, String) + Copy + 'static,
+    {
+        let color = chip["darkColor"]
+            .as_u64()
+            .and_then(|c| u32::try_from(c).ok())
+            .map_or(colors::ACCENT, rgb);
+        let glyph = if chip["folder"].as_bool().unwrap_or(false) {
+            crate::ui::icon(crate::ui::Icon::FOLDER, 14.0).into_element()
+        } else {
+            svg(ImageSrc::svg_markup(
+                chip["icon"].as_str().unwrap_or_default(),
+            ))
+            .w(px(14.0))
+            .h(px(14.0))
+            .into_element()
+        };
+        let menu = chip["menu"].clone();
+        let (open, choose) = (links.open, links.choose);
+        let pressed = link.clone();
+        text("")
+            .text_color(color)
+            .font_weight(FontWeight::MEDIUM)
+            .tooltip(crate::ui::tooltip(SharedString::from(
+                chip["tooltip"].as_str().unwrap_or_default().to_owned(),
+            )))
+            .child(glyph)
+            .child(text(" "))
+            .child(label)
+            .on_press(move |event: &PressEvent| open(pressed.clone(), event.modifiers.ctrl))
+            .on_context_menu(move |_: &ContextMenuEvent| {
+                let link = link.clone();
+                crate::ui::popup(&menu, move |id: &str| choose(link.clone(), id.into()));
+            })
+    }
 }
 
-fn paragraph(runs: Vec<MarkdownRun>, style: &MarkdownStyle) -> Value {
+/// A paragraph of the native document; a run naming a file carries its chip.
+fn paragraph(runs: Vec<MarkdownRun>, style: &MarkdownStyle, chip: Chip) -> Value {
     json!({
         "header": style.header, "marker": style.marker, "code": style.code,
         "quoted": style.quoted, "depth": style.list_depth,
         "alignment": match style.alignment { MarkdownAlignment::Left => "left", MarkdownAlignment::Center => "center", MarkdownAlignment::Right => "right" },
-        "runs": runs.into_iter().map(|run| json!({
-            "text": run.text, "strong": run.strong, "emphasis": run.emphasis,
-            "strikethrough": run.strikethrough, "code": run.code, "link": run.link,
-            "darkColor": run.dark_color, "lightColor": run.light_color,
-        })).collect::<Vec<_>>()
+        "runs": runs.into_iter().map(|run| {
+            let mut value = json!({
+                "text": run.text, "strong": run.strong, "emphasis": run.emphasis,
+                "strikethrough": run.strikethrough, "code": run.code, "link": run.link,
+                "darkColor": run.dark_color, "lightColor": run.light_color,
+            });
+            if let Some(chip) = run.file.as_ref().and_then(chip) {
+                value["file"] = chip;
+            }
+            value
+        }).collect::<Vec<_>>()
     })
 }
 
@@ -555,7 +895,37 @@ fn flush(text: &mut Vec<Value>, parts: &mut Vec<Part>) {
     }
 }
 
-fn parts(blocks: Vec<MarkdownBlock>) -> Vec<Part> {
+/// A code block, labelled with its file or language; a Mermaid block with
+/// its drawing when Core drew it.
+fn code(
+    runs: Vec<MarkdownRun>,
+    style: MarkdownStyle,
+    diagrams: &[(String, Diagram)],
+    chip: Chip,
+) -> Part {
+    let source: String = runs.iter().map(|run| run.text.as_str()).collect();
+    let diagram = (style.language.as_deref() == Some("mermaid"))
+        .then(|| {
+            diagrams
+                .iter()
+                .find(|(code, _)| code.trim_end() == source.trim_end())
+        })
+        .flatten()
+        .map(|(_, diagram)| diagram.clone());
+    Part::Code {
+        label: style
+            .filename
+            .clone()
+            .or_else(|| style.language.clone())
+            .unwrap_or_else(|| "CODE".into()),
+        source,
+        blocks: vec![paragraph(runs, &style, chip)],
+        diagram,
+    }
+}
+
+/// `blocks` as the parts views lay out, a Mermaid block with its drawing.
+fn parts(blocks: Vec<MarkdownBlock>, diagrams: &[(String, Diagram)], chip: Chip) -> Vec<Part> {
     let mut result = Vec::new();
     let mut text = Vec::new();
     for block in blocks {
@@ -566,22 +936,14 @@ fn parts(blocks: Vec<MarkdownBlock>) -> Vec<Part> {
             }
             MarkdownBlock::Paragraph { runs, style } if style.code => {
                 flush(&mut text, &mut result);
-                result.push(Part::Code {
-                    label: style
-                        .filename
-                        .clone()
-                        .or_else(|| style.language.clone())
-                        .unwrap_or_else(|| "CODE".into()),
-                    source: runs.iter().map(|run| run.text.as_str()).collect(),
-                    blocks: vec![paragraph(runs, &style)],
-                });
+                result.push(code(runs, style, diagrams, chip));
             }
             MarkdownBlock::Paragraph { runs, style } => {
                 let mut content = Vec::new();
                 for run in runs {
                     if let Some(image) = run.image {
                         if !content.is_empty() {
-                            text.push(paragraph(std::mem::take(&mut content), &style));
+                            text.push(paragraph(std::mem::take(&mut content), &style, chip));
                         }
                         flush(&mut text, &mut result);
                         result.push(Part::Image(image));
@@ -590,7 +952,7 @@ fn parts(blocks: Vec<MarkdownBlock>) -> Vec<Part> {
                     }
                 }
                 if !content.is_empty() {
-                    text.push(paragraph(content, &style));
+                    text.push(paragraph(content, &style, chip));
                 }
             }
             MarkdownBlock::Visualization { path } => {
@@ -622,16 +984,20 @@ fn parts(blocks: Vec<MarkdownBlock>) -> Vec<Part> {
                             row.into_iter()
                                 .enumerate()
                                 .map(|(column, cell)| {
-                                    parts(vec![MarkdownBlock::Paragraph {
-                                        runs: cell.runs,
-                                        style: MarkdownStyle {
-                                            alignment: columns
-                                                .get(column)
-                                                .copied()
-                                                .unwrap_or_default(),
-                                            ..Default::default()
-                                        },
-                                    }])
+                                    parts(
+                                        vec![MarkdownBlock::Paragraph {
+                                            runs: cell.runs,
+                                            style: MarkdownStyle {
+                                                alignment: columns
+                                                    .get(column)
+                                                    .copied()
+                                                    .unwrap_or_default(),
+                                                ..Default::default()
+                                            },
+                                        }],
+                                        diagrams,
+                                        chip,
+                                    )
                                 })
                                 .collect()
                         })
@@ -667,6 +1033,7 @@ mod tests {
                 header: Some(2),
                 ..Default::default()
             },
+            &|_| None,
         )];
         let expected: Value = serde_json::from_str(include_str!(
             "../apple/Tests/BexNshNativeTests/Fixtures/message.json"
@@ -681,9 +1048,11 @@ mod tests {
     #[test]
     fn native_parts_preserve_media_code_rules_and_table_copy_sources_in_order() {
         let source = "前文 **強調**\n\n![画像](https://example.invalid/image.png)\n\n```rust title=main.rs\nlet 日本語 = 1;\n```\n\n---\n\n|名前|値|\n|:---|---:|\n|日本語|a,b|";
-        let parts = parts(agent_core::presentation::markdown::markdown_blocks(
-            source.into(),
-        ));
+        let parts = parts(
+            agent_core::presentation::markdown::markdown_blocks(source.into()),
+            &[],
+            &|_| None,
+        );
         assert!(matches!(&parts[0], Part::Text(blocks) if blocks[0]["runs"][1]["strong"] == true));
         assert!(
             matches!(&parts[1], Part::Image(source) if source == "https://example.invalid/image.png")
@@ -703,11 +1072,70 @@ mod tests {
     }
 
     #[test]
+    fn complete_mermaid_blocks_draw_and_a_streaming_one_stays_code() {
+        let source = "図です。\n\n```mermaid\nflowchart LR\n  A --> B\n```";
+        let parsed = |source: &str| {
+            parts(
+                agent_core::presentation::markdown::markdown_blocks(source.into()),
+                &diagrams(source),
+                &|_| None,
+            )
+        };
+        let drawn = parsed(source);
+        let Some(Part::Code {
+            diagram: Some(diagram),
+            source: code,
+            ..
+        }) = drawn.last()
+        else {
+            panic!("a complete Mermaid block draws: {}", drawn.len());
+        };
+        assert!(diagram.svg.contains("<svg") && diagram.width > 0.0 && diagram.height > 0.0);
+        assert_eq!(code.trim_end(), "flowchart LR\n  A --> B");
+        let streaming = parsed(&source[..source.len() - 3]);
+        assert!(
+            matches!(streaming.last(), Some(Part::Code { diagram: None, .. })),
+            "an unfinished fence is still being written"
+        );
+    }
+
+    #[test]
+    fn a_file_run_carries_the_chip_its_reference_shows() {
+        let file = MarkdownFileReference {
+            path: "/repo/a.rs".into(),
+            label: "a.rs".into(),
+            kind: agent_core::presentation::markdown::MarkdownFileKind::Code,
+            line: None,
+            column: None,
+        };
+        let block = paragraph(
+            vec![
+                MarkdownRun {
+                    text: "a.rs".into(),
+                    link: Some("a.rs".into()),
+                    file: Some(file),
+                    ..Default::default()
+                },
+                MarkdownRun {
+                    text: " です".into(),
+                    ..Default::default()
+                },
+            ],
+            &MarkdownStyle::default(),
+            &|file| Some(json!({"tooltip": file.path})),
+        );
+        assert_eq!(block["runs"][0]["file"]["tooltip"], "/repo/a.rs");
+        assert!(block["runs"][1].get("file").is_none());
+    }
+
+    #[test]
     fn invocation_and_currency_text_keeps_the_same_gfm_meaning_as_existing_clients() {
         let text = "$fixture-review @Fixture Plugin [success] costs $5 · 日本語 👋";
-        let parts = parts(agent_core::presentation::markdown::markdown_blocks(
-            text.into(),
-        ));
+        let parts = parts(
+            agent_core::presentation::markdown::markdown_blocks(text.into()),
+            &[],
+            &|_| None,
+        );
         let [Part::Text(blocks)] = &parts[..] else {
             panic!("plain text stays text");
         };
@@ -719,18 +1147,21 @@ mod tests {
     #[test]
     fn tool_output_stays_literal_in_the_native_document() {
         let output = "# output\n[open](https://example.com)\n<img src=remote>\n```\n日本語";
-        let parts = parts(vec![
-            agent_core::presentation::markdown::markdown_code_block(
+        let parts = parts(
+            vec![agent_core::presentation::markdown::markdown_code_block(
                 output.into(),
                 None,
                 Some("出力".into()),
-            ),
-        ]);
+            )],
+            &[],
+            &|_| None,
+        );
         let [
             Part::Code {
                 blocks,
                 source,
                 label,
+                diagram: None,
             },
         ] = &parts[..]
         else {

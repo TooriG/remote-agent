@@ -20,6 +20,42 @@ struct MessageRun: Decodable, Equatable {
     let link: String?
     let darkColor: UInt32?
     let lightColor: UInt32?
+    /// The desktop's chip of the file the run names.
+    var file: MessageFile?
+}
+
+/// A file chip as Core describes it: its glyph (a folder's, or the file's SVG),
+/// its full path and size, its menu, and its accent in either look.
+struct MessageFile: Decodable, Equatable {
+    let icon: String?
+    let folder: Bool
+    let tooltip: String
+    let menu: [MessageMenuItem]
+    let darkColor: UInt32
+    let lightColor: UInt32
+}
+
+/// An item of a chip's menu: an action by its opaque id, or a submenu.
+struct MessageMenuItem: Decodable, Equatable {
+    let id: String?
+    let title: String
+    let children: [MessageMenuItem]?
+}
+
+extension NSAttributedString.Key {
+    /// The chip a range of message text shows, and the link it opens.
+    static let messageFile = NSAttributedString.Key("BexMessageFile")
+}
+
+/// What a chip's text carries: its link and the chip, for its menu.
+final class MessageFileLink: NSObject {
+    let link: String
+    let file: MessageFile
+
+    init(link: String, file: MessageFile) {
+        self.link = link
+        self.file = file
+    }
 }
 
 struct MessageParagraph: Decodable, Equatable {
@@ -60,11 +96,30 @@ struct MessageDocument: Decodable, Equatable {
                     .foregroundColor: color(secondary: secondary)
                 ]))
             }
-            for run in block.runs {
-                result.append(NSAttributedString(string: run.text, attributes: attributes(
+            for (position, run) in block.runs.enumerated() {
+                var attributes = attributes(
                     run, size: size, code: block.code, heading: block.header != nil,
                     secondary: secondary, dark: dark
-                )))
+                )
+                if caption(block.runs, at: position) {
+                    // A chip's authored caption reads as text, and opens as the chip does.
+                    attributes[.foregroundColor] = color(secondary: secondary)
+                    attributes[.underlineStyle] = nil
+                }
+                if let file = run.file, let link = run.link {
+                    attributes = chip(file, link: link, size: size, base: attributes, dark: dark)
+                    if let glyph = glyph(file, size: size) {
+                        // A space sets the chip apart from its caption.
+                        let icon = NSMutableAttributedString(
+                            string: position > 0 && caption(block.runs, at: position - 1) ? " " : ""
+                        )
+                        icon.append(NSAttributedString(attachment: glyph))
+                        icon.append(NSAttributedString(string: " "))
+                        icon.addAttributes(attributes, range: NSRange(location: 0, length: icon.length))
+                        result.append(icon)
+                    }
+                }
+                result.append(NSAttributedString(string: run.text, attributes: attributes))
             }
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = block.alignment == "center" ? .center : block.alignment == "right" ? .right : .left
@@ -84,6 +139,52 @@ struct MessageDocument: Decodable, Equatable {
         return result
     }
 
+    /// Whether the run at `position` is part of the caption a chip's author
+    /// wrote before it: a link to the same target, up to the chip.
+    private static func caption(_ runs: [MessageRun], at position: Int) -> Bool {
+        guard runs[position].file == nil, let link = runs[position].link else { return false }
+        return runs[(position + 1)...].first { $0.file != nil || $0.link != link }
+            .map { $0.file != nil && $0.link == link } ?? false
+    }
+
+    /// A chip's text as the desktop client's: the file's accent at medium
+    /// weight, its path and size as its tooltip.
+    private static func chip(_ file: MessageFile, link: String, size: CGFloat,
+                             base: [NSAttributedString.Key: Any], dark: Bool) -> [NSAttributedString.Key: Any] {
+        var result = base
+        result[.font] = MessageFont.systemFont(ofSize: size, weight: .medium)
+        result[.foregroundColor] = rgb(dark ? file.darkColor : file.lightColor)
+        result[.underlineStyle] = nil
+        result[.messageFile] = MessageFileLink(link: link, file: file)
+        // A path no URL holds still opens: the text view reports the string.
+        result[.link] = result[.link] ?? link
+        #if os(macOS)
+            result[.toolTip] = file.tooltip
+        #endif
+        return result
+    }
+
+    /// A chip's glyph at the text's size: the system folder, or the file's icon.
+    private static func glyph(_ file: MessageFile, size: CGFloat) -> NSTextAttachment? {
+        #if os(macOS)
+            let image = file.folder ? NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+                : file.icon.flatMap { NSImage(data: Data($0.utf8)) }
+        #else
+            let image = file.folder ? UIImage(systemName: "folder") : nil
+        #endif
+        guard let image else { return nil }
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        let font = MessageFont.systemFont(ofSize: size)
+        attachment.bounds = CGRect(x: 0, y: (font.capHeight - size) / 2, width: size, height: size)
+        return attachment
+    }
+
+    private static func rgb(_ rgb: UInt32) -> MessageColor {
+        MessageColor(red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
+                     blue: CGFloat(rgb & 255) / 255, alpha: 1)
+    }
+
     private static func color(secondary: Bool) -> MessageColor {
         #if os(macOS)
             secondary ? .secondaryLabelColor : .labelColor
@@ -98,13 +199,18 @@ struct MessageDocument: Decodable, Equatable {
             .font: font(size: size, mono: code || run.code, bold: heading || run.strong, italic: run.emphasis),
             .foregroundColor: color(secondary: secondary)
         ]
-        if let rgb = dark ? run.darkColor : run.lightColor {
-            result[.foregroundColor] = MessageColor(red: CGFloat((rgb >> 16) & 255) / 255,
-                                                    green: CGFloat((rgb >> 8) & 255) / 255,
-                                                    blue: CGFloat(rgb & 255) / 255, alpha: 1)
+        if let color = dark ? run.darkColor : run.lightColor {
+            result[.foregroundColor] = rgb(color)
         }
         if let url = run.link.flatMap(URL.init(string:)) {
             result[.link] = url
+            #if os(macOS)
+                // The text view draws links as their runs say, so a chip
+                // keeps its accent; other links are underlined in the link
+                // color, as AppKit draws them.
+                result[.foregroundColor] = NSColor.linkColor
+                result[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            #endif
         }
         if run.strikethrough {
             result[.strikethroughStyle] = NSUnderlineStyle.single.rawValue

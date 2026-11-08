@@ -422,6 +422,11 @@ fn response_content<'a>(
         include_str!("../../../agent-core/tests/fixtures/markdown/table.md").to_owned()
     } else if prompt.contains("[markdown-document]") {
         include_str!("../../../agent-core/tests/fixtures/markdown/document.md").to_owned()
+    } else if prompt.contains("[mermaid]") {
+        "流れを図にしました。\n\n```mermaid\nflowchart LR\n  Request[依頼] --> Build[実装]\n  Build --> Check[検証]\n```".to_owned()
+    } else if prompt.contains("[file-paths]") {
+        // The workspace's file at a line, a file under a caption, and a folder.
+        "確認したファイルです。\n\n- `hello.txt:2`\n- [子ファイル](nested/child.txt)\n- [nested](./nested)".to_owned()
     } else if scenario == "history" {
         "ローカル relay 構成で Mac・iPhone アプリの実装と検証を完了しました。\n\n- **Mac アプリ**：会話、リモート操作、添付・保存・差分を確認。\n- iPhone Simulator：**10/10 成功、スキップ 0**。\n- SwiftUI の会話表示と入力欄を更新しました。\n\n変更したファイルは、下の差分から確認できます。".to_owned()
     } else {

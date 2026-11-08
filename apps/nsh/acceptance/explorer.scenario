@@ -1,0 +1,28 @@
+# An open file shows beside the workspace's file list, as the desktop client's
+# explorer: its rows drag into the composer as mentions, the focused row opens
+# its menu with Shift+F10, and the list's edge resizes it.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "ツールを確認します"
+press 送信
+expect "シミュレータで完了しました。" 30000
+press 右パネルを切り替え
+press ファイル after ツールを閉じる
+press hello.txt after ツールを閉じる
+expect "日本語のファイル" after ツールを閉じる
+expect ファイル一覧の幅を変更
+expect nested after ツールを閉じる
+screenshot explorer
+drag nested "AI に依頼する" after ツールを閉じる
+screenshot dragging
+drop
+expect "[nested](nested)"
+press nested after ツールを閉じる
+expect child.txt after ツールを閉じる
+key shift+f10
+press メンションをコピー
+expect_clipboard "[nested](nested)"
+drag ファイル一覧の幅を変更 "日本語のファイル*"
+drop
+expect "日本語のファイル" after ツールを閉じる
+screenshot widened

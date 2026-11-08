@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-agent-core = { path = "../../crates/agent-core", features = ["bindings"] }
+agent-core = { path = "../../crates/agent-core", features = ["bindings", "diagrams"] }
 agent-local-host = { path = "../../crates/agent-local-host" }
 agent-protocol = { path = "../../crates/agent-protocol" }
 serde.workspace = true

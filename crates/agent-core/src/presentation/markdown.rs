@@ -5,6 +5,10 @@ use ::markdown::{
 };
 use std::{borrow::Cow, collections::HashMap};
 mod code;
+#[cfg(feature = "diagrams")]
+mod diagram;
+#[cfg(feature = "diagrams")]
+pub use diagram::{MarkdownDiagram, markdown_diagram, markdown_mermaid_fences};
 mod links;
 pub use links::{
     MarkdownFileKind, MarkdownFileReference, MarkdownFileSurface, WORKSPACE_BASENAME_LOOKUP_LIMIT,
@@ -197,13 +201,45 @@ pub fn markdown_images(source: &str) -> Vec<String> {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn markdown_blocks(source: String) -> Vec<MarkdownBlock> {
-    let source = without_disclosure_tags(&source);
+    document(&source, None)
+}
+
+/// The desktop's document: the desktop client's file chips in place of file links and of code
+/// spans its desktop grammar reads as paths. A chip's run names the file, resolved
+/// against `cwd` and the Host's `home`, with a parent where another chip shares
+/// its basename; an authored caption stays as text before it.
+pub fn desktop_markdown_blocks(
+    source: String,
+    cwd: String,
+    home: Option<String>,
+) -> Vec<MarkdownBlock> {
+    let mut blocks = document(
+        &source,
+        Some(links::chips::Workspace::new(&cwd, home.as_deref())),
+    );
+    links::chips::label_parents(&mut blocks);
+    blocks
+}
+
+/// What inline content reads besides its node: the document's link
+/// definitions, and the workspace desktop chips resolve against.
+struct Context<'a> {
+    definitions: HashMap<&'a str, &'a str>,
+    workspace: Option<links::chips::Workspace<'a>>,
+}
+
+fn document(source: &str, workspace: Option<links::chips::Workspace<'_>>) -> Vec<MarkdownBlock> {
+    let source = without_disclosure_tags(source);
     let root = parse(&source);
+    let context = Context {
+        definitions: definitions(&root),
+        workspace,
+    };
     let mut blocks = Vec::new();
     block(
         &root,
         &source,
-        &definitions(&root),
+        &context,
         MarkdownStyle::default(),
         &mut blocks,
     );
@@ -253,12 +289,8 @@ pub fn markdown_code_block(
     }
 }
 
-fn inline(
-    node: &Node,
-    definitions: &HashMap<&str, &str>,
-    mut style: MarkdownRun,
-    runs: &mut Vec<MarkdownRun>,
-) {
+fn inline(node: &Node, context: &Context<'_>, mut style: MarkdownRun, runs: &mut Vec<MarkdownRun>) {
+    let definitions = &context.definitions;
     if let Some((url, alt)) = image(node, |id| definitions.get(id).copied()) {
         style.image = Some(url.to_owned());
         style.text = alt.to_owned();
@@ -271,6 +303,31 @@ fn inline(
         _ => None,
     };
     if let Some(destination) = destination
+        && let Some(workspace) = &context.workspace
+        && let Some(authored) = links::file_reference(destination, links::Syntax::Link)
+        && let Some(file) = workspace.file(destination, links::Syntax::Link)
+    {
+        // The desktop client keeps an authored description as text before the chip,
+        // with its own inline formatting; both open the file.
+        if !links::is_file_label(&links::caption_text(node), &authored) {
+            let caption = MarkdownRun {
+                link: Some(destination.into()),
+                ..style.clone()
+            };
+            for child in node.children().into_iter().flatten() {
+                inline(child, context, caption.clone(), runs);
+            }
+        }
+        runs.push(MarkdownRun {
+            text: file.label.clone(),
+            link: Some(destination.into()),
+            file: Some(file),
+            ..style
+        });
+        return;
+    }
+    if let Some(destination) = destination
+        && context.workspace.is_none()
         && let Some(mut file) = links::file_reference(destination, links::Syntax::Link)
     {
         // Keep authored descriptions, as T3 Code does beside its file chips.
@@ -301,7 +358,13 @@ fn inline(
             style.code = true;
             style.text = code.value.clone();
             if style.link.is_none() {
-                style.file = links::file_reference(&code.value, links::Syntax::MobileCode);
+                style.file = match &context.workspace {
+                    // A desktop chip takes the code span's place.
+                    Some(workspace) => workspace
+                        .file(&code.value, links::Syntax::DesktopCode)
+                        .inspect(|_| style.code = false),
+                    None => links::file_reference(&code.value, links::Syntax::MobileCode),
+                };
                 if let Some(file) = &style.file {
                     style.link = Some(code.value.clone());
                     style.text = file.label.clone();
@@ -316,7 +379,7 @@ fn inline(
     }
     if let Some(children) = node.children() {
         for child in children {
-            inline(child, definitions, style.clone(), runs);
+            inline(child, context, style.clone(), runs);
         }
     } else if !style.text.is_empty() {
         runs.push(style);
@@ -326,7 +389,7 @@ fn inline(
 fn block(
     node: &Node,
     source: &str,
-    definitions: &HashMap<&str, &str>,
+    context: &Context<'_>,
     mut style: MarkdownStyle,
     blocks: &mut Vec<MarkdownBlock>,
 ) {
@@ -356,7 +419,7 @@ fn block(
                             let mut runs = Vec::new();
                             inline(
                                 cell,
-                                definitions,
+                                context,
                                 MarkdownRun {
                                     strong: row_index == 0,
                                     ..Default::default()
@@ -394,7 +457,7 @@ fn block(
                         ["•", "◦", "▪"][depth as usize % 3].into()
                     },
                 );
-                block(child, source, definitions, item_style, blocks);
+                block(child, source, context, item_style, blocks);
             }
             return;
         }
@@ -435,11 +498,11 @@ fn block(
     }
     if matches!(node, Node::Paragraph(_) | Node::Heading(_) | Node::Html(_)) {
         let mut runs = Vec::new();
-        inline(node, definitions, MarkdownRun::default(), &mut runs);
+        inline(node, context, MarkdownRun::default(), &mut runs);
         blocks.push(MarkdownBlock::Paragraph { runs, style });
     } else {
         for child in node.children().into_iter().flatten() {
-            block(child, source, definitions, style.clone(), blocks);
+            block(child, source, context, style.clone(), blocks);
             // A list marker belongs to the first paragraph, not every continuation.
             if matches!(node, Node::ListItem(_)) {
                 style.marker = None;

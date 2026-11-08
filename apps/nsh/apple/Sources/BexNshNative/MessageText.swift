@@ -63,6 +63,8 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             isAutomaticLinkDetectionEnabled = false
             isAutomaticTextCompletionEnabled = false
             enabledTextCheckingTypes = 0
+            // Runs carry their own link look: a file chip keeps its accent.
+            linkTextAttributes = [.cursor: NSCursor.pointingHand]
             delegate = self
         }
 
@@ -72,6 +74,9 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         }
 
         override func menu(for event: NSEvent) -> NSMenu? {
+            if let chip = chip(at: convert(event.locationInWindow, from: nil)) {
+                return fileMenu(chip.file.menu, link: chip.link)
+            }
             guard let menu = super.menu(for: event) else { return nil }
             let range = selectedRange()
             guard range.length > 0, NSMaxRange(range) <= (textStorage?.length ?? 0) else { return menu }
@@ -96,9 +101,44 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             action?(payload)
         }
 
-        func textView(_: NSTextView, clickedOnLink link: Any, at _: Int) -> Bool {
-            let url = (link as? URL)?.absoluteString ?? (link as? String) ?? ""
-            action?(["action": "link", "text": url, "target": document.target])
+        /// The chip under `point`, in the view's coordinates.
+        func chip(at point: CGPoint) -> MessageFileLink? {
+            guard let manager = layoutManager, let container = textContainer, let storage = textStorage,
+                  storage.length > 0 else { return nil }
+            var fraction: CGFloat = 0
+            let glyph = manager.glyphIndex(for: point, in: container, fractionOfDistanceThroughGlyph: &fraction)
+            guard manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+                .contains(point) else { return nil }
+            let index = manager.characterIndexForGlyph(at: glyph)
+            guard index < storage.length else { return nil }
+            return storage.attribute(.messageFile, at: index, effectiveRange: nil) as? MessageFileLink
+        }
+
+        /// A chip's menu as Core lists it; an item reports its id with the chip's link.
+        func fileMenu(_ items: [MessageMenuItem], link: String) -> NSMenu {
+            let menu = NSMenu()
+            for item in items {
+                let entry = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+                if let children = item.children {
+                    entry.submenu = fileMenu(children, link: link)
+                } else if let id = item.id {
+                    entry.action = #selector(quoteSelection(_:))
+                    entry.target = self
+                    entry.representedObject = ["action": "file", "text": link, "id": id, "target": document.target]
+                }
+                menu.addItem(entry)
+            }
+            return menu
+        }
+
+        func textView(_: NSTextView, clickedOnLink link: Any, at index: Int) -> Bool {
+            // A chip opens its authored link, which Core resolves again.
+            let chip = index < (textStorage?.length ?? 0)
+                ? textStorage?.attribute(.messageFile, at: index, effectiveRange: nil) as? MessageFileLink : nil
+            let url = chip?.link ?? (link as? URL)?.absoluteString ?? (link as? String) ?? ""
+            // ⌘ sends a file to the editor, as the desktop client's chips do.
+            let modifier = NSApp?.currentEvent?.modifierFlags.contains(.command) ?? false
+            action?(["action": "link", "text": url, "target": document.target, "modifier": modifier])
             return true
         }
 

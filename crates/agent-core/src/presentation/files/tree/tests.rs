@@ -225,13 +225,12 @@ fn shift_selection_can_cover_a_large_tree_in_display_order() {
     assert!(view.rows.iter().all(|row| row.selected));
     action(
         &mut trees,
-        FileTreeAction::Select {
-            path: paths[1].clone(),
-            additive: false,
-            range: false,
+        FileTreeAction::DragEnd {
+            paths: paths.iter().step_by(2).cloned().collect(),
         },
     );
-    assert_eq!(trees.view(&key(ROOT)).selected_paths, [paths[1].clone()]);
+    let expected: Vec<_> = paths.iter().skip(1).step_by(2).cloned().collect();
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, expected);
     assert_eq!(
         view.selected_paths, paths,
         "previous projections keep their own selection"
@@ -876,7 +875,7 @@ fn query_bounds_and_host_folder_controls_follow_each_surface() {
 }
 
 #[test]
-fn selection_ranges_follow_display_order() {
+fn selection_ranges_and_drag_end_preserve_unrelated_selection() {
     let mut trees = FileTrees::default();
     let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
     complete(
@@ -903,10 +902,34 @@ fn selection_ranges_follow_display_order() {
         },
     );
     assert_eq!(trees.view(&key(ROOT)).selected_paths, ["b", "c", "d"]);
+    action(
+        &mut trees,
+        FileTreeAction::Select {
+            path: "a".into(),
+            additive: true,
+            range: false,
+        },
+    );
+    action(
+        &mut trees,
+        FileTreeAction::DragEnd {
+            paths: vec!["b".into(), "d".into()],
+        },
+    );
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["c", "a"]);
+    action(
+        &mut trees,
+        FileTreeAction::Select {
+            path: "a".into(),
+            additive: true,
+            range: false,
+        },
+    );
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["c"]);
 }
 
 #[test]
-fn hidden_range_anchors_never_toggle_selected_rows() {
+fn hidden_range_anchors_never_toggle_selected_rows_and_dragging_does_not_open_files() {
     let mut trees = FileTrees::default();
     let root = open(&mut trees, ROOT, FileTreeSurface::Desktop);
     complete(
@@ -927,6 +950,9 @@ fn hidden_range_anchors_never_toggle_selected_rows() {
         );
     }
     action(&mut trees, FileTreeAction::Query { text: "a".into() });
+    assert!(trees.view(&key(ROOT)).drag_paths("a").is_empty());
+    action(&mut trees, FileTreeAction::DragStart { path: "b".into() });
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["a", "d"]);
     action(
         &mut trees,
         FileTreeAction::Click {
@@ -936,6 +962,20 @@ fn hidden_range_anchors_never_toggle_selected_rows() {
         },
     );
     assert_eq!(trees.view(&key(ROOT)).selected_paths, ["a", "d"]);
+    assert_eq!(trees.view(&key(ROOT)).drag_paths("a"), ["a", "d"]);
+    assert_eq!(trees.view(&key(ROOT)).drag_paths("c"), ["c"]);
+    let before = trees.view(&key(ROOT)).open_file;
+    action(&mut trees, FileTreeAction::DragStart { path: "c".into() });
+    assert_eq!(trees.view(&key(ROOT)).selected_paths, ["c"]);
+    assert_eq!(trees.view(&key(ROOT)).open_file, before);
+    action(
+        &mut trees,
+        FileTreeAction::DragEnd {
+            paths: vec!["c".into()],
+        },
+    );
+    assert!(trees.view(&key(ROOT)).selected_paths.is_empty());
+    assert_eq!(trees.view(&key(ROOT)).open_file, before);
 }
 
 #[test]

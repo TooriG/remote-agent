@@ -13,7 +13,8 @@
 //!   same name in the conversation).
 //! - `type <label> <text> [after <anchor>] [timeout-ms]`: focuses that element
 //!   and inserts `<text>`.
-//! - `key <name>`: a key with optional modifiers, as `return`, `escape` or `cmd+,`.
+//! - `key <name>`: a key with optional modifiers, as `return`, `escape`, `cmd+,`
+//!   or `shift+f10`.
 //! - `expect <text> [after <anchor>] [timeout-ms]` / `expect_absent ...`: waits
 //!   until some element's text contains `<text>`, or none does.
 //! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
@@ -22,6 +23,10 @@
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
 //!   menu, as a right click on it; `press` then chooses its items.
+//! - `drag <label> <target> [after <anchor>] [timeout-ms]`: presses the middle
+//!   of that element, moves onto the middle of the first element labelled
+//!   `<target>` and holds the button there, so `expect` and `screenshot` see the
+//!   drag; `drop` releases it. `after` and the timeout find the dragged element.
 //! - `choose <path>`: answers the open panel the app shows with `<path>`,
 //!   waiting for one to appear. A leading `$AGENT_STATE_DIR` is the fixture Host's
 //!   directory, whose `project` folder is the fixture's project.
@@ -53,6 +58,11 @@ pub(crate) enum Step {
     Scroll(Find, i32),
     Select(Find, String),
     Menu(Find),
+    /// A press on the first element, moved onto the second and held there.
+    /// The first is found after its anchor, if it names one.
+    Drag(Find, Find),
+    /// The held press of a drag, released where it is.
+    Drop,
     Choose(String),
     ExpectClipboard(String, Duration),
     Wait(Duration),
@@ -169,6 +179,9 @@ fn step(words: &[String]) -> Result<Step, String> {
             Step::Select(find(target, rest)?, (*text).to_owned())
         }
         ("menu", [target, rest @ ..]) => Step::Menu(find(target, rest)?),
+        // `after` and a timeout name where the drag starts.
+        ("drag", [from, to, rest @ ..]) => Step::Drag(find(from, rest)?, find(to, &[])?),
+        ("drop", []) => Step::Drop,
         ("choose", [path]) if path.starts_with('/') || path.starts_with(STATE_DIRECTORY) => {
             Step::Choose((*path).to_owned())
         }
@@ -267,6 +280,7 @@ fn named(name: &str) -> Option<Key> {
         "right" => function(124, 0xF703),
         "down" => function(125, 0xF701),
         "up" => function(126, 0xF700),
+        "f10" => function(109, 0xF70D),
         _ => {
             let mut characters = name.chars();
             let character = characters.next()?;
@@ -297,7 +311,7 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
         )
@@ -351,6 +365,19 @@ mod tests {
                     after: Some("見出し".into()),
                     timeout: DEFAULT_TIMEOUT
                 }),
+                Step::Drag(
+                    Find {
+                        text: "nested".into(),
+                        after: Some("見出し".into()),
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    Find {
+                        text: "AI に依頼する".into(),
+                        after: None,
+                        timeout: DEFAULT_TIMEOUT
+                    }
+                ),
+                Step::Drop,
                 Step::Choose("/tmp/a.txt".into()),
                 Step::Choose("$AGENT_STATE_DIR/project".into()),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
@@ -377,6 +404,7 @@ mod tests {
             ("a", "a", 0),
             (",", ",", 43),
             ("down", "\u{F701}", 125),
+            ("f10", "\u{F70D}", 109),
         ] {
             let key = super::key(name).unwrap();
             assert_eq!((key.characters.as_str(), key.code), (characters, code));

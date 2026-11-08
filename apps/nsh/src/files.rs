@@ -23,6 +23,9 @@ use nsh_core::{
 };
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
+#[cfg(desktop)]
+mod desktop;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Browser {
     pub root: Memo<Option<String>>,
@@ -108,12 +111,7 @@ impl Browser {
         host: String,
         client: Arc<Client>,
     ) {
-        let line = agent_core::presentation::markdown::markdown_file_target(
-            source.clone(),
-            cwd.clone(),
-            agent_core::presentation::markdown::MarkdownFileSurface::Mobile,
-        )
-        .and_then(|target| target.line);
+        let line = position(&source, &cwd).0;
         let Some(request) = mobile_file_open_request(source.clone(), cwd, home) else {
             if !source.starts_with('#') {
                 spawn(async move {
@@ -162,6 +160,41 @@ impl Browser {
         });
     }
 
+    /// The Host path `source` names, with its position, for an editor or a
+    /// menu's action; a target that does not exist yet still resolves.
+    #[cfg(desktop)]
+    pub fn resolve(
+        self,
+        source: String,
+        cwd: String,
+        home: Option<String>,
+        host: String,
+        client: Arc<Client>,
+        then: impl FnOnce(Reference) + 'static,
+    ) {
+        let (line, column) = position(&source, &cwd);
+        let Some(mut request) = mobile_file_open_request(source, cwd, home) else {
+            return;
+        };
+        request.inspect_directory = false;
+        let resolve = client.request(&host, None, Intent::ResolveFileReference(request));
+        self.owner.run(move || {
+            spawn(async move {
+                match resolve.recv().await {
+                    Ok(Ok(Outcome::FileReferenceResolved { path, .. })) => {
+                        then(Reference { path, line, column })
+                    }
+                    Ok(Err(reason)) => native::message(tr("ファイル"), reason.to_string()),
+                    Err(reason) => native::message(tr("ファイル"), reason.to_string()),
+                    Ok(Ok(_)) => native::message(
+                        tr("ファイル"),
+                        tr("ファイルの場所を確認できませんでした。"),
+                    ),
+                }
+            })
+        });
+    }
+
     pub fn open_file(self, path: String, line: Option<u32>, host: String, client: Arc<Client>) {
         if file_preview_mime_type(path.clone()).is_some() {
             self.preview
@@ -182,12 +215,75 @@ impl Browser {
     }
 }
 
+/// A file a link names, resolved on the Host, and the position it names.
+#[cfg(desktop)]
+#[derive(Clone)]
+pub(crate) struct Reference {
+    pub path: String,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+/// The line and column a link names.
+fn position(source: &str, cwd: &str) -> (Option<u32>, Option<u32>) {
+    agent_core::presentation::markdown::markdown_file_target(
+        source.into(),
+        cwd.into(),
+        agent_core::presentation::markdown::MarkdownFileSurface::Mobile,
+    )
+    .map_or((None, None), |target| (target.line, target.column))
+}
+
+/// The Host path of the workspace the conversation works in.
+#[cfg(desktop)]
+fn workspace(connection: Connection) -> String {
+    connection.publication.with(|p| {
+        agent_core::presentation::markdown::file_host_path(
+            p.composer.controls.navigation.cwd.clone(),
+            p.context.home(),
+        )
+    })
+}
+
+/// The Files tool's tree: on the desktop, of the workspace unless the tool
+/// shows a Host folder outside it, as the desktop client's explorer.
 pub(crate) fn screen(id: u64) -> impl Element {
+    let browser = use_context::<Browser>().unwrap();
+    #[cfg(desktop)]
+    let root = {
+        let connection = use_context::<Connection>().unwrap();
+        computed(move || {
+            let selected = browser.root.get();
+            let workspace = workspace(connection);
+            if workspace.is_empty() {
+                return selected;
+            }
+            Some(agent_core::presentation::files::desktop_file_tree_root(
+                &workspace,
+                selected.as_deref(),
+                true,
+            ))
+        })
+    };
+    #[cfg(not(desktop))]
+    let root = browser.root;
+    tree(format!("nsh-files-{id}"), root)
+}
+
+/// The file list beside an open file: the workspace's tree.
+#[cfg(desktop)]
+pub(crate) fn explorer(id: u64) -> impl Element {
+    let connection = use_context::<Connection>().unwrap();
+    let root = computed(move || Some(workspace(connection)).filter(|root| !root.is_empty()));
+    tree(format!("nsh-explorer-{id}"), root)
+}
+
+fn tree(owner: String, root: Memo<Option<String>>) -> impl Element {
     let connection = use_context::<Connection>().unwrap();
     let browser = use_context::<Browser>().unwrap();
     let key = computed(move || FileTreeKey {
-        owner: format!("nsh-files-{id}"),
-        root: browser.root.get().unwrap_or_default(),
+        owner: owner.clone(),
+        root: root.get().unwrap_or_default(),
     });
     // Opening a file from the tree replaces this screen while its effect runs, so
     // the open tree is kept outside the reactive graph for the cleanup to close it.
@@ -280,7 +376,8 @@ pub(crate) fn screen(id: u64) -> impl Element {
     let keyed = stored(false);
     let list = element_ref();
     let area = element_ref();
-    for (keystroke, key, shift) in [
+    #[cfg_attr(not(desktop), allow(unused_mut))]
+    let mut keys = vec![
         ("up", "up", false),
         ("down", "down", false),
         ("left", "left", false),
@@ -291,7 +388,11 @@ pub(crate) fn screen(id: u64) -> impl Element {
         ("space", "space", false),
         ("shift+up", "up", true),
         ("shift+down", "down", true),
-    ] {
+    ];
+    // The focused row's menu, as the desktop client's.
+    #[cfg(desktop)]
+    keys.push(("shift+f10", "contextmenu", false));
+    for (keystroke, key, shift) in keys {
         let options = KeyOptions {
             when: nsh_core::keymap::When::Always,
             repeat: true,
@@ -317,9 +418,9 @@ pub(crate) fn screen(id: u64) -> impl Element {
         if !keyed.replace(false) {
             return;
         }
-        let Some(index) = path.and_then(|path| {
-            tree.with_untracked(|tree| tree.rows.iter().position(|row| row.path == path))
-        }) else {
+        let Some(index) =
+            path.and_then(|path| tree.with_untracked(|tree| tree.index_for_path(&path)))
+        else {
             return;
         };
         let edge = match viewable.get() {
@@ -334,6 +435,15 @@ pub(crate) fn screen(id: u64) -> impl Element {
             false,
         );
     });
+    #[cfg(desktop)]
+    let pointer = desktop::Pointer {
+        connection,
+        key,
+        tree,
+        dragged: signal(None),
+    };
+    #[cfg(desktop)]
+    pointer.keyboard_menu();
     let all_expanded = move || tree.with(|tree| tree.all_expanded);
     let toggle_all_label = move || tree.with(|tree| localized(tree.toggle_all_label.clone()));
     view()
@@ -444,13 +554,14 @@ pub(crate) fn screen(id: u64) -> impl Element {
                     virtual_list(
                         move || tree.with(|tree| tree.rows.len()),
                         move |at| {
-                            tree_row(
-                                computed(move || {
-                                    tree.with(|tree| {
-                                        let row = tree.rows.get(at.index())?;
-                                        Some((row.clone(), tree.is_search_match(row)))
-                                    })
-                                }),
+                            let row = computed(move || {
+                                tree.with(|tree| {
+                                    let row = tree.rows.get(at.index())?;
+                                    Some((row.clone(), tree.is_search_match(row)))
+                                })
+                            });
+                            let element = tree_row(
+                                row,
                                 move || {
                                     engaged.get()
                                         && tree.with(|tree| {
@@ -458,15 +569,24 @@ pub(crate) fn screen(id: u64) -> impl Element {
                                                 == tree.focused_path.as_ref()
                                         })
                                 },
-                                move |path| {
+                                // ⌘ (Ctrl) adds a row to the selection and Shift
+                                // extends it, as the desktop client's tree.
+                                move |path, modifiers: nsh_core::keymap::Modifiers| {
                                     area.focus();
                                     send(FileTreeAction::Click {
                                         path,
-                                        additive: false,
-                                        range: false,
+                                        additive: modifiers.cmd || modifiers.ctrl,
+                                        range: modifiers.shift,
                                     })
                                 },
-                            )
+                            );
+                            #[cfg(desktop)]
+                            let element = pointer.row(element, move || {
+                                row.with_untracked(|row| {
+                                    row.as_ref().map(|(row, _)| row.path.clone())
+                                })
+                            });
+                            element
                         },
                     )
                     .keys(move || {
@@ -487,6 +607,11 @@ pub(crate) fn screen(id: u64) -> impl Element {
                     .min_h_0(),
                 ),
         )
+        .map(|tree| {
+            #[cfg(desktop)]
+            let tree = tree.child(desktop::drag_label(pointer.dragged));
+            tree
+        })
 }
 
 /// A muted line under a panel's header: an error, a limit, or why it is empty.
@@ -504,8 +629,8 @@ pub(crate) fn notice(message: impl IntoReactive<SharedString>) -> impl IntoEleme
 fn tree_row(
     row: Memo<Option<(FileTreeRow, bool)>>,
     focused: impl Fn() -> bool + 'static,
-    press: impl Fn(String) + Copy + 'static,
-) -> impl IntoElement {
+    press: impl Fn(String, nsh_core::keymap::Modifiers) + Copy + 'static,
+) -> View {
     let field = move |read: fn(&FileTreeRow) -> bool| {
         row.with(|row| row.as_ref().is_some_and(|(row, _)| read(row)))
     };
@@ -521,11 +646,14 @@ fn tree_row(
                 .unwrap_or_default()
         })
     };
-    nsh_base::button()
-        .accessibility_label(nsh_core::element::Prop::from(
-            (move || Some(SharedString::from(label()))).into_reactive(),
-        ))
-        .selected(selected)
+    // A view rather than a button: its press reports the keys held.
+    view()
+        .role(nsh_core::AccessibilityRole::Button)
+        .label(move || SharedString::from(label()))
+        .accessibility_state(move || nsh_core::AccessibilityState {
+            selected: selected(),
+            ..Default::default()
+        })
         .flex_row()
         .items_center()
         .gap_1()
@@ -536,7 +664,7 @@ fn tree_row(
         .pr_2()
         .rounded(px(ui::RADIUS))
         .hover(|s| s.bg(ROW_HOVER))
-        .selected_style(|s| s.bg(ROW_SELECTED))
+        .style_when(selected, |s| s.bg(ROW_SELECTED))
         // The keyboard's row, ringed as the desktop client's.
         .border_1()
         .border_color(move || {
@@ -603,11 +731,11 @@ fn tree_row(
                     |s| s.font_weight(FontWeight::SEMIBOLD),
                 ),
         )
-        .on_press(move || {
+        .on_press(move |event: &PressEvent| {
             if let Some(path) =
                 row.with_untracked(|row| row.as_ref().map(|(row, _)| row.path.clone()))
             {
-                press(path);
+                press(path, event.modifiers);
             }
         })
 }
@@ -624,10 +752,12 @@ include!(concat!(env!("OUT_DIR"), "/file_icons.rs"));
 /// A file's glyph from T3 Code's tree icons, its tree variant when it has one.
 fn file_icon(path: &str) -> ImageSrc {
     let name = desktop_file_icon(path);
-    ImageSrc::svg_markup(
-        file_icon_markup(&format!("{name}-tree"))
-            .or_else(|| file_icon_markup(name))
-            .or_else(|| file_icon_markup("file-tree-builtin-default"))
-            .unwrap_or_default(),
-    )
+    ImageSrc::svg_markup(file_icon_markup(&format!("{name}-tree")).unwrap_or_else(|| glyph(name)))
+}
+
+/// The markup of the glyph Core names, or the default file's.
+pub(crate) fn glyph(name: &str) -> &'static str {
+    file_icon_markup(name)
+        .or_else(|| file_icon_markup("file-tree-builtin-default"))
+        .unwrap_or_default()
 }

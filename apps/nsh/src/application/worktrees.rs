@@ -281,6 +281,7 @@ mod tests {
         // These tests publish explicit Host facts. Discovery must not race those facts.
         let selection_path = root.join("connection-selection.json");
         let language_path = root.join("language.json");
+        let explorer_width_path = root.join("file-explorer-width.json");
         let (runtime, client, _) = crate::client::Client::new(root, None).unwrap();
         let (state, _) = tokio::sync::watch::channel(Arc::new(State::default()));
         let app = Arc::new(Application {
@@ -292,6 +293,7 @@ mod tests {
             jobs: Default::default(),
             selection_path,
             language_path,
+            explorer_width_path,
             #[cfg(desktop)]
             updater: None,
         });

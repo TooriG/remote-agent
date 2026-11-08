@@ -1,3 +1,4 @@
+pub(super) mod chips;
 mod detection;
 mod lookup;
 mod paths;
@@ -136,7 +137,7 @@ pub(super) fn file_reference(source: &str, syntax: Syntax) -> Option<MarkdownFil
     let kind = markdown_file_kind(file_path);
     Some(MarkdownFileReference {
         path: file_path.into(),
-        label: file_label(file_path, line, column),
+        label: file_label(file_path, None, line, column),
         kind,
         line,
         column,
@@ -232,8 +233,12 @@ pub fn markdown_file_target(
     Some(file)
 }
 
-fn file_label(path: &str, line: Option<u32>, column: Option<u32>) -> String {
+fn file_label(path: &str, parent: Option<&str>, line: Option<u32>, column: Option<u32>) -> String {
     let mut label = paths::basename(path).to_owned();
+    if let Some(parent) = parent {
+        label.push_str(" · ");
+        label.push_str(parent);
+    }
     if let Some(line) = line {
         write!(label, " · L{line}").expect("String write cannot fail");
         if let Some(column) = column {
@@ -241,6 +246,61 @@ fn file_label(path: &str, line: Option<u32>, column: Option<u32>) -> String {
         }
     }
     label
+}
+
+fn file_labels<'a>(
+    files: impl Iterator<Item = &'a str>,
+) -> std::collections::HashMap<String, String> {
+    let mut groups = std::collections::HashMap::<&str, std::collections::HashSet<String>>::new();
+    for path in files {
+        groups
+            .entry(paths::basename(path))
+            .or_default()
+            .insert(path.replace('\\', "/"));
+    }
+    let mut labels = std::collections::HashMap::new();
+    for group in groups.into_values().filter(|paths| paths.len() > 1) {
+        let mut parents: Vec<_> = group
+            .iter()
+            .map(|path| {
+                let mut segments: Vec<_> = path
+                    .split('/')
+                    .filter(|segment| !segment.is_empty())
+                    .collect();
+                segments.pop();
+                (path, segments)
+            })
+            .collect();
+        // In reversed component order, the longest shared suffix must belong
+        // to a neighbor. This avoids comparing every pair of matching names.
+        parents.sort_unstable_by(|(_, left), (_, right)| left.iter().rev().cmp(right.iter().rev()));
+        for (index, (path, segments)) in parents.iter().enumerate() {
+            if segments.is_empty() {
+                continue;
+            }
+            let shared = index
+                .checked_sub(1)
+                .and_then(|previous| parents.get(previous))
+                .into_iter()
+                .chain(parents.get(index + 1))
+                .map(|(_, other)| {
+                    segments
+                        .iter()
+                        .rev()
+                        .zip(other.iter().rev())
+                        .take_while(|(left, right)| left == right)
+                        .count()
+                })
+                .max()
+                .unwrap_or(0);
+            let depth = (shared + 1).max(2).min(segments.len());
+            labels.insert(
+                (*path).clone(),
+                segments[segments.len() - depth..].join("/"),
+            );
+        }
+    }
+    labels
 }
 
 #[cfg(test)]
