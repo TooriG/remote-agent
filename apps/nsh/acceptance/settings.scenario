@@ -10,7 +10,7 @@ expect "desktop@example.invalid"
 screenshot providers
 press 環境
 expect "作業する環境と、このPCへ接続する端末を管理します。"
-expect "検証 Host"
+expect "このPC" after "作業する環境と、このPCへ接続する端末を管理します。"
 screenshot environment
 press ワークツリー
 expect "新しい会話の作業場所と、作成済みのワークツリーを管理します。"
