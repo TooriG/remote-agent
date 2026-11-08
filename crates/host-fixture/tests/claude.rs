@@ -200,6 +200,43 @@ async fn until(store: &Store, condition: impl Fn(&Snapshot) -> bool) -> Arc<Snap
     })
 }
 
+/// The conversation as a fresh client reads it from a restarted Host.
+async fn reread(
+    root: &Path,
+    memory: Arc<Memory>,
+    (store, endpoint, fixture): (Store, Endpoint, HostFixture),
+    id: &agent_protocol::session::SessionRef,
+) -> Arc<Snapshot> {
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+    let fixture = host(root, memory, fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
+        .await
+        .unwrap();
+    let snapshot = store.snapshot();
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+    snapshot
+}
+
+/// The notification that starts a turn.
+fn notification(
+    snapshot: &Snapshot,
+    id: &agent_protocol::session::SessionRef,
+    turn: usize,
+) -> agent_protocol::items::ItemBody {
+    snapshot.sessions.conversations[id].turns.as_ref().unwrap()[turn]
+        .items
+        .as_ref()
+        .unwrap()[0]
+        .body()
+        .clone()
+}
+
 async fn completed(
     store: &Store,
     id: &agent_protocol::session::SessionRef,
@@ -1944,10 +1981,12 @@ async fn live_claude_account_login_url_and_cancellation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn claude_keeps_loading_through_background_results_and_follow_up_after_reconnect() {
+async fn claude_follows_an_intermediate_result_in_a_new_turn_after_reconnect() {
     use agent_core::presentation::conversation::ConversationRowContent;
     use agent_protocol::execution::TurnStatus;
 
+    // As T3 Code, Claude's result settles its turn, and the follow-up Claude
+    // starts on its own while its subagent runs or after it ended is the next.
     for (prompt, idle_before_result) in [("background", false), ("background-settled", true)] {
         let root = tempfile::tempdir().unwrap();
         if prompt == "background" {
@@ -2009,14 +2048,17 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .unwrap();
         let snapshot = store.snapshot();
         let thread = &snapshot.sessions.conversations[&id];
-        let turn = thread.turns.as_ref().unwrap().last().unwrap();
+        let turns = thread.turns.as_ref().unwrap();
+        assert_eq!(turns.len(), 2);
         assert_eq!(
-            turn.status,
+            turns.last().unwrap().status,
             TurnStatus::Running,
-            "an intermediate result must stay live"
+            "the follow-up to an intermediate result must stay live"
         );
+        assert_eq!(turns[0].status, TurnStatus::Completed);
         assert!(
-            turn.items
+            turns[0]
+                .items
                 .as_ref()
                 .unwrap()
                 .iter()
@@ -2044,13 +2086,13 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .unwrap();
         if prompt == "background" {
             let snapshot = until(&store, |snapshot| {
-                snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0]
+                snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1]
                     .items.as_ref().unwrap().iter().any(|item|
                         item.status == agent_protocol::execution::ItemStatus::Completed
                         && item.is_deferred()
                         && matches!(item.body(), agent_protocol::items::ItemBody::CommandExecution {output, exit_code:None, ..} if output == "background done"))
             }).await;
-            let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0];
+            let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1];
             assert_eq!(turn.status, TurnStatus::Running);
             store
                 .dispatch(Intent::ReadItem(op::ReadItem {
@@ -2066,23 +2108,23 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
                 "{:?}",
                 snapshot.panes.primary().error
             );
-            assert!(snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0].items.as_ref().unwrap().iter().any(|item|
+            assert!(snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1].items.as_ref().unwrap().iter().any(|item|
                 item.status == agent_protocol::execution::ItemStatus::Completed
                 && !item.is_deferred()
                 && matches!(item.body(), agent_protocol::items::ItemBody::CommandExecution {output, exit_code:None, ..} if output == "background stdout\n")
             ), "expanded background work must recover native output while its turn is still running");
             std::fs::remove_file(root.path().join("background-paused")).unwrap();
         }
-        let snapshot = completed(&store, &id, 1, "completed").await;
+        let snapshot = completed(&store, &id, 2, "completed").await;
         let thread = &snapshot.sessions.conversations[&id];
-        let items = thread.turns.as_ref().unwrap()[0].items.as_ref().unwrap();
+        let items = thread.turns.as_ref().unwrap()[1].items.as_ref().unwrap();
         assert!(items.iter().any(|item| item.status == agent_protocol::execution::ItemStatus::Completed
             && matches!(item.body(), agent_protocol::items::ItemBody::CommandExecution {exit_code, output, ..}
                 if if prompt == "background" {exit_code.is_none()} else {*exit_code == Some(0) && output == "approved"})
         ), "live outcomes must update the originating tool");
         assert!(!items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::Attachment {content, ..} if content["commandMode"] == "task-notification")));
         assert!(
-            thread.turns.as_ref().unwrap()[0]
+            thread.turns.as_ref().unwrap()[1]
                 .items
                 .as_ref()
                 .unwrap()
@@ -2096,25 +2138,35 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             thread.clone(),
             &Some(projected),
         );
-        assert!(!projected.turns[0].rows.iter().any(|row| matches!(
+        assert!(!projected.turns[1].rows.iter().any(|row| matches!(
             &row.content, ConversationRowContent::ActivityHeader { activity } if activity.is_in_progress
         )));
         send(&store, "next turn", "after-background").await;
-        completed(&store, &id, 2, "completed").await;
+        completed(&store, &id, 3, "completed").await;
         send(&store, prompt, "stop-background").await;
         let snapshot = until(&store, |snapshot| snapshot.requests().next().is_some()).await;
         store
             .dispatch(Intent::Interrupt(op::Interrupt {
                 thread_id: id.clone(),
-                turn_id: snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2]
+                turn_id: snapshot.sessions.conversations[&id]
+                    .turns
+                    .as_ref()
+                    .unwrap()
+                    .last()
+                    .unwrap()
                     .id
                     .clone(),
             }))
             .await
             .unwrap();
-        let snapshot = completed(&store, &id, 3, "interrupted").await;
+        let snapshot = completed(&store, &id, 5, "interrupted").await;
         assert!(snapshot.requests().next().is_none());
-        let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2];
+        let turn = snapshot.sessions.conversations[&id]
+            .turns
+            .as_ref()
+            .unwrap()
+            .last()
+            .unwrap();
         assert!(turn.error.is_none(), "{:?}", turn.error);
         // A settings change replaces the retained CLI. The same native
         // conversation must resume after its background work was stopped.
@@ -2126,9 +2178,14 @@ async fn claude_keeps_loading_through_background_results_and_follow_up_after_rec
             .await
             .unwrap();
         send(&store, "after stop", "after-interruption").await;
-        let snapshot = completed(&store, &id, 4, "completed").await;
+        let snapshot = completed(&store, &id, 6, "completed").await;
         assert!(
-            snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[3]
+            snapshot.sessions.conversations[&id]
+                .turns
+                .as_ref()
+                .unwrap()
+                .last()
+                .unwrap()
                 .items
                 .as_ref()
                 .unwrap()
@@ -2352,7 +2409,7 @@ async fn claude_forks_a_completed_turn_while_a_later_turn_runs() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_stops_it() {
+async fn claude_waits_on_a_background_shell_reports_in_a_new_turn_and_stop_ends_it() {
     let root = tempfile::tempdir().unwrap();
     let paused = root.path().join("background-shell-paused");
     let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
@@ -2390,44 +2447,357 @@ async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_
             })
         }
     };
+    // The roster precedes the answer's completion, so that it holds the
+    // completion's unread mark.
+    let waiting = |id: agent_protocol::session::SessionRef| {
+        move |snapshot: &Snapshot| {
+            let thread = &snapshot.sessions.conversations[&id];
+            !thread.background.is_empty()
+                && thread
+                    .turns
+                    .iter()
+                    .flatten()
+                    .all(|turn| turn.status.label() != "running")
+        }
+    };
     std::fs::write(&paused, "").unwrap();
     let id = send(&store, "background-shell", "background-shell-answered").await;
-    until(&store, says(0, "あとで結果を報告します")).await;
-    std::fs::remove_file(&paused).unwrap();
-    let snapshot = until(&store, says(0, "結果を報告します")).await;
+    let snapshot = until(&store, waiting(id.clone())).await;
+    let thread = &snapshot.sessions.conversations[&id];
+    assert!(says(0, "あとで結果を報告します")(&snapshot));
     assert_eq!(
-        snapshot.sessions.conversations[&id]
-            .turns
-            .as_ref()
-            .unwrap()
-            .len(),
-        1,
-        "Claude's answer to its finished shell must stay in the requesting turn"
+        thread.turns.as_ref().unwrap()[0].status.label(),
+        "completed",
+        "as T3 Code, the answer completes while its shell runs"
     );
-    completed(&store, &id, 1, "completed").await;
+    assert_eq!(
+        thread.background[0].description.as_deref(),
+        Some("background shell")
+    );
+    std::fs::remove_file(&paused).unwrap();
+    let snapshot = completed(&store, &id, 2, "completed").await;
+    let report = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1];
+    assert!(
+        matches!(report.items.as_ref().unwrap()[0].body(), agent_protocol::items::ItemBody::Notification { reports } if reports.len() == 1),
+        "the shell's notification starts the turn Claude reports in"
+    );
+    assert!(says(1, "結果を報告します")(&snapshot));
+    assert!(snapshot.sessions.conversations[&id].background.is_empty());
 
     std::fs::write(&paused, "").unwrap();
     send(&store, "background-shell", "background-shell-interrupted").await;
-    let snapshot = until(&store, says(1, "あとで結果を報告します")).await;
+    let snapshot = until(&store, waiting(id.clone())).await;
+    let thread = &snapshot.sessions.conversations[&id];
+    assert_eq!(
+        thread.active_turn_id(),
+        Some("background-shell-interrupted".into()),
+        "Stop targets the answered turn that left the shell running"
+    );
     store
         .dispatch(Intent::Interrupt(op::Interrupt {
             thread_id: id.clone(),
-            turn_id: snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1]
-                .id
-                .clone(),
+            turn_id: thread.active_turn_id().unwrap(),
         }))
         .await
         .unwrap();
-    let snapshot = completed(&store, &id, 2, "interrupted").await;
-    let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1];
+    let snapshot = until(&store, |snapshot| {
+        snapshot.sessions.conversations[&id].background.is_empty()
+    })
+    .await;
+    let turn = &snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2];
+    assert_eq!(turn.status.label(), "completed", "Stop keeps the answer");
     assert!(turn.error.is_none(), "{:?}", turn.error);
     std::fs::remove_file(&paused).unwrap();
     send(&store, "after interrupt", "after-background-shell").await;
-    let snapshot = completed(&store, &id, 3, "completed").await;
+    let snapshot = completed(&store, &id, 4, "completed").await;
     assert!(
-        !says(2, "結果を報告します")(&snapshot),
-        "an interrupted shell must not answer into a later turn"
+        !says(3, "結果を報告します")(&snapshot),
+        "a stopped shell must not report into a later turn"
     );
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_waits_on_its_background_roster_refuses_a_model_change_and_reports_in_a_new_turn() {
+    use agent_protocol::execution::BackgroundTaskKind::*;
+    let root = tempfile::tempdir().unwrap();
+    let memory = Arc::new(Memory::default());
+    let fixture = host(root.path(), memory.clone(), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    let select = |id: &str| Intent::SelectModel {
+        thread_id: store
+            .snapshot()
+            .panes
+            .primary()
+            .navigation
+            .draft_key
+            .clone(),
+        model: models::ModelRef {
+            provider: ProviderKind::Claude,
+            id: id.into(),
+        },
+    };
+    store.dispatch(select("default")).await.unwrap();
+    let id = send(&store, "background-roster", "background-roster").await;
+    let roster = |snapshot: &Snapshot| {
+        snapshot.sessions.conversations[&id]
+            .background
+            .iter()
+            .map(|task| (task.kind, task.description.clone().unwrap_or_default()))
+            .collect::<Vec<_>>()
+    };
+    // The roster precedes the answer's completion, which it keeps unread-free.
+    let snapshot = until(&store, |snapshot| {
+        roster(snapshot).len() == 3
+            && snapshot.sessions.conversations[&id]
+                .active_turn_id()
+                .is_some()
+            && snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0].status
+                != models::TurnStatus::Running
+    })
+    .await;
+    assert_eq!(
+        roster(&snapshot),
+        [
+            (Command, "Start the dev server".into()),
+            (Monitor, "Watch the build".into()),
+            (Subagent, "Review the change".into()),
+        ]
+    );
+    assert_eq!(
+        snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0].status,
+        models::TurnStatus::Completed,
+        "as T3 Code, the answer completes while its work runs"
+    );
+
+    store.dispatch(select("sonnet")).await.unwrap();
+    draft(&store, "after the change").await;
+    let refused = store
+        .dispatch(Intent::Submit {
+            thread_id: Some(id.clone()),
+            client_user_message_id: "model-change".into(),
+            alternate: false,
+        })
+        .await
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    let text = agent_core::presentation::error::error_text(
+        agent_core::localization::UiLanguage::Japanese,
+        &refused,
+    );
+    assert_eq!(
+        text.message,
+        "Claudeのバックグラウンドのエージェントやコマンドが実行中のため、モデルや設定を変更するとそれらが終了します。完了を待つか停止してから、もう一度送信してください。"
+    );
+    assert_eq!(
+        text.details.as_deref(),
+        Some(
+            "Claude is still running background agents or commands, and this model or setting change would end them. Wait for them to finish, or press Stop, then send the message again."
+        )
+    );
+    assert_eq!(roster(&store.snapshot()).len(), 3, "the work keeps running");
+
+    std::fs::write(root.path().join("claude-background-release"), []).unwrap();
+    let snapshot = completed(&store, &id, 2, "completed").await;
+    let thread = &snapshot.sessions.conversations[&id];
+    assert!(thread.background.is_empty());
+    let report = thread.turns.as_ref().unwrap()[1].items.as_ref().unwrap();
+    let agent_protocol::items::ItemBody::Notification { reports } = report[0].body() else {
+        panic!("the work's notification starts Claude's report: {report:#?}");
+    };
+    assert_eq!(
+        reports
+            .iter()
+            .map(|report| (report.kind, report.label.clone().unwrap_or_default()))
+            .collect::<Vec<_>>(),
+        [
+            (Command, "Start the dev server".into()),
+            (Monitor, "Watch the build".into()),
+            (Subagent, "Review the change".into()),
+        ]
+    );
+    assert!(
+        report
+            .iter()
+            .any(|item| item_text(item) == Some("バックグラウンドの作業が終わりました")),
+        "as T3 Code, Claude reports in a turn of its own"
+    );
+    let live = notification(&snapshot, &id, 1);
+    let reloaded = reread(root.path(), memory, (store, endpoint, fixture), &id).await;
+    assert_eq!(
+        notification(&reloaded, &id, 1),
+        live,
+        "the report names the work as it did live"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_waits_on_the_commands_and_subagents_its_turn_left_running() {
+    use agent_protocol::execution::BackgroundTaskKind::*;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    store
+        .dispatch(Intent::SelectModel {
+            thread_id: store
+                .snapshot()
+                .panes
+                .primary()
+                .navigation
+                .draft_key
+                .clone(),
+            model: models::ModelRef {
+                provider: ProviderKind::Codex,
+                id: "fixture-model".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let id = send(
+        &store,
+        "[background] [immediate] 開発サーバーを起動します",
+        "codex-background",
+    )
+    .await;
+    assert_eq!(id.provider, ProviderKind::Codex);
+    let roster = |snapshot: &Snapshot| {
+        snapshot
+            .sessions
+            .conversations
+            .get(&id)
+            .map(|thread| {
+                thread
+                    .background
+                    .iter()
+                    .map(|task| (task.kind, task.description.clone().unwrap_or_default()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let snapshot = until(&store, |snapshot| roster(snapshot).len() == 2).await;
+    assert_eq!(
+        roster(&snapshot),
+        [
+            (Command, "npm run dev".into()),
+            (Subagent, "Review the change".into()),
+        ]
+    );
+    let thread = &snapshot.sessions.conversations[&id];
+    assert_eq!(
+        thread.turns.as_ref().unwrap()[0].status.label(),
+        "completed"
+    );
+    store
+        .dispatch(Intent::Interrupt(op::Interrupt {
+            thread_id: id.clone(),
+            turn_id: thread.active_turn_id().unwrap(),
+        }))
+        .await
+        .unwrap();
+    until(&store, |snapshot| {
+        roster(snapshot) == [(Subagent, "Review the change".to_owned())]
+    })
+    .await;
+    std::fs::write(root.path().join("codex-background-release"), []).unwrap();
+    let snapshot = until(&store, |snapshot| roster(snapshot).is_empty()).await;
+    assert_eq!(
+        snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0]
+            .status
+            .label(),
+        "completed",
+        "Stop ended the command, not the answer"
+    );
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_reports_on_its_ended_background_command_in_a_new_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    store
+        .dispatch(Intent::SelectModel {
+            thread_id: store
+                .snapshot()
+                .panes
+                .primary()
+                .navigation
+                .draft_key
+                .clone(),
+            model: models::ModelRef {
+                provider: ProviderKind::Codex,
+                id: "fixture-model".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let id = send(
+        &store,
+        "[background] [immediate] 開発サーバーを起動します",
+        "codex-background-report",
+    )
+    .await;
+    until(&store, |snapshot| {
+        snapshot.sessions.conversations[&id].background.len() == 2
+    })
+    .await;
+    std::fs::write(root.path().join("codex-background-release"), []).unwrap();
+    let snapshot = completed(&store, &id, 2, "completed").await;
+    let thread = &snapshot.sessions.conversations[&id];
+    assert!(thread.background.is_empty());
+    let live = notification(&snapshot, &id, 1);
+    assert_eq!(
+        live,
+        agent_protocol::items::ItemBody::Notification {
+            reports: vec![agent_protocol::execution::BackgroundReport {
+                kind: agent_protocol::execution::BackgroundTaskKind::Command,
+                label: Some("npm run dev".into()),
+                outcome: agent_protocol::execution::BackgroundOutcome::Completed,
+                exit_code: Some(0),
+            }],
+        },
+        "as T3 Code, the ended command wakes Codex in a turn its notification starts"
+    );
+    assert!(
+        thread.turns.as_ref().unwrap()[1]
+            .items
+            .iter()
+            .flatten()
+            .any(|item| item_text(item) == Some("バックグラウンドのコマンドの結果を確認しました"))
+    );
+    // The fixture's app-server keeps threads only while it runs, so another
+    // client reads the conversation from the same Host.
+    let (reader, reader_endpoint) = connect(&fixture, Snapshot::default()).await;
+    reader
+        .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
+        .await
+        .unwrap();
+    assert_eq!(notification(&reader.snapshot(), &id, 1), live);
+    reader.close().await.unwrap();
+    reader_endpoint.close().await;
     store.close().await.unwrap();
     endpoint.close().await;
     fixture.close().await.unwrap();
@@ -2509,7 +2879,7 @@ async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows()
     assert_eq!(turns[0].status.label(), "completed");
     assert_eq!(turns[1].id, "while-background-shell".into());
     std::fs::remove_file(&paused).unwrap();
-    let live = completed(&store, &id, 2, "completed").await;
+    let live = completed(&store, &id, 3, "completed").await;
     assert_eq!(
         texts(&live, &id),
         [
@@ -2517,13 +2887,10 @@ async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows()
                 "background-shell".to_owned(),
                 "あとで結果を報告します".into()
             ],
-            vec![
-                "next question".into(),
-                "reply 2: next question".into(),
-                "結果を報告します".into()
-            ],
+            vec!["next question".into(), "reply 2: next question".into()],
+            vec!["結果を報告します".into()],
         ],
-        "the shell's report belongs to the turn that is current when it arrives"
+        "as T3 Code, the shell's report is a turn of its own"
     );
     let saved: Snapshot =
         serde_json::from_slice(&serde_json::to_vec(live.as_ref()).unwrap()).unwrap();

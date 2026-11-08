@@ -131,12 +131,7 @@ pub(crate) struct RequestOrigin {
 #[derive(Debug, PartialEq)]
 pub(crate) enum SubmissionTarget<'a> {
     Steer(&'a str),
-    /// The running turn answered and only its background work remains; its
-    /// process takes this input as its next prompt ([`Agent::answered`]).
-    Next,
-    Start {
-        cwd: &'a str,
-    },
+    Start { cwd: &'a str },
 }
 
 pub(crate) struct SessionSummary {
@@ -350,11 +345,6 @@ pub(crate) trait Agent: Identity {
         browser: Option<Value>,
     ) -> Result<ThreadResponse, Failure>;
     async fn state(&self, id: &str) -> Result<SubmissionState, Failure>;
-    /// The running turn answered and only background work keeps it running,
-    /// so its process takes the next prompt now ([`SubmissionTarget::Next`]).
-    async fn answered(&self, _id: &str) -> bool {
-        false
-    }
     /// False is an explicit unsupported operation, before any history mutation.
     /// Other failures may have delivered history and must not be blindly retried.
     async fn inject_history(
@@ -445,11 +435,6 @@ pub(crate) enum AgentChange {
     Renamed {
         session: SessionRef,
         name: Option<String>,
-    },
-    /// The running turn answered and only background work remains
-    /// ([`Agent::answered`]); input waiting for it can start.
-    Answered {
-        session: SessionRef,
     },
     Stopped {
         provider: agent_protocol::session::ProviderKind,

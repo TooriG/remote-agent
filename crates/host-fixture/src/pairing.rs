@@ -202,6 +202,12 @@ fn route(
         }
         // A changed file Git has no text diff for, which the diff names binary.
         "/binary-file" => fs::write(root.join("project").join("pixel.bin"), [0, 1, 2, 255, 0])?,
+        // The Codex fixture's background command and subagent finish.
+        "/codex-background/release" => fs::write(root.join("codex-background-release"), [])?,
+        // The Claude fixture's background work finishes, and Claude reports on it.
+        "/claude-background/release" => {
+            fs::write(root.join("project/claude-background-release"), [])?;
+        }
         "/release-inputs" => {
             OpenOptions::new()
                 .create(true)

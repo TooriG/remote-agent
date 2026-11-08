@@ -116,6 +116,9 @@ pub struct Thread {
     #[serde(default)]
     pub status: SessionStatus,
     pub turns: Option<Vec<Arc<Turn>>>,
+    /// Work the agent left running after its running turn answered.
+    #[serde(default)]
+    pub background: Vec<crate::execution::BackgroundTask>,
     #[serde(default, deserialize_with = "project_membership")]
     pub project_id: ProjectMembership,
     pub preview: Option<String>,
@@ -190,11 +193,14 @@ impl Thread {
                     .into(),
             );
         }
-        self.turns
-            .as_ref()?
+        let turns = self.turns.as_ref()?;
+        turns
             .iter()
             .rev()
             .find(|turn| turn.status == TurnStatus::Running)
+            // As T3 Code, Stop also ends the background work an answered
+            // turn left running.
+            .or_else(|| turns.last().filter(|_| !self.background.is_empty()))
             .map(|turn| turn.id.clone())
     }
 }
@@ -267,6 +273,7 @@ fn is_conversation(item: &Item) -> bool {
         ItemBody::UserMessage { .. }
             | ItemBody::AssistantText { .. }
             | ItemBody::ImageGeneration { .. }
+            | ItemBody::Notification { .. }
     )
 }
 

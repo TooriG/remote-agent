@@ -143,6 +143,10 @@ pub enum SessionChange {
     Status {
         status: SessionStatus,
     },
+    /// The running turn answered and waits on this work; empty otherwise.
+    Background {
+        tasks: Vec<crate::execution::BackgroundTask>,
+    },
     Turn {
         turn: Turn,
         completed: bool,
@@ -249,6 +253,7 @@ pub struct Timeline {
     pub queue: crate::operations::InputQueue,
     /// None means no observation; Some(None) explicitly clears preparation.
     pub preparation: Option<Option<SessionPreparation>>,
+    pub background: Vec<crate::execution::BackgroundTask>,
 }
 
 /// Locate an item within the newest occurrence that actually contains it.
@@ -317,6 +322,7 @@ impl SessionChange {
             | Self::ReasoningPart { turn_id, .. }
             | Self::Error { turn_id, .. } => Some(turn_id),
             Self::Status { .. }
+            | Self::Background { .. }
             | Self::Workspace { .. }
             | Self::Preparation { .. }
             | Self::Submission { .. }
@@ -337,6 +343,7 @@ impl SessionChange {
             submissions: next.submissions,
             queue: next.queue,
             preparation: Some(next.preparation),
+            background: next.background,
         });
         result?;
         Ok(Thread {
@@ -347,6 +354,7 @@ impl SessionChange {
             submissions: timeline.submissions,
             queue: timeline.queue,
             preparation: timeline.preparation.flatten(),
+            background: timeline.background,
             ..next
         })
     }
@@ -389,6 +397,10 @@ impl SessionChange {
                 }
                 Self::ResolveRequest { request_id } => {
                     next.requests.remove(request_id);
+                    return Ok(());
+                }
+                Self::Background { tasks } => {
+                    next.background = tasks.clone();
                     return Ok(());
                 }
                 _ => {}
@@ -519,6 +531,7 @@ impl SessionChange {
                 | Self::Submission { .. }
                 | Self::Queue { .. }
                 | Self::Status { .. }
+                | Self::Background { .. }
                 | Self::Turn { .. }
                 | Self::Request { .. }
                 | Self::RequestDelivery { .. }
@@ -588,6 +601,52 @@ fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Opti
 mod update_tests {
     use super::*;
     use crate::execution::{ExecutionError, RetryEvidence};
+
+    #[test]
+    fn an_answered_turn_waits_on_its_roster_until_the_owner_clears_it() {
+        let roster = vec![crate::execution::BackgroundTask {
+            id: "shell".into(),
+            kind: crate::execution::BackgroundTaskKind::Command,
+            description: Some("dev server".into()),
+        }];
+        let turn = |completed| SessionChange::Turn {
+            turn: Turn {
+                id: "turn".into(),
+                status: if completed {
+                    TurnStatus::Completed
+                } else {
+                    TurnStatus::Running
+                },
+                ..Default::default()
+            },
+            completed,
+        };
+        let running = turn(false).apply(&Thread::default()).unwrap();
+        let waiting = turn(true)
+            .apply(
+                &SessionChange::Background {
+                    tasks: roster.clone(),
+                }
+                .apply(&running)
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(waiting.background, roster, "the answered turn waits on it");
+        assert_eq!(waiting.status, SessionStatus::Idle);
+        assert_eq!(
+            waiting.active_turn_id(),
+            Some("turn".into()),
+            "Stop ends the work the answered turn left running"
+        );
+        let roundtrip: Thread =
+            serde_json::from_value(serde_json::to_value(&waiting).unwrap()).unwrap();
+        assert_eq!(roundtrip.background, roster);
+        let cleared = SessionChange::Background { tasks: Vec::new() }
+            .apply(&waiting)
+            .unwrap();
+        assert!(cleared.background.is_empty());
+        assert_eq!(cleared.active_turn_id(), None);
+    }
 
     #[test]
     fn item_positions_require_both_ids_and_prefer_the_latest_matching_occurrence() {

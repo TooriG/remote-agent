@@ -66,8 +66,7 @@ impl HostRpcService {
             AgentChange::Session {
                 session,
                 change: SessionChange::Status { .. },
-            }
-            | AgentChange::Answered { session } => Some((session.clone(), false)),
+            } => Some((session.clone(), false)),
             _ => None,
         };
         self.inner.router.apply(change, bindings)?;

@@ -80,6 +80,7 @@ fn fixture_change(previous: &Snapshot, params: Value) -> (Snapshot, Vec<Effect>)
                     .map_or(1, |state| state.revision + 1),
                 statuses: Vec::new(),
                 display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
+                background: Vec::new(),
                 unread,
             },
         }),

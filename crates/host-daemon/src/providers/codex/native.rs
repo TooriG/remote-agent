@@ -273,15 +273,96 @@ fn file_changes(value: Value) -> Vec<FileChange> {
 #[cfg(test)]
 mod owned_details_tests;
 
+/// T3 Code wakes Codex with this prompt when a command its turn left running
+/// ends, so that Codex reports on it:
+/// https://github.com/pingdotgg/t3code/blob/dac8b11ddc25bd5da62a367fdb6c3de777ae2986/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts#L427
+const BACKGROUND_COMMAND_COMPLETED: &str = "Background command completed";
+
+pub(super) fn background_command_detail(
+    command: &str,
+    exit_code: Option<i32>,
+    output: &str,
+) -> String {
+    const COMMAND_MAX: usize = 200;
+    const OUTPUT_TAIL_MAX: usize = 1_000;
+    let command = if command.chars().count() > COMMAND_MAX {
+        format!(
+            "{}...",
+            command.chars().take(COMMAND_MAX).collect::<String>()
+        )
+    } else {
+        command.to_owned()
+    };
+    let exit = exit_code.map_or_else(String::new, |code| format!(" (exit {code})"));
+    let header = format!("{BACKGROUND_COMMAND_COMPLETED}{exit}: {command}");
+    let output = output.trim_end();
+    let count = output.chars().count();
+    if count == 0 {
+        return header;
+    }
+    let tail = if count > OUTPUT_TAIL_MAX {
+        format!(
+            "...{}",
+            output
+                .chars()
+                .skip(count - OUTPUT_TAIL_MAX)
+                .collect::<String>()
+        )
+    } else {
+        output.to_owned()
+    };
+    format!("{header}\n\nOutput tail:\n{tail}")
+}
+
+fn background_command_report(
+    text: Option<&str>,
+    content: &[MessagePart],
+) -> Option<BackgroundReport> {
+    let prompt = content
+        .iter()
+        .find_map(|part| match part {
+            MessagePart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .or(text)?;
+    let rest = prompt.strip_prefix(BACKGROUND_COMMAND_COMPLETED)?;
+    let (exit_code, rest) = match rest.strip_prefix(" (exit ") {
+        Some(rest) => {
+            let (code, rest) = rest.split_once(')')?;
+            (Some(code.parse().ok()?), rest)
+        }
+        None => (None, rest),
+    };
+    let command = rest.strip_prefix(": ")?.lines().next()?;
+    Some(BackgroundReport {
+        kind: BackgroundTaskKind::Command,
+        label: (!command.is_empty()).then(|| command.to_owned()),
+        outcome: match exit_code {
+            Some(0) => BackgroundOutcome::Completed,
+            Some(_) => BackgroundOutcome::Failed,
+            None => BackgroundOutcome::Unknown,
+        },
+        exit_code,
+    })
+}
+
 pub(crate) fn parse_item(mut value: Value) -> Result<Item, serde_json::Error> {
     let id = field(&value, "id")?;
     let status = item_status(value["status"].as_str());
     let client_input_id = field(&value, "clientId")?;
     let body = match value["type"].as_str().unwrap_or_default() {
-        "userMessage" => ItemBody::UserMessage {
-            text: serde_json::from_value(take_value(&mut value, "text"))?,
-            content: message_parts(take_value(&mut value, "content")),
-        },
+        "userMessage" => {
+            let text: Option<String> = serde_json::from_value(take_value(&mut value, "text"))?;
+            let content = message_parts(take_value(&mut value, "content"));
+            // The prompt that woke Codex for its background command is that
+            // command's notification, live and in history alike.
+            match background_command_report(text.as_deref(), &content) {
+                Some(report) => ItemBody::Notification {
+                    reports: vec![report],
+                },
+                None => ItemBody::UserMessage { text, content },
+            }
+        }
         "agentMessage" => ItemBody::AssistantText {
             text: take_string(&mut value, "text"),
             phase: match value["phase"].as_str() {
@@ -543,9 +624,13 @@ pub(crate) fn parse_turn(mut value: Value) -> Result<Turn, serde_json::Error> {
 /// Codex's summary view omits generated images. Read full bounded pages, then
 /// keep the conversation content here while leaving work details on demand.
 pub(super) fn summary_items(items: Vec<Arc<Item>>) -> Vec<Arc<Item>> {
-    let user = items
-        .iter()
-        .position(|item| matches!(item.body(), ItemBody::UserMessage { .. }));
+    // A notification starts a turn as its user message does.
+    let user = items.iter().position(|item| {
+        matches!(
+            item.body(),
+            ItemBody::UserMessage { .. } | ItemBody::Notification { .. }
+        )
+    });
     let answer = items.iter().rposition(|item| {
         matches!(
             item.body(),
@@ -653,6 +738,46 @@ pub(super) fn encode_input(input: &[agent_protocol::operations::Input]) -> Vec<V
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_prompt_that_wakes_codex_for_its_command_reads_as_that_commands_notification() {
+        let detail = background_command_detail("npm run dev", Some(0), "ready\n");
+        assert_eq!(
+            detail,
+            "Background command completed (exit 0): npm run dev\n\nOutput tail:\nready"
+        );
+        for (text, outcome, exit_code) in [
+            (detail, BackgroundOutcome::Completed, Some(0)),
+            (
+                background_command_detail("npm run dev", Some(2), ""),
+                BackgroundOutcome::Failed,
+                Some(2),
+            ),
+            (
+                background_command_detail("npm run dev", None, ""),
+                BackgroundOutcome::Unknown,
+                None,
+            ),
+        ] {
+            let item = parse_item(
+                json!({"id":"wake","type":"userMessage","content":[{"type":"text","text":text}]}),
+            )
+            .unwrap();
+            assert_eq!(
+                item.body(),
+                &ItemBody::Notification {
+                    reports: vec![BackgroundReport {
+                        kind: BackgroundTaskKind::Command,
+                        label: Some("npm run dev".into()),
+                        outcome,
+                        exit_code,
+                    }],
+                }
+            );
+        }
+        let human = parse_item(json!({"id":"human","type":"userMessage","content":[{"type":"text","text":"Background command completed? Check it"}]})).unwrap();
+        assert!(matches!(human.body(), ItemBody::UserMessage { .. }));
+    }
 
     #[test]
     fn native_history_arrays_reuse_owned_json_storage() {

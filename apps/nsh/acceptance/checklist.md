@@ -102,6 +102,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Conversation: steering a running turn, minimap beside the lane | covered | steering, queued-input, minimap |
 | Conversation: live Thinking and work rows (T3 Code's shimmer), expandable thoughts | covered | thinking, live-work; the shimmer itself is screenshot evidence only |
 | Conversation: one without a message yet (a side chat's) opens empty and sends its first message | covered | empty-conversation |
+| Conversation: waiting on background work (Claude, Codex), its report and notification after reopening and in English, Stop, refused model change | covered | background-waiting, background-model-change, codex-background-waiting, codex-background-report |
 | Composer: model picker | covered | model-picker |
 | Composer: why a send waits (another agent chosen while the conversation works) | covered | provider-switch |
 | Composer: Japanese input method (confirming return, sending while composing) | covered | input-method |

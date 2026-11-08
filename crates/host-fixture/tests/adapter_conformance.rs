@@ -52,7 +52,7 @@ async fn finished_with_input(events: &mut Reader, input: &ClientInputId) -> Turn
         let (turn_id, items) = match change(events).await {
             SessionChange::Turn { turn, completed } => {
                 if completed {
-                    assert_eq!(turn.status, TurnStatus::Completed);
+                    assert_eq!(turn.status, TurnStatus::Completed, "{turn:#?}");
                     finished.insert(turn.id.clone());
                 }
                 (turn.id, turn.items.unwrap_or_default())

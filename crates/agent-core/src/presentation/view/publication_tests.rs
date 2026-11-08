@@ -161,6 +161,7 @@ fn waiting_membership_refreshes_lists_without_republishing_other_surfaces() {
             } else {
                 Vec::new()
             },
+            background: Vec::new(),
             unread: Vec::new(),
             display: TaskActivitySummary {
                 waiting: u32::from(waiting),
@@ -232,6 +233,7 @@ fn waiting_publication_keeps_distinct_state_and_empty_state_comparisons() {
             waiting: (0..count)
                 .map(|index| SessionRef::new(ProviderKind::Codex, format!("task{index}")).unwrap())
                 .collect(),
+            background: Vec::new(),
             unread: vec![],
             display: TaskActivitySummary::default().display(),
         })

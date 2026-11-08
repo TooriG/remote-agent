@@ -16,6 +16,10 @@ pub struct TaskActivityState {
     pub statuses: Vec<(crate::session::SessionRef, crate::models::SessionStatus)>,
     /// User conversations awaiting a response; subagent requests are excluded.
     pub waiting: Vec<crate::session::SessionRef>,
+    /// Conversations whose answered turn waits on background work, and
+    /// whether that work holds the conversation's completion.
+    #[serde(default)]
+    pub background: Vec<(crate::session::SessionRef, bool)>,
     pub unread: Vec<(crate::session::SessionRef, crate::ids::TurnId)>,
 }
 
@@ -188,6 +192,9 @@ pub struct TaskActivityView {
 pub struct TaskState {
     pub status: crate::models::SessionStatus,
     pub waiting: bool,
+    /// Some while the answered turn waits on background work: whether that
+    /// work holds the conversation's completion.
+    pub background: Option<bool>,
     pub latest: Option<TurnStatus>,
 }
 impl TaskState {
@@ -211,7 +218,9 @@ impl TaskState {
         ) {
             return ("unknown", false);
         }
-        if crate::models::task_active(None, self.status) {
+        // As T3 Code, work that will wake the agent keeps its task going;
+        // a command left running, such as a dev server, does not.
+        if crate::models::task_active(None, self.status) || self.background == Some(true) {
             return ("running", true);
         }
         match self.latest {
@@ -227,6 +236,26 @@ impl TaskState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_answer_waiting_on_work_that_wakes_its_agent_stays_running() {
+        let waiting = |background| TaskState {
+            status: crate::models::SessionStatus::Idle,
+            background,
+            latest: Some(TurnStatus::Completed),
+            ..Default::default()
+        };
+        assert_eq!(waiting(Some(true)).phase(), ("running", true));
+        assert_eq!(
+            waiting(Some(true)).session_status(),
+            crate::models::SessionStatus::Running
+        );
+        assert_eq!(
+            waiting(Some(false)).phase(),
+            ("completed", false),
+            "a dev server left running does not hold the answer"
+        );
+    }
+
     #[test]
     fn preparing_tasks_count_as_active_without_a_provider_turn() {
         let task = TaskState {
@@ -362,7 +391,8 @@ mod tests {
                     TaskState {
                         status,
                         waiting: false,
-                        latest: turn
+                        latest: turn,
+                        background: None,
                     }
                     .phase(),
                     ("unknown", false)
@@ -378,7 +408,8 @@ mod tests {
                     TaskState {
                         status,
                         waiting: true,
-                        latest: turn
+                        latest: turn,
+                        background: None,
                     }
                     .phase(),
                     ("waiting", true)
@@ -401,7 +432,8 @@ mod tests {
                 TaskState {
                     status: crate::models::SessionStatus::Idle,
                     waiting: false,
-                    latest: turn
+                    latest: turn,
+                    background: None,
                 }
                 .phase(),
                 expected
@@ -410,7 +442,8 @@ mod tests {
                 TaskState {
                     status: crate::models::SessionStatus::Running,
                     waiting: false,
-                    latest: turn
+                    latest: turn,
+                    background: None,
                 }
                 .phase(),
                 ("running", true)

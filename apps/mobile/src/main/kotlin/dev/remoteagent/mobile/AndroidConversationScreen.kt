@@ -55,6 +55,7 @@ import dev.remoteagent.core.Outcome
 import dev.remoteagent.core.ReadItem
 import dev.remoteagent.core.Respond
 import dev.remoteagent.core.VisibleConversationRow
+import dev.remoteagent.core.notificationText
 import java.util.UUID
 import kotlinx.coroutines.launch
 
@@ -175,6 +176,12 @@ private fun ConversationContent(
         is ConversationRowContent.ProviderHandoff ->
             Text(
                 content.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        is ConversationRowContent.Notification ->
+            Text(
+                notificationText(content.reports, language),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

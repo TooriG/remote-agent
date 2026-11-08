@@ -87,7 +87,10 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             && follow_up.with(|f| f.editing.is_none())
             && empty()
     };
-    let stopping = move || idle_input() && controls.with(|c| c.running_turn.is_some());
+    // Work an answered turn left running is stopped from its own strip.
+    let stopping = move || {
+        idle_input() && controls.with(|c| c.running_turn.is_some() && c.background.is_none())
+    };
     // A stop or failure held the queue: the send button resumes it.
     let resuming = move || {
         idle_input()
@@ -874,6 +877,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         },
     ));
     column
+        .child(crate::background_work::strip())
         .child(crate::requests::panels(following))
         .child(when(
             move || {

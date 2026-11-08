@@ -9,6 +9,7 @@
 //! and identities instead of independently guessing finality or grouping.
 
 pub mod agents;
+pub mod background_work;
 pub mod connection_list;
 pub mod connections;
 pub mod diff;
@@ -80,7 +81,8 @@ impl<'a> From<&'a Item> for ItemMetadata<'a> {
             id: &item.id,
             client_id: item.client_input_id.as_deref(),
             kind: match item.body() {
-                ItemBody::UserMessage { .. } => GroupKind::User,
+                // A notification starts a turn as a user message does.
+                ItemBody::UserMessage { .. } | ItemBody::Notification { .. } => GroupKind::User,
                 ItemBody::AssistantText { .. } => GroupKind::Assistant,
                 ItemBody::CommandExecution { .. } => GroupKind::Command,
                 ItemBody::FileChange { .. } => GroupKind::FileChange,
@@ -456,6 +458,14 @@ pub fn item_presentation(
             true,
         ),
         ItemBody::ImageGeneration { .. } => ("imageGeneration", None, false),
+        ItemBody::Notification { reports } => (
+            "notification",
+            Some(background_work::notification_text(
+                reports.clone(),
+                language,
+            )),
+            false,
+        ),
         // As T3 Code's "Compacting…" while it runs.
         ItemBody::Compaction {} if item.status == crate::models::ItemStatus::Running => (
             "unknown",

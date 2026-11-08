@@ -1,6 +1,7 @@
 //! Codex native protocol boundary: execution operations, one shared process,
 //! ordered request completion, native cursors and deferred item reads.
 pub(crate) mod accounts;
+mod background;
 mod cli;
 mod composer;
 mod fork;
@@ -88,6 +89,7 @@ pub struct Codex {
     stopped: tokio_util::sync::CancellationToken,
     processed: tokio::sync::watch::Sender<u64>,
     subscriptions: Arc<retention::Subscriptions>,
+    rosters: Arc<background::Rosters>,
 }
 pub use codex_app_server::AppServerConfig as Config;
 
@@ -143,6 +145,7 @@ impl Codex {
             stopped: Default::default(),
             processed: tokio::sync::watch::channel(0).0,
             subscriptions: Arc::default(),
+            rosters: Arc::default(),
         }
     }
     pub async fn enable_accounts(
@@ -992,13 +995,6 @@ impl Agent for Codex {
                     .await?;
                 Some(turn.into())
             }
-            // A Codex turn that runs has not answered.
-            SubmissionTarget::Next => {
-                return Err(Failure::new(
-                    "unsupported_operation",
-                    "Codex starts the next turn after the running one",
-                ));
-            }
             SubmissionTarget::Start { cwd } => {
                 self.resume(&input.thread_id.id, Some(cwd), browser, reload)
                     .await?;
@@ -1031,11 +1027,28 @@ impl Agent for Codex {
         id: &str,
         turn_id: &agent_protocol::ids::TurnId,
     ) -> Result<agent_protocol::models::Empty, Failure> {
-        self.request(
-            "turn/interrupt",
-            &serde_json::json!({"threadId":id,"turnId":turn_id}),
-        )
-        .await
+        // As T3 Code, Stop on a conversation that waits on its commands ends
+        // their background terminals.
+        let session = SessionRef::new(ProviderKind::Codex, id.into())
+            .map_err(|error| Failure::new("invalid_session", error))?;
+        let terminals = self.rosters.stop(&session);
+        if terminals.is_empty() {
+            return self
+                .request(
+                    "turn/interrupt",
+                    &serde_json::json!({"threadId":id,"turnId":turn_id}),
+                )
+                .await;
+        }
+        for process in terminals {
+            let _: Value = self
+                .request(
+                    "thread/backgroundTerminals/terminate",
+                    &serde_json::json!({"threadId":id,"processId":process}),
+                )
+                .await?;
+        }
+        Ok(agent_protocol::models::Empty {})
     }
     async fn models(&self, params: &op::ListModels) -> Result<op::ModelPage, Failure> {
         let config: Result<Value, _> = self
@@ -1128,6 +1141,7 @@ impl Agent for Codex {
         let accounts = self.accounts.clone();
         let process = codex.clone();
         let subscriptions = self.subscriptions.clone();
+        let rosters = self.rosters.clone();
         subscriptions
             .clone()
             .spawn_releaser(codex.clone(), stopped.clone());
@@ -1178,10 +1192,15 @@ impl Agent for Codex {
                             let result = match event_change(instance, &request) {
                                 Ok(Some(change)) => {
                                     subscriptions.observe(&change);
+                                    let background = rosters.observe(
+                                        &change,
+                                        &request.params::<Value>().unwrap_or_default(),
+                                    );
+                                    wake(&process, &change, background.continuations);
                                     if matches!(change, AgentChange::TaskParent { .. }) {
                                         Ok(())
                                     } else {
-                                        emit(&output, change).await
+                                        emit_all(&output, [Some(change), background.roster]).await
                                     }
                                 }
                                 Ok(None) => Ok(()),
@@ -1236,6 +1255,41 @@ impl Agent for Codex {
             let _ = process.shutdown().await;
         }
     }
+}
+
+/// Starts the turn in which Codex reports on its ended background commands,
+/// as T3 Code continues a thread with the command's detail.
+fn wake(process: &Arc<CodexAppServer>, change: &AgentChange, prompts: Vec<String>) {
+    let AgentChange::Session { session, .. } = change else {
+        return;
+    };
+    for prompt in prompts {
+        let process = process.clone();
+        let params = serde_json::json!({
+            "threadId": session.id,
+            "input": native::encode_input(&[op::Input::Text { text: prompt }]),
+        });
+        tokio::spawn(async move {
+            let started = process
+                .request_sequenced::<_, Value>("turn/start", &params)
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|reply| reply.value.outcome.map_err(|error| format!("{error:?}")));
+            if let Err(error) = started {
+                tracing::warn!(target: "agent", operation = "host.codex.background_wake", message = %error);
+            }
+        });
+    }
+}
+
+async fn emit_all(
+    output: &tokio::sync::mpsc::Sender<AgentEvent>,
+    changes: impl IntoIterator<Item = Option<AgentChange>>,
+) -> Result<(), String> {
+    for change in changes.into_iter().flatten() {
+        emit(output, change).await?;
+    }
+    Ok(())
 }
 
 async fn refresh_auth_tokens(

@@ -408,3 +408,41 @@ fn follow_up_controls_name_the_send_and_list_the_queue_the_host_holds() {
         assert_eq!(rows, expected, "running {running}, held {held}");
     }
 }
+
+#[test]
+fn an_answered_turn_offers_its_background_work_and_stop_while_the_composer_sends() {
+    let mut snapshot = snapshot();
+    let waiting = |background| {
+        Arc::new(Thread {
+            id: Some(session()),
+            turns: Some(vec![Arc::new(Turn {
+                id: "turn".into(),
+                status: TurnStatus::Completed,
+                ..Default::default()
+            })]),
+            background,
+            ..Default::default()
+        })
+    };
+    Arc::make_mut(&mut snapshot.sessions.conversations).insert(session(), waiting(Vec::new()));
+    assert_eq!(presentation(&snapshot).controls.background, None);
+    Arc::make_mut(&mut snapshot.sessions.conversations).insert(
+        session(),
+        waiting(vec![agent_protocol::execution::BackgroundTask {
+            id: "shell".into(),
+            kind: agent_protocol::execution::BackgroundTaskKind::Monitor,
+            description: Some("Watch the build".into()),
+        }]),
+    );
+    crate::state::set_draft_text(&mut snapshot, session().into(), "next".into());
+    let composer = presentation(&snapshot);
+    let work = composer.controls.background.as_ref().unwrap();
+    assert!(work.waiting);
+    assert_eq!(
+        work.title(crate::localization::UiLanguage::English),
+        "Waiting on monitor Watch the build"
+    );
+    assert!(composer.can_interrupt(), "Stop ends the work");
+    assert_eq!(composer.controls.running_turn, Some("turn".into()));
+    assert!(composer.can_send(true), "a message can follow the work");
+}

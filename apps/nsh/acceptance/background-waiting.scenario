@@ -1,0 +1,39 @@
+# Claude answers while a background command, a Monitor and a subagent run:
+# as T3 Code, the answer completes with its work folded under its time, the
+# strip above the composer names the work it waits on with Stop, and once the
+# work finishes Claude reports in a new turn its notification starts. The
+# notification names the work the same way after the conversation reopens,
+# and in English in the English UI.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+press "Fixture Model"
+expect "Claude Code" 20000
+press "Claude Code"
+expect "Default (recommended)" 20000
+press "Default (recommended)"
+type "AI に依頼する" "background-roster"
+press 送信
+expect "サブエージェント 1件、コマンド 1件、モニター 1件を待機中" 30000
+expect "Review the change、Start the dev server、Watch the build"
+expect "バックグラウンドで作業しています"
+expect "作業しました"
+expect_absent "作業中…"
+screenshot waiting
+fixture /claude-background/release
+expect "コマンド「Start the dev server」、モニター「Watch the build」、サブエージェント「Review the change」が完了しました" 30000
+expect "バックグラウンドの作業が終わりました" 30000
+expect_absent "サブエージェント 1件、コマンド 1件、モニター 1件を待機中"
+screenshot reported
+press 新しいチャット
+expect_absent "バックグラウンドの作業が終わりました"
+press 検証プロジェクト
+press "background-roster"
+expect "コマンド「Start the dev server」、モニター「Watch the build」、サブエージェント「Review the change」が完了しました" 20000
+screenshot reopened
+press 設定を開く
+press "日本語 ▾"
+press English
+press Close
+expect "Command \"Start the dev server\", monitor \"Watch the build\" and subagent \"Review the change\" finished" 10000
+expect_absent "が完了しました"
+screenshot english

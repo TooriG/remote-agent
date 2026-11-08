@@ -4,6 +4,7 @@ mod acceptance;
 mod accounts;
 mod activity;
 mod application;
+mod background_work;
 mod browser;
 mod client;
 mod composer;

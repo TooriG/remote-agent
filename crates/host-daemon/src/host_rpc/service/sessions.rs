@@ -396,8 +396,6 @@ impl HostRpcService {
             status: response.thread.status,
             running_turn: running_turn.as_deref(),
             steers: agent.capabilities().steer,
-            answered: response.thread.status == agent_protocol::models::SessionStatus::Running
-                && agent.answered(&target.id).await,
             // A held queue waits for the user; new input starts as T3 Code's does.
             ahead: !queue.held
                 && queue.inputs.first().is_some_and(|first| {

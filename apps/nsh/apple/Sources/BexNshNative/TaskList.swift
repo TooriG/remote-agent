@@ -217,6 +217,8 @@ private struct TaskStatus: View {
             case "waiting": Image(systemName: "person.crop.circle.badge.questionmark").foregroundStyle(.orange)
             case "running": ProgressView().controlSize(.small)
             case "unread": Image(systemName: "circle.fill").resizable().frame(width: 8, height: 8)
+            case "background":
+                Image(systemName: "circle.fill").resizable().frame(width: 8, height: 8).foregroundStyle(.secondary)
             default: EmptyView()
             }
             if indicators?.changes == true {

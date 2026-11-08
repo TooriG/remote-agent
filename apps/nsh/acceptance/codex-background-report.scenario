@@ -1,0 +1,19 @@
+# As T3 Code, a command Codex left running wakes Codex when it ends: the
+# report is a new turn that the command's notification starts, with the
+# command's terminal icon, in the UI's language.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[background] [immediate] 開発サーバーを起動します"
+press 送信
+expect "サブエージェント 1件、コマンド 1件を待機中" 30000
+fixture /codex-background/release
+expect "コマンド「npm run dev」が完了しました（終了コード 0）" 30000
+expect "バックグラウンドのコマンドの結果を確認しました" 30000
+expect_absent "サブエージェント 1件、コマンド 1件を待機中"
+screenshot reported
+press 設定を開く
+press "日本語 ▾"
+press English
+press Close
+expect "Command \"npm run dev\" finished (exit 0)" 10000
+screenshot english

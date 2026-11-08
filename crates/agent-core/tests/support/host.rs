@@ -382,6 +382,7 @@ impl Writer {
                     statuses: Vec::new(),
                     display: agent_protocol::live_activity::TaskActivitySummary::default()
                         .display(),
+                    background: Vec::new(),
                     unread: state
                         .unread
                         .iter()

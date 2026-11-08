@@ -18,22 +18,21 @@ pub(super) struct Execution<'a> {
     pub running_turn: Option<&'a str>,
     /// The provider can take input into its running turn.
     pub steers: bool,
-    /// The running turn answered and only background work remains, so its
-    /// process takes the next prompt now; T3 Code's run has ended there.
-    pub answered: bool,
     /// Other input already waits in the queue, which this input does not overtake.
     pub ahead: bool,
 }
 
 /// Steering joins the running turn at once, as in T3 Code; a provider that
-/// cannot steer, or a turn whose ID is not known yet, queues the input.
+/// cannot steer, or a turn whose ID is not known yet, queues the input. Input
+/// to a conversation with no running turn starts one, behind input already
+/// queued: a provider whose answered turn keeps background work running (as
+/// Claude's does) takes it into that process as its next turn.
 pub(super) fn submission_route<'a>(
     execution: Execution<'a>,
     follow_up: FollowUp,
     cwd: Option<&'a str>,
 ) -> Result<Route<'a>, &'static str> {
-    let running = execution.status == SessionStatus::Running;
-    if running && !execution.answered {
+    if execution.status == SessionStatus::Running {
         if follow_up == FollowUp::Steer
             && execution.steers
             && let Some(turn) = execution.running_turn
@@ -44,9 +43,6 @@ pub(super) fn submission_route<'a>(
     }
     if execution.ahead {
         return Ok(Route::Queue);
-    }
-    if running {
-        return Ok(Route::Provider(SubmissionTarget::Next));
     }
     Ok(Route::Provider(SubmissionTarget::Start {
         cwd: cwd
@@ -70,7 +66,6 @@ mod tests {
             status,
             running_turn,
             steers: true,
-            answered: false,
             ahead: false,
         }
     }
@@ -127,32 +122,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_answered_turn_takes_the_next_prompt_behind_queued_input() {
-        for follow_up in FOLLOW_UPS {
-            for (ahead, expected) in [
-                (false, Route::Provider(SubmissionTarget::Next)),
-                (true, Route::Queue),
-            ] {
-                let execution = Execution {
-                    answered: true,
-                    ahead,
-                    ..execution(SessionStatus::Running, Some("live"))
-                };
-                assert_eq!(
-                    submission_route(execution, follow_up, None).unwrap(),
-                    expected
-                );
-            }
-        }
-    }
-
     proptest::proptest! {
         #[test]
         fn running_input_never_starts_a_second_turn(
             steer in proptest::bool::ANY,
             steers in proptest::bool::ANY,
-            answered in proptest::bool::ANY,
             ahead in proptest::bool::ANY,
             turn in proptest::option::of("[a-z]{1,24}"),
         ) {
@@ -161,19 +135,15 @@ mod tests {
                 status: SessionStatus::Running,
                 running_turn: turn.as_deref(),
                 steers,
-                answered,
                 ahead,
             };
             match submission_route(execution, follow_up, Some("/project")) {
                 Ok(Route::Provider(SubmissionTarget::Steer(id))) => {
-                    proptest::prop_assert!(steer && steers && !answered);
+                    proptest::prop_assert!(steer && steers);
                     proptest::prop_assert_eq!(Some(id), turn.as_deref());
                 }
-                Ok(Route::Provider(SubmissionTarget::Next)) => {
-                    proptest::prop_assert!(answered && !ahead)
-                }
                 Ok(Route::Queue) => {
-                    let waits = if answered { ahead } else { !steer || !steers || turn.is_none() };
+                    let waits = !steer || !steers || turn.is_none();
                     proptest::prop_assert!(waits)
                 }
                 Ok(Route::Provider(SubmissionTarget::Start { .. })) => {

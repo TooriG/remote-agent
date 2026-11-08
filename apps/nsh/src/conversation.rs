@@ -50,6 +50,8 @@ struct Row {
     steer: bool,
     /// The message waited in the queue, then started its turn.
     queued: bool,
+    /// A notification row's icon.
+    notification: Option<crate::ui::Icon>,
     error: Option<TurnErrorPresentation>,
     /// The message's id while the Host may not have received it: it goes back
     /// to the composer or is discarded, as the desktop client's controls do.
@@ -119,6 +121,7 @@ fn project(
             let retry = match &row.content { ConversationRowContent::Preparation { preparation } => preparation.retry.clone(), _ => None };
             let error = match &row.content { ConversationRowContent::Error { error } => Some(error.clone()), _ => None };
             let unresolved = match &row.content { ConversationRowContent::User { item } => item.unknown_submission_id(), _ => None };
+            let notification = match &row.content { ConversationRowContent::Notification { icon, .. } => Some(crate::ui::Icon::notification(*icon)), _ => None };
             let detail = match &row.content {
                 ConversationRowContent::Activity { item, turn_id } if item.data.collapsible => {
                     Some(crate::activity::Item { source: Shared(item.clone()), turn: turn_id.clone(), live })
@@ -147,6 +150,10 @@ fn project(
                     (Kind::Activity, preparation.text)
                 }
                 ConversationRowContent::ProviderHandoff { text } => (Kind::Activity, text),
+                ConversationRowContent::Notification { reports, .. } => (
+                    Kind::Activity,
+                    agent_core::presentation::background_work::notification_text(reports, crate::l10n::language()),
+                ),
                 ConversationRowContent::Error { error } => (Kind::Activity, error.message),
                 ConversationRowContent::InProgress { .. } => (Kind::Activity, tr("作業中…").into()),
                 ConversationRowContent::PendingRequest { .. } => return None,
@@ -168,6 +175,7 @@ fn project(
                 queued,
                 error,
                 unresolved,
+                notification,
             })
         })
         .collect::<Vec<_>>()
@@ -179,6 +187,25 @@ fn project(
             Some(row)
         })
         .collect()
+}
+
+/// The background work the agent woke for, as T3 Code's notification row:
+/// the work's icon beside what it did.
+fn notification_row(row: Memo<Option<Row>>) -> impl IntoElement {
+    use crate::ui::{self, colors};
+    let icon = row.with_untracked(|row| row.as_ref().and_then(|row| row.notification));
+    view()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .text_color(colors::MUTED)
+        .child(icon.map(|icon| ui::icon(icon, 14.0).into_element()))
+        .child(
+            text(move || {
+                row.with(|row| row.as_ref().map(|row| row.body.clone()).unwrap_or_default())
+            })
+            .text_size(px(13.0)),
+        )
 }
 
 pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
@@ -412,6 +439,15 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                     .child(when(
                                         move || {
                                             row.with(|row| {
+                                                row.as_ref()
+                                                    .is_some_and(|row| row.notification.is_some())
+                                            })
+                                        },
+                                        move || notification_row(row),
+                                    ))
+                                    .child(when(
+                                        move || {
+                                            row.with(|row| {
                                                 row.as_ref().is_some_and(|row| {
                                                     row.activity.as_ref().is_some_and(|activity| {
                                                         activity.activity_can_collapse
@@ -531,6 +567,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                             ) && row.detail.is_none()
                                                                 && row.error.is_none()
                                                                 && row.status.is_none()
+                                                                && row.notification.is_none()
                                                         })
                                                     })
                                                 },

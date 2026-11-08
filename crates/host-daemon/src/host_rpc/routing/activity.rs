@@ -48,11 +48,17 @@ pub(super) fn task_activity_state(
         .map(|(session, _)| session.clone())
         .collect();
     waiting.sort();
+    let mut background: Vec<_> = tasks
+        .iter()
+        .filter_map(|(session, task)| Some((session.clone(), task.facts?.background?)))
+        .collect();
+    background.sort();
     agent_protocol::live_activity::TaskActivityState {
         revision,
         display: task_display(tasks, &unread),
         statuses: statuses.into_iter().collect(),
         waiting,
+        background,
         unread,
     }
 }
@@ -72,6 +78,10 @@ pub(super) fn publish_task_activity(
         .iter()
         .filter_map(|(id, output)| output.try_send(*id, frame.clone()).err().map(|_| *id))
         .collect()
+}
+
+fn background_wait(tasks: &[agent_protocol::execution::BackgroundTask]) -> Option<bool> {
+    (!tasks.is_empty()).then(|| agent_protocol::execution::background_holds_completion(tasks))
 }
 
 /// Record a conversation's latest execution facts. Unknown facts never replace
@@ -100,6 +110,7 @@ pub(super) fn record_task_facts(
             .requests
             .values()
             .any(|request| request.delivery == agent_protocol::session::RequestDelivery::Awaiting),
+        background: background_wait(&timeline.background),
         latest: timeline
             .turns
             .as_ref()
@@ -170,6 +181,7 @@ impl SessionRouter {
                         waiting: thread.requests.values().any(|request| {
                             request.delivery == agent_protocol::session::RequestDelivery::Awaiting
                         }),
+                        background: background_wait(&thread.background),
                         latest: thread
                             .turns
                             .as_ref()
@@ -239,5 +251,46 @@ impl SessionRouter {
             params,
             task_display(&state.tasks, &state.reads.unread()),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversations_waiting_on_background_work_name_whether_it_holds_completion() {
+        use agent_protocol::execution::{BackgroundTask, BackgroundTaskKind::*};
+        let session = |id: &str| {
+            SessionRef::new(agent_protocol::session::ProviderKind::Claude, id.into()).unwrap()
+        };
+        let task = |kinds: &[agent_protocol::execution::BackgroundTaskKind]| Task {
+            facts: Some(TaskState {
+                status: agent_protocol::models::SessionStatus::Running,
+                background: background_wait(
+                    &kinds
+                        .iter()
+                        .map(|kind| BackgroundTask {
+                            id: format!("{kind:?}"),
+                            kind: *kind,
+                            description: None,
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                ..Default::default()
+            }),
+            facts_revision: 1,
+        };
+        let tasks = HashMap::from([
+            (session("working"), task(&[])),
+            (session("server"), task(&[Command])),
+            (session("agents"), task(&[Command, Subagent])),
+        ]);
+        let state = task_activity_state(1, &tasks, Vec::new());
+        assert_eq!(
+            state.background,
+            [(session("agents"), true), (session("server"), false)]
+        );
+        assert_eq!(state.statuses.len(), 3, "waiting work still runs");
     }
 }

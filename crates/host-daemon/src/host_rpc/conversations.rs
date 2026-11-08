@@ -649,13 +649,6 @@ impl Conversations {
                 }
                 AgentChange::Renamed { session, name }
             }
-            AgentChange::Answered { session } => match owner(rows, &session) {
-                Some(row) if row.active != session => return Ok(None),
-                Some(row) => AgentChange::Answered {
-                    session: row.id.clone(),
-                },
-                None => AgentChange::Answered { session },
-            },
             other => other,
         };
         Ok(Some(event))

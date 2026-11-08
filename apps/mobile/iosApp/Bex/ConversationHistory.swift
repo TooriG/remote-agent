@@ -106,6 +106,8 @@ extension ThreadScreen {
             ThreadPreparationRow(preparation: preparation) { model.perform($0) }
         case let (.providerHandoff(text), _):
             Text(text).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
+        case let (.notification(reports, _), _):
+            NotificationRow(reports: reports)
         case let (.user, item?):
             userMessageRow(item, row: projected, timestampMs: row.timestampMs)
                 .padding(.top, projected.origin() == .queued ? 0 : 16)
@@ -216,5 +218,16 @@ private struct ThreadPreparationRow: View {
                 }
             }.accessibilityIdentifier("task.preparation")
         }
+    }
+}
+
+/// What the background work the agent woke for did, in the app's language.
+private struct NotificationRow: View {
+    let reports: [BackgroundReport]
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        Text(notificationText(reports: reports, language: locale.appLanguage))
+            .font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
     }
 }

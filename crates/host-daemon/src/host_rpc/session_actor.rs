@@ -89,6 +89,7 @@ impl SessionActor {
                 .is_some_and(Option::is_some)
             || !self.timeline.requests.is_empty()
             || self.timeline.turns.is_some()
+            || !self.timeline.background.is_empty()
     }
 
     pub(super) fn overlay(&self, mut thread: Thread) -> Thread {
@@ -126,6 +127,7 @@ impl SessionActor {
         thread.requests = self.timeline.requests.clone();
         thread.submissions = self.timeline.submissions.clone();
         thread.queue = self.timeline.queue.clone();
+        thread.background = self.timeline.background.clone();
         if let Some(preparation) = &self.timeline.preparation {
             thread.preparation = preparation.clone();
         }

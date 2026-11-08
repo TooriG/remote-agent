@@ -77,6 +77,7 @@ mod tests {
             project_id: Some("same-project".into()),
             active: false,
             waiting: false,
+            background: false,
             unread: false,
             has_changes: None,
         }

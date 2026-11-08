@@ -618,6 +618,7 @@ fn convert(
     // the response, stamps the interruption `interruptedBySendNow`, and runs
     // the message as the next prompt. That prompt continues the cut turn.
     let mut steering = false;
+    let mut wake = Wake::default();
     for node in chain {
         let kind = node["type"].as_str().unwrap_or_default();
         let id = node["uuid"].as_str().unwrap_or_default();
@@ -629,37 +630,13 @@ fn convert(
         if let Some(cwd) = node["cwd"].as_str() {
             thread.cwd = Some(cwd.into());
         }
-        if kind == "user"
-            && let Some(outcome) = native::notification_outcome(
-                node["origin"]["kind"].as_str(),
-                &node["message"]["content"],
-            )
-            && let Some((turn_index, item_index, item)) =
-                turns
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find_map(|(turn_index, turn)| {
-                        turn.items
-                            .as_ref()?
-                            .iter()
-                            .enumerate()
-                            .find_map(|(item_index, item)| {
-                                (item.id.as_str() == outcome.tool_id)
-                                    .then(|| outcome.item(item.id.clone(), item.body()))
-                                    .flatten()
-                                    .map(|item| (turn_index, item_index, item))
-                            })
-                    })
-        {
-            if let Some(path) = outcome.output_path {
-                output_paths.insert(item.id.clone(), path.into());
+        match notification(&mut turns, node, &mut output_paths, &mut wake) {
+            Notification::Other => {}
+            Notification::Finished => continue,
+            Notification::Woke => {
+                item_positions.clear();
+                continue;
             }
-            Arc::make_mut(&mut turns[turn_index])
-                .items
-                .as_mut()
-                .unwrap()[item_index] = Arc::new(item);
-            continue;
         }
         let Some((initial_item, blocks)) = node_content(kind, id, node, &mut warnings) else {
             continue;
@@ -670,26 +647,25 @@ fn convert(
                 id: name.into(),
             });
         }
-        // Queued human input, steers and task activity stay in the running
-        // turn. Only a standalone user message starts another persisted turn.
-        let prompt = kind == "user" && initial_item.as_ref().is_some_and(is_prompt);
-        if (prompt && !std::mem::take(&mut steering)) || turns.is_empty() {
+        if let Some(id) = turn_start(
+            &turns,
+            &wake,
+            &mut steering,
+            node,
+            initial_item.as_ref(),
+            id,
+        ) {
             item_positions.clear();
             turns.push(Arc::new(Turn {
-                id: initial_item
-                    .as_ref()
-                    .map_or(id, |item| item.id.as_str())
-                    .into(),
+                id,
                 status: TurnStatus::Completed,
                 items: Some(Vec::new()),
                 ..Default::default()
             }));
         }
+        wake.follow(node);
         let turn = Arc::make_mut(turns.last_mut().unwrap());
-        let time = node["timestamp"]
-            .as_str()
-            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
-            .and_then(|time| u64::try_from(time.timestamp_millis()).ok());
+        let time = node_time(node);
         turn.started_at_ms = turn.started_at_ms.or(time);
         turn.completed_at_ms = time.or(turn.completed_at_ms);
         if kind == "assistant" && !id.is_empty() {
@@ -758,6 +734,167 @@ fn convert(
         output_paths,
         fork_points,
     })
+}
+
+/// Claude's own turn is named by the answer it follows, as the live Host names it.
+fn wake_turn_id(turns: &[Arc<Turn>]) -> agent_protocol::ids::TurnId {
+    format!("{}-wake", turns.last().map_or("", |turn| turn.id.as_str())).into()
+}
+
+fn node_time(node: &Value) -> Option<u64> {
+    node["timestamp"]
+        .as_str()
+        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+        .and_then(|time| u64::try_from(time.timestamp_millis()).ok())
+}
+
+/// Whether Claude's answer ended, so that what follows it starts the turn
+/// Claude woke for, as T3 Code's continuation.
+#[derive(Default)]
+struct Wake {
+    /// The message that ended the answer. Claude saves each of its blocks.
+    answer: Option<String>,
+    /// The current turn is a wake turn that only its notification has started.
+    notification: bool,
+}
+
+impl Wake {
+    fn woke_by(&self, node: &Value) -> bool {
+        node["type"] == "assistant"
+            && self
+                .answer
+                .as_deref()
+                .is_some_and(|answer| node["message"]["id"].as_str() != Some(answer))
+    }
+
+    /// An answer ends with its final message; input after it is what Claude
+    /// responds to next.
+    fn follow(&mut self, node: &Value) {
+        let answer = (node["type"] == "assistant"
+            && native::text_phase(node["message"]["stop_reason"].as_str())
+                == agent_protocol::items::AssistantPhase::Final)
+            .then(|| node["message"]["id"].as_str().map(str::to_owned))
+            .flatten();
+        *self = Self {
+            answer,
+            notification: false,
+        };
+    }
+}
+
+/// The turn a transcript node starts: a standalone user message or a response
+/// Claude starts on its own after its answer. Queued human input, steers and
+/// task activity stay in the running turn. A prompt after Claude Code's send-now cut (`steering`) continues the turn
+/// the cut stopped, as a steer.
+fn turn_start(
+    turns: &[Arc<Turn>],
+    wake: &Wake,
+    steering: &mut bool,
+    node: &Value,
+    input: Option<&agent_protocol::items::Item>,
+    id: &str,
+) -> Option<agent_protocol::ids::TurnId> {
+    if wake.woke_by(node) {
+        return Some(wake_turn_id(turns));
+    }
+    let prompt = node["type"] == "user" && input.is_some_and(is_prompt);
+    ((prompt && !std::mem::take(steering)) || turns.is_empty())
+        .then(|| input.map_or(id, |item| item.id.as_str()).into())
+}
+
+enum Notification {
+    Other,
+    Finished,
+    Woke,
+}
+
+/// A task notification finishes the item that ran the work and, after an
+/// answer, starts the turn Claude woke for with the notification's reports.
+fn notification(
+    turns: &mut Vec<Arc<Turn>>,
+    node: &Value,
+    output_paths: &mut BTreeMap<ItemId, String>,
+    wake: &mut Wake,
+) -> Notification {
+    if node["type"] != "user" || node["origin"]["kind"] != "task-notification" {
+        return Notification::Other;
+    }
+    let mut report = BackgroundReport {
+        kind: BackgroundTaskKind::BackgroundTask,
+        label: None,
+        outcome: BackgroundOutcome::Unknown,
+        exit_code: None,
+    };
+    let mut finished = false;
+    if let Some(outcome) =
+        native::notification_outcome(node["origin"]["kind"].as_str(), &node["message"]["content"])
+        && let Some((turn_index, item_index, item)) =
+            turns
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(turn_index, turn)| {
+                    turn.items
+                        .as_ref()?
+                        .iter()
+                        .enumerate()
+                        .find_map(|(item_index, item)| {
+                            (item.id.as_str() == outcome.tool_id)
+                                .then(|| outcome.item(item.id.clone(), item.body()))
+                                .flatten()
+                                .map(|item| (turn_index, item_index, item))
+                        })
+                })
+    {
+        if let Some(path) = outcome.output_path {
+            output_paths.insert(item.id.clone(), path.into());
+        }
+        report = outcome.report(item.body());
+        Arc::make_mut(&mut turns[turn_index])
+            .items
+            .as_mut()
+            .unwrap()[item_index] = Arc::new(item);
+        finished = true;
+    }
+    if wake.answer.is_some() {
+        let id = wake_turn_id(turns);
+        let time = node_time(node);
+        turns.push(Arc::new(Turn {
+            id: id.clone(),
+            status: TurnStatus::Completed,
+            items: Some(vec![Arc::new(agent_protocol::items::Item::new(
+                format!("{id}:notification").into(),
+                ItemStatus::Completed,
+                agent_protocol::items::ItemBody::Notification {
+                    reports: vec![report],
+                },
+            ))]),
+            started_at_ms: time,
+            completed_at_ms: time,
+            ..Default::default()
+        }));
+        *wake = Wake {
+            answer: None,
+            notification: true,
+        };
+        return Notification::Woke;
+    }
+    if wake.notification
+        && let Some(item) = Arc::make_mut(turns.last_mut().unwrap())
+            .items
+            .as_mut()
+            .and_then(|items| items.first_mut())
+        && let agent_protocol::items::ItemBody::Notification { reports } =
+            Arc::make_mut(item).body_mut()
+    {
+        reports.push(report);
+        return Notification::Finished;
+    }
+    if finished {
+        Notification::Finished
+    } else {
+        Notification::Other
+    }
 }
 
 struct AppendedBlocks {
@@ -1376,6 +1513,72 @@ mod tests {
             matches!(items[1].body(), ItemBody::CommandExecution {output, exit_code:None, ..} if output == "work failed")
         );
         assert_eq!(turns[1].items.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_notification_after_the_answer_starts_the_turn_claude_woke_for() {
+        let notice = |uuid: &str, parent: &str, tool: &str| {
+            json!({"type":"user","uuid":uuid,"parentUuid":parent,"origin":{"kind":"task-notification"},"promptSource":"system","turnOrigin":"task_notification","queueSkipAttachments":true,
+                "message":{"content":format!("<task-notification><tool-use-id>{tool}</tool-use-id><status>completed</status><summary>{tool} done</summary></task-notification>")}})
+        };
+        let nodes = vec![
+            json!({"type":"user","uuid":"first","parentUuid":null,"message":{"content":"start the server"}}),
+            json!({"type":"assistant","uuid":"call","parentUuid":"first","message":{"id":"call","stop_reason":"tool_use","content":[
+                {"type":"tool_use","id":"server","name":"Bash","input":{"command":"npm run dev"}},
+                {"type":"tool_use","id":"agent","name":"Agent","input":{"prompt":"Review the change"}}]}}),
+            json!({"type":"user","uuid":"launch","parentUuid":"call","message":{"content":[{"type":"tool_result","tool_use_id":"server","content":"launched"}]},"toolUseResult":{"backgroundTaskId":"task"}}),
+            json!({"type":"assistant","uuid":"answer","parentUuid":"launch","message":{"id":"answer","stop_reason":"end_turn","content":[{"type":"text","text":"started"}]}}),
+            notice("notice", "answer", "server"),
+            notice("second-notice", "notice", "agent"),
+            json!({"type":"assistant","uuid":"report","parentUuid":"second-notice","message":{"id":"report","stop_reason":"end_turn","content":[{"type":"text","text":"reported"}]}}),
+        ];
+        let history = convert(
+            Thread {
+                id: Some(SessionRef::new(ProviderKind::Claude, ID.into()).unwrap()),
+                ..Default::default()
+            },
+            nodes,
+            10,
+            vec![],
+        )
+        .unwrap();
+        let turns = history.response.thread.turns.unwrap();
+        assert_eq!(turns.len(), 2, "{turns:#?}");
+        assert!(
+            turns[0]
+                .items
+                .iter()
+                .flatten()
+                .filter(|item| ["server", "agent"].contains(&item.id.as_str()))
+                .all(|item| item.status == ItemStatus::Completed),
+            "the notifications finish the work in the turn that ran it"
+        );
+        assert_eq!(
+            turns[1].id,
+            "first-wake".into(),
+            "named by the answer it follows"
+        );
+        let items = turns[1].items.as_ref().unwrap();
+        assert_eq!(
+            items[0].body(),
+            &ItemBody::Notification {
+                reports: vec![
+                    BackgroundReport {
+                        kind: BackgroundTaskKind::Command,
+                        label: Some("npm run dev".into()),
+                        outcome: BackgroundOutcome::Completed,
+                        exit_code: None,
+                    },
+                    BackgroundReport {
+                        kind: BackgroundTaskKind::Subagent,
+                        label: Some("Review the change".into()),
+                        outcome: BackgroundOutcome::Completed,
+                        exit_code: None,
+                    },
+                ],
+            }
+        );
+        assert_eq!(item_text(&items[1]), Some("reported"));
     }
 
     #[test]
