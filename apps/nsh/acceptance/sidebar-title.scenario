@@ -10,8 +10,6 @@ expect "シミュレータで完了しました。" 30000
 press 検証プロジェクト
 expect "Simulator conversation" 10000
 screenshot live-title
-# The unfolded project is kept once the list's copy has been written.
-wait 12000
 relaunch
 expect "検証プロジェクト" 30000
 expect "Simulator conversation" 20000

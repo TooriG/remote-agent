@@ -4,7 +4,7 @@
 //! A copy is the newest window of a settled conversation: running and
 //! expanded conversations keep their last settled copy. Writes follow the
 //! first change after half a second, then at most every ten seconds, keeping
-//! only the latest state. Copies have no count or size limit. A damaged or
+//! only the latest state; an app about to stop flushes what is pending. Copies have no count or size limit. A damaged or
 //! older copy is removed when read; removing a Host removes its directory.
 //! Copies are best effort: failed reads and writes leave the Host as the source.
 use crate::{
@@ -240,15 +240,17 @@ pub fn clear(directory: &Path) {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Save changed lists and settled conversations until the Store stops publishing.
-pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>) {
-    // The state published before this task started is written as a change.
-    let mut saved = BTreeMap::<SessionRef, Arc<Thread>>::new();
-    let mut saved_list: Option<ListCopy> = None;
-    updates.mark_changed();
-    while updates.changed().await.is_ok() {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let snapshot = updates.borrow_and_update().clone();
+/// What the copies on disk hold, to write only what changed.
+#[derive(Default)]
+struct Saved {
+    conversations: BTreeMap<SessionRef, Arc<Thread>>,
+    list: Option<ListCopy>,
+}
+
+impl Saved {
+    /// Writes the list and settled conversations that differ from the saved
+    /// copies, and says whether it wrote anything.
+    async fn write_changes(&mut self, directory: &Path, snapshot: &Snapshot) -> bool {
         let mut writing = false;
         if snapshot.connection.connected
             && !snapshot.lists.unconfirmed_lists.contains(&OperationKey::SessionList)
@@ -265,7 +267,8 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
                 projects: snapshot.lists.project_threads.clone(),
                 expanded: snapshot.lists.expanded_projects.clone(),
             };
-            if saved_list
+            if self
+                .list
                 .as_ref()
                 .is_none_or(|previous| !list.unchanged(previous))
             {
@@ -276,7 +279,7 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
                     .await
                     .is_ok_and(|result| result.is_ok())
                 {
-                    saved_list = Some(list);
+                    self.list = Some(list);
                 }
             }
         }
@@ -285,7 +288,7 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
             .conversations
             .iter()
             .filter(|(id, thread)| {
-                saved
+                self.conversations
                     .get(*id)
                     .is_none_or(|previous| !Arc::ptr_eq(previous, thread))
                     && savable(thread)
@@ -294,7 +297,7 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
             .collect();
         if !changed.is_empty() {
             writing = true;
-            let target = directory.clone();
+            let target = directory.to_owned();
             let pending = changed.clone();
             let written = tokio::task::spawn_blocking(move || {
                 pending
@@ -306,12 +309,57 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
             .unwrap_or_default();
             for ((id, thread), written) in changed.into_iter().zip(written) {
                 if written {
-                    saved.insert(id, thread);
+                    self.conversations.insert(id, thread);
                 }
             }
         }
-        if writing {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+        writing
+    }
+}
+
+/// A request to write the pending copies now; answered once they are written.
+pub type Flush = tokio::sync::oneshot::Sender<()>;
+
+/// Save changed lists and settled conversations until the Store stops
+/// publishing. A change is written half a second after it,
+/// and a write is followed by ten quiet seconds; a flush writes whatever is
+/// pending at once, as the app leaves or quits within them.
+pub async fn run(
+    directory: PathBuf,
+    mut updates: watch::Receiver<Arc<Snapshot>>,
+    mut flushes: tokio::sync::mpsc::UnboundedReceiver<Flush>,
+) {
+    use tokio::time::Instant;
+    let mut saved = Saved::default();
+    let mut quiet_until = Instant::now();
+    // The state published before this task started is written as a change.
+    let mut due = Some(Instant::now() + Duration::from_millis(500));
+    let mut flushable = true;
+    loop {
+        let flush = tokio::select! {
+            changed = updates.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                due.get_or_insert((Instant::now() + Duration::from_millis(500)).max(quiet_until));
+                continue;
+            }
+            flush = flushes.recv(), if flushable => match flush {
+                Some(flush) => Some(flush),
+                None => {
+                    flushable = false;
+                    continue;
+                }
+            },
+            () = tokio::time::sleep_until(due.unwrap_or(quiet_until)), if due.is_some() => None,
+        };
+        let snapshot = updates.borrow_and_update().clone();
+        if saved.write_changes(&directory, &snapshot).await {
+            quiet_until = Instant::now() + Duration::from_secs(10);
+        }
+        due = None;
+        if let Some(flush) = flush {
+            let _ = flush.send(());
         }
     }
 }
@@ -319,6 +367,11 @@ pub async fn run(directory: PathBuf, mut updates: watch::Receiver<Arc<Snapshot>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Flushes no one asks for.
+    fn unflushed() -> tokio::sync::mpsc::UnboundedReceiver<Flush> {
+        tokio::sync::mpsc::unbounded_channel().1
+    }
     use crate::models::{Project, ProjectMembership, Turn};
     use crate::session::ProviderKind;
     use crate::state::{Event, Intent, operations as op, reduce};
@@ -438,7 +491,7 @@ mod tests {
     async fn first_host_results_are_saved_without_an_offline_startup_cooldown() {
         let directory = tempfile::tempdir().unwrap();
         let (updates, receiver) = watch::channel(Arc::new(Snapshot::default()));
-        let saving = tokio::spawn(run(directory.path().into(), receiver));
+        let saving = tokio::spawn(run(directory.path().into(), receiver, unflushed()));
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert!(!directory.path().join("list.cache").exists());
         updates.send_replace(listed("first host result"));
@@ -453,7 +506,7 @@ mod tests {
     {
         let directory = tempfile::tempdir().unwrap();
         let (updates, receiver) = watch::channel(listed("saved chat"));
-        let saving = tokio::spawn(run(directory.path().into(), receiver));
+        let saving = tokio::spawn(run(directory.path().into(), receiver, unflushed()));
         tokio::time::sleep(Duration::from_millis(600)).await;
         list_written(directory.path(), "saved chat").await;
         drop(updates);
@@ -589,7 +642,7 @@ mod tests {
             .collect();
         Arc::make_mut(&mut saved.lists.expanded_projects).remove("p1");
         let (updates, receiver) = watch::channel(Arc::new(saved));
-        let saving = tokio::spawn(run(directory.path().into(), receiver));
+        let saving = tokio::spawn(run(directory.path().into(), receiver, unflushed()));
         tokio::time::sleep(Duration::from_millis(600)).await;
         list_written(directory.path(), "saved chat").await;
         drop(updates);
@@ -744,7 +797,7 @@ mod tests {
     async fn search_and_offline_changes_do_not_replace_the_saved_list(#[case] state: &str) {
         let directory = tempfile::tempdir().unwrap();
         let (updates, receiver) = watch::channel(listed("saved chat"));
-        let saving = tokio::spawn(run(directory.path().into(), receiver));
+        let saving = tokio::spawn(run(directory.path().into(), receiver, unflushed()));
         tokio::time::sleep(Duration::from_millis(600)).await;
         list_written(directory.path(), "saved chat").await;
         let mut next = (*listed("not the full live list")).clone();
@@ -797,7 +850,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("host-a/b");
         let (updates, receiver) = watch::channel(snapshot([]));
-        let saving = tokio::spawn(run(directory.clone(), receiver));
+        let saving = tokio::spawn(run(directory.clone(), receiver, unflushed()));
         updates.send_replace(snapshot([
             thread("settled", 2, TurnStatus::Completed),
             thread("running", 2, TurnStatus::Running),

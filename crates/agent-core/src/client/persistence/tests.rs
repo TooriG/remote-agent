@@ -447,6 +447,68 @@ async fn final_save_seals_the_queue_even_if_earlier_waiters_are_cancelled() {
     );
 }
 
+#[rstest::rstest]
+#[case::leaving(false)]
+#[case::quitting(true)]
+#[tokio::test]
+async fn a_change_in_the_copies_quiet_period_is_written_before_the_app_stops(
+    #[case] quitting: bool,
+) {
+    use crate::models::Thread;
+    use agent_protocol::session::SessionRef;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let directory = tempfile::tempdir().unwrap();
+        let copies = directory.path().join("copies");
+        let storage = Arc::new(Storage::default());
+        let persistence = Persistence::new(storage.clone(), Arc::default());
+        let mut snapshot = persistence
+            .restore(false, Some(copies.clone()))
+            .await
+            .unwrap();
+        let id = SessionRef::new(ProviderKind::Codex, "cached".into()).unwrap();
+        let named = |name: &str| {
+            Arc::new(Thread {
+                id: Some(id.clone()),
+                name: Some(name.into()),
+                turns: Some(Vec::new()),
+                ..Default::default()
+            })
+        };
+        Arc::make_mut(&mut snapshot.sessions.conversations).insert(id.clone(), named("first"));
+        let (updates, snapshots) = watch::channel(Arc::new(snapshot));
+        let saving = tokio::spawn(persistence.start(snapshots).unwrap());
+        let saved_name = || async {
+            Persistence::new(storage.clone(), Arc::default())
+                .restore(false, Some(copies.clone()))
+                .await
+                .unwrap()
+                .sessions
+                .conversations
+                .get(&id)
+                .and_then(|thread| thread.name.clone())
+        };
+        while saved_name().await.as_deref() != Some("first") {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        // The copies now wait ten quiet seconds before their next write.
+        let mut renamed = updates.borrow().as_ref().clone();
+        Arc::make_mut(&mut renamed.sessions.conversations).insert(id.clone(), named("second"));
+        let renamed = Arc::new(renamed);
+        updates.send_replace(renamed.clone());
+        if quitting {
+            // As a session quits: the copies first, then the final state.
+            persistence.flush_copies().await;
+            persistence.finish(renamed).unwrap().await.unwrap();
+        } else {
+            persistence.flush(renamed).unwrap().await.unwrap();
+        }
+        assert_eq!(saved_name().await.as_deref(), Some("second"));
+        saving.abort();
+    })
+    .await
+    .expect("conversation copies stalled");
+}
+
 #[tokio::test]
 async fn conversation_copies_are_saved_restored_and_cleared_on_pairing() {
     use crate::models::{Thread, ThreadList};

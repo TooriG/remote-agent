@@ -157,7 +157,22 @@ pub struct Persistence {
     device: Arc<DevicePreferences>,
     restored: Mutex<Option<Restored>>,
     queue: Mutex<Option<mpsc::UnboundedSender<Save>>>,
+    /// Asks the conversation copies to write what is pending now.
+    copies: Mutex<Option<mpsc::UnboundedSender<crate::conversation_cache::Flush>>>,
     failure: watch::Sender<Option<String>>,
+}
+
+/// How far a save reaches.
+#[derive(Clone, Copy, PartialEq)]
+enum Reach {
+    /// The state, as it changes.
+    State,
+    /// The state and the conversation copies' pending writes, before the app
+    /// may stop: an iPhone app leaving the foreground.
+    Copies,
+    /// The state, and nothing is saved after it: an app quitting, which has
+    /// flushed the copies while still connected.
+    Last,
 }
 impl Persistence {
     pub fn new(storage: Arc<dyn ClientStorage>, device: Arc<DevicePreferences>) -> Arc<Self> {
@@ -166,6 +181,7 @@ impl Persistence {
             device,
             restored: Mutex::default(),
             queue: Mutex::default(),
+            copies: Mutex::default(),
             failure: watch::channel(None).0,
         })
     }
@@ -235,6 +251,10 @@ impl Persistence {
                 preferences: Preferences::capture(&snapshots.borrow()),
                 conversations: None,
             });
+        let (flush, flushes) = mpsc::unbounded_channel();
+        if conversations.is_some() {
+            *self.copies.lock().unwrap() = Some(flush);
+        }
         let storage = self.storage.clone();
         let device = self.device.clone();
         let failure = self.failure.clone();
@@ -273,25 +293,42 @@ impl Persistence {
         Some(async move {
             let copies = async move {
                 if let Some(directory) = conversations {
-                    crate::conversation_cache::run(directory, snapshots).await;
+                    crate::conversation_cache::run(directory, snapshots, flushes).await;
                 }
             };
             tokio::join!(saving, copies);
         })
     }
     pub fn enqueue(&self, snapshot: Arc<Snapshot>) -> Result<Completion<()>, AgentError> {
-        self.send(snapshot, false)
+        self.send(snapshot, Reach::State)
+    }
+    /// Save the state and write the conversation copies' pending changes
+    /// before the app may be stopped, which their quiet period would lose.
+    pub fn flush(&self, snapshot: Arc<Snapshot>) -> Result<Completion<()>, AgentError> {
+        self.send(snapshot, Reach::Copies)
     }
     /// Seal the queue before publishing the final snapshot. An autosave racing
-    /// shutdown can no longer enqueue an older snapshot behind this write.
+    /// shutdown can no longer enqueue an older snapshot behind this write. The
+    /// copies stop; [`Self::flush_copies`] writes theirs first.
     pub fn finish(&self, snapshot: Arc<Snapshot>) -> Result<Completion<()>, AgentError> {
-        self.send(snapshot, true)
+        self.send(snapshot, Reach::Last)
     }
-    fn send(
-        &self,
-        snapshot: Arc<Snapshot>,
-        final_save: bool,
-    ) -> Result<Completion<()>, AgentError> {
+    /// Write the conversation copies' pending changes now, which their quiet
+    /// period would lose if the app stopped. The list copy is written only while
+    /// connected, so a quitting app flushes before it disconnects.
+    pub fn flush_copies(&self) -> impl Future<Output = ()> + Send + 'static {
+        let copies = self.copies.lock().unwrap().clone();
+        async move {
+            // Copies are best effort: a stopped copier has nothing pending.
+            if let Some(copies) = copies {
+                let (written, done) = oneshot::channel();
+                if copies.send(written).is_ok() {
+                    let _ = done.await;
+                }
+            }
+        }
+    }
+    fn send(&self, snapshot: Arc<Snapshot>, reach: Reach) -> Result<Completion<()>, AgentError> {
         let (complete, result) = oneshot::channel();
         let mut queue = self.queue.lock().unwrap();
         queue
@@ -299,10 +336,22 @@ impl Persistence {
             .ok_or_else(|| error("session is not ready"))?
             .send(Save { snapshot, complete })
             .map_err(error)?;
-        if final_save {
+        if reach == Reach::Last {
             queue.take();
         }
-        Ok(async move { result.await.map_err(error)? }.boxed().shared())
+        let copies = (reach == Reach::Copies).then(|| self.flush_copies());
+        if reach == Reach::Last {
+            self.copies.lock().unwrap().take();
+        }
+        Ok(async move {
+            result.await.map_err(error)??;
+            if let Some(copies) = copies {
+                copies.await;
+            }
+            Ok(())
+        }
+        .boxed()
+        .shared())
     }
     pub async fn observe(
         self: Arc<Self>,
