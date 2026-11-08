@@ -22,11 +22,16 @@
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
 //!   menu, as a right click on it; `press` then chooses its items.
-//! - `choose <path>`: answers the open panel the app shows with `<path>`,
-//!   waiting for one to appear. A leading `$AGENT_STATE_DIR` is the fixture Host's
-//!   directory, whose `project` folder is the fixture's project.
+//! - `choose <path>`: answers the open or save panel the app shows with
+//!   `<path>`, waiting for one to appear. A leading `$AGENT_STATE_DIR` is the
+//!   fixture Host's directory, whose `project` folder is the fixture's project.
+//! - `expect_file <path> [timeout-ms]`: waits until the file at `<path>` (as
+//!   `choose` takes it) exists with some content.
 //! - `expect_clipboard <text> [timeout-ms]`: waits until the clipboard's text
 //!   contains `<text>`. The driver restores the clipboard when the scenario ends.
+//! - `activate`: brings the app to the front through Launch Services, as the
+//!   user clicking it in the Dock: AppKit lets an app activate itself only
+//!   while the user is in it. It takes the focus from the user briefly.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -54,7 +59,9 @@ pub(crate) enum Step {
     Select(Find, String),
     Menu(Find),
     Choose(String),
+    ExpectFile(String, Duration),
     ExpectClipboard(String, Duration),
+    Activate,
     Wait(Duration),
     Screenshot(String),
     Dump(String),
@@ -172,10 +179,16 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("choose", [path]) if path.starts_with('/') || path.starts_with(STATE_DIRECTORY) => {
             Step::Choose((*path).to_owned())
         }
+        ("expect_file", [path, rest @ ..])
+            if path.starts_with('/') || path.starts_with(STATE_DIRECTORY) =>
+        {
+            Step::ExpectFile((*path).to_owned(), find(path, rest)?.timeout)
+        }
         ("expect_clipboard", [text]) => Step::ExpectClipboard((*text).to_owned(), DEFAULT_TIMEOUT),
         ("expect_clipboard", [text, timeout]) => {
             Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
         }
+        ("activate", []) => Step::Activate,
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
@@ -297,8 +310,8 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
-             expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
+             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\nexpect_file $AGENT_STATE_DIR/saved.png 500\n\
+             expect_clipboard \"a b\" 500\nfixture /release-inputs\nactivate\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
         )
         .unwrap();
@@ -353,8 +366,13 @@ mod tests {
                 }),
                 Step::Choose("/tmp/a.txt".into()),
                 Step::Choose("$AGENT_STATE_DIR/project".into()),
+                Step::ExpectFile(
+                    "$AGENT_STATE_DIR/saved.png".into(),
+                    Duration::from_millis(500)
+                ),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
                 Step::Control("/release-inputs".into()),
+                Step::Activate,
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
                 Step::Dump("tree_1".into()),

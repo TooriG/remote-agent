@@ -49,7 +49,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | HistoryUITests.testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText | covered | long-markdown |
 | HistoryUITests.testSimulatorReopensCompletedHistoryCollapsed | covered | folded-work, markdown-table (reopened collapsed) |
 | ImagesUITests.testSimulatorShowsGeneratedImagesAndOpensFileLinksAfterReopening | partial | images (a file link opens in the tool panel); generated images are screenshot evidence only |
-| ImagesUITests.testSimulatorOpensOnlyTheTappedImageAndSavesIt | not yet | Quick Look shows only while the app is frontmost, which the runner does not force; it reports "このファイルをプレビューできませんでした。" there |
+| ImagesUITests.testSimulatorOpensOnlyTheTappedImageAndSavesIt | partial | images (a tapped image opens in Quick Look, also when asked while the app is in the background); which image of several opens, and saving, not yet: the image menu that saves is not on the Mac yet |
 | ImagesUITests.testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening | covered | images |
 | ModelSelectionUITests.testSimulatorModelPickerUsesNativeFormAndAgentPicker | covered | model-picker |
 | NavigationUITests.testSimulatorRemovesHostAndRequiresPairingAfterRelaunch | not yet | each scenario runs one app process; removing the only Host ends the scenario's connection |

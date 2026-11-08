@@ -211,8 +211,8 @@ fn account_row(
                             .gap_1()
                             .child(
                                 text(name)
-                                .text_size(px(14.0))
-                                .font_weight(FontWeight::MEDIUM),
+                                    .text_size(px(14.0))
+                                    .font_weight(FontWeight::MEDIUM),
                             )
                             .child(
                                 text(move || {

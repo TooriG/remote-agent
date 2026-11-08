@@ -77,9 +77,8 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
             String::new()
         }
     });
-    let accepts_input = computed(move || {
-        ready.get() && native::shown() && connection_failure.get().is_none()
-    });
+    let accepts_input =
+        computed(move || ready.get() && native::shown() && connection_failure.get().is_none());
     let request = move |action| {
         frame.with_untracked(|frame| BrowserRequest {
             thread_id: thread.get(),

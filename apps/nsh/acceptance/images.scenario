@@ -23,3 +23,12 @@ press 検証プロジェクト
 press "[images] [immediate] 画像を表示します"
 expect "インライン画像です。" 20000
 expect 画像を拡大
+# Quick Look takes its controller from the active app's key window: a preview
+# asked for while the user is in another app shows once they come back.
+press 画像を拡大
+wait 1500
+expect_absent "このファイルをプレビューできませんでした。"
+activate
+expect "Open with Preview" 10000
+key escape
+expect_absent "Open with Preview" 10000

@@ -28,7 +28,7 @@ use objc2_app_kit::{
     NSApplication, NSBitmapImageFileType, NSEvent, NSEventModifierFlags, NSEventType, NSMenu,
     NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification, NSModalResponseOK,
     NSOpenPanel, NSPasteboard, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting,
-    NSScreen, NSView, NSWindow,
+    NSSavePanel, NSScreen, NSView, NSWindow,
 };
 use objc2_core_graphics::{CGEvent, CGScrollEventUnit};
 use objc2_foundation::{
@@ -134,6 +134,7 @@ impl Driver {
         }));
         self.index += 1;
         self.since = Instant::now();
+        ACTIVATING.set(false);
         self.write(None);
     }
 
@@ -223,7 +224,9 @@ fn limit(step: &Step) -> Duration {
         | Step::Menu(find)
         | Step::Expect(find)
         | Step::ExpectAbsent(find) => find.timeout,
-        Step::Wait(duration) | Step::ExpectClipboard(_, duration) => *duration,
+        Step::Wait(duration)
+        | Step::ExpectClipboard(_, duration)
+        | Step::ExpectFile(_, duration) => *duration,
         _ => super::script::DEFAULT_TIMEOUT,
     }
 }
@@ -272,6 +275,7 @@ fn attempt(
         }),
         Step::Menu(find) => context_menu(&Tree::read(mtm, menus), find),
         Step::Choose(path) => choose(path, mtm),
+        Step::ExpectFile(path, _) => file_written(path),
         Step::ExpectClipboard(text, _) => {
             let copied = Clipboard::text();
             if copied.contains(text.as_str()) {
@@ -283,7 +287,44 @@ fn attempt(
         Step::Key(key) => {
             done(post_key(key, mtm).map(|()| format!("posted key code {}", key.code)))
         }
+        Step::Activate => activate(mtm),
     }
+}
+
+thread_local! {
+    /// Whether the current `activate` step has asked Launch Services.
+    static ACTIVATING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Asks Launch Services to bring the app forward, once per step: it reaches
+/// this running app by its bundle, as a click in the Dock does.
+fn activate(mtm: MainThreadMarker) -> Attempt {
+    let app = NSApplication::sharedApplication(mtm);
+    if app.isActive() {
+        return Attempt::Passed("the app is active".into(), None);
+    }
+    if !ACTIVATING.replace(true) {
+        let bundle = objc2_foundation::NSBundle::mainBundle()
+            .bundlePath()
+            .to_string();
+        if !bundle.ends_with(".app") {
+            return Attempt::Failed(format!("{bundle} is not an app bundle to activate"));
+        }
+        // Should Launch Services start another copy instead, it gets this
+        // one's isolated Host rather than the user's.
+        let mut open = std::process::Command::new("/usr/bin/open");
+        open.args(["-a", &bundle]);
+        for name in ["AGENT_STATE_DIR", "AGENT_ISOLATED_HOST"] {
+            match std::env::var(name) {
+                Ok(value) => open.args(["--env", &format!("{name}={value}")]),
+                Err(_) => return Attempt::Failed(format!("{name} is not set")),
+            };
+        }
+        if let Err(reason) = open.stdin(std::process::Stdio::null()).spawn() {
+            return Attempt::Failed(format!("open -a {bundle}: {reason}"));
+        }
+    }
+    Attempt::Pending("the app is not active yet".into())
 }
 
 fn done(result: Result<String, String>) -> Attempt {
@@ -523,7 +564,15 @@ const MAX_NODES: usize = 50_000;
 impl Tree {
     fn read(mtm: MainThreadMarker, menus: &[Retained<NSMenu>]) -> Self {
         let mut tree = Self { nodes: Vec::new() };
-        for window in NSApplication::sharedApplication(mtm).orderedWindows() {
+        let app = NSApplication::sharedApplication(mtm);
+        // Ordered windows leave out panels (Quick Look's), which follow them.
+        let ordered = app.orderedWindows();
+        let panels: Vec<_> = app
+            .windows()
+            .into_iter()
+            .filter(|window| !ordered.containsObject(window))
+            .collect();
+        for window in ordered.into_iter().chain(panels) {
             if window.isVisible() {
                 let object = unsafe { Retained::cast_unchecked::<AnyObject>(window.clone()) };
                 tree.walk(object, None, 0, &window);
@@ -964,42 +1013,97 @@ unsafe extern "C-unwind" fn chosen_urls(_: *mut AnyObject, _: Sel) -> *mut NSArr
     Retained::autorelease_return(CHOSEN.with_borrow(|urls| urls.clone().unwrap_or_default()))
 }
 
-/// Picks `path` in the app's open panel once it shows: the panel answers it as
-/// the user's choice and closes as its Open button would.
-fn choose(path: &str, mtm: MainThreadMarker) -> Attempt {
-    let path = match path.strip_prefix(super::script::STATE_DIRECTORY) {
-        Some(rest) => match std::env::var("AGENT_STATE_DIR") {
-            Ok(directory) => format!("{directory}{rest}"),
-            Err(_) => return Attempt::Failed("AGENT_STATE_DIR is not set".into()),
-        },
-        None => path.to_owned(),
-    };
-    if !std::path::Path::new(&path).exists() {
-        return Attempt::Failed(format!("{path} does not exist"));
+/// The save panel's `URL` while the driver chooses, as `chosen_urls`.
+unsafe extern "C-unwind" fn chosen_url(_: *mut AnyObject, _: Sel) -> *mut NSURL {
+    CHOSEN.with_borrow(|urls| {
+        urls.as_ref()
+            .and_then(|urls| urls.firstObject())
+            .map_or(std::ptr::null_mut(), Retained::autorelease_return)
+    })
+}
+
+/// A step's path, a leading `$AGENT_STATE_DIR` being the fixture Host's directory.
+fn resolve(path: &str) -> Result<String, String> {
+    match path.strip_prefix(super::script::STATE_DIRECTORY) {
+        Some(rest) => std::env::var("AGENT_STATE_DIR")
+            .map(|directory| format!("{directory}{rest}"))
+            .map_err(|_| "AGENT_STATE_DIR is not set".to_owned()),
+        None => Ok(path.to_owned()),
     }
+}
+
+/// Picks `path` in the app's open or save panel once one shows: the panel
+/// answers it as the user's choice and closes as its Open or Save button would.
+/// An open panel's file must exist; a save panel's folder must.
+fn choose(path: &str, mtm: MainThreadMarker) -> Attempt {
+    let path = match resolve(path) {
+        Ok(path) => path,
+        Err(reason) => return Attempt::Failed(reason),
+    };
     let Some((panel, parent)) = NSApplication::sharedApplication(mtm)
         .windows()
         .iter()
         .filter(|window| window.isVisible())
-        .filter_map(|window| window.downcast::<NSOpenPanel>().ok())
+        .filter_map(|window| window.downcast::<NSSavePanel>().ok())
         .find_map(|panel| panel.sheetParent().map(|parent| (panel, parent)))
     else {
-        return Attempt::Pending("no open panel shows".into());
+        return Attempt::Pending("no file panel shows".into());
     };
+    let opening = panel.downcast_ref::<NSOpenPanel>().is_some();
+    let needed = if opening {
+        Some(std::path::Path::new(&path))
+    } else {
+        std::path::Path::new(&path).parent()
+    };
+    if !needed.is_some_and(std::path::Path::exists) {
+        return Attempt::Failed(format!("{path} has nothing to choose"));
+    }
     let url = NSURL::fileURLWithPath(&NSString::from_str(&path));
     CHOSEN.set(Some(NSArray::from_retained_slice(&[url])));
-    let Some(method) = panel.class().instance_method(sel!(URLs)) else {
-        return Attempt::Failed("the open panel has no URLs".into());
+    let (selector, answer) = if opening {
+        (
+            sel!(URLs),
+            // SAFETY: the replacement takes and returns what `URLs` does.
+            unsafe {
+                std::mem::transmute::<
+                    unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut NSArray<NSURL>,
+                    objc2::runtime::Imp,
+                >(chosen_urls)
+            },
+        )
+    } else {
+        (
+            sel!(URL),
+            // SAFETY: the replacement takes and returns what `URL` does.
+            unsafe {
+                std::mem::transmute::<
+                    unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut NSURL,
+                    objc2::runtime::Imp,
+                >(chosen_url)
+            },
+        )
     };
-    // SAFETY: the replacement takes and returns what `URLs` does.
-    unsafe {
-        method.set_implementation(std::mem::transmute::<
-            unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut NSArray<NSURL>,
-            objc2::runtime::Imp,
-        >(chosen_urls));
-    }
+    let Some(method) = panel.class().instance_method(selector) else {
+        return Attempt::Failed(format!("the panel has no {selector:?}"));
+    };
+    // SAFETY: `answer` has the method's signature.
+    unsafe { method.set_implementation(answer) };
     parent.endSheet_returnCode(&panel, NSModalResponseOK);
     Attempt::Passed(format!("chose {path}"), None)
+}
+
+/// Whether the file at `path` exists and has content yet.
+fn file_written(path: &str) -> Attempt {
+    let path = match resolve(path) {
+        Ok(path) => path,
+        Err(reason) => return Attempt::Failed(reason),
+    };
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.len() > 0 => {
+            Attempt::Passed(format!("{path} has {} bytes", metadata.len()), None)
+        }
+        _ => Attempt::Pending(format!("{path} is not written")),
+    }
 }
 
 /// The clipboard's items, each as its data by type.
