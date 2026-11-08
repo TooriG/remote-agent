@@ -242,9 +242,6 @@ impl Operation for StartAccountLogin {
             provider: self.provider,
         })
     }
-    fn navigation_bound(&self) -> bool {
-        false
-    }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, login: Self::Output) -> Vec<Effect> {
         let account = Arc::make_mut(&mut snapshot.catalog.account);
@@ -272,9 +269,6 @@ impl Operation for ReadAccountLogin {
         Some(OperationKey::AccountLogin {
             provider: self.provider,
         })
-    }
-    fn navigation_bound(&self) -> bool {
-        false
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, pane_id: &str, status: Self::Output) -> Vec<Effect> {
@@ -318,9 +312,6 @@ impl Operation for PollAccountLogin {
     fn key(&self) -> Option<OperationKey> {
         self.0.key()
     }
-    fn navigation_bound(&self) -> bool {
-        false
-    }
     no_input!();
     type Output = <ReadAccountLogin as rpc::RpcMethod>::Output;
     async fn run(
@@ -343,9 +334,6 @@ impl Operation for CancelAccountLogin {
         Some(OperationKey::AccountLogin {
             provider: self.provider,
         })
-    }
-    fn navigation_bound(&self) -> bool {
-        false
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
@@ -387,9 +375,6 @@ impl Operation for SubmitAccountLogin {
         Some(OperationKey::AccountLogin {
             provider: self.provider,
         })
-    }
-    fn navigation_bound(&self) -> bool {
-        false
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {

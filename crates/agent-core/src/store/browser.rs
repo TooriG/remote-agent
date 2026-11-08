@@ -9,7 +9,7 @@ use crate::{
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// The page is read this often; after a failed read the Host is retried more slowly.
@@ -47,8 +47,8 @@ struct State {
     generation: u64,
     queued: VecDeque<BrowserRequest>,
     active: bool,
-    read_failed: bool,
-    finished: Option<Instant>,
+    /// The pause before the next request: the read interval, or the retry interval after a failed read.
+    wait: Duration,
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
@@ -97,11 +97,10 @@ impl BrowserSession {
         result: Result<BrowserFrame, crate::peer::PeerError>,
     ) -> BrowserUpdate {
         let mut state = self.state.lock().unwrap();
-        state.finished = Some(Instant::now());
         let reading = matches!(action, BrowserAction::Read);
+        state.wait = READ_INTERVAL;
         match result {
             Ok(mut frame) => {
-                state.read_failed = false;
                 state.tab_id = frame.tab_id.clone();
                 state.image_id = frame.image_id.clone();
                 state.generation = frame.generation;
@@ -120,7 +119,7 @@ impl BrowserSession {
                 let crate::client::AgentError::Failed { reason: message } =
                     crate::client::error(error);
                 if reading {
-                    state.read_failed = true;
+                    state.wait = RETRY_INTERVAL;
                     BrowserUpdate::ReadFailed { message }
                 } else {
                     BrowserUpdate::ActionFailed { action, message }
@@ -165,20 +164,8 @@ impl BrowserSession {
     /// returns its result. Nothing remains once the view is hidden and every
     /// action is sent. One caller drives a session at a time.
     pub async fn next(&self) -> Option<BrowserUpdate> {
-        let wait = {
-            let state = self.state.lock().unwrap();
-            let interval = if state.read_failed {
-                RETRY_INTERVAL
-            } else {
-                READ_INTERVAL
-            };
-            state
-                .finished
-                .map(|finished| interval.saturating_sub(finished.elapsed()))
-        };
-        if let Some(wait) = wait {
-            tokio::time::sleep(wait).await;
-        }
+        let wait = self.state.lock().unwrap().wait;
+        tokio::time::sleep(wait).await;
         let request = self.next_request()?;
         let action = request.action.clone();
         let result = self.store.browser(request).await;

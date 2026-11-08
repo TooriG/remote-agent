@@ -85,8 +85,7 @@ internal class AndroidAppModel(private val context: Context, private val prefere
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
-    @Volatile
-    private var publication = Presentation.empty(language)
+    @Volatile private var publication = Presentation.empty(language)
     val snapshot: Snapshot
         get() = publication.snapshot()
 

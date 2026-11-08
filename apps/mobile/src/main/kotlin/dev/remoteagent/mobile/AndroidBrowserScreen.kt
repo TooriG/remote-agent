@@ -57,8 +57,8 @@ import dev.remoteagent.core.BrowserCredentials
 import dev.remoteagent.core.BrowserFrame
 import dev.remoteagent.core.BrowserInputKind
 import dev.remoteagent.core.BrowserKey
-import dev.remoteagent.core.BrowserUpdate
 import dev.remoteagent.core.BrowserStatus
+import dev.remoteagent.core.BrowserUpdate
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.browserFitAction
 import dev.remoteagent.core.browserInputFocus

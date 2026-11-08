@@ -466,15 +466,16 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     fn scheduling(&self) -> Scheduling {
         Scheduling::Concurrent
     }
-    /// Host and session caches outlive the pane that requested them. Only
-    /// results that select or replace a pane's content follow its navigation.
+    /// Host and session caches outlive the pane that requested them, as does
+    /// an account login. Only results that select or replace a pane's content
+    /// follow its navigation.
     fn navigation_bound(&self) -> bool {
         !matches!(
             self.scheduling(),
             Scheduling::LatestHostState(_)
                 | Scheduling::LatestList(_)
                 | Scheduling::LatestProject(_)
-        )
+        ) && !matches!(self.key(), Some(OperationKey::AccountLogin { .. }))
     }
     fn run(
         &self,
