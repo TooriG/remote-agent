@@ -136,6 +136,7 @@ private struct WorkspaceFilePreview: View {
 
 struct WorkspaceFileSheet: View {
     let files: AgentCore.Files
+    let paneId: String
     @Binding var text: String
     let perform: SnapshotRequest
     let entry: FileEntry
@@ -261,8 +262,9 @@ struct WorkspaceFileSheet: View {
                 error = failure.localizedDescription; return
             }
             initialized = true
-            if let file = snapshot.files().file(), file.path == entry.path,
-               (snapshot.files().fileDraft(path: entry.path)?.revision ?? file.revision) != file.revision {
+            if let file = snapshot.files(paneId: paneId)?.file(), file.path == entry.path,
+               (snapshot.files(paneId: paneId)?.fileDraft(path: entry.path)?.revision ?? file.revision) != file
+               .revision {
                 error = "ホストのファイルが変更されています。下書きは保持しました。再読込すると下書きを破棄します。"
             }
         }

@@ -72,7 +72,7 @@ class VisualizationTest {
                 while (
                     withContext(Dispatchers.Main) {
                         assertNull("Pairing must not fail while waiting for models", model.notice)
-                        model.busy || !model.snapshot.connected() || model.snapshot.models().isEmpty()
+                        model.busy || !model.snapshot.connected() || model.settings.modelsMatching(null, "").isEmpty()
                     }
                 ) delay(20)
             }
@@ -80,7 +80,15 @@ class VisualizationTest {
             val draft = withContext(Dispatchers.Main) { model.draftKey }
             perform(Intent.SetDraftText(draft, "[success] [visualize] Compare twelve icons"))
             perform(Intent.Submit(null, token))
-            val id = withContext(Dispatchers.Main) { requireNotNull(model.snapshot.navigation().threadId) }
+            val id =
+                withContext(Dispatchers.Main) {
+                    requireNotNull(
+                        dev.remoteagent.core.Presentation.fromSnapshot(model.snapshot, "")
+                            .conversationContext()
+                            .navigation()
+                            .threadId
+                    )
+                }
             withTimeout(30_000) {
                 while (true) {
                     val complete =
@@ -135,7 +143,7 @@ class VisualizationTest {
             verify("visualize-reopened.png")
             withContext(Dispatchers.Main) {
                 assertEquals("", model.snapshot.draft(DraftKey.Session(id)).text)
-                assertNull(model.snapshot.error())
+                assertTrue(model.snapshot.errorNotices("", dev.remoteagent.core.ErrorScope.Application).isEmpty())
                 assertNull(model.notice)
             }
         } catch (error: Throwable) {

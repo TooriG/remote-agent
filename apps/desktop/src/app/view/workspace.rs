@@ -379,19 +379,20 @@ pub(in crate::app) fn details_toggle(
 impl Desktop {
     pub(in crate::app) fn publish_workspace(&self, cx: &mut Context<Self>) {
         let model = WorkspaceModel {
-            connected: self.snapshot.connection.connected,
-            cwd: self.snapshot.pane.navigation.cwd.clone(),
-            directory: self.snapshot.selected_directory(),
-            review: self.snapshot.pane.workspace.review.clone(),
+            connected: self.publication.snapshot.connection.connected,
+            cwd: self.publication.pane().navigation.cwd.clone(),
+            directory: self.publication.context.selected_directory(),
+            review: self.publication.pane().workspace.review.clone(),
             local_shell: self.local_shell,
             editors: self
+                .publication
                 .snapshot
                 .files
                 .file_open_capabilities
                 .as_ref()
                 .map(|c| c.editors.clone())
                 .unwrap_or_default(),
-            preferred_editor: self.snapshot.files.preferred_editor,
+            preferred_editor: self.publication.snapshot.files.preferred_editor,
             sources: self
                 .publication
                 .conversation

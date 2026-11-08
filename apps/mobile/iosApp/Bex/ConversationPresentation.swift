@@ -11,7 +11,6 @@ struct ThreadConversationRow: Identifiable, Sendable {
 
 /// Immutable native render values; Rust owns projection policy.
 struct ConversationPresentation: Sendable {
-    let source: AgentCore.Thread
     let id: SessionRef?
     let scope: PanelScope
     private struct CachedTurn: Sendable {
@@ -24,7 +23,6 @@ struct ConversationPresentation: Sendable {
     private let queued: [String: ConversationItem]
 
     static func project(_ rendered: RenderedConversation, scope: PanelScope, previous: Self?) -> Self {
-        let source = rendered.source()
         if let previous, previous.scope == scope, rendered.unchanged(other: previous.projection) {
             return previous
         }
@@ -51,8 +49,7 @@ struct ConversationPresentation: Sendable {
             nextQueued[item.id()] = Self.item(item, previous: previous?.queued[item.id()])
         }
         return Self(
-            source: source,
-            id: source.id(),
+            id: rendered.id(),
             scope: scope, turns: next, projection: rendered, queued: nextQueued
         )
     }

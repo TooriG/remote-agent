@@ -1,6 +1,6 @@
 //! Window-local input state. Saved values always come from the core snapshot;
 //! these types only decide when local input may replace or be replaced by them.
-use agent_core::{questions::QuestionPrompt, state::DraftKey};
+use agent_core::questions::QuestionPrompt;
 use agent_protocol::{
     dsh::KeyProvider, ids::RequestId, models::WorktreeSettings, session::ProviderKind,
 };
@@ -267,8 +267,6 @@ impl WorktreeForm {
 pub(super) struct AccountForm {
     pub(super) code: Entity<InputState>,
     pub(super) busy: bool,
-    pub(super) polling: bool,
-    pub(super) login_draft: Option<DraftKey>,
     pub(super) sign_out: Option<String>,
     pub(super) dsh_key_provider: KeyProvider,
 }
@@ -283,8 +281,6 @@ impl AccountForm {
                     .masked(true)
             }),
             busy: false,
-            polling: false,
-            login_draft: None,
             sign_out: None,
             dsh_key_provider: Default::default(),
         }

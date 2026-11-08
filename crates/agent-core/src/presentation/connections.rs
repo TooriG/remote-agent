@@ -292,7 +292,7 @@ mod tests {
                 },
                 ..Default::default()
             };
-            snapshot.operations.insert(
+            Arc::make_mut(&mut snapshot.operations).insert(
                 key.clone(),
                 OperationState {
                     generation: 1,
@@ -321,7 +321,10 @@ mod tests {
                 snapshot.connection_setup().agents[0].availability,
                 AgentAvailability::Unavailable
             );
-            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Running;
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(&key)
+                .unwrap()
+                .phase = OperationPhase::Running;
             assert_eq!(
                 snapshot.connection_setup().agents[0].availability,
                 AgentAvailability::Checking
@@ -334,7 +337,10 @@ mod tests {
                 .unwrap(),
             );
             assert!(snapshot.connection_setup().can_start);
-            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(&key)
+                .unwrap()
+                .phase = OperationPhase::Failed {
                 message: "refresh failed".into(),
             };
             assert!(

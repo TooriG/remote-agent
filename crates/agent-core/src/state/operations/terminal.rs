@@ -13,7 +13,7 @@ impl Operation for StartTerminal {
             starts: true,
         }
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         if snapshot
             .terminals
             .get(&self.handle)
@@ -37,7 +37,7 @@ impl Operation for StartTerminal {
         );
         Ok(())
     }
-    fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         if snapshot
             .terminals
             .get(&self.handle)
@@ -63,7 +63,7 @@ impl Operation for ResizeTerminal {
         false
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         if let Some(terminal) = shared_mut(&mut snapshot.terminals, &self.handle) {
             terminal.size = self.size;
         }
@@ -139,7 +139,7 @@ impl Operation for DetachTerminal {
             starts: false,
         }
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         if let Some(terminal) = shared_mut(&mut snapshot.terminals, &self.handle)
             && matches!(
                 terminal.phase,
@@ -203,6 +203,7 @@ mod tests {
             };
             let (closed, effects) = reduce(
                 &before,
+                "",
                 Event::Intent(Intent::CloseTerminal {
                     handle: "closing".into(),
                 }),
@@ -213,6 +214,7 @@ mod tests {
             assert_eq!(before.terminals.len(), 2);
             let (closed_again, effects) = reduce(
                 &closed,
+                "",
                 Event::Intent(Intent::CloseTerminal {
                     handle: "closing".into(),
                 }),

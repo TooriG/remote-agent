@@ -47,7 +47,7 @@ fn history_refresh_does_not_expand_its_request_to_the_cached_window(
         limit: requested,
         ..ReadThread::new(id)
     };
-    read.prepare(&mut snapshot).unwrap();
+    read.prepare(&mut snapshot, "").unwrap();
     assert_eq!(read.limit, expected);
 }
 
@@ -104,6 +104,7 @@ fn unavailable_history_preserves_live_turn_requests_and_subsequent_text() {
     })
     .apply(
         &mut snapshot,
+        "",
         OpenedSession {
             session: SessionRef::new(
                 agent_protocol::session::ProviderKind::Codex,
@@ -123,6 +124,7 @@ fn unavailable_history_preserves_live_turn_requests_and_subsequent_text() {
     };
     let (snapshot, _) = reduce(
         &snapshot,
+        "",
         Event::SessionUpdate(Box::new(agent_protocol::session::SessionUpdate {
             subscription_id: subscription,
             change,
@@ -290,7 +292,7 @@ fn storage_changes_keep_drafts_separate_and_restore_the_original_area() {
             ..Default::default()
         }),
     );
-    let (mut next, _) = reduce(&original, Event::StorageScope("host-key:area-b".into()));
+    let (mut next, _) = reduce(&original, "", Event::StorageScope("host-key:area-b".into()));
     assert!(next.sessions.conversations.is_empty());
     assert!(next.input.drafts.is_empty());
     assert_eq!(
@@ -316,7 +318,7 @@ fn storage_changes_keep_drafts_separate_and_restore_the_original_area() {
     );
     let saved: Snapshot =
         agent_core::persistence::decode(&agent_core::persistence::encode(&next).unwrap()).unwrap();
-    let (restored, _) = reduce(&saved, Event::StorageScope("host-key:area-a".into()));
+    let (restored, _) = reduce(&saved, "", Event::StorageScope("host-key:area-a".into()));
     assert_eq!(
         restored.input.drafts[&agent_core::state::DraftKey::from(
             agent_protocol::session::SessionRef {
@@ -508,21 +510,23 @@ fn local_storage_keeps_user_work_without_host_caches() {
             ),
             ..Default::default()
         },
-        pane: std::sync::Arc::new(agent_core::state::PaneState {
-            navigation: Arc::new(Navigation {
-                thread_id: Some(agent_protocol::session::SessionRef {
-                    provider: agent_protocol::session::ProviderKind::Codex,
-                    id: "native".into(),
+        panes: agent_core::state::PaneStates::with_primary(std::sync::Arc::new(
+            agent_core::state::PaneState {
+                navigation: Arc::new(Navigation {
+                    thread_id: Some(agent_protocol::session::SessionRef {
+                        provider: agent_protocol::session::ProviderKind::Codex,
+                        id: "native".into(),
+                    }),
+                    cwd: "/project".into(),
+                    draft_key: SessionRef {
+                        provider: ProviderKind::Codex,
+                        id: "native".into(),
+                    }
+                    .into(),
                 }),
-                cwd: "/project".into(),
-                draft_key: SessionRef {
-                    provider: ProviderKind::Codex,
-                    id: "native".into(),
-                }
-                .into(),
-            }),
-            ..Default::default()
-        }),
+                ..Default::default()
+            },
+        )),
         ..Default::default()
     };
     Arc::make_mut(&mut original.lists.activity).unread.insert(
@@ -568,7 +572,10 @@ fn local_storage_keeps_user_work_without_host_caches() {
         original.sessions.pending_submissions
     );
     assert_eq!(restored.files.file_drafts, original.files.file_drafts);
-    assert_eq!(restored.pane.navigation, original.pane.navigation);
+    assert_eq!(
+        restored.panes.primary().navigation,
+        original.panes.primary().navigation
+    );
     assert!(restored.lists.activity.unread.is_empty());
     assert!(restored.lists.activity.active.is_empty());
     assert!(restored.sessions.conversations.is_empty());
@@ -618,13 +625,17 @@ proptest::proptest! {
             },
             ..Default::default()
         };
-        let (changed, _) = reduce(&original, Event::SessionUpdate(Box::new(SessionUpdate {
+        let (changed, _) = reduce(
+        &original,
+        "",
+        Event::SessionUpdate(Box::new(SessionUpdate {
             subscription_id: claude_subscription,
             change: SessionChange::Text {
                 turn_id:"same-turn".into(), item_id:"same-item".into(),
                 field:TextField::AssistantText, delta:delta.clone(),
             },
-        })));
+        })),
+        );
         proptest::prop_assert!(Arc::ptr_eq(&original.sessions.conversations[&codex], &changed.sessions.conversations[&codex]));
         let expected_text = format!("{claude_text}{delta}");
         proptest::prop_assert_eq!(item_text(&(changed.sessions.conversations[&claude].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])), Some(expected_text.as_str()));

@@ -8,24 +8,21 @@ import dev.remoteagent.core.ConversationRowPolicy
 import dev.remoteagent.core.ConversationRows
 import dev.remoteagent.core.ProgressRows
 import dev.remoteagent.core.Snapshot
-import dev.remoteagent.core.Thread
-import dev.remoteagent.core.projectConversation
 
 private val fixtureRowPolicy = ConversationRowPolicy(requests = true, progress = ProgressRows.ALWAYS)
 
 /** Construct native action fixtures through the production core projector. */
-internal fun projectConversationRows(
-    snapshot: Snapshot,
-    thread: Thread?,
-    previous: ConversationRows?,
-): ConversationRows? = thread?.let {
-    ConversationRows.project(
-        projectConversation(snapshot, it, previous?.source()),
-        snapshot.panelScope("fixture", snapshot.navigation().draftKey),
-        emptyMap(),
-        fixtureRowPolicy,
-        previous,
-    )
+internal fun projectConversationRows(snapshot: Snapshot): ConversationRows? {
+    val value = dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "")
+    return value.conversation()?.let { rendered ->
+        ConversationRows.project(
+            rendered,
+            snapshot.panelScope("fixture", value.conversationContext().navigation().draftKey),
+            emptyMap(),
+            fixtureRowPolicy,
+            null,
+        )
+    }
 }
 
 @androidx.compose.runtime.Composable
@@ -39,7 +36,7 @@ internal fun ThreadDetailFixture(
 ) {
     var current by remember(projection) { mutableStateOf(projection) }
     ThreadDetailScreen(
-        dev.remoteagent.core.ConversationContext.fromSnapshot(snapshot),
+        dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "").conversationContext(),
         current,
         perform,
         { id ->

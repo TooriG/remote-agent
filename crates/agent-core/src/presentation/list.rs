@@ -328,12 +328,10 @@ impl Snapshot {
         )
     }
 }
-#[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
     /// The selected folder is separate from the provider's execution directory.
-    pub fn selected_directory(&self) -> String {
-        let thread = self
-            .pane
+    pub fn selected_directory(&self, pane: &crate::state::PaneState) -> String {
+        let thread = pane
             .navigation
             .thread_id
             .as_ref()
@@ -343,10 +341,13 @@ impl Snapshot {
         }) {
             String::new()
         } else {
-            self.pane.navigation.cwd.clone()
+            pane.navigation.cwd.clone()
         }
     }
+}
 
+#[cfg_attr(feature = "bindings", uniffi::export)]
+impl Snapshot {
     pub fn thread_list(&self) -> Option<ThreadList> {
         self.list_source().thread_list()
     }
@@ -917,6 +918,7 @@ mod tests {
         Arc::make_mut(&mut state.lists.project_threads).insert("project".into(), page);
         state = reduce(
             &state,
+            "",
             Event::Intent(Intent::MoveChatToProject {
                 thread_id: placed,
                 project_id: "project".into(),
@@ -1034,6 +1036,7 @@ mod tests {
         let mut snapshot = Snapshot::default();
         ListSessions::new(Default::default()).apply(
             &mut snapshot,
+            "",
             serde_json::from_value(json!({
                 "data": [
                     {"id":{"provider":"codex","id":"assigned"}, "projectId":"known"},
@@ -1064,17 +1067,14 @@ mod tests {
     fn returned_project_header_replaces_branding_while_preserving_loaded_tasks() {
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.lists.expanded_projects).insert("project".into(), 5);
-        ListSessions::new(Default::default()).apply(
-            &mut snapshot,
-            serde_json::from_value(json!({
+        ListSessions::new(Default::default()).apply(&mut snapshot, "", serde_json::from_value(json!({
                 "data":[{"id":{"provider":"codex","id":"task"},"projectId":"project"}],
                 "projects":[{"id":"project","name":"Old project","roots":[],"icon":{"lightPng":"BAUG","darkPng":"BAUG"}}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{"project":{"limit":5,"hasMore":false}},"limit":5
             }))
-            .unwrap(),
-        );
+            .unwrap());
         for icon in [Some("AQID"), None] {
-            ListSessions::new(Default::default()).apply(&mut snapshot, serde_json::from_value(json!({
+            ListSessions::new(Default::default()).apply(&mut snapshot, "", serde_json::from_value(json!({
                 "data":[],
                 "projects":[{"id":"project","name":"Renamed project","roots":[],"icon":icon.map(|png| json!({"lightPng":png,"darkPng":"BAUG"}))}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
@@ -1086,6 +1086,7 @@ mod tests {
             }
             .apply(
                 &mut snapshot,
+                "",
                 agent_protocol::operations::ListDecorations {
                     icons: [(
                         "project".into(),
@@ -1138,6 +1139,7 @@ mod tests {
             let previous_list = previous.thread_list();
             crate::state::operations::ListAccounts {}.apply(
                 &mut snapshot,
+                "",
                 serde_json::from_value(json!({
                     "accounts": providers.iter().map(|provider| json!({
                         "provider":provider,"id":"account"
@@ -1183,6 +1185,7 @@ mod tests {
         let mut snapshot = snapshot_list(json!([]));
         crate::state::operations::ListAccounts {}.apply(
             &mut snapshot,
+            "",
             serde_json::from_value(json!({"accounts":[],"selected":{}})).unwrap(),
         );
         let page = Arc::make_mut(snapshot.lists.threads.as_mut().unwrap());
@@ -1208,6 +1211,7 @@ mod tests {
         };
         ListSessions::new(Default::default()).apply(
             &mut snapshot,
+            "",
             page(
                 serde_json::json!([{"id":{"provider":"codex","id":"native"},"name":"Cached"}]),
                 serde_json::json!({}),
@@ -1215,6 +1219,7 @@ mod tests {
         );
         ListSessions::new(Default::default()).apply(
             &mut snapshot,
+            "",
             page(
                 serde_json::json!([{"id":{"provider":"claude","id":"uuid"},"name":"Available"}]),
                 serde_json::json!({"codex":{"message":"offline"}}),
@@ -1235,7 +1240,7 @@ mod tests {
                 .title
                 .contains("未確認")
         );
-        assert!(snapshot.pane.error.is_none());
+        assert!(snapshot.panes.primary().error.is_none());
     }
     #[rstest::rstest]
     fn list_preserves_has_changes_alongside_activity_after_serialization_and_refresh(
@@ -1270,7 +1275,7 @@ mod tests {
             "data":[thread], "projects":[],
             "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5, }))
         .unwrap();
-        ListSessions::new(Default::default()).apply(&mut snapshot, page);
+        ListSessions::new(Default::default()).apply(&mut snapshot, "", page);
         let restored: Snapshot =
             serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
         let rows = restored.thread_list().unwrap();

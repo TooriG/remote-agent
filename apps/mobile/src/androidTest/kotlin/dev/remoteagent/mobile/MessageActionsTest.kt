@@ -15,8 +15,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.remoteagent.core.ConversationRowContent
 import dev.remoteagent.core.OperationPhase
-import dev.remoteagent.core.ProviderKind
-import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.Snapshot
 import org.json.JSONArray
 import org.json.JSONObject
@@ -67,12 +65,7 @@ class MessageActionsTest {
     @Test
     fun forkPhaseShowsProgressPreventsRepeatAndAllowsRetryAfterFailure() {
         conversation().use { snapshot ->
-            val projection =
-                projectConversationRows(
-                    snapshot,
-                    snapshot.conversation(SessionRef(ProviderKind.CODEX, "actions")),
-                    null,
-                )
+            val projection = projectConversationRows(snapshot)
             var calls = 0
             val response =
                 requireNotNull(projection)
@@ -116,12 +109,7 @@ class MessageActionsTest {
     @Test
     fun userAndAssistantMessagesCopyExactTextAndAcknowledgeTheTap() {
         conversation().use { snapshot ->
-            val projection =
-                projectConversationRows(
-                    snapshot,
-                    snapshot.conversation(SessionRef(ProviderKind.CODEX, "actions")),
-                    null,
-                )
+            val projection = projectConversationRows(snapshot)
             lateinit var clipboard: ClipboardManager
             compose.setContent {
                 clipboard = LocalClipboardManager.current

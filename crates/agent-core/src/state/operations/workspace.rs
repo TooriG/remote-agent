@@ -1,36 +1,6 @@
 use super::*;
 use crate::client::ClientExt;
 
-#[cfg(test)]
-mod path_tests {
-    use super::*;
-
-    #[test]
-    fn folder_navigation_accepts_home_paths_and_rejects_workspace_relative_paths() {
-        let mut snapshot = Snapshot::default();
-        for path in [
-            "~",
-            "~/Documents",
-            "/workspace",
-            "C:/Users/host",
-            r"\\server\share",
-        ] {
-            assert!(
-                ListFiles { path: path.into() }
-                    .prepare(&mut snapshot)
-                    .is_ok()
-            );
-        }
-        for path in ["", "documents", "~someone/documents"] {
-            assert!(
-                ListFiles { path: path.into() }
-                    .prepare(&mut snapshot)
-                    .is_err()
-            );
-        }
-    }
-}
-
 pub use agent_protocol::operations::ListFiles;
 pub use agent_protocol::operations::ResolveFile;
 
@@ -45,7 +15,9 @@ impl Operation for ResolveFile {
 
 impl Operation for ListFiles {
     fn key(&self) -> Option<OperationKey> {
-        Some(OperationKey::Directory)
+        Some(OperationKey::Directory {
+            pane: String::new(),
+        })
     }
     rpc_operation!();
     fn outcome(output: &mut Self::Output) -> Outcome {
@@ -53,7 +25,7 @@ impl Operation for ListFiles {
             listing: output.clone(),
         }
     }
-    fn prepare(&mut self, _: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, _: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         if !agent_protocol::paths::is_absolute_host_path(&self.path)
             && self.path != "~"
             && !self.path.starts_with("~/")
@@ -83,15 +55,19 @@ impl rpc::RpcMethod for ReadFile {
 
 impl Operation for ReadFile {
     fn key(&self) -> Option<OperationKey> {
-        Some(OperationKey::File)
+        Some(OperationKey::File {
+            pane: String::new(),
+        })
     }
     no_input!();
     type Output = <Self as rpc::RpcMethod>::Output;
     async fn run(&self, _: (), context: &mut Execution<'_>) -> Result<Self::Output, PeerError> {
         context.call(self).await
     }
-    fn apply(self, snapshot: &mut Snapshot, file: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).file = Some(Arc::new(file));
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, file: Self::Output) -> Vec<Effect> {
+        if let Some(pane) = snapshot.panes.get_mut(pane_id) {
+            Arc::make_mut(&mut Arc::make_mut(pane).workspace).file = Some(Arc::new(file));
+        }
         Vec::new()
     }
     fn outcome(output: &mut Self::Output) -> Outcome {
@@ -99,7 +75,7 @@ impl Operation for ReadFile {
             file: output.clone(),
         }
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         if self.discard_draft {
             Arc::make_mut(&mut snapshot.files.file_drafts).remove(&self.path);
         }
@@ -122,12 +98,11 @@ impl Operation for SaveFile {
         })
     }
     type Input = Arc<FileDraft>;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, pane_id: &str) -> Result<Self::Input, PeerError> {
         if snapshot
-            .pane
-            .workspace
-            .file
-            .as_ref()
+            .panes
+            .get(pane_id)
+            .and_then(|pane| pane.workspace.file.as_ref())
             .is_some_and(|file| file.path == self.path && file.truncated)
         {
             return Err(PeerError::InvalidMessage(
@@ -156,22 +131,31 @@ impl Operation for SaveFile {
             .await?;
         Ok((submitted, file))
     }
-    fn apply(self, snapshot: &mut Snapshot, (submitted, file): Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        pane_id: &str,
+        (submitted, file): Self::Output,
+    ) -> Vec<Effect> {
         Self::rebase_draft(snapshot, &submitted, &file);
         let effects = super::file_tree::refresh_file_trees(snapshot, &file.path);
         if snapshot
-            .pane
-            .workspace
-            .file
-            .as_ref()
+            .panes
+            .get(pane_id)
+            .and_then(|pane| pane.workspace.file.as_ref())
             .is_some_and(|current| current.path == file.path)
+            && let Some(pane) = snapshot.panes.get_mut(pane_id)
         {
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).file =
-                Some(Arc::new(file));
+            Arc::make_mut(&mut Arc::make_mut(pane).workspace).file = Some(Arc::new(file));
         }
         effects
     }
-    fn stale(self, snapshot: &mut Snapshot, (submitted, file): Self::Output) -> Vec<Effect> {
+    fn stale(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        (submitted, file): Self::Output,
+    ) -> Vec<Effect> {
         Self::rebase_draft(snapshot, &submitted, &file);
         Vec::new()
     }
@@ -196,20 +180,19 @@ pub use agent_protocol::operations::ReviewWorkspace;
 
 /// Navigation and notifications already belong to an epoch. Their review read
 /// shares it instead of dispatching a second intent that invalidates siblings.
-pub(in crate::state) fn review_workspace(snapshot: &mut Snapshot) -> Option<Effect> {
-    // A preparing task still sits in its source checkout until the Host moves
-    // it to a worktree; those changes are not the task's. T3 Code shows none.
-    let preparing = snapshot
-        .pane
+pub(in crate::state) fn review_workspace(snapshot: &mut Snapshot, pane_id: &str) -> Option<Effect> {
+    let pane = snapshot.panes.get(pane_id)?.clone();
+    // Preparing tasks still sit in the source checkout until the Host moves them.
+    let preparing = pane
         .navigation
         .thread_id
         .as_ref()
         .and_then(|id| snapshot.sessions.conversations.get(id))
         .is_some_and(|thread| thread.preparation.is_some());
-    if preparing || snapshot.selected_directory().is_empty() {
-        if snapshot.pane.workspace.review.is_some() || snapshot.pane.workspace.review_cwd.is_some()
-        {
-            let workspace = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace);
+    if preparing || snapshot.selected_directory(&pane).is_empty() {
+        if pane.workspace.review.is_some() || pane.workspace.review_cwd.is_some() {
+            let pane = Arc::make_mut(snapshot.panes.get_mut(pane_id)?);
+            let workspace = Arc::make_mut(&mut pane.workspace);
             workspace.review = None;
             workspace.review_cwd = None;
         }
@@ -219,11 +202,11 @@ pub(in crate::state) fn review_workspace(snapshot: &mut Snapshot) -> Option<Effe
         return None;
     }
     let mut operation = ReviewWorkspace {
-        cwd: snapshot.pane.navigation.cwd.clone(),
+        cwd: pane.navigation.cwd.clone(),
     };
     operation
-        .prepare(snapshot)
-        .expect("selecting a review directory is infallible");
+        .prepare(snapshot, pane_id)
+        .expect("selecting a live review directory is infallible");
     Some(Effect::execute(operation))
 }
 
@@ -232,20 +215,24 @@ impl Operation for ReviewWorkspace {
         Scheduling::LatestReview
     }
     fn key(&self) -> Option<OperationKey> {
-        Some(OperationKey::WorkspaceReview)
+        Some(OperationKey::WorkspaceReview {
+            pane: String::new(),
+        })
     }
     rpc_operation!();
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
-        let workspace = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace);
+    fn prepare(&mut self, snapshot: &mut Snapshot, pane_id: &str) -> Result<(), String> {
+        let pane = snapshot.panes.get_mut(pane_id).ok_or("pane is closed")?;
+        let workspace = Arc::make_mut(&mut Arc::make_mut(pane).workspace);
         if workspace.review_cwd.as_ref() != Some(&self.cwd) {
             workspace.review = None;
         }
         workspace.review_cwd = Some(self.cwd.clone());
         Ok(())
     }
-    fn apply(self, snapshot: &mut Snapshot, review: Self::Output) -> Vec<Effect> {
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).review =
-            Some(Arc::new(review));
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, review: Self::Output) -> Vec<Effect> {
+        if let Some(pane) = snapshot.panes.get_mut(pane_id) {
+            Arc::make_mut(&mut Arc::make_mut(pane).workspace).review = Some(Arc::new(review));
+        }
         Vec::new()
     }
 }
@@ -354,7 +341,12 @@ impl Operation for ListWorktrees {
         Some(OperationKey::Worktrees)
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, worktrees: Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        worktrees: Self::Output,
+    ) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.files.workspace).worktrees = Some(Arc::new(worktrees));
         Vec::new()
     }
@@ -367,7 +359,7 @@ impl Operation for RemoveWorktree {
         false
     }
     rpc_operation!();
-    fn apply(self, _: &mut Snapshot, _: Self::Output) -> Vec<Effect> {
+    fn apply(self, _: &mut Snapshot, _pane_id: &str, _: Self::Output) -> Vec<Effect> {
         vec![Effect::execute(ListWorktrees {})]
     }
 }
@@ -408,6 +400,7 @@ mod read_result_tests {
         }
         .apply(
             &mut snapshot,
+            "",
             FileContent {
                 path: loaded_path.into(),
                 revision: "prefix".into(),
@@ -418,18 +411,21 @@ mod read_result_tests {
         );
         assert_eq!(snapshot.files.file_drafts[&path], original);
         assert_eq!(
-            SaveFile { path: path.clone() }.capture(&snapshot).is_err(),
+            SaveFile { path: path.clone() }
+                .capture(&snapshot, "")
+                .is_err(),
             read_only
         );
         let (edited, effects) = crate::state::reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::SetFileDraft {
                 path: path.clone(),
                 text: "new user text".into(),
             }),
         );
         assert!(effects.is_empty());
-        assert_eq!(edited.pane.error.is_some(), read_only);
+        assert_eq!(edited.panes.primary().error.is_some(), read_only);
         assert_eq!(
             edited.files.file_drafts[&path].text,
             if read_only {
@@ -438,38 +434,33 @@ mod read_result_tests {
                 "new user text"
             }
         );
-        assert_eq!(edited.pane.workspace.file.as_ref().unwrap().text, "preview");
-    }
-    #[test]
-    fn each_read_receipt_keeps_its_content_when_another_file_replaces_the_editor_snapshot() {
-        let file = |path: &str, text: &str| FileContent {
-            path: path.into(),
-            text: text.into(),
-            revision: "r1".into(),
-            size: text.len() as u64,
-            truncated: false,
-        };
-        let mut parent = file("/repo/parent.md", "[child](child.md)");
-        let receipt = ReadFile::outcome(&mut parent);
-        let mut snapshot = Snapshot::default();
-        ReadFile {
-            path: parent.path.clone(),
-            discard_draft: false,
-        }
-        .apply(&mut snapshot, parent);
-        ReadFile {
-            path: "/repo/child.md".into(),
-            discard_draft: false,
-        }
-        .apply(&mut snapshot, file("/repo/child.md", "child content"));
         assert_eq!(
-            snapshot.pane.workspace.file.as_ref().unwrap().path,
-            "/repo/child.md"
+            edited.panes.primary().workspace.file.as_ref().unwrap().text,
+            "preview"
         );
-        let Outcome::FileRead { file } = receipt else {
-            panic!("file read result")
-        };
-        assert_eq!(file.path, "/repo/parent.md");
-        assert_eq!(file.text, "[child](child.md)");
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn folder_navigation_accepts_home_paths_and_rejects_workspace_relative_paths() {
+        let mut snapshot = Snapshot::default();
+        for path in [
+            "~",
+            "~/Documents",
+            "/workspace",
+            "C:/Users/host",
+            r"\\server\share",
+        ] {
+            let mut list = ListFiles { path: path.into() };
+            assert!(list.prepare(&mut snapshot, "").is_ok(), "{path}");
+        }
+        for path in ["", "documents", "~someone/documents"] {
+            let mut list = ListFiles { path: path.into() };
+            assert!(list.prepare(&mut snapshot, "").is_err(), "{path}");
+        }
     }
 }

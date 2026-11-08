@@ -132,7 +132,11 @@ fn assert_work_starts_collapsed(turn: &Turn) {
     use std::sync::Arc;
     let rendered = project_conversation(
         crate::localization::UiLanguage::Japanese,
-        &crate::state::Snapshot::default().pane.navigation.draft_key,
+        &crate::state::Snapshot::default()
+            .panes
+            .primary()
+            .navigation
+            .draft_key,
         &crate::state::Snapshot::default()
             .sessions
             .pending_submissions,

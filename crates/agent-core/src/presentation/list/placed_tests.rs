@@ -749,7 +749,7 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
                 let key = OperationKey::ProjectList {
                     project_id: "destination".into(),
                 };
-                snapshot.operations.insert(
+                Arc::make_mut(&mut snapshot.operations).insert(
                     key.clone(),
                     OperationState {
                         generation: 1,
@@ -768,7 +768,10 @@ fn expanded_projects_keep_connection_and_operation_errors_without_affecting_coll
                     project.error.as_ref().map(|error| error.message.as_str()),
                     expected
                 );
-                snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Failed {
+                Arc::make_mut(&mut snapshot.operations)
+                    .get_mut(&key)
+                    .unwrap()
+                    .phase = OperationPhase::Failed {
                     message: "read failed".into(),
                 };
                 let project = snapshot
@@ -803,9 +806,9 @@ fn translated_list_copy_preserves_titles_paths_and_provider_names() {
         ],"projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,
         "providerErrors":{"設定":"provider failure"}
     })).unwrap()));
-    let japanese = Presentation::project(Arc::new(snapshot.clone()), None);
+    let japanese = Presentation::project(Arc::new(snapshot.clone()), "", None).unwrap();
     snapshot.catalog.ui_language = UiLanguage::English;
-    let english = Presentation::project(Arc::new(snapshot), Some(&japanese));
+    let english = Presentation::project(Arc::new(snapshot), "", Some(&japanese)).unwrap();
     let list = english.list.as_ref().unwrap();
     assert!(!Arc::ptr_eq(list, japanese.list.as_ref().unwrap()));
     assert_eq!(list.threads[0].title, "設定\n{0} (saved · unverified)");
@@ -822,6 +825,6 @@ fn translated_list_copy_preserves_titles_paths_and_provider_names() {
             "The conversation list is incomplete (設定). Saved results from unavailable providers may be out of date."
         )
     );
-    let same = Presentation::project(english.snapshot.clone(), Some(&english));
+    let same = Presentation::project(english.snapshot.clone(), "", Some(&english)).unwrap();
     assert!(Arc::ptr_eq(list, same.list.as_ref().unwrap()));
 }

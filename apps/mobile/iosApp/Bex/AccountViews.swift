@@ -147,7 +147,7 @@ struct AccountLoginSection: View {
     let providerName: String
     @Binding var loginCode: String
     let progressMessage: String?
-    let loginError: String?
+    let loginError: ErrorText?
     let submit: () -> Void
     let retry: () -> Void
 
@@ -186,7 +186,7 @@ struct AccountLoginSection: View {
                 ProgressView(LocalizedStringKey(progressMessage))
             }
             if let error = loginError {
-                ErrorTextView(source: error).font(.caption).foregroundStyle(.red)
+                ErrorTextView(text: error).font(.caption).foregroundStyle(.red)
                 Button("認証状態を再確認", action: retry)
             }
         }

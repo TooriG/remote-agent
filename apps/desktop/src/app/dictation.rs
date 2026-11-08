@@ -109,7 +109,10 @@ impl super::view::composer::ComposerContent {
 }
 impl Desktop {
     pub(super) fn start_dictation(&mut self) {
-        if self.dictation.is_some() || !self.snapshot.connection.connected || self.busy() {
+        if self.dictation.is_some()
+            || !self.publication.snapshot.connection.connected
+            || self.busy()
+        {
             return;
         }
         let (events, incoming) = async_channel::unbounded();
@@ -132,7 +135,7 @@ impl Desktop {
                 self.dictation = Some(Dictation {
                     id,
                     key: self.draft_key().clone(),
-                    generation: self.snapshot.connection.epoch,
+                    generation: self.publication.snapshot.connection.epoch,
                     phase: Phase::Preparing,
                     send: false,
                     control: Some(control),
@@ -204,7 +207,8 @@ impl Desktop {
                         .as_ref()
                         .map(|preparation| preparation.id()),
                     audio,
-                    send: state.send && state.generation == self.snapshot.connection.epoch,
+                    send: state.send
+                        && state.generation == self.publication.snapshot.connection.epoch,
                     client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
                 });
                 self.perform(intent, OperationCompletion::Dictation(id));
@@ -241,12 +245,14 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let mut view = Desktop::new(Mode::Main, window, cx);
             view.onboarding = false;
-            Arc::make_mut(&mut view.snapshot).connection.connected = true;
+            view.edit_fixture(|snapshot| {
+                snapshot.connection.connected = true;
+            });
             view.open_surface(view.panel_scope(), Panel::Files, None);
             view.dictation = Some(Dictation {
                 id,
                 key: view.draft_key().clone(),
-                generation: view.snapshot.connection.epoch,
+                generation: view.publication.snapshot.connection.epoch,
                 phase: Phase::Recording,
                 send: false,
                 control: None,

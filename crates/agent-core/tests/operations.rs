@@ -170,12 +170,12 @@ async fn execute(client: &Client, command: &Value) -> Result<Value, PeerError> {
             id: text(command, "accountId").to_owned()
         }),
         "startAccountLogin" => call!(StartAccountLogin {
-            provider: agent_protocol::session::ProviderKind::Codex
+            provider: agent_protocol::session::ProviderKind::Codex,
+            thread_id: None,
         }),
         "accountLoginStatus" => call!(ReadAccountLogin {
             provider: agent_protocol::session::ProviderKind::Codex,
             id: text(command, "loginId").to_owned(),
-            thread_id: None,
         }),
         "cancelAccountLogin" => {
             call!(CancelAccountLogin {

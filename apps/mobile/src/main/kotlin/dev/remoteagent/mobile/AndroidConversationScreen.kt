@@ -271,11 +271,7 @@ internal fun ThreadComposer(
                             perform(Intent.Submit(navigation.threadId, UUID.randomUUID().toString())) {}
                         },
                         enabled =
-                            controls.provider != null &&
-                                inputUnavailable == null &&
-                                !sending &&
-                                !uploading &&
-                                (draft.text.isNotBlank() || draft.attachments.isNotEmpty()),
+                            composer.canSend(draft.text.isNotBlank() || draft.attachments.isNotEmpty()) && !uploading,
                     ) {
                         if (sending) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         else
@@ -294,6 +290,7 @@ internal fun ThreadComposer(
 internal fun AttachmentButton(
     selectionKey: Pair<String?, dev.remoteagent.core.DraftKey>,
     attach: (Pair<String?, dev.remoteagent.core.DraftKey>, Uri, () -> Unit) -> Unit,
+    enabled: Boolean,
     transferState: (Boolean) -> Unit = {},
 ) {
     val language = LocalUiLanguage.current
@@ -318,7 +315,7 @@ internal fun AttachmentButton(
             selection = selectionKey
             picker.launch(arrayOf("*/*"))
         },
-        enabled = !transferring,
+        enabled = enabled && !transferring,
         modifier =
             Modifier.semantics {
                 contentDescription = if (transferring) language.text("アップロード中") else language.text("写真やファイルを添付")

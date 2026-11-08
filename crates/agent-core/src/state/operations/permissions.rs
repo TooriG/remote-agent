@@ -10,17 +10,17 @@ pub struct PermissionSettingsState {
 macro_rules! permission_operation {
     ($ty:ty) => {
         impl Operation for $ty {
+            fn navigation_bound(&self) -> bool {
+                false
+            }
             fn key(&self) -> Option<OperationKey> {
                 Some(OperationKey::Permissions {
                     provider: self.provider,
                 })
             }
-            fn navigation_bound(&self) -> bool {
-                false
-            }
             no_input!();
             type Output = Result<PermissionSettings, String>;
-            fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+            fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
                 Arc::make_mut(&mut snapshot.catalog.permission_settings).insert(
                     self.provider,
                     Arc::new(PermissionSettingsState { result: None }),
@@ -34,7 +34,12 @@ macro_rules! permission_operation {
             ) -> Result<Self::Output, PeerError> {
                 Ok(context.call(self).await.map_err(|error| error.to_string()))
             }
-            fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+            fn apply(
+                self,
+                snapshot: &mut Snapshot,
+                _pane_id: &str,
+                output: Self::Output,
+            ) -> Vec<Effect> {
                 if snapshot
                     .catalog
                     .permission_settings

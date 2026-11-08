@@ -267,17 +267,25 @@ impl Desktop {
     }
     // Fixtures inject immutable state at the same core projection boundary as Store.
     #[cfg(test)]
-    pub(in crate::app) fn project_fixture(&mut self) {
+    pub(in crate::app) fn project_fixture(&mut self, snapshot: Arc<Snapshot>) {
         self.publication = agent_core::presentation::view::Presentation::project(
-            self.snapshot.clone(),
+            snapshot,
+            &self.publication.pane_id,
             Some(&self.publication),
-        );
+        )
+        .unwrap();
+    }
+    #[cfg(test)]
+    pub(in crate::app) fn edit_fixture(&mut self, edit: impl FnOnce(&mut Snapshot)) {
+        let mut snapshot = self.publication.snapshot.as_ref().clone();
+        edit(&mut snapshot);
+        self.project_fixture(Arc::new(snapshot));
     }
 
     fn publish_media(&self, cx: &mut Context<Self>) {
         let source = media::MediaSource {
             host: self.remote_key().into(),
-            cwd: self.snapshot.pane.navigation.cwd.clone(),
+            cwd: self.publication.pane().navigation.cwd.clone(),
             remote: self.remote.is_some(),
             session: self.selected().cloned(),
         };
@@ -796,7 +804,7 @@ mod cache_tests {
                 window,
                 cx,
             );
-            desktop.snapshot = store.snapshot();
+            desktop.project_fixture(store.snapshot());
             desktop.session = session.take();
             desktop.epoch += 1;
             desktop.connecting = false;
@@ -917,7 +925,7 @@ mod cache_tests {
             },
             ..Default::default()
         };
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key =
             DraftKey::Session {
                 session: SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
@@ -940,7 +948,7 @@ mod cache_tests {
         let (desktop, window) = cx.add_window_view(|window, cx| {
             let mut desktop = Desktop::new(Mode::Main, window, cx);
             desktop.onboarding = false;
-            desktop.snapshot = store.snapshot();
+            desktop.project_fixture(store.snapshot());
             desktop.session = session.take();
             desktop.open_panel(Panel::Browser, window, cx);
             desktop
@@ -1083,17 +1091,18 @@ mod cache_tests {
                 let mut desktop = Desktop::new(Mode::Main, window, cx);
                 desktop.onboarding = false;
                 let key = desktop.draft_key().clone();
-                Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).input.drafts).insert(
-                    key,
-                    Arc::new(Draft {
-                        model: Some(agent_protocol::models::ModelRef {
-                            provider: agent_protocol::session::ProviderKind::Codex,
-                            id: "gpt".into(),
+                desktop.edit_fixture(|snapshot| {
+                    Arc::make_mut(&mut snapshot.input.drafts).insert(
+                        key,
+                        Arc::new(Draft {
+                            model: Some(agent_protocol::models::ModelRef {
+                                provider: agent_protocol::session::ProviderKind::Codex,
+                                id: "gpt".into(),
+                            }),
+                            ..Default::default()
                         }),
-                        ..Default::default()
-                    }),
-                );
-                desktop.project_fixture();
+                    );
+                });
                 desktop
             });
             owner = Some(desktop.clone());
@@ -1106,13 +1115,14 @@ mod cache_tests {
         window.run_until_parked();
         assert!(window.debug_bounds("model-choice-extra").is_none());
         owner.unwrap().update(window, |desktop, cx| {
-            Arc::make_mut(&mut desktop.snapshot).catalog.models = Arc::new(
-                serde_json::from_value(serde_json::json!([
-                    {"id":"extra","model":{"provider":"codex","id":"extra"},"displayName":"Extra"}
-                ]))
-                .unwrap(),
-            );
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+    snapshot.catalog.models = Arc::new(
+                    serde_json::from_value(serde_json::json!([
+                        {"id":"extra","model":{"provider":"codex","id":"extra"},"displayName":"Extra"}
+                    ]))
+                    .unwrap(),
+                );
+            });
             cx.notify();
         });
         window.run_until_parked();
@@ -1142,7 +1152,13 @@ mod cache_tests {
             Arc::new(agent_core::store::Store::offline(Snapshot::default(), None))
         });
         let session = runtime.block_on(async { StoreSession::new(store.clone(), app_runtime) });
-        let key = store.snapshot().pane.navigation.draft_key.clone();
+        let key = store
+            .snapshot()
+            .panes
+            .primary()
+            .navigation
+            .draft_key
+            .clone();
         let (desktop, window) = cx.add_window_view(|window, cx| {
             let mut view = Desktop::new(
                 Mode::Fixture {
@@ -1226,9 +1242,9 @@ mod cache_tests {
                 view.hosts = None;
                 view.app_updates = None;
                 view.open_surface(view.panel_scope(), Panel::Files, None);
-                let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id = Some(session.clone());
-                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key = session.clone().into();
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id = Some(session.clone());
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key = session.clone().into();
                 snapshot.lists.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
                     "data":[{"id":{"provider":"codex","id":"selected"},"name":"Task"}],
                     "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,
@@ -1238,9 +1254,9 @@ mod cache_tests {
                     "turns":[{"id":"turn","status":"completed","items":[{"id":"answer","body":{"inline":{"body":{"assistantText":{"text":"Original answer","phase":"final"}}}}}]}]
                 })).unwrap()));
                 let store = runtime.block_on(async {
-                    Arc::new(agent_core::store::Store::offline((*view.snapshot).clone(), None))
+                    Arc::new(agent_core::store::Store::offline(snapshot, None))
                 });
-                view.snapshot = store.snapshot();
+                view.project_fixture(store.snapshot());
                 view.epoch += 1;
                 let epoch = view.epoch;
                 let updates = view.updates.clone();
@@ -1337,7 +1353,7 @@ mod cache_tests {
                 assert!(view.publication.conversation.same(&previous.conversation));
                 assert!(Arc::ptr_eq(&view.publication.context, &previous.context));
                 assert!(Arc::ptr_eq(
-                    &view.snapshot.files.workspace,
+                    &view.publication.snapshot.files.workspace,
                     &previous.snapshot.files.workspace,
                 ));
             });
@@ -1350,10 +1366,10 @@ mod cache_tests {
         // Offline restoration clears running status. Supply the live status
         // fixture separately before checking streaming and animation reuse.
         desktop.update(cx, |view, cx| {
-            let snapshot = Arc::make_mut(&mut view.snapshot);
+            let mut snapshot = view.publication.snapshot.as_ref().clone();
             Arc::make_mut(snapshot.lists.threads.as_mut().unwrap()).data[0].status =
                 agent_protocol::models::SessionStatus::Running;
-            view.project_fixture();
+            view.project_fixture(Arc::new(snapshot));
             cx.notify();
         });
         cx.run_until_parked();
@@ -1362,7 +1378,7 @@ mod cache_tests {
         window
             .update(cx, |_, window, cx| {
                 desktop.update(cx, |view, cx| {
-                    let snapshot = Arc::make_mut(&mut view.snapshot);
+                    let mut snapshot = view.publication.snapshot.as_ref().clone();
                     let thread = Arc::make_mut(
                         Arc::make_mut(&mut snapshot.sessions.conversations)
                             .get_mut(&session)
@@ -1377,7 +1393,7 @@ mod cache_tests {
                             phase: agent_protocol::items::AssistantPhase::Final,
                         },
                     ));
-                    view.project_fixture();
+                    view.project_fixture(Arc::new(snapshot));
                     view.publish_views(window, cx);
                 });
             })
@@ -1391,7 +1407,7 @@ mod cache_tests {
             assert!(Arc::ptr_eq(&view.publication.composer, &previous.composer));
             assert!(Arc::ptr_eq(&view.publication.context, &previous.context));
             assert!(Arc::ptr_eq(
-                &view.snapshot.files.workspace,
+                &view.publication.snapshot.files.workspace,
                 &previous.snapshot.files.workspace,
             ));
         });
@@ -1461,13 +1477,16 @@ mod cache_tests {
                 .unwrap();
             cx.run_until_parked();
             if desktop.read_with(cx, |view, _| {
-                view.snapshot.pane.navigation.cwd == "/next-project"
+                view.publication.snapshot.panes.primary().navigation.cwd == "/next-project"
             }) {
                 break;
             }
         }
         desktop.read_with(cx, |view, cx| {
-            assert_eq!(view.snapshot.pane.navigation.cwd, "/next-project");
+            assert_eq!(
+                view.publication.snapshot.panes.primary().navigation.cwd,
+                "/next-project"
+            );
             assert!(view.composer.input.read(cx).value().is_empty());
         });
         assert!(

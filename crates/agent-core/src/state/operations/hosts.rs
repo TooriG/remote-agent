@@ -9,7 +9,7 @@ impl Operation for ReadHostSoftware {
     fn scheduling(&self) -> Scheduling {
         Scheduling::LatestHostState(OperationKey::HostSoftware)
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, output: Self::Output) -> Vec<Effect> {
         snapshot.catalog.host_software = Some(Arc::new(output));
         Vec::new()
     }
@@ -27,7 +27,7 @@ impl Operation for ReadTaskActivity {
     fn scheduling(&self) -> Scheduling {
         Scheduling::LatestHostState(OperationKey::TaskActivity)
     }
-    fn apply(self, snapshot: &mut Snapshot, state: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, state: Self::Output) -> Vec<Effect> {
         snapshot.accept_task_activity(state)
     }
 }
@@ -75,7 +75,7 @@ mod task_activity_tests {
             assert_eq!(request["method"], "host/taskActivity/read");
             writer.reply(&request, json!({"error":{"code":"provider_failed","message":"fixture unavailable","delivery":"notSent"}})).await.unwrap();
             while store.snapshot().operation_running(OperationKey::TaskActivity) { updates.changed().await.unwrap(); }
-            assert!(store.snapshot().pane.error.is_none());
+            assert!(store.snapshot().panes.primary().error.is_none());
             assert_eq!(store.snapshot().lists.task_activity.as_ref().unwrap().display.current.total, 1);
             assert!(store.snapshot().lists.threads.is_some());
             store.close().await.unwrap();
@@ -90,7 +90,7 @@ impl Operation for RegisterLiveActivity {
             activity_id: self.activity_id.clone(),
         })
     }
-    fn prepare(&mut self, _: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, _: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         self.validate().map_err(str::to_owned)
     }
     fn outcome(output: &mut Self::Output) -> Outcome {
@@ -116,7 +116,7 @@ rpc::rpc_method!(LoadHostName, HostName, |self| crate::models::Empty {});
 impl Operation for LoadHostName {
     rpc_operation!();
     const STALE_POLICY: StalePolicy = StalePolicy::Apply;
-    fn apply(self, snapshot: &mut Snapshot, name: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, name: Self::Output) -> Vec<Effect> {
         snapshot.connection.host_name = Some(name);
         Vec::new()
     }
@@ -132,7 +132,7 @@ pub use agent_protocol::operations::RemoveRemoteHost;
 
 impl Operation for RemoveRemoteHost {
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         let Self { id } = self;
         Arc::make_mut(&mut snapshot.connection.management)
             .remotes
@@ -145,7 +145,7 @@ pub use agent_protocol::operations::RevokeDevice;
 
 impl Operation for RevokeDevice {
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         let Self { id } = self;
         if let Some(status) = Arc::make_mut(&mut snapshot.connection.management)
             .status
@@ -176,7 +176,7 @@ mod device_tests {
             devices: devices.to_vec(),
             provider_errors: None,
         }));
-        RevokeDevice { id: "phone".into() }.apply(&mut snapshot, crate::models::Empty {});
+        RevokeDevice { id: "phone".into() }.apply(&mut snapshot, "", crate::models::Empty {});
         assert_eq!(
             snapshot
                 .connection
@@ -208,7 +208,7 @@ impl Operation for LoadHostManagement {
         )?;
         Ok((status, remotes))
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, output: Self::Output) -> Vec<Effect> {
         let management = Arc::make_mut(&mut snapshot.connection.management);
         management.status = Some(Arc::new(output.0));
         management.remotes = output.1;
@@ -272,7 +272,7 @@ impl Operation for PairRemoteHost {
             })
             .await
     }
-    fn apply(self, snapshot: &mut Snapshot, host: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, host: Self::Output) -> Vec<Effect> {
         let management = Arc::make_mut(&mut snapshot.connection.management);
         if let Some(current) = management
             .remotes

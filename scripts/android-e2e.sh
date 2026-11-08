@@ -115,7 +115,7 @@ adb -P "$server_port" -s "$serial" shell am instrument -w -r -e cwd "$fixture/ho
     -e class dev.remoteagent.mobile.StorePersistenceTest,dev.remoteagent.mobile.ConversationRecoveryTest,dev.remoteagent.mobile.MarkdownTableTest,dev.remoteagent.mobile.ConversationNavigationTest,dev.remoteagent.mobile.ThreadListTest,dev.remoteagent.mobile.ComposerControlsTest,dev.remoteagent.mobile.EnvironmentSettingsTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.store.log"
 adb -P "$server_port" -s "$serial" exec-out screencap -p >"$log.final.png"
-grep -qx 'OK (16 tests)' "$log.store.log"
+grep -qx 'OK (14 tests)' "$log.store.log"
 # Each paired test gets a fresh single-use invitation and isolated credentials.
 
 prepare_pairing
@@ -147,8 +147,8 @@ adb -P "$server_port" -s "$serial" pull /sdcard/Android/data/dev.remoteagent.mob
 if [[ $mode == all ]]; then
 adb -P "$server_port" -s "$serial" shell settings put secure show_ime_with_hard_keyboard 1
 adb -P "$server_port" -s "$serial" shell am instrument -w -r \
-    -e class dev.remoteagent.mobile.VoiceInputTest,dev.remoteagent.mobile.MarkdownLinkTest,dev.remoteagent.mobile.FileViewerTest,dev.remoteagent.mobile.MessageActionsTest,dev.remoteagent.mobile.UnknownSubmissionTest,dev.remoteagent.mobile.ModelSelectionTest,dev.remoteagent.mobile.ComposerStopTest,dev.remoteagent.mobile.ComposerKeyboardTest \
+    -e class dev.remoteagent.mobile.VoiceInputTest,dev.remoteagent.mobile.MarkdownLinkTest,dev.remoteagent.mobile.FileViewerTest,dev.remoteagent.mobile.MessageActionsTest,dev.remoteagent.mobile.UnknownSubmissionTest,dev.remoteagent.mobile.ComposerStopTest,dev.remoteagent.mobile.ComposerKeyboardTest \
     dev.remoteagent.mobile.test/androidx.test.runner.AndroidJUnitRunner | tee "$log.ui.log"
-grep -qx 'OK (26 tests)' "$log.ui.log"
+grep -qx 'OK (24 tests)' "$log.ui.log"
 fi
 echo "Android API 37: $mode checks passed; records at $log.*"

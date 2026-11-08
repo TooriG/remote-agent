@@ -7,11 +7,12 @@ impl Desktop {
         let input = self.composer.input.read(cx);
         if self.composer.completion_dismissed
             || !input.selected_range().is_empty()
-            || !self.snapshot.connection.connected
+            || !self.publication.snapshot.connection.connected
         {
             return None;
         }
-        self.snapshot
+        self.publication
+            .composer
             .composer_suggestions(input.value().to_string(), input.cursor() as u32)
     }
     pub(super) fn completion_key(
@@ -220,14 +221,14 @@ mod tests {
                     remote: Some(super::RemoteHost { id: "fixture".into(), name: "fixture".into(), ticket: "invalid-fixture-ticket".into() }),
                  cwd: "/fixture".into(),}, window, cx));
                 desktop.update(cx, |view, cx| {
-                    let snapshot = Arc::make_mut(&mut view.snapshot);
+                    let mut snapshot = view.publication.snapshot.as_ref().clone();
                     snapshot.connection.connected = true;
-                    Arc::make_mut(&mut snapshot.input.drafts).insert(snapshot.pane.navigation.draft_key.clone(), Arc::new(agent_core::state::Draft {
+                    Arc::make_mut(&mut snapshot.input.drafts).insert(snapshot.panes.primary().navigation.draft_key.clone(), Arc::new(agent_core::state::Draft {
                         model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "model".into() }),
                         ..Default::default()
                     }));
-                    Arc::make_mut(&mut snapshot.catalog.composer_catalogs).insert(snapshot.pane.navigation.cwd.clone(), Arc::new(ComposerCatalog {
-                        cwd: snapshot.pane.navigation.cwd.clone(), loading: true,
+                    Arc::make_mut(&mut snapshot.catalog.composer_catalogs).insert(snapshot.panes.primary().navigation.cwd.clone(), Arc::new(ComposerCatalog {
+                        cwd: snapshot.panes.primary().navigation.cwd.clone(), loading: true,
                         candidates: [
                             ("Review", "Investigate whether structured datasets and query results are trustworthy enough to use, including freshness, duplicates and missing values"),
                             ("Analyze Data Quality With A Very Long Skill Name", "First line\nSecond line"),
@@ -236,6 +237,7 @@ mod tests {
                             description: description.into(),
                         }).collect(), ..Default::default()
                     }));
+                    view.project_fixture(Arc::new(snapshot));
                     view.composer.input.update(cx, |input, cx| {
                         input.set_value("/", window, cx);
                         input.set_selected_range(1..1, cx);
@@ -309,7 +311,9 @@ mod tests {
                     window,
                     cx,
                 );
-                Arc::make_mut(&mut desktop.snapshot).connection.connected = true;
+                desktop.edit_fixture(|snapshot| {
+                    snapshot.connection.connected = true;
+                });
                 desktop.composer.input.update(cx, |input, cx| {
                     input.set_readonly(false, cx);
                     input.set_value("ABCDE", window, cx);
@@ -387,10 +391,10 @@ mod tests {
             )
         });
         view.update(cx, |view, window, cx| {
-            let snapshot = Arc::make_mut(&mut view.snapshot);
+            let mut snapshot = view.publication.snapshot.as_ref().clone();
             snapshot.connection.connected = true;
             Arc::make_mut(&mut snapshot.input.drafts).insert(
-                snapshot.pane.navigation.draft_key.clone(),
+                snapshot.panes.primary().navigation.draft_key.clone(),
                 Arc::new(agent_core::state::Draft {
                     model: Some(agent_protocol::models::ModelRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
@@ -400,9 +404,9 @@ mod tests {
                 }),
             );
             Arc::make_mut(&mut snapshot.catalog.composer_catalogs).insert(
-                snapshot.pane.navigation.cwd.clone(),
+                snapshot.panes.primary().navigation.cwd.clone(),
                 Arc::new(ComposerCatalog {
-                    cwd: snapshot.pane.navigation.cwd.clone(),
+                    cwd: snapshot.panes.primary().navigation.cwd.clone(),
                     candidates: vec![ComposerCandidate {
                         invocation: Invocation {
                             provider: agent_protocol::session::ProviderKind::Codex,
@@ -415,6 +419,7 @@ mod tests {
                     ..Default::default()
                 }),
             );
+            view.project_fixture(Arc::new(snapshot));
             view.composer.input.update(cx, |input, cx| {
                 input.set_readonly(false, cx);
                 input.set_value("日本語 /rev 後半", window, cx);

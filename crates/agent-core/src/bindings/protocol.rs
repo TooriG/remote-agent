@@ -560,10 +560,6 @@ struct Accounts {
     pub errors: std::collections::HashMap<ProviderKind, String>,
 }
 #[uniffi::remote(Record)]
-struct StartAccountLogin {
-    pub provider: crate::session::ProviderKind,
-}
-#[uniffi::remote(Record)]
 struct SubmitAccountLogin {
     pub provider: ProviderKind,
     pub id: String,

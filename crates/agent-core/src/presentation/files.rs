@@ -153,12 +153,3 @@ pub struct Files {
     pub(crate) resources: crate::state::Files,
     pub(crate) selection: std::sync::Arc<crate::state::WorkspaceLocation>,
 }
-#[cfg(feature = "bindings")]
-impl crate::state::Snapshot {
-    pub fn files_view(&self) -> std::sync::Arc<Files> {
-        std::sync::Arc::new(Files {
-            resources: self.files.clone(),
-            selection: self.pane.workspace.clone(),
-        })
-    }
-}

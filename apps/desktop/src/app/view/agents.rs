@@ -138,7 +138,7 @@ mod tests {
             desktop.onboarding = false;
             desktop.panels = desktop.panels.clone().set_open(desktop.panel_scope(), false);
             let parent = agent_protocol::session::SessionRef { provider:agent_protocol::session::ProviderKind::Codex, id:"parent".into() };
-            let snapshot = Arc::make_mut(&mut desktop.snapshot);
+            let mut snapshot = desktop.publication.snapshot.as_ref().clone();
             snapshot.lists.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
                 "data":[{"id":{"provider":"codex","id":"parent"},"name":"Parent"}],
                 "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,})).unwrap()));
@@ -146,11 +146,11 @@ mod tests {
                 agent_protocol::session::SessionRef { provider: parent.provider, id:"child".into() },
                 Arc::new(serde_json::from_value(serde_json::json!({"id":{"provider":"codex","id":"child"},"parentId":{"provider":"codex","id":"parent"},"name":"Review","status":"running"})).unwrap())
             );
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id = Some(parent.clone());
-            Arc::make_mut(&mut snapshot.pane).observed_agents = Some(parent.clone());
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key = parent.clone().into();
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id = Some(parent.clone());
+            Arc::make_mut(snapshot.panes.primary_mut()).observed_agents = Some(parent.clone());
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key = parent.clone().into();
             Arc::make_mut(&mut snapshot.input.drafts).insert(parent.into(),Arc::new(Draft { text:"Keep my draft".into(),..Default::default() }));
-            desktop.project_fixture();
+            desktop.project_fixture(Arc::new(snapshot));
             desktop
         });
         window.simulate_resize(size(px(1600.), px(900.)));
@@ -173,10 +173,27 @@ mod tests {
             assert!(desktop.panels.get(desktop.panel_scope()).kind() == Panel::Agents);
             assert_eq!(desktop.selected().unwrap().id, "parent");
             assert_eq!(desktop.draft().text, "Keep my draft");
-            assert_eq!(desktop.snapshot.thread_list().unwrap().threads.len(), 1);
-            assert!(desktop.snapshot.agent_panel()[0].active);
-            let snapshot = Arc::make_mut(&mut desktop.snapshot);
-            let child = snapshot.agent_panel()[0].key.clone();
+            assert_eq!(
+                desktop
+                    .publication
+                    .snapshot
+                    .thread_list()
+                    .unwrap()
+                    .threads
+                    .len(),
+                1
+            );
+            assert!(
+                desktop
+                    .publication
+                    .snapshot
+                    .agent_panel(desktop.publication.snapshot.panes.primary())[0]
+                    .active
+            );
+            let mut snapshot = desktop.publication.snapshot.as_ref().clone();
+            let child = snapshot.agent_panel(snapshot.panes.primary())[0]
+                .key
+                .clone();
             Arc::make_mut(&mut snapshot.lists.activity).active.insert(
                 agent_protocol::session::SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
@@ -184,9 +201,9 @@ mod tests {
                 },
                 false,
             );
-            assert_eq!(snapshot.agent_panel()[0].key, child);
-            assert!(!snapshot.agent_panel()[0].active);
-            desktop.project_fixture();
+            assert_eq!(snapshot.agent_panel(snapshot.panes.primary())[0].key, child);
+            assert!(!snapshot.agent_panel(snapshot.panes.primary())[0].active);
+            desktop.project_fixture(Arc::new(snapshot));
             cx.notify();
         });
         window.run_until_parked();

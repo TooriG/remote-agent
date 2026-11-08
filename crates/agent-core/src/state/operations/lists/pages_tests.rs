@@ -93,7 +93,7 @@ fn empty_project_pages_keep_unassigned_root_rows_without_grouping() {
         },
     );
     let mut snapshot = Snapshot::default();
-    ListSessions::new(Default::default()).apply(&mut snapshot, input);
+    ListSessions::new(Default::default()).apply(&mut snapshot, "", input);
     assert_eq!(snapshot.lists.threads.as_ref().unwrap().data, expected);
     assert!(snapshot.lists.project_threads["empty"].data.is_empty());
     assert!(snapshot.lists.project_threads["empty"].has_more);
@@ -165,7 +165,7 @@ fn root_refresh_groups_pages_without_replacing_larger_or_omitted_cached_pages() 
         },
         ..Default::default()
     };
-    ListSessions::new((*snapshot.lists.list_query).clone()).apply(&mut snapshot, input);
+    ListSessions::new((*snapshot.lists.list_query).clone()).apply(&mut snapshot, "", input);
     assert_eq!(
         snapshot.lists.threads.as_ref().unwrap().data,
         [root, hidden.clone(), other]

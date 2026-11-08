@@ -46,7 +46,6 @@ import dev.remoteagent.core.ticketIdentity
 import java.io.File
 import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -86,10 +85,9 @@ internal class AndroidAppModel(private val context: Context, private val prefere
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
-    private var publication = Presentation.empty(language)
-    @Volatile
-    var snapshot = publication.snapshot()
-        private set
+    @Volatile private var publication = Presentation.empty(language)
+    val snapshot: Snapshot
+        get() = publication.snapshot()
 
     var settings by mutableStateOf(publication.settings())
         private set
@@ -100,7 +98,7 @@ internal class AndroidAppModel(private val context: Context, private val prefere
     var composer by mutableStateOf(publication.composer())
         private set
 
-    var files by mutableStateOf(snapshot.files())
+    var files by mutableStateOf(requireNotNull(snapshot.files("")))
         private set
 
     var terminals by mutableStateOf(dev.remoteagent.core.Terminals.empty())
@@ -157,7 +155,8 @@ internal class AndroidAppModel(private val context: Context, private val prefere
     private val sessions =
         ClientSessions(true, ClientBuild(0uL, BuildConfig.BUILD_REVISION), repository.deviceName, preferences)
     private var session: ClientSession? = null
-    private var owner: AgentStore? = null
+    // Observed so a browser pane follows the selected Host's Store.
+    private var owner by mutableStateOf<AgentStore?>(null)
 
     private val connections = mutableStateMapOf<String, Job>()
     private var pairingConnection by mutableStateOf<Job?>(null)
@@ -193,16 +192,9 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         }
     }
 
-    suspend fun browser(
-        expectedProfile: String?,
-        request: dev.remoteagent.core.BrowserRequest,
-    ): dev.remoteagent.core.BrowserFrame {
-        val store = owner ?: error("ホストに接続してください。")
-        check(connectionSelection.hostId == expectedProfile)
-        val frame = store.browser(request)
-        if (owner !== store || connectionSelection.hostId != expectedProfile) throw CancellationException()
-        return frame
-    }
+    /** The selected Host's Store, which owns its browser. */
+    val selectedStore: AgentStore?
+        get() = owner
 
     fun perform(intent: Intent, complete: (Result<Outcome>) -> Unit = {}) {
         val store = session
@@ -460,7 +452,8 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         connectionStates[host] = HostConnectionState(current.connectionEnabled(), current.connected())
         updateProfile(current, host)
         if (connectionSelection.hostId == host) {
-            owner = session?.store()
+            // Each read returns a new binding wrapper; take the Store once it is ready.
+            if (owner == null) owner = session?.store()
             publish(next)
         } else if (connectionSelection.all && listChanged) updateTaskList()
     }
@@ -482,12 +475,11 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         isConnected = next.connected()
         loadingThreads = next.operationRunning(OperationKey.SessionList)
         listQuery = next.listQuery()
-        applicationNotices = next.errorNotices(ErrorScope.Application)
-        projectNotices = next.errorNotices(ErrorScope.Projects)
-        if (changes.groups.files || changes.groups.pane) files = next.files()
+        applicationNotices = next.errorNotices("", ErrorScope.Application)
+        projectNotices = next.errorNotices("", ErrorScope.Projects)
+        if (changes.groups.files || changes.groups.panes) files = requireNotNull(next.files(value.paneId()))
         if (changes.groups.terminals) terminals = next.terminals()
-        fileLocation = FileLocation(next.navigation().cwd, next.hostHomeDirectory())
-        snapshot = next
+        fileLocation = FileLocation(context.navigation().cwd, context.home())
         session?.persistenceError()?.let { notice = it }
     }
 
@@ -714,11 +706,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
         androidx.compose.foundation.layout.Row {
             FilesLauncher(model.files, model.fileLocation.cwd, model::perform)
             TerminalLauncher(model.terminals, model.conversationContext.navigation().cwd, model::perform)
-            BrowserLauncher(
-                model.conversationContext.navigation().threadId,
-                model.connectionSelection.hostId,
-                model::browser,
-            )
+            BrowserLauncher(model.conversationContext.navigation().threadId, model.selectedStore)
         }
         ThreadDetailScreen(
             model.conversationContext,
@@ -736,7 +724,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
                     ModelPickerDialog(model.settings, selected, model::perform, dismiss)
                 },
             ) { transferState ->
-                AttachmentButton(model.selectionKey, model::attach, transferState)
+                AttachmentButton(model.selectionKey, model::attach, model.composer.canAttach(), transferState)
             }
         }
     }

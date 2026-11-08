@@ -209,6 +209,7 @@ impl Sessions {
         if let Some(enabled) = enabled {
             snapshot = agent_core::state::reduce(
                 &snapshot,
+                "",
                 agent_core::state::Event::Intent(agent_core::state::Intent::SetConnectionEnabled {
                     enabled,
                 }),
@@ -216,11 +217,12 @@ impl Sessions {
             .0;
         }
         let cwd = snapshot
-            .pane
+            .panes
+            .primary()
             .navigation
             .thread_id
             .is_none()
-            .then(|| snapshot.pane.navigation.cwd.clone());
+            .then(|| snapshot.panes.primary().navigation.cwd.clone());
         let store = match runtime.connections.connect(remote, snapshot.clone()).await {
             Ok(store) => store,
             Err(error) => {
@@ -628,9 +630,28 @@ mod tests {
                 .snapshot()
                 .connection_enabled()
         );
-        assert_eq!(local.pane.snapshot().unwrap().pane.navigation.cwd, "/local");
         assert_eq!(
-            remote.pane.snapshot().unwrap().pane.navigation.cwd,
+            local
+                .pane
+                .snapshot()
+                .unwrap()
+                .panes
+                .get(local.pane.id())
+                .unwrap()
+                .navigation
+                .cwd,
+            "/local"
+        );
+        assert_eq!(
+            remote
+                .pane
+                .snapshot()
+                .unwrap()
+                .panes
+                .get(remote.pane.id())
+                .unwrap()
+                .navigation
+                .cwd,
             "/remote"
         );
         assert!(runtime.sessions.store(Some("invalid ticket")).is_none());
@@ -692,7 +713,9 @@ mod tests {
             .pane
             .snapshot()
             .unwrap()
-            .pane
+            .panes
+            .get(side.pane.id())
+            .unwrap()
             .navigation
             .draft_key
             .clone();
@@ -703,7 +726,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_ne!(store.snapshot().pane.navigation.draft_key, key);
+        assert_ne!(store.snapshot().panes.primary().navigation.draft_key, key);
         assert!(primary.close().is_none());
         side.pane
             .dispatch(Intent::NewChat {
@@ -719,7 +742,17 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(side.pane.snapshot().unwrap().pane.navigation.cwd, "/other");
+        assert_eq!(
+            side.pane
+                .snapshot()
+                .unwrap()
+                .panes
+                .get(side.pane.id())
+                .unwrap()
+                .navigation
+                .cwd,
+            "/other"
+        );
         assert!(side.close().is_none());
         drop(side);
         drop(primary);

@@ -24,8 +24,8 @@ pub struct AgentSummary {
 type AgentEntries = BTreeMap<String, (SessionRef, Option<SessionRef>, AgentSummary)>;
 
 impl Snapshot {
-    pub fn agent_panel(&self) -> Vec<AgentSummary> {
-        let Some(root) = self.pane.navigation.thread_id.as_ref() else {
+    pub fn agent_panel(&self, pane: &crate::state::PaneState) -> Vec<AgentSummary> {
+        let Some(root) = pane.navigation.thread_id.as_ref() else {
             return Vec::new();
         };
         let mut entries = AgentEntries::new();
@@ -135,18 +135,17 @@ pub(super) fn empty() -> std::sync::Arc<Vec<AgentSummary>> {
 
 pub(super) fn project(
     snapshot: &Snapshot,
+    pane: &crate::state::PaneState,
     previous: Option<&super::view::Presentation>,
 ) -> std::sync::Arc<Vec<AgentSummary>> {
     use crate::state::Same;
     use std::sync::Arc;
-    if snapshot.pane.observed_agents.is_none()
-        || snapshot.pane.observed_agents != snapshot.pane.navigation.thread_id
-    {
+    if pane.observed_agents.is_none() || pane.observed_agents != pane.navigation.thread_id {
         return empty();
     }
     if let Some(previous) = previous
         && snapshot.catalog.ui_language == previous.snapshot.catalog.ui_language
-        && snapshot.pane.observed_agents == previous.snapshot.pane.observed_agents
+        && pane.observed_agents == previous.pane().observed_agents
         && snapshot
             .sessions
             .conversations
@@ -158,7 +157,7 @@ pub(super) fn project(
     {
         return previous.agents.clone();
     }
-    let agents = snapshot.agent_panel();
+    let agents = snapshot.agent_panel(pane);
     if let Some(previous) = previous
         && agents == *previous.agents
     {
@@ -315,7 +314,7 @@ mod tests {
 
     fn snapshot(data: serde_json::Value) -> Snapshot {
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
             Some(session("root"));
         let data: Vec<Thread> = serde_json::from_value(data).unwrap();
         snapshot.sessions.conversations = Arc::new(
@@ -340,28 +339,28 @@ mod tests {
             {"id":{"provider":"codex","id":"root"}},
             {"id":{"provider":"codex","id":"child"},"parentId":{"provider":"codex","id":"root"},"name":"Review","status":"running"}
         ]));
-        let hidden = Presentation::project(Arc::new(state.clone()), None);
+        let hidden = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
         assert!(hidden.agents.is_empty());
-        Arc::make_mut(&mut state.pane).observed_agents = Some(session("root"));
-        let opened = Presentation::project(Arc::new(state.clone()), Some(&hidden));
+        Arc::make_mut(state.panes.primary_mut()).observed_agents = Some(session("root"));
+        let opened = Presentation::project(Arc::new(state.clone()), "", Some(&hidden)).unwrap();
         assert!(opened.changes(hidden).agents);
         assert_eq!(opened.agents.len(), 1);
         assert!(opened.agents[0].active);
         let mut foreign = state.clone();
-        Arc::make_mut(&mut foreign.pane).observed_agents = Some(session("other"));
-        let foreign = Presentation::project(Arc::new(foreign), Some(&opened));
+        Arc::make_mut(foreign.panes.primary_mut()).observed_agents = Some(session("other"));
+        let foreign = Presentation::project(Arc::new(foreign), "", Some(&opened)).unwrap();
         assert!(
             foreign.agents.is_empty(),
             "another conversation's observation cannot expose this fleet"
         );
         Arc::make_mut(&mut state.input.drafts).insert(
-            state.pane.navigation.draft_key.clone(),
+            state.panes.primary().navigation.draft_key.clone(),
             Arc::new(Draft {
                 text: "typed".into(),
                 ..Default::default()
             }),
         );
-        let typed = Presentation::project(Arc::new(state.clone()), Some(&opened));
+        let typed = Presentation::project(Arc::new(state.clone()), "", Some(&opened)).unwrap();
         assert!(Arc::ptr_eq(&opened.agents, &typed.agents));
         Arc::make_mut(
             Arc::make_mut(&mut state.sessions.conversations)
@@ -369,22 +368,22 @@ mod tests {
                 .unwrap(),
         )
         .preview = Some("A streaming preview".into());
-        let streamed = Presentation::project(Arc::new(state.clone()), Some(&typed));
+        let streamed = Presentation::project(Arc::new(state.clone()), "", Some(&typed)).unwrap();
         assert!(Arc::ptr_eq(&typed.agents, &streamed.agents));
         assert!(!streamed.changes(typed.clone()).agents);
         Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), false);
-        let stopped = Presentation::project(Arc::new(state.clone()), Some(&typed));
+        let stopped = Presentation::project(Arc::new(state.clone()), "", Some(&typed)).unwrap();
         assert!(stopped.changes(typed).agents);
         assert!(!stopped.agents[0].active);
-        Arc::make_mut(&mut state.pane).observed_agents = None;
-        let closed = Presentation::current(Arc::new(state.clone()), &stopped);
+        Arc::make_mut(state.panes.primary_mut()).observed_agents = None;
+        let closed = Presentation::current(Arc::new(state.clone()), &stopped).unwrap();
         assert!(
             closed.agents.is_empty(),
             "closing must not wait for the worker"
         );
-        let projected = Presentation::project(Arc::new(state), Some(&closed));
+        let projected = Presentation::project(Arc::new(state), "", Some(&closed)).unwrap();
         assert!(!projected.changes(closed).agents);
     }
 
@@ -396,12 +395,12 @@ mod tests {
             {"id":{"provider":"codex","id":"named"},"parentId":{"provider":"codex","id":"root"},"name":"設定\n{0}","status":"running"},
             {"id":{"provider":"codex","id":"unnamed"},"parentId":{"provider":"codex","id":"root"},"status":"idle"}
         ]));
-        Arc::make_mut(&mut state.pane).observed_agents = Some(session("root"));
-        let japanese = Presentation::project(Arc::new(state.clone()), None);
+        Arc::make_mut(state.panes.primary_mut()).observed_agents = Some(session("root"));
+        let japanese = Presentation::project(Arc::new(state.clone()), "", None).unwrap();
         assert_eq!(japanese.agents[0].status, "実行中");
         assert_eq!(japanese.agents[1].title, "無題のタスク");
         state.catalog.ui_language = UiLanguage::English;
-        let english = Presentation::project(Arc::new(state.clone()), Some(&japanese));
+        let english = Presentation::project(Arc::new(state.clone()), "", Some(&japanese)).unwrap();
         assert!(english.changes(japanese.clone()).agents);
         assert_eq!(english.agents[0].title, "設定\n{0}");
         assert_eq!(english.agents[0].status, "Running");
@@ -410,7 +409,7 @@ mod tests {
         assert_eq!(english.agents[0].key, japanese.agents[0].key);
         assert_eq!(english.agents[1].key, japanese.agents[1].key);
         assert_eq!(japanese.agents[0].status, "実行中");
-        let same = Presentation::project(Arc::new(state), Some(&english));
+        let same = Presentation::project(Arc::new(state), "", Some(&english)).unwrap();
         assert!(Arc::ptr_eq(&same.agents, &english.agents));
     }
 
@@ -426,7 +425,7 @@ mod tests {
             {"id":{"provider":"codex","id":"cross"},"parentId":{"provider":"claude","id":"root"}},
             {"id":{"provider":"codex","id":"self"},"parentId":{"provider":"codex","id":"self"}}
         ]));
-        let before = state.agent_panel();
+        let before = state.agent_panel(state.panes.primary());
         assert_eq!(
             before
                 .iter()
@@ -436,25 +435,28 @@ mod tests {
         );
         assert!(before[0].active);
         assert_eq!(before[1].status, "未確認");
-        assert_eq!(state.pane.navigation.thread_id, Some(session("root")));
+        assert_eq!(
+            state.panes.primary().navigation.thread_id,
+            Some(session("root"))
+        );
         for thread in Arc::make_mut(&mut state.sessions.conversations).values_mut() {
             Arc::make_mut(thread).updated_at = Some(999.);
         }
         Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), false);
-        let after = state.agent_panel();
+        let after = state.agent_panel(state.panes.primary());
         assert_eq!(
             before.iter().map(|row| &row.key).collect::<Vec<_>>(),
             after.iter().map(|row| &row.key).collect::<Vec<_>>()
         );
         assert!(!after[0].active);
         assert_eq!(after[0].status, "待機");
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id =
             Some(session("fork"));
-        assert!(state.agent_panel().is_empty());
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = None;
-        assert!(state.agent_panel().is_empty());
+        assert!(state.agent_panel(state.panes.primary()).is_empty());
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id = None;
+        assert!(state.agent_panel(state.panes.primary()).is_empty());
     }
 
     fn item(
@@ -532,7 +534,7 @@ mod tests {
         Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), true);
-        let agents = state.agent_panel();
+        let agents = state.agent_panel(state.panes.primary());
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].title, "Review");
         assert_eq!(agents[0].model.as_deref(), Some("review-model"));
@@ -541,10 +543,10 @@ mod tests {
         Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), false);
-        assert_eq!(state.agent_panel()[0].status, "完了");
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id =
+        assert_eq!(state.agent_panel(state.panes.primary())[0].status, "完了");
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id =
             Some(session("unrelated"));
-        assert!(state.agent_panel().is_empty());
+        assert!(state.agent_panel(state.panes.primary()).is_empty());
     }
 
     #[test]
@@ -584,7 +586,7 @@ mod tests {
         Arc::make_mut(&mut state.lists.activity)
             .active
             .insert(session("child"), true);
-        let agents = state.agent_panel();
+        let agents = state.agent_panel(state.panes.primary());
         assert_eq!(agents.len(), 1);
         assert!(agents[0].active);
     }
@@ -596,14 +598,14 @@ mod tests {
             id: "root".into(),
         };
         let mut state = snapshot(serde_json::json!([]));
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id =
             Some(owner.clone());
         put_items(
             &mut state,
             owner.clone(),
             vec![item("task", ItemStatus::Running, "Task", vec![], vec![])],
         );
-        let running = state.agent_panel();
+        let running = state.agent_panel(state.panes.primary());
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].title, "Check the change");
         assert!(running[0].active);
@@ -612,13 +614,13 @@ mod tests {
             owner,
             vec![item("task", ItemStatus::Completed, "Task", vec![], vec![])],
         );
-        let completed = state.agent_panel();
+        let completed = state.agent_panel(state.panes.primary());
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].key, running[0].key);
         assert_eq!(completed[0].status, "完了");
         assert!(!completed[0].active);
         state.catalog.ui_language = UiLanguage::English;
-        let english = state.agent_panel();
+        let english = state.agent_panel(state.panes.primary());
         assert_eq!(english[0].status, "Done");
         assert_eq!(english[0].title, "Check the change");
         assert_eq!(english[0].key, completed[0].key);
@@ -663,7 +665,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let agents = state.agent_panel();
+        let agents = state.agent_panel(state.panes.primary());
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].status, label);
         assert_eq!(agents[0].active, active);
@@ -673,14 +675,14 @@ mod tests {
         #[test]
         fn arbitrary_native_graphs_show_only_unique_reachable_agents(parents in prop::collection::vec(0usize..25, 1..25)) {
             let mut state = snapshot(serde_json::json!([]));
-            Arc::make_mut(&mut Arc::make_mut(&mut state.pane).navigation).thread_id = Some(session("0"));
+            Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).navigation).thread_id = Some(session("0"));
             state.sessions.conversations = Arc::new(parents.iter().enumerate().map(|(index,parent)| {
                 let id = session(&index.to_string());
                 (id.clone(), Arc::new(Thread {
                     id:Some(id), parent_id:Some(session(&parent.to_string())), ..Default::default()
                 }))
             }).collect());
-            let rows = state.agent_panel();
+            let rows = state.agent_panel(state.panes.primary());
             let expected:HashSet<_> = (1..parents.len()).filter(|&index| {
                 let mut cursor=index;
                 let mut visited=HashSet::new();

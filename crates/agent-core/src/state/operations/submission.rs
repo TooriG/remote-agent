@@ -21,7 +21,7 @@ impl Operation for Dictate {
         })
     }
     type Input = Arc<Draft>;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         Ok(snapshot
             .input
             .drafts
@@ -45,19 +45,27 @@ impl Operation for Dictate {
                 .await?,
         ))
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
         if output.1.text.trim().is_empty() {
             return Vec::new();
         }
         if !self.send {
-            return self.stale(snapshot, output);
+            return self.stale(snapshot, pane_id, output);
         }
         let (mut draft, output) = output;
         let clear_draft = draft.clone();
         append_transcript(&mut Arc::make_mut(&mut draft).text, &output.text);
         let (next, effects) = submission(
             snapshot,
-            snapshot.pane.navigation.thread_id.clone(),
+            snapshot
+                .panes
+                .get(pane_id)
+                .and_then(|pane| pane.navigation.thread_id.clone()),
+            snapshot
+                .panes
+                .get(pane_id)
+                .map(|pane| pane.navigation.cwd.clone())
+                .filter(|cwd| !cwd.trim().is_empty()),
             self.draft_key.clone(),
             draft,
             self.client_user_message_id.clone(),
@@ -65,12 +73,17 @@ impl Operation for Dictate {
         );
         *snapshot = next;
         if effects.is_empty() {
-            return self.stale(snapshot, (clear_draft, output));
+            return self.stale(snapshot, pane_id, (clear_draft, output));
         }
         effects
     }
-    fn stale(self, snapshot: &mut Snapshot, (_, output): Self::Output) -> Vec<Effect> {
-        if output.text.trim().is_empty() {
+    fn stale(
+        self,
+        snapshot: &mut Snapshot,
+        pane_id: &str,
+        (_, output): Self::Output,
+    ) -> Vec<Effect> {
+        if snapshot.panes.get(pane_id).is_none() || output.text.trim().is_empty() {
             return Vec::new();
         }
         let draft = Arc::make_mut(
@@ -100,7 +113,7 @@ impl Operation for Respond {
         })
     }
     type Input = Arc<Request>;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         snapshot
             .request(&self.request_id)
             .cloned()
@@ -136,10 +149,10 @@ impl Operation for StartSubmission {
         Some(&self.client_user_message_id)
     }
     type Output = crate::session::OpenedSession;
-    fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn stale(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.sessions.subscriptions)
             .insert(output.session, output.subscription_id);
-        self.complete(snapshot, output.response.thread, false)
+        self.complete(snapshot, pane_id, output.response.thread, false)
     }
     fn outcome(output: &mut Self::Output) -> Outcome {
         Outcome::StartedThread {
@@ -170,10 +183,10 @@ impl Operation for StartSubmission {
             })
             .await
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.sessions.subscriptions)
             .insert(output.session, output.subscription_id);
-        self.complete(snapshot, output.response.thread, true)
+        self.complete(snapshot, pane_id, output.response.thread, true)
     }
 }
 
@@ -181,6 +194,7 @@ impl StartSubmission {
     fn complete(
         self,
         snapshot: &mut Snapshot,
+        pane_id: &str,
         mut thread: Thread,
         current_view: bool,
     ) -> Vec<Effect> {
@@ -191,7 +205,9 @@ impl StartSubmission {
             ..
         } = self;
         let Some(id) = thread.id.clone() else {
-            Arc::make_mut(&mut snapshot.pane).error = Some("thread ID is missing".into());
+            if let Some(pane) = snapshot.panes.get_mut(pane_id) {
+                Arc::make_mut(pane).error = Some("thread ID is missing".into());
+            }
             return Vec::new();
         };
         thread
@@ -212,27 +228,23 @@ impl StartSubmission {
         } else {
             empty
         };
-        if current_view {
-            let location = snapshot
-                .pane
-                .workspace
-                .location(snapshot.pane.navigation.cwd.clone());
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces)
-                .insert(id.clone().into(), location);
-        } else if let Some(workspace) =
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces).remove(&draft_key)
-        {
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces)
-                .insert(id.clone().into(), workspace);
+        if let Some(pane) = snapshot.panes.get_mut(pane_id) {
+            let pane = Arc::make_mut(pane);
+            if current_view {
+                let location = pane.workspace.location(pane.navigation.cwd.clone());
+                Arc::make_mut(&mut pane.workspaces).insert(id.clone().into(), location);
+            } else if let Some(workspace) = Arc::make_mut(&mut pane.workspaces).remove(&draft_key) {
+                Arc::make_mut(&mut pane.workspaces).insert(id.clone().into(), workspace);
+            }
         }
         let effects = if current_view {
-            open_thread(snapshot, thread, None, None, None)
+            open_thread(snapshot, pane_id, thread, None, None, None)
         } else {
-            refresh_thread(snapshot, thread);
+            refresh_thread(snapshot, pane_id, thread);
             Vec::new()
         };
-        if remove_original {
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces).remove(&draft_key);
+        if remove_original && let Some(pane) = snapshot.panes.get_mut(pane_id) {
+            Arc::make_mut(&mut Arc::make_mut(pane).workspaces).remove(&draft_key);
         }
         let drafts = Arc::make_mut(&mut snapshot.input.drafts);
         if remove_original {
@@ -267,7 +279,7 @@ impl Operation for SendSubmission {
         })
     }
     type Input = (bool, Option<crate::session::ProviderKind>);
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         Ok((
             !snapshot
                 .sessions
@@ -322,10 +334,11 @@ impl Operation for SendSubmission {
             .await?;
         Ok(SubmissionProgress::Sent(reply.turn_id))
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
         let turn_id = match output {
             SubmissionProgress::Opened(opened) => {
-                let mut effects = ReadThread::new(self.thread_id.clone()).apply(snapshot, *opened);
+                let mut effects =
+                    ReadThread::new(self.thread_id.clone()).apply(snapshot, pane_id, *opened);
                 effects.push(Effect::execute(self));
                 return effects;
             }
@@ -414,7 +427,7 @@ impl Operation for UploadAttachment {
         .map_err(PeerError::from)?;
         Ok(uploaded.path)
     }
-    fn apply(mut self, snapshot: &mut Snapshot, path: Self::Output) -> Vec<Effect> {
+    fn apply(mut self, snapshot: &mut Snapshot, _pane_id: &str, path: Self::Output) -> Vec<Effect> {
         self.attachment.path = path;
         Arc::make_mut(
             Arc::make_mut(&mut snapshot.input.drafts)
@@ -440,13 +453,13 @@ mod startup_identity_tests {
             id: "created".into(),
         };
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key = if current_view
-        {
-            draft_key.clone()
-        } else {
-            DraftKey::from("other")
-        };
-        let navigation = snapshot.pane.navigation.clone();
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key =
+            if current_view {
+                draft_key.clone()
+            } else {
+                DraftKey::from("other")
+            };
+        let navigation = snapshot.panes.primary().navigation.clone();
         let thread: Thread =
             serde_json::from_value(serde_json::json!({"id":session, "cwd":"/project"})).unwrap();
         let effects = StartSubmission {
@@ -456,7 +469,7 @@ mod startup_identity_tests {
             client_user_message_id: "submitted".into(),
             draft: Arc::default(),
         }
-        .complete(&mut snapshot, thread, current_view);
+        .complete(&mut snapshot, "", thread, current_view);
         assert!(effects.is_empty(), "the Host owns the admitted first input");
         assert!(snapshot.sessions.pending_submissions.is_empty());
         assert_eq!(
@@ -464,9 +477,12 @@ mod startup_identity_tests {
             Some(&session)
         );
         if current_view {
-            assert_eq!(snapshot.pane.navigation.thread_id.as_ref(), Some(&session));
+            assert_eq!(
+                snapshot.panes.primary().navigation.thread_id.as_ref(),
+                Some(&session)
+            );
         } else {
-            assert_eq!(snapshot.pane.navigation, navigation);
+            assert_eq!(snapshot.panes.primary().navigation, navigation);
         }
         let restored =
             crate::persistence::decode(&crate::persistence::encode(&snapshot).unwrap()).unwrap();
@@ -483,7 +499,7 @@ mod dictation_tests {
         #[values(true, false)] send: bool,
     ) {
         let mut snapshot = Snapshot::default();
-        let draft_key = snapshot.pane.navigation.draft_key.clone();
+        let draft_key = snapshot.panes.primary().navigation.draft_key.clone();
         let operation = Dictate {
             draft_key: draft_key.clone(),
             preparation: None,
@@ -491,7 +507,7 @@ mod dictation_tests {
             send,
             client_user_message_id: "voice".into(),
         };
-        let captured = operation.capture(&snapshot).unwrap();
+        let captured = operation.capture(&snapshot, "").unwrap();
         Arc::make_mut(&mut snapshot.input.drafts).insert(
             draft_key.clone(),
             Arc::new(Draft {
@@ -501,6 +517,7 @@ mod dictation_tests {
         );
         let effects = operation.apply(
             &mut snapshot,
+            "",
             (
                 captured,
                 rpc::Transcription {

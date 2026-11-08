@@ -81,7 +81,10 @@ impl ClientSession {
 
     pub fn presentation(&self) -> Arc<crate::presentation::view::Presentation> {
         self.store().map_or_else(
-            || crate::presentation::view::Presentation::pending(self.pending_snapshot()),
+            || {
+                crate::presentation::view::Presentation::pending(self.pending_snapshot(), "")
+                    .expect("primary pane always exists")
+            },
             |store| store.presentation(),
         )
     }
@@ -552,7 +555,14 @@ mod tests {
                     *this.observed.lock().unwrap() = Some(("session lock held".into(), false));
                     return;
                 }
-                let cwd = this.session.snapshot().pane.navigation.cwd.clone();
+                let cwd = this
+                    .session
+                    .snapshot()
+                    .panes
+                    .primary()
+                    .navigation
+                    .cwd
+                    .clone();
                 let flush_pending = this.session.clone().flush().now_or_never().is_none();
                 *this.observed.lock().unwrap() = Some((cwd, flush_pending));
             }
@@ -565,7 +575,9 @@ mod tests {
         });
         let waker = futures_util::task::waker(probe.clone());
         let mut context = std::task::Context::from_waker(&waker);
-        let mut waiting = Box::pin(store.next_snapshot(store.snapshot()));
+        let mut snapshots = store.store.subscribe();
+        snapshots.borrow_and_update();
+        let mut waiting = Box::pin(snapshots.changed());
         assert!(std::future::Future::poll(waiting.as_mut(), &mut context).is_pending());
         let receipt = session
             .dispatch(Intent::NewChat {
@@ -763,9 +775,9 @@ mod tests {
     }
 
     async fn connected(store: &AgentStore, expected: bool) {
-        let mut previous = store.snapshot();
-        while previous.connection.connected != expected {
-            previous = store.next_snapshot(previous).await.unwrap();
+        let mut snapshots = store.store.subscribe();
+        while snapshots.borrow_and_update().connection.connected != expected {
+            snapshots.changed().await.unwrap();
         }
     }
 

@@ -535,7 +535,7 @@ mod tests {
                 },
                 ..Default::default()
             };
-            let (next, _) = reduce(&snapshot, Event::Intent(Intent::NewChat { cwd: "/project".into() }));
+            let (next, _) = reduce(&snapshot, "", Event::Intent(Intent::NewChat { cwd: "/project".into() }));
             let key = crate::state::DraftKey::from("new:/project");
             proptest::prop_assert_eq!(next.model_provider_for_draft(key.clone()), Some(provider));
             proptest::prop_assert_eq!(next.input.drafts[&key].model.as_ref().unwrap().provider, provider);
@@ -564,13 +564,15 @@ mod tests {
             };
             let (snapshot, _) = reduce(
                 &snapshot,
+                "",
                 Event::Intent(Intent::NewChat {
                     cwd: "/project".into(),
                 }),
             );
-            let key = snapshot.pane.navigation.draft_key.clone();
+            let key = snapshot.panes.primary().navigation.draft_key.clone();
             let (snapshot, _) = reduce(
                 &snapshot,
+                "",
                 Event::Intent(Intent::SetDraftText {
                     thread_id: key.clone(),
                     text: "keep this input".into(),
@@ -580,6 +582,7 @@ mod tests {
             assert!(snapshot.permission_control(&key).load_provider.is_none());
             let (next, effects) = reduce(
                 &snapshot,
+                "",
                 Event::Intent(Intent::Submit {
                     thread_id: None,
                     client_user_message_id: "input".into(),
@@ -588,7 +591,7 @@ mod tests {
             assert!(effects.is_empty());
             assert!(next.sessions.pending_submissions.is_empty());
             assert_eq!(next.input.drafts[&key].text, "keep this input");
-            assert!(next.pane.error.is_none());
+            assert!(next.panes.primary().error.is_none());
             assert!(
                 next.operation_error(crate::state::operations::OperationKey::Submission {
                     draft_key: key
@@ -622,11 +625,11 @@ mod tests {
                     proptest::prop_assert_eq!(snapshot.model_for_provider(key.clone(), provider), Some(selected.clone()));
                     proptest::prop_assert_eq!(snapshot.model_quick_controls(key).effort, effort);
                 }
-                let choices = crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(snapshot.clone())).models_matching(Some(provider), id.clone());
+                let choices = crate::presentation::view::Presentation::from_snapshot(Arc::new(snapshot.clone()), "".into()).unwrap().settings().models_matching(Some(provider), id.clone());
                 proptest::prop_assert_eq!(choices.len(), 1);
                 proptest::prop_assert_eq!(&choices[0].model, &selected);
             }
-            proptest::prop_assert_eq!(crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(snapshot.clone())).models_matching(None, id).len(), 2);
+            proptest::prop_assert_eq!(crate::presentation::view::Presentation::from_snapshot(Arc::new(snapshot.clone()), "".into()).unwrap().settings().models_matching(None, id).len(), 2);
         }
     }
 
@@ -660,9 +663,12 @@ mod tests {
                 .map(|index| snapshot.catalog.models[index].clone())
                 .collect();
             assert_eq!(
-                crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
-                    snapshot.clone()
-                ))
+                crate::presentation::view::Presentation::from_snapshot(
+                    Arc::new(snapshot.clone()),
+                    "".into()
+                )
+                .unwrap()
+                .settings()
                 .models_matching(provider, query.into()),
                 expected,
                 "query: {query:?}"
@@ -686,23 +692,32 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
-                snapshot.clone()
-            ))
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
             .model_error_messages(Some(ProviderKind::Codex)),
             ["codex: Codex catalog failed"]
         );
         assert_eq!(
-            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
-                snapshot.clone()
-            ))
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
             .model_error_messages(Some(ProviderKind::Claude)),
             ["claude: Claude catalog failed"]
         );
         assert_eq!(
-            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
-                snapshot.clone()
-            ))
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
             .model_error_messages(None)
             .len(),
             2
@@ -762,9 +777,12 @@ mod tests {
         assert!(controls.efforts.is_empty());
         assert!(controls.toggle_fast_to.is_none());
         assert!(
-            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
-                snapshot.clone()
-            ))
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
             .models_matching(Some(ProviderKind::Codex), "haiku".into())
             .is_empty()
         );

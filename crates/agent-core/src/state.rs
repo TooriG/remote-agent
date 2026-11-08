@@ -174,6 +174,9 @@ pub struct AccountState {
     pub accounts: Option<Arc<agent_protocol::operations::Accounts>>,
     #[serde(skip)]
     pub login: Option<Arc<agent_protocol::operations::AccountLogin>>,
+    /// The draft that adopts the account the pending login adds.
+    #[serde(skip)]
+    pub login_draft: Option<DraftKey>,
     #[serde(skip)]
     pub dsh_credentials: Option<Arc<agent_protocol::dsh::Credentials>>,
 }
@@ -429,6 +432,13 @@ macro_rules! snapshot {
         pub struct Snapshot {
             $($(#[$meta])* pub $field: $type,)*
         }
+        impl Changed {
+            pub(crate) fn selected_pane(mut self, changed: bool) -> Self {
+                self.panes = changed;
+                self.any = false $(|| self.$field)*;
+                self
+            }
+        }
         impl Snapshot {
             pub fn changes_from(&self, previous: &Self) -> Changed {
                 let mut changed = Changed {
@@ -448,9 +458,7 @@ snapshot! {
     #[serde(flatten)] sessions: Sessions,
     #[serde(flatten)] input: Input,
     #[serde(flatten)] files: Files,
-    #[serde(flatten)] pane: Arc<PaneState>,
-    #[serde(skip)] panes: PaneStates,
-    #[serde(skip)] pane_id: String,
+    #[serde(flatten)] panes: PaneStates,
     #[serde(skip)] terminals: Arc<BTreeMap<String, Arc<Terminal>>>,
     #[serde(skip)] project_import: Arc<ProjectImportState>,
     #[serde(skip)] operations: Operations,
@@ -614,17 +622,24 @@ fn clear_workspace_location(workspace: &mut WorkspaceLocation) {
     workspace.review_cwd = None;
 }
 
-pub fn reduce(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
+pub fn reduce(previous: &Snapshot, pane_id: &str, event: Event) -> (Snapshot, Vec<Effect>) {
     let (mut next, mut effects) = match event {
-        Event::Intent(intent) => reduce_intent(previous, intent),
-
+        Event::Intent(intent) => reduce_intent(previous, pane_id, intent),
         Event::Notification(message) => notification(previous, message),
         Event::SessionUpdate(update) => notifications::session_update(previous, *update),
         event => reduce_event(previous, event),
     };
+    let before = previous
+        .panes
+        .get(pane_id)
+        .and_then(|pane| pane.navigation.thread_id.as_ref());
+    let selected = next
+        .panes
+        .get(pane_id)
+        .and_then(|pane| pane.navigation.thread_id.as_ref());
     if next.connection.connected
-        && previous.pane.navigation.thread_id != next.pane.navigation.thread_id
-        && let Some(selected) = &next.pane.navigation.thread_id
+        && before != selected
+        && let Some(selected) = selected
         && let Some((session, turn_id)) = next
             .lists
             .task_activity
@@ -639,18 +654,16 @@ pub fn reduce(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
     effects.extend(op::prefetch_composer_catalog(
         next.connection.connected,
         &mut next.catalog.composer_catalogs,
-        std::iter::once((next.pane_id.as_str(), next.pane.navigation.as_ref())).chain(
-            next.panes
-                .0
-                .iter()
-                .map(|(id, pane)| (id.as_str(), pane.navigation.as_ref())),
-        ),
+        next.panes
+            .0
+            .iter()
+            .map(|(id, pane)| (id.as_str(), pane.navigation.as_ref())),
     ));
     effects.extend(op::prefetch_model_settings(
         next.connection.connected,
-        next.input
-            .drafts
-            .get(&next.pane.navigation.draft_key)
+        next.panes
+            .get(pane_id)
+            .and_then(|pane| next.input.drafts.get(&pane.navigation.draft_key))
             .and_then(|draft| draft.model.as_ref()),
         &next.catalog.models,
         next.operations.keys(),
@@ -658,17 +671,20 @@ pub fn reduce(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
     (next, effects)
 }
 macro_rules! prepare_operations {
-    ($intent:expr, $next:ident, [$($variant:ident),* $(,)?], {$($local:tt)*}) => {
+    ($intent:expr, $next:ident, $pane:expr, [$($variant:ident),* $(,)?], {$($local:tt)*}) => {
         match $intent {
-            $(Intent::$variant(operation) => return prepare($next, operation),)*
+            $(Intent::$variant(operation) => return prepare($next, $pane, operation),)*
             $($local)*
         }
     };
 }
 
-fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>) {
+fn reduce_intent(previous: &Snapshot, pane_id: &str, intent: Intent) -> (Snapshot, Vec<Effect>) {
     let mut next = previous.clone();
-    prepare_operations!(intent, next, [
+    let Some(pane) = previous.panes.get(pane_id) else {
+        return (next, Vec::new());
+    };
+    prepare_operations!(intent, next, pane_id, [
         ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity, ReadHostSoftware,
         ReadPermissionSettings, UpdatePermissionSettings,
         ManageCodexCli, ReadProviderSettings, SetProviderEnabled, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
@@ -699,17 +715,18 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         }
         Intent::RecoverError { id } => {
             if let Some(recovery) = previous.error_recovery(id) {
-                return reduce_intent(previous, recovery.intent);
+                return reduce_intent(previous, pane_id, recovery.intent);
             }
         },
         Intent::DismissError { id } => match id {
             op::ErrorId::Operation { key, generation } => {
                 if next.operations.get(&key).is_some_and(|state| {
                     state.generation == generation && matches!(state.phase, op::OperationPhase::Failed { .. })
-                }) { next.operations.remove(&key); }
+                }) { Arc::make_mut(&mut next.operations).remove(&key); }
             }
             op::ErrorId::Application { message } => {
-                for error in [&mut next.connection.connection_failure, &mut Arc::make_mut(&mut next.pane).error] {
+                let pane = Arc::make_mut(next.panes.get_mut(pane_id).expect("admitted pane exists"));
+                for error in [&mut next.connection.connection_failure, &mut pane.error] {
                     if error.as_deref() == Some(message.as_str()) {
                         *error = None;
                     }
@@ -717,14 +734,15 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             }
         },
         Intent::WatchAgents { thread_id } => {
-            let thread_id = thread_id.filter(|id| next.pane.navigation.thread_id.as_ref() == Some(id));
-            if next.pane.observed_agents != thread_id {
-                if let Some(session) = Arc::make_mut(&mut next.pane).observed_agents.take()
+            let thread_id = thread_id.filter(|id| pane.navigation.thread_id.as_ref() == Some(id));
+            if pane.observed_agents != thread_id {
+                let target = Arc::make_mut(next.panes.get_mut(pane_id).expect("admitted pane exists"));
+                let retired = std::mem::replace(&mut target.observed_agents, thread_id.clone());
+                if let Some(session) = retired
                     && !next.panes.0.values().any(|pane| pane.observed_agents.as_ref() == Some(&session)) {
-                    next.operations.remove(&op::OperationKey::Agents { session });
+                    Arc::make_mut(&mut next.operations).remove(&op::OperationKey::Agents { session });
                 }
-                Arc::make_mut(&mut next.pane).observed_agents = thread_id;
-                let effects = op::refresh_agents(next.connection.connected, next.pane.observed_agents.as_ref());
+                let effects = op::refresh_agents(next.connection.connected, thread_id.as_ref());
                 return (next, effects);
             }
         }
@@ -747,21 +765,21 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 return (next, Vec::new());
             }
             if let Some(cursor) = previous.sessions.conversations.get(&thread_id).and_then(|thread| thread.history_cursor.clone()) {
-                return prepare(next, op::ReadHistory { session: thread_id, cursor, include_activity: false });
+                return prepare(next, pane_id, op::ReadHistory { session: thread_id, cursor, include_activity: false });
             }
             let window = op::HISTORY_WINDOW_TURNS;
             let limit = u32::try_from(previous.sessions.conversations.get(&thread_id).map_or(window.into(), |thread| {
                 thread.history_limit
                     .unwrap_or_else(|| thread.turns.as_ref().map_or(window.into(), |turns| turns.len() as u64))
             })).unwrap_or(u32::MAX).saturating_add(window);
-            return prepare(next, op::ReadThread { limit, ..op::ReadThread::new(thread_id) });
+            return prepare(next, pane_id, op::ReadThread { limit, ..op::ReadThread::new(thread_id) });
         }
         Intent::LoadTurnItems(params) => {
             if previous.sessions.conversations.get(&params.thread_id)
                 .and_then(|thread| thread.turns.as_ref())
                 .and_then(|turns| turns.iter().rfind(|turn| turn.id == params.turn_id))
                 .is_some_and(|turn| turn.items_summary) {
-                return prepare(next, params);
+                return prepare(next, pane_id, params);
             }
         }
         Intent::CloseTerminal { handle } => {
@@ -789,15 +807,16 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             thread_id,
             client_user_message_id,
         } => {
-            let thread_id = thread_id.or_else(|| previous.pane.navigation.thread_id.clone());
+            let thread_id = thread_id.or_else(|| pane.navigation.thread_id.clone());
             let draft_key = thread_id
                 .clone()
                 .map(DraftKey::from)
-                .unwrap_or_else(|| previous.pane.navigation.draft_key.clone());
+                .unwrap_or_else(|| pane.navigation.draft_key.clone());
             let draft = previous.input.drafts.get(&draft_key).cloned().unwrap_or_default();
             return submission(
                 previous,
                 thread_id,
+                (!pane.navigation.cwd.trim().is_empty()).then(|| pane.navigation.cwd.clone()),
                 draft_key,
                 draft,
                 client_user_message_id,
@@ -810,7 +829,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .get(&client_user_message_id)
                 .is_some_and(|pending| pending.delivery_unknown)
             {
-                return reduce(previous, Event::SubmissionFailed(client_user_message_id));
+                return reduce(previous, pane_id, Event::SubmissionFailed(client_user_message_id));
             }
         }
         Intent::DiscardUnknownSubmission { client_user_message_id } => {
@@ -833,8 +852,8 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
 
         Intent::ListSessions(mut operation) => {
             let refresh = operation.query.search_term == previous.lists.list_query.search_term;
-            if let Err(error) = op::Operation::prepare(&mut operation, &mut next) {
-                Arc::make_mut(&mut next.pane).error = Some(error);
+            if let Err(error) = op::Operation::prepare(&mut operation, &mut next, pane_id) {
+                Arc::make_mut(next.panes.get_mut(pane_id).expect("admitted pane exists")).error = Some(error);
                 return (next, Vec::new());
             }
             let mut effects = vec![Effect::execute(operation)];
@@ -845,7 +864,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             let Some(limit) = previous.lists.expanded_projects.get(&project_id).copied() else {
                 return (next, Vec::new());
             };
-            return prepare(next, op::ListProjectSessions {
+            return prepare(next, pane_id, op::ListProjectSessions {
                 project_id,
                 limit,
                 search_term: previous.lists.list_query.search_term.clone(),
@@ -858,7 +877,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             if next.connection.connected && next.lists.expanded_projects.contains_key(&project_id)
                 && !next.lists.project_threads.contains_key(&project_id)
                 && projects::chat_placement(next.lists.project_preferences.get(&next.connection.storage_scope), &thread_id) == Some(project_id.as_str()) {
-                return prepare(next, op::ListProjectSessions {
+                return prepare(next, pane_id, op::ListProjectSessions {
                     project_id, limit: 5, search_term: previous.lists.list_query.search_term.clone(),
                 });
             }
@@ -867,7 +886,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             let name = name.trim();
             let section = section.trim();
             if name.is_empty() || name.chars().count() > 100 || section.chars().count() > 60 {
-                Arc::make_mut(&mut next.pane).error = Some("表示名は1〜100文字、セクションは60文字以内で入力してください".into());
+                Arc::make_mut(next.panes.get_mut(pane_id).expect("admitted pane exists")).error = Some("表示名は1〜100文字、セクションは60文字以内で入力してください".into());
             } else {
                 projects::update(&mut next, &project_id, |p| {
                     p.name = Some(name.into());
@@ -900,7 +919,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 let limit = page.map_or(5, |page| page.limit);
                 Arc::make_mut(&mut next.lists.expanded_projects).insert(project_id.clone(), limit);
                 if next.connection.connected && (page.is_none() || next.lists.unconfirmed_lists.contains(&op::OperationKey::ProjectList { project_id: project_id.clone() })) {
-                    return prepare(next, op::ListProjectSessions {
+                    return prepare(next, pane_id, op::ListProjectSessions {
                         project_id,
                         limit,
                         search_term: previous.lists.list_query.search_term.clone(),
@@ -915,7 +934,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 };
                 let limit = limit.saturating_add(10);
                 Arc::make_mut(&mut next.lists.expanded_projects).insert(project_id.clone(), limit);
-                return prepare(next, op::ListProjectSessions {
+                return prepare(next, pane_id, op::ListProjectSessions {
                     project_id,
                     limit,
                     search_term: previous.lists.list_query.search_term.clone(),
@@ -924,7 +943,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             let mut query = (*previous.lists.list_query).clone();
             query.limit = query.limit.saturating_add(10);
             query.part = Some(crate::models::ListPart::Chats);
-            return prepare(next, op::ListSessions::new(query));
+            return prepare(next, pane_id, op::ListSessions::new(query));
         }
         Intent::ShowRecentChats | Intent::ExpandRecentChats => {
             let expanding = matches!(intent, Intent::ExpandRecentChats);
@@ -939,24 +958,24 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
             query.project_limit = query.project_limit.max(query.limit);
             query.part = None;
             if next.connection.connected {
-                return prepare(next, op::ListSessions::new(query));
+                return prepare(next, pane_id, op::ListSessions::new(query));
             }
         }
         Intent::ExpandProjects => {
             let mut query = (*previous.lists.list_query).clone();
             query.project_limit = query.project_limit.saturating_add(10);
             query.part = Some(crate::models::ListPart::Projects);
-            return prepare(next, op::ListSessions::new(query));
+            return prepare(next, pane_id, op::ListSessions::new(query));
         }
 
         Intent::ShowThreadList => {
-            Arc::make_mut(&mut next.pane).epoch += 1;
-            navigate(&mut next, Navigation::default());
+            next.invalidate_pane(pane_id);
+            navigate(&mut next, pane_id, Navigation::default());
             return (next, Vec::new());
         }
         Intent::NewChat { cwd } => {
-            Arc::make_mut(&mut next.pane).epoch += 1;
-            let key = DraftKey::new_chat(&cwd, next.pane.draft_slot);
+            next.invalidate_pane(pane_id);
+            let key = DraftKey::new_chat(&cwd, pane.draft_slot);
             let existing = previous.input.drafts.get(&key);
             if existing.is_none_or(|draft| draft.model.is_none()) {
                 let selection = previous.catalog.model_preferences.provider
@@ -977,18 +996,18 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 (draft.model, draft.effort, draft.service_tier) = settings;
                 Arc::make_mut(&mut next.input.drafts).insert(key.clone(), Arc::new(draft));
             }
-            navigate(&mut next, Navigation {
+            navigate(&mut next, pane_id, Navigation {
                 cwd,
                 draft_key: key,
                 ..Default::default()
             });
-            let effects = op::review_workspace(&mut next).into_iter().collect();
+            let effects = op::review_workspace(&mut next, pane_id).into_iter().collect();
             return (next, effects);
         }
 
         Intent::SetFileDraft { path, text } => {
-            if previous.pane.workspace.file.as_ref().is_some_and(|file| file.path == path && file.truncated) {
-                Arc::make_mut(&mut next.pane).error = Some("ファイルが大きすぎるため編集できません。".into());
+            if pane.workspace.file.as_ref().is_some_and(|file| file.path == path && file.truncated) {
+                Arc::make_mut(next.panes.get_mut(pane_id).expect("admitted pane exists")).error = Some("ファイルが大きすぎるため編集できません。".into());
                 return (next, Vec::new());
             }
             let revision = previous
@@ -996,8 +1015,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 .get(&path)
                 .map(|draft| draft.revision.as_str())
                 .or_else(|| {
-                    previous
-                        .pane.workspace
+                    pane.workspace
                         .file
                         .as_ref()
                         .filter(|file| file.path == path)
@@ -1012,7 +1030,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                     }),
                 );
             } else {
-                Arc::make_mut(&mut next.pane).error = Some("file has not been loaded".into());
+                Arc::make_mut(next.panes.get_mut(pane_id).expect("admitted pane exists")).error = Some("file has not been loaded".into());
             }
         }
 
@@ -1025,16 +1043,16 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                     .map(|draft| draft.text.clone()).unwrap_or_default();
                 append_transcript(&mut combined, &text);
                 let cursor = u32::try_from(combined.len()).unwrap_or(u32::MAX);
-                return reduce_intent(previous, Intent::EditComposer { thread_id, text: combined, cursor });
+                return reduce_intent(previous, pane_id, Intent::EditComposer { thread_id, text: combined, cursor });
             }
         },
         Intent::EditComposer { thread_id, text, cursor } => {
-            let load_catalog = thread_id == previous.pane.navigation.draft_key
+            let load_catalog = thread_id == pane.navigation.draft_key
                 && previous.connection.connected
                 && crate::composer::query(&text, cursor as usize).is_some_and(|(_, _, filter)| {
                     crate::composer::should_refresh_catalog(
-                        previous.catalog.composer_catalogs.get(&previous.pane.navigation.cwd)
-                            .filter(|catalog| catalog.cwd == previous.pane.navigation.cwd)
+                        previous.catalog.composer_catalogs.get(&pane.navigation.cwd)
+                            .filter(|catalog| catalog.cwd == pane.navigation.cwd)
                             .map(|catalog| catalog.loading),
                         filter,
                         previous.input.drafts.get(&thread_id).is_none_or(|draft| draft.text != text),
@@ -1042,8 +1060,8 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
                 });
             set_draft_text(&mut next, thread_id, text);
             if load_catalog {
-                let cwd = next.pane.navigation.cwd.clone();
-                return prepare(next, op::LoadComposerCatalog { cwd });
+                let cwd = pane.navigation.cwd.clone();
+                return prepare(next, pane_id, op::LoadComposerCatalog { cwd });
             }
         }
         Intent::InsertInvocation { thread_id, text, invocation } => {
@@ -1056,7 +1074,7 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         Intent::SetDraftText { thread_id, text } => set_draft_text(&mut next, thread_id, text),
         Intent::AnswerQuestion { request_id, action } => {
             if let Some(answer) = crate::questions::act(&mut next, request_id.clone(), action) {
-                return prepare(next, op::Respond { request_id, answer });
+                return prepare(next, pane_id, op::Respond { request_id, answer });
             }
         }
         intent @ (Intent::SelectModel { .. }
@@ -1144,43 +1162,37 @@ pub(crate) fn set_draft_text(snapshot: &mut Snapshot, thread_id: DraftKey, text:
     draft.text = text;
 }
 
-fn navigate(snapshot: &mut Snapshot, navigation: Navigation) {
-    if snapshot.pane.navigation.draft_key != navigation.draft_key {
-        snapshot.operations.retain(|key, _| {
-            !matches!(
-                key,
-                op::OperationKey::Directory
-                    | op::OperationKey::File
-                    | op::OperationKey::SaveFile { .. }
-                    | op::OperationKey::WorkspaceReview
-            )
+fn navigate(snapshot: &mut Snapshot, pane_id: &str, navigation: Navigation) {
+    let Some(target) = snapshot.panes.get_mut(pane_id) else {
+        return;
+    };
+    let pane = Arc::make_mut(target);
+    let previous_id = pane.navigation.thread_id.clone();
+    if pane.navigation.draft_key != navigation.draft_key {
+        Arc::make_mut(&mut snapshot.operations).retain(|key, _| {
+            key.pane() != Some(pane_id) && !matches!(key, op::OperationKey::SaveFile { .. })
         });
-        let key = snapshot.pane.navigation.draft_key.clone();
-        let saved = snapshot
-            .pane
-            .workspace
-            .location(snapshot.pane.navigation.cwd.clone());
-        let workspaces = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspaces);
-        workspaces.insert(key, saved);
+        let saved = pane.workspace.location(pane.navigation.cwd.clone());
+        let workspaces = Arc::make_mut(&mut pane.workspaces);
+        workspaces.insert(pane.navigation.draft_key.clone(), saved);
         let location = workspaces
             .remove(&navigation.draft_key)
             .filter(|location| location.cwd == navigation.cwd)
             .unwrap_or_default();
-        let workspace = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace);
+        let workspace = Arc::make_mut(&mut pane.workspace);
         workspace.file = location.file;
         workspace.review_cwd = location.review_cwd;
         workspace.review = location.review;
-    } else if snapshot.pane.navigation.cwd != navigation.cwd || navigation.draft_key.is_empty() {
-        clear_workspace_location(Arc::make_mut(
-            &mut Arc::make_mut(&mut snapshot.pane).workspace,
-        ));
+    } else if pane.navigation.cwd != navigation.cwd || navigation.draft_key.is_empty() {
+        clear_workspace_location(Arc::make_mut(&mut pane.workspace));
     }
-    let previous_id = snapshot.pane.navigation.thread_id.clone();
     if previous_id != navigation.thread_id {
-        Arc::make_mut(&mut snapshot.pane).observed_agents = None;
+        pane.observed_agents = None;
     }
+    let selected = navigation.thread_id.clone();
+    pane.navigation = Arc::new(navigation);
     let _ = previous_id
-        .filter(|id| navigation.thread_id.as_ref() != Some(id) && !snapshot.selected_elsewhere(id))
+        .filter(|id| selected.as_ref() != Some(id) && !snapshot.selected_in_any_pane(id))
         .filter(|id| {
             snapshot.lists.activity.active.get(id) != Some(&true)
                 && snapshot
@@ -1190,28 +1202,30 @@ fn navigate(snapshot: &mut Snapshot, navigation: Navigation) {
                     .is_none_or(|thread| thread.requests.is_empty())
         })
         .and_then(|id| Arc::make_mut(&mut snapshot.sessions.subscriptions).remove(&id));
-    if let Some(id) = &navigation.thread_id
-        && snapshot.lists.activity.unread.contains(id)
+    if let Some(id) = selected
+        && snapshot.lists.activity.unread.contains(&id)
     {
         Arc::make_mut(&mut snapshot.lists.activity)
             .unread
-            .remove(id);
+            .remove(&id);
     }
-    Arc::make_mut(&mut snapshot.pane).navigation = Arc::new(navigation);
 }
 
 fn prepare<O: operations::Operation>(
     mut next: Snapshot,
+    pane_id: &str,
     mut operation: O,
 ) -> (Snapshot, Vec<Effect>) {
     if operation.invalidates() {
-        Arc::make_mut(&mut next.pane).epoch += 1;
+        next.invalidate_pane(pane_id);
     }
-    if let Err(error) = operation.prepare(&mut next) {
+    if let Err(error) = operation.prepare(&mut next, pane_id) {
         if let Some(key) = operation.key() {
-            next.fail_operation(key, error);
+            next.fail_operation(key.in_pane(pane_id), error);
         } else {
-            Arc::make_mut(&mut next.pane).error = Some(error);
+            if let Some(pane) = next.panes.get_mut(pane_id) {
+                Arc::make_mut(pane).error = Some(error);
+            }
         }
         return (next, Vec::new());
     }
@@ -1221,7 +1235,7 @@ fn prepare<O: operations::Operation>(
 impl Snapshot {
     fn fail_operation(&mut self, key: op::OperationKey, message: String) {
         self.operation_sequence += 1;
-        self.operations.insert(
+        Arc::make_mut(&mut self.operations).insert(
             key,
             op::OperationState {
                 generation: self.operation_sequence,
@@ -1230,7 +1244,7 @@ impl Snapshot {
         );
     }
 }
-fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
+pub(crate) fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
     let mut next = previous.clone();
     match event {
         Event::TerminalFailed { handle, reason } => {
@@ -1257,7 +1271,7 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             }
             next.project_import = Arc::default();
             next.terminals = Arc::default();
-            Arc::make_mut(&mut next.pane).observed_agents = None;
+            Arc::make_mut(next.panes.primary_mut()).observed_agents = None;
             next.catalog.provider_settings = None;
             next.catalog.host_software = None;
             next.lists.task_activity = None;
@@ -1270,7 +1284,9 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     drafts: std::mem::take(&mut next.input.drafts),
                     pending_submissions: std::mem::take(&mut next.sessions.pending_submissions),
                     file_drafts: std::mem::take(&mut next.files.file_drafts),
-                    navigation: std::mem::take(&mut Arc::make_mut(&mut next.pane).navigation),
+                    navigation: std::mem::take(
+                        &mut Arc::make_mut(next.panes.primary_mut()).navigation,
+                    ),
                 };
                 Arc::make_mut(&mut next.lists.archived_scopes)
                     .insert(next.connection.storage_scope.clone(), Arc::new(archived));
@@ -1278,9 +1294,12 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     next.input.drafts = saved.drafts.clone();
                     next.sessions.pending_submissions = saved.pending_submissions.clone();
                     next.files.file_drafts = saved.file_drafts.clone();
-                    Arc::make_mut(&mut next.pane).navigation = saved.navigation.clone();
+                    Arc::make_mut(next.panes.primary_mut()).navigation = saved.navigation.clone();
                 }
-                for pane in Arc::make_mut(&mut next.panes.0).values_mut() {
+                for (_, pane) in Arc::make_mut(&mut next.panes.0)
+                    .iter_mut()
+                    .filter(|(id, _)| !id.is_empty())
+                {
                     let cwd = pane.navigation.cwd.clone();
                     *pane = Arc::new(PaneState {
                         draft_slot: pane.draft_slot,
@@ -1296,8 +1315,8 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                 next.sessions.conversations = Arc::default();
                 next.lists.threads = None;
                 next.files.workspace = Arc::default();
-                Arc::make_mut(&mut next.pane).workspace = Arc::default();
-                Arc::make_mut(&mut next.pane).workspaces = Arc::default();
+                Arc::make_mut(next.panes.primary_mut()).workspace = Arc::default();
+                Arc::make_mut(next.panes.primary_mut()).workspaces = Arc::default();
                 next.sessions.draft_sessions = Arc::default();
                 next.catalog.account = Arc::default();
                 next.catalog.models = Arc::default();
@@ -1349,7 +1368,6 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
             next.reset_session();
             next.connection.connected = true;
             next.lists.task_activity = None;
-            Arc::make_mut(&mut next.pane).error = None;
             next.connection.connection_failure = None;
             next.lists.list_query = Arc::new((*next.lists.list_query).clone().for_connection());
             let effects = next.prepare_connection_refresh();
@@ -1367,7 +1385,6 @@ fn reduce_event(previous: &Snapshot, event: Event) -> (Snapshot, Vec<Effect>) {
                     Arc::make_mut(terminal).phase = TerminalPhase::Suspended;
                 }
             }
-            Arc::make_mut(&mut next.pane).error = None;
         }
         Event::Intent(_) | Event::Notification(_) | Event::SessionUpdate(_) => {
             unreachable!("handled by the reducer router")
@@ -1437,16 +1454,14 @@ impl Snapshot {
         if self.catalog.account.accounts.is_none() {
             effects.push(Effect::execute(op::ListAccounts {}));
         }
-        effects.extend(self.prepare_pane_refresh());
+        effects.extend(op::poll_account_login(self));
         let panes: Vec<_> = self.panes.0.keys().cloned().collect();
-        for pane in panes {
-            let mut view = self.for_pane(&pane).unwrap();
+        for id in panes {
             effects.extend(
-                view.prepare_pane_refresh()
+                self.prepare_pane_refresh(&id)
                     .into_iter()
-                    .map(|effect| effect.in_pane(&pane)),
+                    .map(|effect| effect.in_pane(&id)),
             );
-            *self = view.for_pane("").unwrap();
         }
         for (handle, terminal) in self.terminals.iter() {
             if terminal.phase == TerminalPhase::Suspended {
@@ -1460,15 +1475,16 @@ impl Snapshot {
         effects
     }
 
-    fn prepare_pane_refresh(&mut self) -> Vec<Effect> {
-        let mut effects = op::refresh_agents(
-            self.connection.connected,
-            self.pane.observed_agents.as_ref(),
-        );
-        if let Some(thread_id) = &self.pane.navigation.thread_id {
+    fn prepare_pane_refresh(&mut self, pane_id: &str) -> Vec<Effect> {
+        let Some(pane) = self.panes.get(pane_id) else {
+            return Vec::new();
+        };
+        let mut effects =
+            op::refresh_agents(self.connection.connected, pane.observed_agents.as_ref());
+        if let Some(thread_id) = &pane.navigation.thread_id {
             effects.push(Effect::execute(op::ReadThread::open(thread_id.clone())));
         } else {
-            effects.extend(op::review_workspace(self));
+            effects.extend(op::review_workspace(self, pane_id));
         }
         effects
     }
@@ -1476,7 +1492,6 @@ impl Snapshot {
     /// Cached history and drafts survive; IDs and activity belong to one connection.
     /// Pending submissions are persisted only to recover dictation after a crash.
     fn reset_session(&mut self) {
-        Arc::make_mut(&mut self.pane).error = None;
         for pane in Arc::make_mut(&mut self.panes.0).values_mut() {
             if pane.error.is_some() {
                 Arc::make_mut(pane).error = None;
@@ -1591,7 +1606,13 @@ impl Snapshot {
                 continue;
             }
             let selected_provider = self.draft_provider(key, previous.model.as_ref());
-            if selected_provider.is_none() && key != &self.pane.navigation.draft_key {
+            if selected_provider.is_none()
+                && !self
+                    .panes
+                    .0
+                    .values()
+                    .any(|pane| &pane.navigation.draft_key == key)
+            {
                 continue;
             }
             let selection = selected_provider.is_none().then_some(remembered).flatten();
@@ -1757,6 +1778,7 @@ fn shared_mut<'a, K: Ord + Clone + std::borrow::Borrow<Q>, Q: Ord + ?Sized, T: C
 fn submission(
     previous: &Snapshot,
     thread_id: Option<crate::session::SessionRef>,
+    cwd: Option<String>,
     draft_key: DraftKey,
     draft: Arc<Draft>,
     client_user_message_id: agent_protocol::ids::ClientInputId,
@@ -1838,8 +1860,7 @@ fn submission(
         None => Effect::execute(op::StartSubmission {
             provider: provider.expect("new submission has a provider"),
             draft_key,
-            cwd: (!previous.pane.navigation.cwd.trim().is_empty())
-                .then(|| previous.pane.navigation.cwd.clone()),
+            cwd,
             client_user_message_id,
             draft,
         }),
@@ -1860,25 +1881,33 @@ mod workspace_navigation_tests {
             ..Default::default()
         };
         let mut state = Snapshot {
-            pane: std::sync::Arc::new(crate::state::PaneState {
-                navigation: Arc::new(navigation(a.clone())),
-                ..Default::default()
-            }),
+            panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(
+                crate::state::PaneState {
+                    navigation: Arc::new(navigation(a.clone())),
+                    ..Default::default()
+                },
+            )),
             ..Default::default()
         };
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).workspace).review_cwd =
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).workspace).review_cwd =
             Some("a-review".into());
-        navigate(&mut state, navigation(b.clone()));
-        assert!(state.pane.workspace.review_cwd.is_none());
-        Arc::make_mut(&mut Arc::make_mut(&mut state.pane).workspace).review_cwd =
+        navigate(&mut state, "", navigation(b.clone()));
+        assert!(state.panes.primary().workspace.review_cwd.is_none());
+        Arc::make_mut(&mut Arc::make_mut(state.panes.primary_mut()).workspace).review_cwd =
             Some("b-review".into());
-        navigate(&mut state, navigation(a));
-        assert_eq!(state.pane.workspace.review_cwd.as_deref(), Some("a-review"));
-        navigate(&mut state, navigation(b));
-        assert_eq!(state.pane.workspace.review_cwd.as_deref(), Some("b-review"));
+        navigate(&mut state, "", navigation(a));
+        assert_eq!(
+            state.panes.primary().workspace.review_cwd.as_deref(),
+            Some("a-review")
+        );
+        navigate(&mut state, "", navigation(b));
+        assert_eq!(
+            state.panes.primary().workspace.review_cwd.as_deref(),
+            Some("b-review")
+        );
         let restored =
             crate::persistence::decode(&crate::persistence::encode(&state).unwrap()).unwrap();
-        assert!(restored.pane.workspaces.is_empty());
+        assert!(restored.panes.primary().workspaces.is_empty());
         assert_eq!(restored.files.workspace, Arc::default());
     }
 }
@@ -1939,6 +1968,7 @@ mod submission_tests {
         let (next, effects) = submission(
             &snapshot,
             Some(session),
+            None,
             key.clone(),
             draft.clone(),
             "send".into(),
@@ -2013,6 +2043,7 @@ mod submission_tests {
         };
         let (next, effects) = reduce_intent(
             &snapshot,
+            "",
             Intent::Submit {
                 thread_id: Some(id),
                 client_user_message_id: "input".into(),
@@ -2189,18 +2220,21 @@ mod history_tests {
                         ),
                         ..Default::default()
                     },
-                    operations: [(
-                        OperationKey::History { session: owner },
-                        OperationState {
-                            generation: 1,
-                            phase,
-                        },
-                    )]
-                    .into(),
+                    operations: Arc::new(
+                        [(
+                            OperationKey::History { session: owner },
+                            OperationState {
+                                generation: 1,
+                                phase,
+                            },
+                        )]
+                        .into(),
+                    ),
                     ..Default::default()
                 };
                 let (next, effects) = reduce(
                     &snapshot,
+                    "",
                     Event::Intent(Intent::ReadOlder {
                         thread_id: session.clone(),
                     }),

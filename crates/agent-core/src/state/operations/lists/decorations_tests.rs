@@ -118,7 +118,7 @@ fn decorations_match_captured_sources_across_root_and_project_pages() {
             ),
         ],
     };
-    assert!(operation.apply(&mut state, output).is_empty());
+    assert!(operation.apply(&mut state, "", output).is_empty());
     let root = state.lists.threads.as_ref().unwrap();
     assert_eq!(root.data[0].has_changes, Some(false));
     assert_eq!(root.data[1].has_changes, None);
@@ -169,6 +169,7 @@ fn unchanged_decorations_preserve_shared_lists() {
         let mut state = original.clone();
         read(std::slice::from_ref(&current)).apply(
             &mut state,
+            "",
             ListDecorations {
                 icons: [("p".into(), Some(project_icon("icon")))].into(),
                 statuses,
@@ -204,6 +205,7 @@ fn icons_apply_without_root_threads_or_status_changes() {
         read(&[])
             .apply(
                 &mut state,
+                "",
                 ListDecorations {
                     icons: [("p".into(), Some(project_icon("icon")))].into(),
                     statuses: Vec::new(),
@@ -223,6 +225,7 @@ fn icons_apply_without_root_threads_or_status_changes() {
         read(&[])
             .apply(
                 &mut state,
+                "",
                 ListDecorations {
                     icons: Default::default(),
                     statuses: Vec::new()
@@ -249,12 +252,12 @@ fn project_decorations_do_not_require_a_root_list() {
         statuses: vec![(current.id.clone().unwrap(), Some(false))],
     };
     let mut state = original.clone();
-    read(&[]).apply(&mut state, output.clone());
+    read(&[]).apply(&mut state, "", output.clone());
     assert!(Arc::ptr_eq(
         &state.lists.project_threads,
         &original.lists.project_threads
     ));
-    read(&[current]).apply(&mut state, output);
+    read(&[current]).apply(&mut state, "", output);
     assert!(state.lists.threads.is_none());
     assert_eq!(
         state.lists.project_threads["p"].data[0].has_changes,
@@ -290,6 +293,7 @@ fn a_dark_only_logo_update_does_not_require_the_light_logo_to_change() {
     };
     read(&[]).apply(
         &mut state,
+        "",
         ListDecorations {
             icons: [("p".into(), Some(changed.clone()))].into(),
             statuses: Vec::new(),

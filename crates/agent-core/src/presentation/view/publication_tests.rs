@@ -3,8 +3,10 @@ use crate::state::Snapshot;
 use std::sync::Arc;
 
 fn changes(snapshot: &Snapshot, previous: Arc<Snapshot>) -> PresentationChanges {
-    let previous = Presentation::project(previous, None);
-    Presentation::project(Arc::new(snapshot.clone()), Some(&previous)).changes(previous)
+    let previous = Presentation::project(previous, "", None).unwrap();
+    Presentation::project(Arc::new(snapshot.clone()), "", Some(&previous))
+        .unwrap()
+        .changes(previous)
 }
 
 #[test]
@@ -60,37 +62,46 @@ fn list_publication_tracks_visible_operation_phases_without_reacting_to_generati
                         },
                     )
                 })
-                .collect(),
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into(),
             ..Default::default()
         });
         assert!(!changes(&previous, previous.clone()).list);
         for key in keys.iter().take(3).chain(keys.last().filter(|_| count > 0)) {
             let mut next = previous.as_ref().clone();
-            let state = next.operations.get_mut(key).unwrap();
+            let state = Arc::make_mut(&mut next.operations).get_mut(key).unwrap();
             state.generation += 1;
             let generation = changes(&next, previous.clone());
             assert!(generation.changed && !generation.list);
-            next.operations.get_mut(key).unwrap().phase = OperationPhase::Failed {
+            Arc::make_mut(&mut next.operations)
+                .get_mut(key)
+                .unwrap()
+                .phase = OperationPhase::Failed {
                 message: "first failure".into(),
             };
             let failed = Arc::new(next.clone());
             let phase = changes(&next, previous.clone());
             assert!(phase.list && !phase.groups.catalog && !phase.conversation);
-            next.operations.get_mut(key).unwrap().phase = OperationPhase::Failed {
+            Arc::make_mut(&mut next.operations)
+                .get_mut(key)
+                .unwrap()
+                .phase = OperationPhase::Failed {
                 message: "different failure".into(),
             };
             assert!(changes(&next, failed).list);
-            next.operations.remove(key);
+            Arc::make_mut(&mut next.operations).remove(key);
             assert!(changes(&next, previous.clone()).list);
         }
         for key in [
-            OperationKey::WorkspaceReview,
+            OperationKey::WorkspaceReview {
+                pane: String::new(),
+            },
             OperationKey::ProjectList {
                 project_id: "not-visible".into(),
             },
         ] {
             let mut next = previous.as_ref().clone();
-            next.operations.insert(
+            Arc::make_mut(&mut next.operations).insert(
                 key,
                 OperationState {
                     generation: 2,
@@ -198,7 +209,7 @@ fn publication_changes_keep_independent_surfaces_and_connection_epochs_distinct(
     assert!(catalog.changed && catalog.groups.catalog);
     assert!(!catalog.list && !catalog.conversation && !catalog.reconnected);
     next = (*before).clone();
-    Arc::make_mut(&mut next.pane).error = Some("failed".into());
+    Arc::make_mut(next.panes.primary_mut()).error = Some("failed".into());
     assert!(changes(&next, before.clone()).changed);
     next.connection.connection_generation += 1;
     assert!(

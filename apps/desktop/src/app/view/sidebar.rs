@@ -277,7 +277,7 @@ impl SidebarRow {
                         cx.stop_propagation();
                         let after = bounds.get().is_some_and(|bounds| window.mouse_position().y > bounds.center().y);
                         let _ = drop_owner.update(cx, |desktop, cx| {
-                            if drop_host.is_empty() && desktop.snapshot.connection.storage_scope != drag.scope { return; }
+                            if drop_host.is_empty() && desktop.publication.snapshot.connection.storage_scope != drag.scope { return; }
                             let intent = match &drag.kind {
                                 SidebarDragKind::Project(id) => Intent::ReorderProject { project_id: id.clone(), target_id: drop_target.clone(), after },
                                 SidebarDragKind::Chat(id) => Intent::MoveChatToProject { thread_id: id.clone(), project_id: drop_target.clone() },
@@ -447,10 +447,11 @@ impl Desktop {
             connected_hosts: hosts
                 .map(|hosts| hosts.connected_hosts())
                 .unwrap_or_default(),
-            storage_scope: self.snapshot.connection.storage_scope.clone(),
-            connected: self.snapshot.connection.connected,
+            storage_scope: self.publication.snapshot.connection.storage_scope.clone(),
+            connected: self.publication.snapshot.connection.connected,
             local: self.remote.is_none(),
             loading_session_list: self
+                .publication
                 .snapshot
                 .operation_running(op::OperationKey::SessionList),
             errors: self.error_rows(&ErrorScope::Projects),
@@ -1186,8 +1187,7 @@ mod tests {
                 )
             });
             let sidebar = desktop.update(cx, |desktop, cx| {
-                desktop.snapshot = store.snapshot();
-                desktop.project_fixture();
+                desktop.project_fixture(store.snapshot());
                 desktop.session = Some(session);
                 let entity = cx.entity();
                 let sidebar = cx.new(|cx| {
@@ -1223,8 +1223,7 @@ mod tests {
         assert_eq!(store.snapshot().thread_list().unwrap().projects[0].id, "b");
         view.update(window, |view, cx| {
             view.0.update(cx, |desktop, cx| {
-                desktop.snapshot = store.snapshot();
-                desktop.project_fixture();
+                desktop.project_fixture(store.snapshot());
                 cx.notify();
             })
         });
@@ -1251,8 +1250,7 @@ mod tests {
         ] {
             view.update(window, |view, cx| {
                 view.0.update(cx, |desktop, cx| {
-                    desktop.snapshot = store.snapshot();
-                    desktop.project_fixture();
+                    desktop.project_fixture(store.snapshot());
                     cx.notify();
                 })
             });
@@ -1278,7 +1276,13 @@ mod tests {
             }
         }
         assert!(
-            store.snapshot().pane.navigation.thread_id.is_none(),
+            store
+                .snapshot()
+                .panes
+                .primary()
+                .navigation
+                .thread_id
+                .is_none(),
             "dragging must not open the chat"
         );
     }
@@ -1312,16 +1316,16 @@ mod tests {
                 provider: agent_protocol::session::ProviderKind::Codex,
                 id: "fixture".into(),
             };
-            let snapshot = Arc::make_mut(&mut desktop.snapshot);
+            let mut snapshot = desktop.publication.snapshot.as_ref().clone();
             snapshot.lists.threads = Some(Arc::new(
                 serde_json::from_value(serde_json::json!({
                     "data":[], "projects":[{"id":"brand", "name":"remote-agent", "roots":[]}],
                      "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5, }))
                 .unwrap(),
             ));
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
                 Some(session.clone());
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key =
                 session.clone().into();
             Arc::make_mut(&mut snapshot.input.drafts).insert(
                 session.into(),
@@ -1330,8 +1334,7 @@ mod tests {
                     ..Default::default()
                 }),
             );
-            let store = runtime
-                .block_on(async { Arc::new(Store::offline((*desktop.snapshot).clone(), None)) });
+            let store = runtime.block_on(async { Arc::new(Store::offline(snapshot, None)) });
             let app_runtime = desktop.runtime.clone();
             desktop.session = Some(runtime.block_on(async {
                 let (updates, receive) = async_channel::unbounded();
@@ -1344,8 +1347,7 @@ mod tests {
                 ));
                 receive.recv().await.unwrap().unwrap().unwrap()
             }));
-            desktop.snapshot = store.snapshot();
-            desktop.project_fixture();
+            desktop.project_fixture(store.snapshot());
             cx.notify();
             desktop
         });
@@ -1364,14 +1366,17 @@ mod tests {
         for expanded in [true, false] {
             window.simulate_click(project, Modifiers::default());
             view.update(window, |view, cx| {
-                view.snapshot = view.session.as_ref().unwrap().host.store.snapshot();
-                view.project_fixture();
+                view.project_fixture(view.session.as_ref().unwrap().host.store.snapshot());
                 cx.notify();
             });
             window.run_until_parked();
             view.update(window, |view, _| {
                 assert_eq!(
-                    view.snapshot.lists.expanded_projects.contains_key("brand"),
+                    view.publication
+                        .snapshot
+                        .lists
+                        .expanded_projects
+                        .contains_key("brand"),
                     expanded
                 );
             });
@@ -1470,13 +1475,14 @@ mod tests {
         let (view, window) = cx.add_window_view(|window, cx| {
             let mut desktop = Desktop::new(Mode::Main, window, cx);
             desktop.onboarding = false;
-            Arc::make_mut(&mut desktop.snapshot).lists.threads = Some(Arc::new(
-                serde_json::from_value(serde_json::json!({
-                    "data":[{"id":{"provider":"codex","id":"listed"},"name":"Listed task"}],
-                    "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
-                .unwrap(),
-            ));
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+    snapshot.lists.threads = Some(Arc::new(
+                    serde_json::from_value(serde_json::json!({
+                        "data":[{"id":{"provider":"codex","id":"listed"},"name":"Listed task"}],
+                        "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
+                    .unwrap(),
+                ));
+            });
             cx.notify();
             desktop
         });
@@ -1489,8 +1495,8 @@ mod tests {
             })
         });
         view.update(window, |view, cx| {
-            let snapshot = Arc::make_mut(&mut view.snapshot);
-            let draft = snapshot.pane.navigation.draft_key.clone();
+            let mut snapshot = view.publication.snapshot.as_ref().clone();
+            let draft = snapshot.panes.primary().navigation.draft_key.clone();
             Arc::make_mut(&mut snapshot.input.drafts).insert(
                 draft,
                 Arc::new(Draft {
@@ -1498,14 +1504,16 @@ mod tests {
                     ..Default::default()
                 }),
             );
+            view.project_fixture(Arc::new(snapshot));
             cx.notify();
         });
         window.run_until_parked();
         assert_eq!(renders.get(), 0, "typing must not rebuild the sidebar");
         view.update(window, |view, cx| {
-            let snapshot = Arc::make_mut(&mut view.snapshot);
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+            let mut snapshot = view.publication.snapshot.as_ref().clone();
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
                 Some(session);
+            view.project_fixture(Arc::new(snapshot));
             cx.notify();
         });
         window.run_until_parked();
@@ -1540,13 +1548,14 @@ mod tests {
             let desktop = cx.new(|cx| {
                 let mut desktop = Desktop::new(Mode::Main, window, cx);
                 desktop.onboarding = false;
-                Arc::make_mut(&mut desktop.snapshot).lists.threads = Some(Arc::new(
-                    serde_json::from_value(serde_json::json!({
-                        "data":[{"id":{"provider":"codex","id":"running"},"name":"Running task","status":"running"}],
-                        "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
-                    .unwrap(),
-                ));
-                desktop.project_fixture();
+                desktop.edit_fixture(|snapshot| {
+    snapshot.lists.threads = Some(Arc::new(
+                        serde_json::from_value(serde_json::json!({
+                            "data":[{"id":{"provider":"codex","id":"running"},"name":"Running task","status":"running"}],
+                            "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,}))
+                        .unwrap(),
+                    ));
+                });
                 cx.notify();
                 desktop
             });
@@ -1629,8 +1638,7 @@ mod tests {
                 )
             });
             desktop.update(cx, |desktop, _| {
-                desktop.snapshot = store.snapshot();
-                desktop.project_fixture();
+                desktop.project_fixture(store.snapshot());
                 desktop.session = Some(session);
                 desktop.local_busy = 1;
             });
@@ -1648,7 +1656,8 @@ mod tests {
             assert_eq!(
                 store
                     .snapshot()
-                    .pane
+                    .panes
+                    .primary()
                     .navigation
                     .thread_id
                     .as_ref()

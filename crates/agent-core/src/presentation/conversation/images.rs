@@ -135,7 +135,7 @@ mod tests {
     ) {
         let projected = project_conversation(
             crate::localization::UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             thread(
                 vec![
@@ -191,7 +191,7 @@ mod tests {
         ] {
             let projected = project_conversation(
                 crate::localization::UiLanguage::Japanese,
-                &Snapshot::default().pane.navigation.draft_key,
+                &Snapshot::default().panes.primary().navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 thread(items, models::TurnStatus::Completed),
                 &None,
@@ -219,7 +219,7 @@ mod tests {
         for (activity, standalone) in [(deferred_user, true), (command, false)] {
             let projected = project_conversation(
                 crate::localization::UiLanguage::Japanese,
-                &Snapshot::default().pane.navigation.draft_key,
+                &Snapshot::default().panes.primary().navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 thread(
                     vec![
@@ -247,7 +247,7 @@ mod tests {
         for status in [models::TurnStatus::Running, models::TurnStatus::Completed] {
             let projected = project_conversation(
                 crate::localization::UiLanguage::Japanese,
-                &Snapshot::default().pane.navigation.draft_key,
+                &Snapshot::default().panes.primary().navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 thread(
                     vec![
@@ -293,7 +293,7 @@ mod tests {
             ));
             let projected = project_conversation(
                 crate::localization::UiLanguage::Japanese,
-                &Snapshot::default().pane.navigation.draft_key,
+                &Snapshot::default().panes.primary().navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 thread(
                     vec![
@@ -332,7 +332,7 @@ mod tests {
     ) {
         let projected = project_conversation(
             crate::localization::UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             thread(
                 vec![image("image", path), answer(text, "final")],
@@ -365,14 +365,14 @@ mod tests {
             let source = thread(vec![generated.clone(), answer(text, "final")], status);
             let projected = project_conversation(
                 crate::localization::UiLanguage::Japanese,
-                &Snapshot::default().pane.navigation.draft_key,
+                &Snapshot::default().panes.primary().navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 source.clone(),
                 &previous,
             );
             let reopened = project_conversation(
                 crate::localization::UiLanguage::Japanese,
-                &Snapshot::default().pane.navigation.draft_key,
+                &Snapshot::default().panes.primary().navigation.draft_key,
                 &Snapshot::default().sessions.pending_submissions,
                 source,
                 &None,

@@ -235,8 +235,7 @@ mod tests {
                 window,
                 cx,
             );
-            view.snapshot = local.snapshot();
-            view.project_fixture();
+            view.project_fixture(local.snapshot());
             view.session = Some(local_session);
             let hosts = cx.new(|cx| Hosts::new(window, cx));
             hosts.update(cx, |hosts, _| hosts.fixture_remotes(vec![remote.clone()]));
@@ -269,10 +268,24 @@ mod tests {
                     cx,
                 );
                 assert_eq!(
-                    distant.snapshot().pane.navigation.thread_id.as_ref(),
+                    distant
+                        .snapshot()
+                        .panes
+                        .primary()
+                        .navigation
+                        .thread_id
+                        .as_ref(),
                     Some(&id)
                 );
-                assert!(local.snapshot().pane.navigation.thread_id.is_none());
+                assert!(
+                    local
+                        .snapshot()
+                        .panes
+                        .primary()
+                        .navigation
+                        .thread_id
+                        .is_none()
+                );
                 assert!(view.connection_selection.all);
                 assert_eq!(
                     view.connection_selection.host_id.as_deref(),

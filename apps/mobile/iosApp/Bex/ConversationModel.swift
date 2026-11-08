@@ -10,7 +10,10 @@ final class ConversationModel {
     @ObservationIgnored let session: ClientSession
     @ObservationIgnored let pane: AgentPane?
     @ObservationIgnored private(set) var publication: Presentation
-    @ObservationIgnored private(set) var snapshot: AgentCore.Snapshot
+    var snapshot: AgentCore.Snapshot {
+        publication.snapshot()
+    }
+
     private(set) var settings: SettingsPresentation
     private(set) var isConnected = false
     private(set) var conversationContext: ConversationContext
@@ -44,15 +47,13 @@ final class ConversationModel {
         self.session = session
         self.pane = pane
         let empty = Presentation.empty(language: session.snapshot().uiLanguage())
-        let snapshot = empty.snapshot()
         let composer = empty.composer()
         publication = empty
-        self.snapshot = snapshot
         settings = empty.settings()
         conversationContext = empty.conversationContext()
         self.composer = composer
         composerControls = composer.controls()
-        files = snapshot.files()
+        files = empty.snapshot().files(paneId: "")!
         if let value = try? currentPresentation() {
             publish(value)
         }
@@ -106,8 +107,8 @@ final class ConversationModel {
 
     func publish(_ value: Presentation) {
         let changes = value.changes(previous: publication)
-        guard changes.changed else { return }
         let next = value.snapshot()
+        guard changes.changed, let nextFiles = next.files(paneId: value.paneId()) else { return }
         migrateWorkbench(to: next)
         publication = value
         if changes.settings {
@@ -125,14 +126,12 @@ final class ConversationModel {
         if changes.agents {
             agents = value.agents()
         }
-        let nextFiles = next.files()
         if changes.groups.terminals {
             terminals = next.terminals()
         }
         if !nextFiles.unchanged(other: files) {
             files = nextFiles
         }
-        snapshot = next
         if isConnected != next.connected() {
             isConnected = next.connected()
         }
@@ -269,7 +268,7 @@ extension ConversationModel {
     }
 
     var dockedRequest: Request? {
-        composerControls.request
+        conversationContext.dockedRequest()
     }
 
     func answerQuestion(_ requestId: String, _ action: QuestionAction) {

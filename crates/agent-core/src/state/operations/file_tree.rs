@@ -91,7 +91,7 @@ impl Operation for ReadTreeDirectory {
     fn rejected_output(&self, _: ()) -> Option<Self::Output> {
         Some(Err("フォルダを読み込めませんでした。".into()))
     }
-    fn apply(self, snapshot: &mut Snapshot, result: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, result: Self::Output) -> Vec<Effect> {
         effects(
             Arc::make_mut(&mut snapshot.files.workspace)
                 .file_trees
@@ -113,9 +113,9 @@ impl Operation for DebounceSearchTree {
     fn rejected_output(&self, _: ()) -> Option<Self::Output> {
         Some(Err("ファイルを検索できませんでした。".into()))
     }
-    fn apply(self, snapshot: &mut Snapshot, result: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, result: Self::Output) -> Vec<Effect> {
         if let Err(error) = result {
-            return self.0.apply(snapshot, Err(error));
+            return self.0.apply(snapshot, pane_id, Err(error));
         }
         // The timer and the RPC have separate lifetimes. New input must start
         // its own debounce while a prior RPC is running, and stale timers must
@@ -157,7 +157,7 @@ impl Operation for SearchTree {
     fn rejected_output(&self, _: ()) -> Option<Self::Output> {
         Some(Err("ファイルを検索できませんでした。".into()))
     }
-    fn apply(self, snapshot: &mut Snapshot, result: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, result: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.files.workspace)
             .file_trees
             .searched(&self.key, self.generation, result);
@@ -222,8 +222,8 @@ mod tests {
         };
         let old = query("old");
         let current = query("current");
-        assert!(old.apply(&mut snapshot, Ok(())).is_empty());
-        assert_eq!(current.apply(&mut snapshot, Ok(())).len(), 1);
+        assert!(old.apply(&mut snapshot, "", Ok(())).is_empty());
+        assert_eq!(current.apply(&mut snapshot, "", Ok(())).len(), 1);
         let trees = &mut Arc::make_mut(&mut snapshot.files.workspace).file_trees;
         let pending = trees.action(
             key("/workspace"),
@@ -253,7 +253,7 @@ mod tests {
                 query,
                 generation
             })
-            .apply(&mut snapshot, Ok(()))
+            .apply(&mut snapshot, "", Ok(()))
             .is_empty()
         );
     }
@@ -267,10 +267,11 @@ mod tests {
             },
             ..Default::default()
         };
-        Arc::make_mut(&mut Arc::make_mut(&mut before.pane).navigation).cwd =
+        Arc::make_mut(&mut Arc::make_mut(before.panes.primary_mut()).navigation).cwd =
             "/another-thread".into();
         let (mut next, effects) = crate::state::reduce(
             &before,
+            "",
             crate::state::Event::Intent(Intent::FileTree {
                 key: key("/workspace"),
                 action: FileTreeAction::Open {
@@ -326,7 +327,7 @@ mod tests {
         assert!(
             store
                 .snapshot()
-                .error_notices(crate::presentation::error::ErrorScope::Workspace)
+                .error_notices("", crate::presentation::error::ErrorScope::Workspace)
                 .is_empty()
         );
         let _ = store.dispatch(open).await;
@@ -350,11 +351,14 @@ mod tests {
      {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             let mut initial = Snapshot::default();
-            super::super::ReadFileOpenCapabilities {}.prepare(&mut initial).unwrap();
+            super::super::ReadFileOpenCapabilities {}.prepare(&mut initial, "").unwrap();
             initial.files.preferred_editor = Some(agent_protocol::editors::EditorId::Cursor);
-            super::super::ReadFileOpenCapabilities {}.apply(&mut initial,
-                agent_protocol::editors::FileOpenCapabilities { editors: vec![agent_protocol::editors::EditorId::Cursor], reveal: None });
-            let (mut initial, _) = crate::state::reduce(&initial, Event::Disconnected);
+            super::super::ReadFileOpenCapabilities {}.apply(
+            &mut initial,
+            "",
+                agent_protocol::editors::FileOpenCapabilities { editors: vec![agent_protocol::editors::EditorId::Cursor], reveal: None },
+            );
+            let (mut initial, _) = crate::state::reduce(&initial, "", Event::Disconnected);
             assert!(initial.files.file_open_capabilities.is_none());
             let key = FileTreeKey { owner: "mobile".into(), root: "/workspace".into() };
             assert!(file_tree_action(&mut initial, key.clone(), FileTreeAction::Open {

@@ -149,10 +149,10 @@ mod tests {
         window.simulate_resize(size(px(1500.), px(900.)));
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
-                Arc::make_mut(
-                    &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
-                )
-                .cwd = "/workspace".into();
+                view.edit_fixture(|snapshot| {
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
+                        .cwd = "/workspace".into();
+                });
                 view.file_explorer.storage = Some(storage.clone());
                 view.file_explorer.preferred = 320.;
                 view.open_surface(

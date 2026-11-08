@@ -111,28 +111,30 @@ mod tests {
             display: TaskActivitySummary::default().display(),
         };
         let mut state = Snapshot::default();
-        ReadTaskActivity {}.apply(&mut state, running.clone());
+        ReadTaskActivity {}.apply(&mut state, "", running.clone());
         assert_eq!(state.task_activity_display(), Some(running.display.clone()));
         state = reduce(
             &state,
+            "",
             Event::Notification(Notification::TaskActivity {
                 state: completed.clone(),
             }),
         )
         .0;
-        ReadTaskActivity {}.apply(&mut state, running);
+        ReadTaskActivity {}.apply(&mut state, "", running);
         assert_eq!(state.task_activity_display(), Some(completed.display));
         assert!(state.lists.threads.is_none());
         assert!(state.sessions.conversations.is_empty());
-        let disconnected = reduce(&state, Event::Disconnected).0;
+        let disconnected = reduce(&state, "", Event::Disconnected).0;
         assert_eq!(
             disconnected.task_activity_display(),
             state.task_activity_display()
         );
-        let mut reconnected = reduce(&disconnected, Event::Connected).0;
+        let mut reconnected = reduce(&disconnected, "", Event::Connected).0;
         assert_eq!(reconnected.task_activity_display(), None);
         ReadTaskActivity {}.apply(
             &mut reconnected,
+            "",
             TaskActivityState {
                 waiting: Vec::new(),
                 unread: Vec::new(),

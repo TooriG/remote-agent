@@ -363,8 +363,7 @@ fn project_row(
 ) -> Arc<VisibleConversationRow> {
     if let Some(previous) = previous
         && previous.origin == *origin
-        && previous.data.timestamp_ms == data.timestamp_ms
-        && same_content(&previous.data.content, &data.content)
+        && previous.data == *data
         && previous.last == last
         && previous.expanded == expanded
         && previous.progress == progress
@@ -390,40 +389,4 @@ fn is_source_item(content: &ConversationRowContent) -> bool {
             | ConversationRowContent::PendingRequest { .. }
             | ConversationRowContent::Error { .. }
     )
-}
-
-fn same_content(a: &ConversationRowContent, b: &ConversationRowContent) -> bool {
-    use ConversationRowContent::*;
-    match (a, b) {
-        (User { item: a }, User { item: b }) => Arc::ptr_eq(a, b),
-        (
-            Activity {
-                item: a,
-                turn_id: at,
-            },
-            Activity {
-                item: b,
-                turn_id: bt,
-            },
-        ) => Arc::ptr_eq(a, b) && at == bt,
-        (
-            Response {
-                item: a,
-                show_actions: aa,
-                fork_turn_id: af,
-            },
-            Response {
-                item: b,
-                show_actions: ba,
-                fork_turn_id: bf,
-            },
-        ) => Arc::ptr_eq(a, b) && aa == ba && af == bf,
-        (ActivityHeader { activity: a }, ActivityHeader { activity: b }) => a == b,
-        (PendingRequest { request: a }, PendingRequest { request: b }) => a == b,
-        (ProviderHandoff { text: a }, ProviderHandoff { text: b }) => a == b,
-        (Error { error: a }, Error { error: b }) => a == b,
-        (Preparation { preparation: a }, Preparation { preparation: b }) => a == b,
-        (InProgress { turn_id: a }, InProgress { turn_id: b }) => a == b,
-        _ => false,
-    }
 }

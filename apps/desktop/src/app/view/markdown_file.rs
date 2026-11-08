@@ -48,7 +48,7 @@ impl FileChips {
         if !paths.is_empty() {
             cx.defer(move |cx| {
                 let _ = owner.update(cx, |desktop, _| {
-                    if desktop.snapshot.connection.epoch == epoch {
+                    if desktop.publication.snapshot.connection.epoch == epoch {
                         desktop.ensure_reference_metadata(paths);
                     }
                 });
@@ -167,7 +167,7 @@ impl FileChip {
     ) {
         cx.stop_propagation();
         let _ = self.desktop.update(cx, |desktop, cx| {
-            if desktop.snapshot.connection.epoch != self.epoch {
+            if desktop.publication.snapshot.connection.epoch != self.epoch {
                 return;
             }
             if menu {
@@ -314,7 +314,7 @@ impl Render for FileChip {
             .on_hover(cx.listener(|view, hovered, _, cx| {
                 if *hovered {
                     let _ = view.desktop.update(cx, |desktop, _| {
-                        if desktop.snapshot.connection.epoch == view.epoch {
+                        if desktop.publication.snapshot.connection.epoch == view.epoch {
                             desktop.ensure_reference_metadata(vec![view.file.path.clone()]);
                         }
                     });

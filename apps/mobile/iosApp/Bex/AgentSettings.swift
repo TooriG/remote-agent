@@ -2,7 +2,6 @@ import AgentCore
 import SwiftUI
 
 struct ProviderAccountScreen: View {
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.locale) private var locale
     let model: ConversationModel
     var profiles: [HostProfile] = []
@@ -13,10 +12,8 @@ struct ProviderAccountScreen: View {
     @State private var loadingAccounts = false
     @State private var credentialProvider = KeyProvider.deepSeek
     @State private var loginCode = ""
-    @State private var loginError: String?
     @State private var loginRequestInFlight = false
     @State private var cancellingLogin = false
-    @State private var pollingLogin: Task<Void, Never>?
     @State private var signOutId: String?
     private var accounts: [Account] {
         model.accounts.filter { $0.provider == provider }
@@ -28,6 +25,11 @@ struct ProviderAccountScreen: View {
 
     private var login: AccountLogin? {
         model.settings.accountLogin()
+    }
+
+    /// Core records failures of starting, confirming, answering, and cancelling the login.
+    private var loginError: ErrorText? {
+        model.settings.accountLoginError(provider: provider)
     }
 
     private var loginInProgress: Bool {
@@ -61,7 +63,7 @@ struct ProviderAccountScreen: View {
                     login: login, providerName: provider.bexName, loginCode: $loginCode,
                     progressMessage: loginProgressMessage, loginError: loginError,
                     submit: { submitLoginCode(login.loginId, provider: login.provider) },
-                    retry: { pollLogin(login.loginId, provider: login.provider) }
+                    retry: { readLogin(login) }
                 )
             } else {
                 Section {
@@ -122,19 +124,12 @@ struct ProviderAccountScreen: View {
             }
         }
         .onChange(of: model.host) { _ in
-            loginError = nil
             loginCode = ""
             signOutId = nil
             if model.isConnected {
                 refresh()
             }
         }
-        .onChange(of: scenePhase) { phase in
-            if phase == .active, let login {
-                pollLogin(login.loginId, provider: login.provider)
-            }
-        }
-        .onDisappear { pollingLogin?.cancel(); pollingLogin = nil }
     }
 }
 
@@ -221,7 +216,7 @@ extension ProviderAccountScreen {
                 ProgressView(loginProgressMessage)
             }
             if let error = loginError {
-                ErrorTextView(source: error).font(.caption).foregroundStyle(.red)
+                ErrorTextView(text: error).font(.caption).foregroundStyle(.red)
             }
         } header: {
             HStack {
@@ -253,8 +248,9 @@ extension ProviderAccountScreen {
         if provider == .deepSeek {
             model.perform(.readDshCredentials(ReadCredentials()))
         }
-        if let login {
-            pollLogin(login.loginId, provider: login.provider); return
+        // Core confirms a pending login; accounts are listed once it finishes.
+        if login != nil {
+            return
         }
         loadingAccounts = true
         model.perform(.listAccounts(ListAccounts())) { _ in loadingAccounts = false }
@@ -270,13 +266,14 @@ extension ProviderAccountScreen {
     private func startLogin() {
         loginCode = ""
         loginRequestInFlight = true
-        loginError = nil
-        model.perform(.startAccountLogin(StartAccountLogin(provider: provider)), completion: finishLoginRequest)
+        model.perform(
+            .startAccountLogin(StartAccountLogin(provider: provider, threadId: nil)),
+            completion: finishLoginRequest
+        )
     }
 
     private func submitLoginCode(_ id: String, provider: ProviderKind) {
         loginRequestInFlight = true
-        loginError = nil
         let code = loginCode
         loginCode = ""
         model.perform(
@@ -285,48 +282,25 @@ extension ProviderAccountScreen {
         )
     }
 
-    private func finishLoginRequest(_ result: Result<Outcome, Error>) {
+    private func finishLoginRequest(_: Result<Outcome, Error>) {
         loginRequestInFlight = false
         if cancellingLogin {
-            cancelLogin(); return
-        }
-        if case let .failure(error) = result {
-            loginError = error.localizedDescription
-        } else if let login {
-            pollLogin(login.loginId, provider: login.provider)
+            cancelLogin()
         }
     }
 
-    private func pollLogin(_ id: String, provider: ProviderKind) {
-        guard pollingLogin == nil, !cancellingLogin else { return }
-        loginError = nil
-        pollingLogin = Task { @MainActor in
-            defer { pollingLogin = nil }
-            while !Task.isCancelled {
-                do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
-                guard login?.loginId == id, login?.provider == provider else { return }
-                let result: Result<Outcome, Error> = await withCheckedContinuation { continuation in
-                    model.perform(.readAccountLogin(ReadAccountLogin(
-                        provider: provider,
-                        id: id,
-                        threadId: nil
-                    ))) {
-                        continuation.resume(returning: $0)
-                    }
-                }
-                guard !Task.isCancelled else { return }
-                if case let .failure(error) = result {
-                    loginError = error.localizedDescription; return
-                }
-            }
-        }
+    /// A cancel requested meanwhile runs once the read finishes, as for the other login requests.
+    private func readLogin(_ login: AccountLogin) {
+        loginRequestInFlight = true
+        model.perform(
+            .readAccountLogin(ReadAccountLogin(provider: login.provider, id: login.loginId)),
+            completion: finishLoginRequest
+        )
     }
 
     private func cancelLogin() {
         cancellingLogin = true
         loginCode = ""
-        loginError = nil
-        pollingLogin?.cancel()
         // Finish the in-flight start or code submission before cancelling on the Host.
         guard !loginRequestInFlight else { return }
         guard let login else {
@@ -335,11 +309,8 @@ extension ProviderAccountScreen {
         model.perform(.cancelAccountLogin(CancelAccountLogin(
             provider: login.provider,
             id: login.loginId
-        ))) { result in
+        ))) { _ in
             cancellingLogin = false
-            if case let .failure(error) = result {
-                loginError = error.localizedDescription
-            }
         }
     }
 }

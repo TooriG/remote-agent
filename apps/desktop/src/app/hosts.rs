@@ -836,7 +836,8 @@ impl Hosts {
             .map(|error| error.text(language))
             .or_else(|| {
                 self.snapshot
-                    .pane
+                    .panes
+                    .primary()
                     .error
                     .as_ref()
                     .map(|error| agent_core::presentation::error::error_text(language, error))

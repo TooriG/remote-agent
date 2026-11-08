@@ -258,9 +258,9 @@ impl Desktop {
         let active_surface = panel.active;
         let active = self.workbench_visible(panel_open, cx);
         let thread_id = (active && panel_kind == Panel::Agents)
-            .then(|| self.snapshot.pane.navigation.thread_id.clone())
+            .then(|| self.publication.pane().navigation.thread_id.clone())
             .flatten();
-        if self.snapshot.pane.observed_agents != thread_id {
+        if self.publication.pane().observed_agents != thread_id {
             self.dispatch(Intent::WatchAgents { thread_id });
         }
         let composer_visible = self.visible
@@ -312,7 +312,7 @@ impl Desktop {
                     });
                 }
                 SurfaceResource::Terminal(view)
-                    if self.snapshot.connection.connected
+                    if self.publication.snapshot.connection.connected
                         && self.panels.scope(*id).is_some_and(|owner| {
                             owner.host == scope.host && owner.storage == scope.storage
                         }) =>
@@ -376,7 +376,7 @@ impl Desktop {
             })
             .collect();
         let file = (kind == Panel::File)
-            .then(|| self.snapshot.pane.workspace.file.as_ref())
+            .then(|| self.publication.pane().workspace.file.as_ref())
             .flatten()
             .filter(|file| {
                 panel.selected().and_then(|surface| surface.path.as_deref())
@@ -417,10 +417,10 @@ impl Desktop {
             ),
             explorer_available: self.file_explorer.available,
             explorer_focus: self.file_explorer.focus.clone(),
-            cwd: self.snapshot.pane.navigation.cwd.clone(),
+            cwd: self.publication.pane().navigation.cwd.clone(),
             review_files: self
-                .snapshot
-                .pane
+                .publication
+                .pane()
                 .workspace
                 .review
                 .as_ref()
@@ -435,8 +435,8 @@ impl Desktop {
                 input: self.editor.input.clone(),
                 truncated: file.is_some()
                     && self
-                        .snapshot
-                        .pane
+                        .publication
+                        .pane()
                         .workspace
                         .file
                         .as_ref()
@@ -444,12 +444,15 @@ impl Desktop {
                 path: file,
                 saving: kind == Panel::File && self.busy(),
                 failed: self
+                    .publication
                     .snapshot
-                    .operation_error(op::OperationKey::File)
+                    .operation_error(op::OperationKey::File {
+                        pane: self.publication.pane_id.clone(),
+                    })
                     .is_some(),
             },
             review: (kind == Panel::Diff)
-                .then(|| self.snapshot.pane.workspace.review.as_ref())
+                .then(|| self.publication.pane().workspace.review.as_ref())
                 .flatten()
                 .map(|review| (review.additions, review.deletions, review.files.len())),
             agents: if kind == Panel::Agents {
@@ -485,8 +488,8 @@ fn panel_icon(kind: Panel) -> IconName {
 impl Desktop {
     fn panel_tools(&self) -> Vec<agent_core::panels::PanelTool> {
         agent_core::panels::panel_tools(
-            self.snapshot.connection.connected,
-            !self.snapshot.pane.navigation.cwd.is_empty(),
+            self.publication.snapshot.connection.connected,
+            !self.publication.pane().navigation.cwd.is_empty(),
         )
     }
     pub(in crate::app) fn open_review(&mut self, path: Option<&str>, cx: &mut Context<Self>) {
@@ -1203,7 +1206,7 @@ impl WorkbenchView {
 
 impl Desktop {
     fn workspace_diff(&mut self, id: u64, cx: &mut Context<Self>) -> Entity<DiffView> {
-        let review = &self.snapshot.pane.workspace.review;
+        let review = &self.publication.pane().workspace.review;
         let source = review.as_ref().map_or("", |review| review.diff.as_str());
         if let Some(SurfaceResource::Diff {
             view,
@@ -1264,6 +1267,88 @@ mod tests {
     use core::prelude::v1::test;
 
     #[gpui::test]
+    fn side_workbench_reads_its_own_review_and_file_editability(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        cx.update(|cx| {
+            crate::appearance::init(cx);
+            cx.set_global(Runtime {
+                handle: runtime.handle().clone(),
+                sessions: Default::default(),
+                connections: Arc::default(),
+                closing: tokio_util::task::TaskTracker::new(),
+                logging_error: None,
+            });
+        });
+        let (store, pane) = runtime.block_on(async {
+            let store = Arc::new(agent_core::store::Store::offline(Snapshot::default(), None));
+            let pane = store.open_pane("/side".into()).unwrap();
+            (store, pane)
+        });
+        for truncated in [false, true] {
+            let mut snapshot = store.snapshot().as_ref().clone();
+            for (id, path, truncated) in [
+                ("", "/primary/file", !truncated),
+                (pane.id(), "/side/file", truncated),
+            ] {
+                let workspace = Arc::make_mut(
+                    &mut Arc::make_mut(snapshot.panes.get_mut(id).unwrap()).workspace,
+                );
+                workspace.file = Some(Arc::new(agent_protocol::models::FileContent {
+                    path: path.into(),
+                    revision: "base".into(),
+                    text: "text".into(),
+                    size: 4,
+                    truncated,
+                }));
+                workspace.review = Some(Arc::new(agent_protocol::models::WorkspaceReview {
+                    branch: "main".into(),
+                    additions: 1,
+                    deletions: 0,
+                    diff: String::new(),
+                    files: vec![agent_protocol::models::ChangedFile {
+                        path: path.into(),
+                        status: "M".into(),
+                        additions: Some(1),
+                        deletions: Some(0),
+                    }],
+                }));
+            }
+            let snapshot = Arc::new(snapshot);
+            let (_, _) = cx.add_window_view(|window, cx| {
+                let mut desktop = Desktop::new(
+                    Mode::Fixture {
+                        remote: None,
+                        cwd: String::new(),
+                    },
+                    window,
+                    cx,
+                );
+                desktop.publication = agent_core::presentation::view::Presentation::project(
+                    snapshot.clone(),
+                    pane.id(),
+                    None,
+                )
+                .unwrap();
+                desktop.project_fixture(snapshot.clone());
+                desktop.open_surface(
+                    desktop.panel_scope(),
+                    Panel::File,
+                    Some("/side/file".into()),
+                );
+                let model = desktop.workbench_model(px(1400.), cx).unwrap();
+                assert_eq!(model.review_files, ["/side/file"]);
+                assert_eq!(model.editor.path.as_deref(), Some("/side/file"));
+                assert_eq!(model.editor.truncated, truncated);
+                desktop
+            });
+        }
+        runtime.block_on(store.close()).unwrap();
+    }
+
+    #[gpui::test]
     fn hidden_workbench_defers_resources_and_reconciles_before_drawing(cx: &mut TestAppContext) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1291,10 +1376,10 @@ mod tests {
             desktop.onboarding = false;
             desktop.tab = Tab::Settings;
             desktop.open_surface(desktop.panel_scope(), Panel::Diff, None);
-            Arc::make_mut(
-                &mut Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).pane).workspace,
-            )
-            .review = Some(review.clone());
+            desktop.edit_fixture(|snapshot| {
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace).review =
+                    Some(review.clone());
+            });
             desktop
         });
         window.simulate_resize(size(px(1600.), px(900.)));
@@ -1347,10 +1432,11 @@ mod tests {
             cx.observe(&diff, move |_, _| changes.set(changes.get() + 1))
         });
         desktop.update(window, |desktop, cx| {
-            let workspace = Arc::make_mut(
-                &mut Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).pane).workspace,
-            );
-            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+second".into();
+            desktop.edit_fixture(|snapshot| {
+                let workspace =
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace);
+                Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+second".into();
+            });
             cx.notify();
         });
         window.run_until_parked();
@@ -1371,10 +1457,11 @@ mod tests {
         window.run_until_parked();
         let notifications = diff_changes.get();
         desktop.update(window, |desktop, cx| {
-            let workspace = Arc::make_mut(
-                &mut Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).pane).workspace,
-            );
-            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+third".into();
+            desktop.edit_fixture(|snapshot| {
+                let workspace =
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace);
+                Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+third".into();
+            });
             cx.notify();
         });
         window.run_until_parked();
@@ -1399,10 +1486,11 @@ mod tests {
         });
         let before = diff_changes.get();
         desktop.update(window, |desktop, cx| {
-            let workspace = Arc::make_mut(
-                &mut Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).pane).workspace,
-            );
-            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+hidden side chat".into();
+            desktop.edit_fixture(|snapshot| {
+                let workspace =
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace);
+                Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+hidden side chat".into();
+            });
             cx.notify();
         });
         window.run_until_parked();
@@ -1503,10 +1591,10 @@ mod tests {
                 draft: DraftKey::from("other-conversation"),
                 ..view.panel_scope()
             };
-            Arc::make_mut(
-                &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
-            )
-            .draft_key = b.draft.clone();
+            view.edit_fixture(|snapshot| {
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
+                    .draft_key = b.draft.clone();
+            });
             assert!(!view.panels.get(b.clone()).open);
             view.panels = view.panels.clone().set_open(b, true);
             cx.notify();
@@ -1515,10 +1603,10 @@ mod tests {
         assert!(window.debug_bounds("surface-launcher").is_some());
         assert!(window.debug_bounds("diff-file-navigation").is_none());
         view.update(window, |view, cx| {
-            Arc::make_mut(
-                &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
-            )
-            .draft_key = a.draft.clone();
+            view.edit_fixture(|snapshot| {
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
+                    .draft_key = a.draft.clone();
+            });
             assert_eq!(view.panels.get(a.clone()).active, Some(diff));
             assert_eq!(view.panels.get(a.clone()).surfaces.len(), 2);
             cx.notify();

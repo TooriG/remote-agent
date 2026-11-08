@@ -46,9 +46,6 @@ import dev.remoteagent.core.SetProviderEnabled
 import dev.remoteagent.core.SettingsPresentation
 import dev.remoteagent.core.StartAccountLogin
 import dev.remoteagent.core.SubmitAccountLogin
-import kotlinx.coroutines.delay
-
-private const val ACCOUNT_LOGIN_POLL_INTERVAL_MILLIS = 2000L
 
 @Composable
 internal fun EnvironmentSettingsScreen(
@@ -168,7 +165,7 @@ private fun ProviderSettingsContent(
     }
     val login = settings.accountLogin()?.takeIf { it.provider == provider }
     if (provider == ProviderKind.DEEP_SEEK) CredentialSettings(settings, perform)
-    else if (login != null) AccountLoginSettings(login, settings.connected(), perform)
+    else if (login != null) AccountLoginSettings(login, settings, perform)
     else AccountSettings(settings, provider, perform)
     ProviderRuntimeSettings(settings, provider, perform)
 }
@@ -214,7 +211,7 @@ private fun AccountSettings(
         Text(language.text("再取得"))
     }
     TextButton(
-        onClick = { perform(Intent.StartAccountLogin(StartAccountLogin(provider))) {} },
+        onClick = { perform(Intent.StartAccountLogin(StartAccountLogin(provider, null))) {} },
         enabled = settings.connected(),
     ) {
         Text(language.text("アカウントを追加"))
@@ -241,18 +238,13 @@ private fun AccountSettings(
 @Composable
 private fun AccountLoginSettings(
     login: AccountLogin,
-    connected: Boolean,
+    settings: SettingsPresentation,
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
 ) {
     val language = LocalUiLanguage.current
     val context = LocalContext.current
+    val connected = settings.connected()
     var code by remember(login.loginId) { mutableStateOf("") }
-    LaunchedEffect(login.loginId, connected) {
-        while (connected) {
-            delay(ACCOUNT_LOGIN_POLL_INTERVAL_MILLIS)
-            perform(Intent.ReadAccountLogin(ReadAccountLogin(login.provider, login.loginId, null))) {}
-        }
-    }
     Text(login.userCode)
     TextButton(
         onClick = { context.startActivity(AndroidIntent(AndroidIntent.ACTION_VIEW, Uri.parse(login.verificationUrl))) }
@@ -275,6 +267,16 @@ private fun AccountLoginSettings(
             enabled = connected && code.isNotBlank(),
         ) {
             Text(language.text("送信"))
+        }
+    }
+    // Core confirms the login until a read fails; then the user retries.
+    settings.accountLoginError(login.provider)?.let { error ->
+        ErrorTextView(error)
+        TextButton(
+            onClick = { perform(Intent.ReadAccountLogin(ReadAccountLogin(login.provider, login.loginId))) {} },
+            enabled = connected,
+        ) {
+            Text(language.text("認証状態を再確認"))
         }
     }
     TextButton(onClick = { perform(Intent.CancelAccountLogin(CancelAccountLogin(login.provider, login.loginId))) {} }) {

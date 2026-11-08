@@ -72,7 +72,7 @@ import dev.remoteagent.core.fileTreePath
 import java.util.Locale
 import java.util.UUID
 
-internal val LocalFiles = compositionLocalOf { Snapshot.empty().files() }
+internal val LocalFiles = compositionLocalOf { requireNotNull(Snapshot.empty().files("")) }
 internal val LocalFileLocation = compositionLocalOf { FileLocation("", null) }
 
 @Composable
