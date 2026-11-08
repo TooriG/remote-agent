@@ -1,4 +1,5 @@
 //! AppKit controls and a real NSToolbar; NSH only supplies data and receives events.
+use crate::l10n::tr;
 use nsh_core::JsonValue;
 use nsh_platform_macos::{ComponentContext, Components, NativeComponent};
 use objc2::{
@@ -16,12 +17,15 @@ use std::{
 pub(crate) fn open_directory(path: &str) {
     let directory = std::path::Path::new(path);
     if !directory.is_absolute() || !directory.is_dir() {
-        super::message("フォルダを開く", "プロジェクトのフォルダが見つかりません");
+        super::message(
+            tr("フォルダを開く"),
+            tr("プロジェクトのフォルダが見つかりません"),
+        );
         return;
     }
     let url = objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(path));
     if !NSWorkspace::sharedWorkspace().openURL(&url) {
-        super::message("フォルダを開く", "フォルダを開けませんでした。");
+        super::message(tr("フォルダを開く"), tr("フォルダを開けませんでした。"));
     }
 }
 
@@ -418,7 +422,7 @@ impl Search {
     fn new(context: ComponentContext) -> Self {
         let target = ActionTarget::new(context.clone());
         let view = NSSearchField::initWithFrame(NSSearchField::alloc(target.mtm()), CGRect::ZERO);
-        view.setPlaceholderString(Some(&NSString::from_str("会話を検索")));
+        view.setPlaceholderString(Some(&NSString::from_str(tr("会話を検索"))));
         view.setSendsWholeSearchString(false);
         // The target implements searched: and lives as long as the field.
         unsafe {
@@ -488,7 +492,7 @@ define_class!(
         #[unsafe(method_id(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
         fn item(&self, _: &NSToolbar, identifier: &NSString, _: bool) -> Option<Retained<NSToolbarItem>> {
             let info = match identifier.to_string().as_str() {
-                "sidebar" => Some(("sidebar.left", "サイドバー")), "compose" => Some(("square.and.pencil", "新しい会話")), "more" => Some(("ellipsis", "その他")), _ => None,
+                "sidebar" => Some(("sidebar.left", tr("サイドバー"))), "compose" => Some(("square.and.pencil", tr("新しい会話"))), "more" => Some(("ellipsis", tr("その他"))), _ => None,
             };
             info.map(|(image, label)| {
                 let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(self.mtm()), identifier);

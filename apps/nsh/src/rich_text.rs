@@ -1,5 +1,6 @@
 //! Core supplies Markdown semantics; TextKit owns native selection, layout and menus.
 use crate::Connection;
+use crate::l10n::tr;
 use agent_core::{
     panels::PanelScope,
     presentation::markdown::{MarkdownAlignment, MarkdownBlock, MarkdownRun, MarkdownStyle},
@@ -195,16 +196,16 @@ fn view_parts(
                                 .child(crate::ui::text_button(
                                     move || {
                                         SharedString::from(if wrap.get() {
-                                            "折り返し解除"
+                                            tr("折り返し解除")
                                         } else {
-                                            "折り返し"
+                                            tr("折り返し")
                                         })
                                     },
                                     move || wrap.update(|wrap| *wrap = !*wrap),
                                 ))
                                 .child(crate::ui::icon_button(
                                     crate::ui::Icon::COPY,
-                                    "コードをコピー",
+                                    tr("コードをコピー"),
                                     move || {
                                         part.with_untracked(|(_, part)| {
                                             if let Part::Code { source, .. } = part {
@@ -240,7 +241,7 @@ fn view_parts(
                 240.0,
             )
             .into_element(),
-            Part::Link(_) => crate::ui::text_button("ファイルを開く", move || {
+            Part::Link(_) => crate::ui::text_button(tr("ファイルを開く"), move || {
                 let target = serde_json::from_str::<Target>(&target.get_untracked()).unwrap();
                 let Part::Link(path) = part.with_untracked(|(_, part)| part.clone()) else {
                     return;
@@ -350,17 +351,18 @@ fn table(
                 .child(crate::ui::text_button(
                     move || {
                         SharedString::from(if compact.get() {
-                            "セルを折り返す"
+                            tr("セルを折り返す")
                         } else {
-                            "セルをコンパクトに表示"
+                            tr("セルをコンパクトに表示")
                         })
                     },
                     move || compact.update(|compact| *compact = !*compact),
                 ))
-                .child(crate::ui::text_button("Markdownをコピー", move || {
-                    copy(true)
-                }))
-                .child(crate::ui::text_button("CSVをコピー", move || {
+                .child(crate::ui::text_button(
+                    tr("Markdownをコピー"),
+                    move || copy(true),
+                ))
+                .child(crate::ui::text_button(tr("CSVをコピー"), move || {
                     copy(false)
                 })),
         )

@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::{Connection, native};
 use agent_core::{
     presentation::error::{ErrorNotice, ErrorScope},
@@ -36,15 +37,18 @@ pub(crate) fn notices(
             view()
                 .p_2()
                 .gap_2()
-                .child(text(move || notice.with(|notice| notice.title.clone())))
-                .child(text(move || notice.with(|notice| notice.text.to_string())).selectable(true))
+                .child(text(move || notice.with(|notice| localized(notice.title.clone()))))
+                .child(
+                    text(move || notice.with(|notice| localized(notice.text.to_string())))
+                        .selectable(true),
+                )
                 .child(when(
                     move || notice.with(|notice| notice.recovery_label.is_some()),
                     move || {
                         native::text_button(
                             move || {
                                 json!(notice.with(|notice| {
-                                    notice.recovery_label.clone().unwrap_or_default()
+                                    localized(notice.recovery_label.clone().unwrap_or_default())
                                 }))
                             },
                             move || {
@@ -60,7 +64,7 @@ pub(crate) fn notices(
                         })))
                     },
                 ))
-                .child(native::text_button(json!("閉じる"), move || {
+                .child(native::text_button(json!(tr("閉じる")), move || {
                     connection.dispatch(Intent::DismissError {
                         id: notice.with_untracked(|notice| notice.id.clone()),
                     });

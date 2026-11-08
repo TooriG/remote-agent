@@ -1,4 +1,5 @@
 //! The desktop sidebar: the window's leading column in the existing desktop client's layout.
+use crate::l10n::tr;
 use crate::{
     Connection,
     application::{Host, ListRequest, Navigation},
@@ -51,7 +52,7 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                                 .min_w_0(),
                         )
                         .child(
-                            ui::icon_button(Icon::NEW_CHAT, "新しいチャット", compose)
+                            ui::icon_button(Icon::NEW_CHAT, tr("新しいチャット"), compose)
                                 .enabled(connected),
                         ),
                 ),
@@ -67,12 +68,12 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                 .pb(px(20.0))
                 .child(ui::icon_button(
                     Icon::SETTINGS,
-                    "設定を開く",
+                    tr("設定を開く"),
                     move || navigate(Navigation::Settings(true)),
                 ))
                 .child(ui::icon_button(
                     Icon::REFRESH,
-                    "会話を更新",
+                    tr("会話を更新"),
                     move || {
                         connection.application.with(|application| {
                             application.request_list(ListRequest::Refresh);
@@ -92,9 +93,9 @@ pub(crate) fn header(expanded: bool, toggle: impl Fn() + 'static) -> View {
             .encode(include_bytes!("../../desktop/assets/icon.png"))
     );
     let (glyph, label) = if expanded {
-        (Icon::PANEL_LEFT_CLOSE, "サイドバーを閉じる")
+        (Icon::PANEL_LEFT_CLOSE, tr("サイドバーを閉じる"))
     } else {
-        (Icon::PANEL_LEFT_OPEN, "サイドバーを開く")
+        (Icon::PANEL_LEFT_OPEN, tr("サイドバーを開く"))
     };
     view()
         .h(px(HEADER_HEIGHT))
@@ -155,7 +156,7 @@ pub(crate) fn conversation_header(
             view().window_drag(false).child(
                 ui::icon_button(
                     Icon::DETAILS,
-                    "スレッド詳細を切り替え",
+                    tr("スレッド詳細を切り替え"),
                     move || details.update(|open| *open = !*open),
                 )
                 .prop("selected", move || json!(details.get())),
@@ -166,7 +167,7 @@ pub(crate) fn conversation_header(
             move || {
                 view().window_drag(false).child(ui::icon_button(
                     Icon::PANEL_RIGHT,
-                    "右パネルを切り替え",
+                    tr("右パネルを切り替え"),
                     toggle_panel,
                 ))
             },
@@ -179,7 +180,7 @@ fn connection_menu(hosts: Memo<Vec<Host>>) -> impl IntoElement {
     let all = move || connection.state.with(|state| state.all_hosts);
     let title = move || {
         if all() {
-            return "すべての接続先".to_owned();
+            return tr("すべての接続先").to_owned();
         }
         let selected = connection.host.get();
         hosts.with(|hosts| {
@@ -187,14 +188,14 @@ fn connection_menu(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                 .iter()
                 .find(|host| host.id == selected)
                 .map(|host| host.name.clone())
-                .unwrap_or_else(|| "このPC".into())
+                .unwrap_or_else(|| tr("このPC").into())
         })
     };
     let items = move || {
         let all = all();
         let selected = connection.host.get_untracked();
         let mut entries = vec![
-            json!({"id": "", "title": "すべての接続先", "selected": all}),
+            json!({"id": "", "title": tr("すべての接続先"), "selected": all}),
             json!({"separator": true}),
         ];
         entries.extend(hosts.with_untracked(|hosts| {
@@ -215,7 +216,7 @@ fn connection_menu(hosts: Memo<Vec<Host>>) -> impl IntoElement {
         .rounded(px(ui::RADIUS))
         .text_color(colors::FOREGROUND)
         .role(AccessibilityRole::Button)
-        .label("接続先")
+        .label(tr("接続先"))
         .hover(|s| s.bg(colors::GHOST_HOVER))
         .active(|s| s.bg(colors::SELECTED))
         .on_press(move || {

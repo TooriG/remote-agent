@@ -18,6 +18,7 @@ mod editor;
 mod environment;
 mod files;
 mod invocations;
+mod l10n;
 mod media;
 mod model_controls;
 mod native;
@@ -53,6 +54,7 @@ use agent_core::{
     state::Intent,
 };
 use application::Navigation;
+use l10n::tr;
 use nsh_core::{HeaderSystemItem, platform::Lifecycle, prelude::*};
 use serde_json::json;
 use shared::Shared;
@@ -152,7 +154,12 @@ pub fn App() -> impl IntoElement {
         .and_then(|root| application::Application::new(root, storage::local_host()?));
     let (runtime, service) = match service {
         Ok(service) => service,
-        Err(reason) => return view().p_4().child(text(reason.to_string())).into_element(),
+        Err(reason) => {
+            return view()
+                .p_4()
+                .child(text(l10n::localized(reason.to_string())))
+                .into_element();
+        }
     };
     let stored_service = service.clone();
     cleanup(move || {
@@ -168,11 +175,31 @@ pub(crate) enum Area {
     Shell,
 }
 
+/// The application's views, made again in each language it selects.
 fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
-    let application = stored(service.clone());
-    let client = stored(service.client.clone());
     let mut updates = service.subscribe();
     let state = signal(Shared(updates.borrow_and_update().clone()));
+    spawn(async move {
+        while updates.changed().await.is_ok() {
+            let next = updates.borrow_and_update().clone();
+            state.set(Shared(next));
+        }
+    });
+    let language = computed(move || state.with(|state| state.language));
+    each(
+        move || vec![language.get()],
+        |language| language.code(),
+        move |_, _| app_content(service.clone(), state.read_only(), area),
+    )
+}
+
+fn app_content(
+    service: Arc<application::Application>,
+    state: ReadSignal<Shared<application::State>>,
+    area: Area,
+) -> AnyElement {
+    let application = stored(service.clone());
+    let client = stored(service.client.clone());
     let hosts = computed(move || state.with(|state| state.hosts.clone()));
     let host = computed(move || state.with(|state| state.host.clone()));
     let empty = stored(Shared(Presentation::empty()));
@@ -183,7 +210,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
     });
     let handles = AppHandles {
         application,
-        state: state.read_only(),
+        state,
         client,
         pairing: computed(move || state.with(|state| state.pairing)),
     };
@@ -195,7 +222,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
     provide_context(workspace);
     let files = files::Browser::new(preview);
     provide_context(files);
-    let failure = computed(move || state.with(|state| state.failure.clone()));
+    let failure = computed(move || state.with(|state| state.failure.clone().map(l10n::localized)));
     let routes = signal(vec![0_u8]);
     let settings = computed(move || state.with(|state| state.settings));
     let provider = computed(move || state.with(|state| state.provider));
@@ -212,17 +239,11 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
     if primary {
         effect(move || client.with(|client| client.scene(lifecycle() == Lifecycle::Active)));
     }
-    spawn(async move {
-        while updates.changed().await.is_ok() {
-            let next = updates.borrow_and_update().clone();
-            state.set(Shared(next));
-        }
-    });
     let title = computed(move || {
         connection
             .context
             .with(|p| p.title())
-            .unwrap_or_else(|| "新しいチャット".into())
+            .unwrap_or_else(|| tr("新しいチャット").into())
     });
     let list = move || {
         threads::list(query, move || {
@@ -293,7 +314,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                         .gap_2()
                         .p_2()
                         .child(text(move || failure.get().unwrap_or_default()))
-                        .child(native::text_button(json!("閉じる"), move || {
+                        .child(native::text_button(json!(tr("閉じる")), move || {
                             application.with(|application| application.dismiss_failure())
                         }))
                 },
@@ -430,12 +451,12 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                     .header_right(
                         native::menu(
                             "ellipsis",
-                            "その他",
+                            tr("その他"),
                             move || {
-                                let mut entries = vec![json!({"id": "refresh", "title": "更新", "symbol": "arrow.clockwise"})];
+                                let mut entries = vec![json!({"id": "refresh", "title": tr("更新"), "symbol": "arrow.clockwise"})];
                                 entries.extend(workbench::tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "symbol": workbench::symbol(tool.kind), "enabled": tool.enabled})));
-                                entries.push(json!({"id": "settings", "title": "環境", "symbol": "gearshape"}));
-                                entries.push(json!({"id": "worktrees", "title": "ワークツリー設定", "symbol": "arrow.triangle.branch", "enabled": connection.settings.with(|p| p.connected())}));
+                                entries.push(json!({"id": "settings", "title": tr("環境"), "symbol": "gearshape"}));
+                                entries.push(json!({"id": "worktrees", "title": tr("ワークツリー設定"), "symbol": "arrow.triangle.branch", "enabled": connection.settings.with(|p| p.connected())}));
                                 json!(entries)
                             },
                             move |item| {
@@ -450,7 +471,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                         .h(px(44.0)),
                     ),
                 2 => nsh_base::nav_page()
-                    .title("環境")
+                    .title(tr("環境"))
                     .child(notices())
                     .child(environment::overview(hosts)),
                 5 => nsh_base::nav_page()
@@ -462,7 +483,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                                 .into_iter()
                                 .find(|a| Some(a.provider) == provider.get())
                                 .map(|a| a.name)
-                                .unwrap_or_else(|| "アカウント".into())
+                                .unwrap_or_else(|| tr("アカウント").into())
                         })
                     })
                     .header_back_visible(move || !account_locked.get())
@@ -483,7 +504,7 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
                     .child(workbench::screen()),
                 _ => nsh_base::nav_page()
                     .title("Bex")
-                    .header_back_title("戻る")
+                    .header_back_title(tr("戻る"))
                     .header_right_system_item(HeaderSystemItem::Compose)
                     .header_right(view().on_press(move || toolbar_action("compose")))
                     .child(notices())

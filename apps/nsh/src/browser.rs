@@ -1,4 +1,5 @@
 //! Native controls send displayed-page-scoped operations to the Host's browser.
+use crate::l10n::{localized, tr};
 use crate::{Connection, native, shared::Shared, workbench::Workbench};
 use agent_core::state::DraftKey;
 use agent_protocol::{browser::*, session::SessionRef};
@@ -18,7 +19,7 @@ pub(crate) fn screen() -> impl IntoElement {
         .min_h_0()
         .child(when(
             move || thread.get().is_none(),
-            move || text("会話を始めると、AIと同じブラウザを利用できます。").p_4(),
+            move || text(tr("会話を始めると、AIと同じブラウザを利用できます。")).p_4(),
         ))
         .child(each(
             move || thread.get().into_iter().collect::<Vec<_>>(),
@@ -95,7 +96,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
         }
         credentials.set(None);
         failure.set(None);
-        notice.set(importing.then(|| "ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。".into()));
+        notice.set(importing.then(|| tr("ブラウザデータを取り込み中… 接続先のMacでOSのアクセス確認が出たら許可してください。").into()));
         true
     };
     effect(move || {
@@ -208,6 +209,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
             .get()
             .or_else(|| connection_failure.get())
             .or_else(|| notice.get())
+            .map(localized)
     });
     let native_action = move |event: &NativeEvent| {
         if event.data.get("DismissCredentials").is_some() {
@@ -240,7 +242,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                         .auto_capitalize(AutoCapitalize::None)
                         .keyboard_type(KeyboardType::Url)
                         .value(move || address.get())
-                        .placeholder("検索または URL を入力")
+                        .placeholder(tr("検索または URL を入力"))
                         .readonly(move || !accepts_input.get())
                         .on_focus(move || address_editing.set(true))
                         .on_blur(move || address_editing.set(false))
@@ -249,14 +251,14 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                         .flex_1(),
                 )
                 .child(
-                    native::button("arrow.right", "開く", open)
+                    native::button("arrow.right", tr("開く"), open)
                         .prop("identifier", json!("browser.open"))
                         .prop("enabled", move || json!(accepts_input.get()))
                         .w(px(44.))
                         .h(px(44.)),
                 )
                 .child(
-                    native::button("arrow.clockwise", "再読み込み", move || {
+                    native::button("arrow.clockwise", tr("再読み込み"), move || {
                         send(BrowserAction::Reload);
                     })
                     .prop("enabled", move || json!(accepts_input.get()))
@@ -336,7 +338,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                                     .masked(move || {
                                         frame.with(|f| f.input_kind != Some(BrowserInputKind::Text))
                                     })
-                                    .placeholder("選択した欄に入力")
+                                    .placeholder(tr("選択した欄に入力"))
                                     .readonly(move || !accepts_input.get())
                                     .on_change(move |text: &str| input_text.set(text.to_owned()))
                                     .on_composition_change(move |event: &Composition| {
@@ -345,7 +347,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                                     .on_submit(move |_: &str| insert())
                                     .flex_1(),
                             )
-                            .child(native::text_button(json!("入力"), insert).prop(
+                            .child(native::text_button(json!(tr("入力")), insert).prop(
                                 "enabled",
                                 move || {
                                     json!(
@@ -363,7 +365,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                             .child(
                                 native::button(
                                     "keyboard.chevron.compact.down",
-                                    "入力を閉じる",
+                                    tr("入力を閉じる"),
                                     move || set_keyboard(false),
                                 )
                                 .w(px(44.))
@@ -374,7 +376,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                                     key: BrowserKey::Tab,
                                 });
                             }))
-                            .child(native::text_button(json!("全選択"), move || {
+                            .child(native::text_button(json!(tr("全選択")), move || {
                                 send(BrowserAction::Key {
                                     key: BrowserKey::SelectAll,
                                 });
@@ -399,7 +401,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                 .gap_2()
                 .p_2()
                 .child(
-                    native::button("chevron.left", "前のページ", move || {
+                    native::button("chevron.left", tr("前のページ"), move || {
                         send(BrowserAction::Back);
                     })
                     .prop("enabled", move || {
@@ -409,7 +411,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                     .h(px(44.)),
                 )
                 .child(
-                    native::button("chevron.right", "次のページ", move || {
+                    native::button("chevron.right", tr("次のページ"), move || {
                         send(BrowserAction::Forward);
                     })
                     .prop("enabled", move || {
@@ -419,7 +421,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                     .h(px(44.)),
                 )
                 .child(
-                    native::button("keyboard", "文字入力", move || {
+                    native::button("keyboard", tr("文字入力"), move || {
                         set_keyboard(!keyboard.get_untracked())
                     })
                     .prop("enabled", move || {
@@ -431,7 +433,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
                 .child(
                     native::menu(
                         "ellipsis.circle",
-                        "ブラウザのメニュー",
+                        tr("ブラウザのメニュー"),
                         move || frame.with(|frame| menu(frame)),
                         move |key| {
                             let action = match key {
@@ -475,15 +477,16 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
 }
 
 fn menu(frame: &BrowserFrame) -> serde_json::Value {
-    let mut items =
-        vec![json!({"id":"credentials", "title":"ログイン状態・保存パスワード", "symbol":"key"})];
-    items.extend(frame.tabs.iter().map(|tab| json!({"id": format!("tab:{}", tab.id), "title": if tab.url == "about:blank" { "新しいタブ" } else if tab.title.is_empty() { &tab.url } else { &tab.title }, "symbol":"globe", "selected": frame.tab_id == tab.id})));
+    let mut items = vec![
+        json!({"id":"credentials", "title":tr("ログイン状態・保存パスワード"), "symbol":"key"}),
+    ];
+    items.extend(frame.tabs.iter().map(|tab| json!({"id": format!("tab:{}", tab.id), "title": if tab.url == "about:blank" { tr("新しいタブ") } else if tab.title.is_empty() { &tab.url } else { &tab.title }, "symbol":"globe", "selected": frame.tab_id == tab.id})));
     items.extend([
-        json!({"id":"new", "title":"新しいタブ", "symbol":"plus"}),
-        json!({"id":"close", "title":"タブを閉じる", "symbol":"xmark", "enabled": !frame.tab_id.is_empty()}),
-        json!({"id":"fit", "title":"画面に合わせる", "symbol":"arrow.up.left.and.arrow.down.right"}),
+        json!({"id":"new", "title":tr("新しいタブ"), "symbol":"plus"}),
+        json!({"id":"close", "title":tr("タブを閉じる"), "symbol":"xmark", "enabled": !frame.tab_id.is_empty()}),
+        json!({"id":"fit", "title":tr("画面に合わせる"), "symbol":"arrow.up.left.and.arrow.down.right"}),
         json!({"id":"desktop", "title":"PC · 1280 × 800", "symbol":"desktopcomputer"}),
-        json!({"id":"phone", "title":"スマートフォン · 390 × 844", "symbol":"iphone"}),
+        json!({"id":"phone", "title":tr("スマートフォン · 390 × 844"), "symbol":"iphone"}),
     ]);
     json!(items)
 }

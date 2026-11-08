@@ -1,4 +1,5 @@
 //! SwiftTerm owns rendering and native input; the native component only moves bytes.
+use crate::l10n::tr;
 use nsh_core::JsonValue;
 use objc2::rc::Retained;
 use serde_json::json;
@@ -57,8 +58,8 @@ impl ForeignTerminal {
         // The box's address remains stable until release has disconnected the delegate.
         let handle =
             unsafe { (bridge.create)((&mut *context as *mut ComponentContext).cast(), event) };
-        let handle =
-            NonNull::new(handle).ok_or_else(|| "ターミナルを作成できませんでした。".to_owned())?;
+        let handle = NonNull::new(handle)
+            .ok_or_else(|| tr("ターミナルを作成できませんでした。").to_owned())?;
         Ok(Self {
             bridge,
             handle,

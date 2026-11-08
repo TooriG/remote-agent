@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::{Connection, native, shared::Shared};
 use agent_core::{
     presentation::{
@@ -41,6 +42,7 @@ pub(crate) fn workspace_summary(
     p: &agent_core::presentation::view::Presentation,
     local: bool,
 ) -> WorkspaceSummary {
+    use crate::l10n::tr_format;
     use agent_core::presentation::{editors, markdown::file_basename};
     use agent_protocol::editors::FileManagerRevealKind;
     let cwd = &p.composer.controls.navigation.cwd;
@@ -62,7 +64,7 @@ pub(crate) fn workspace_summary(
         .collect::<std::collections::BTreeSet<_>>();
     WorkspaceSummary {
         directory: if cwd.is_empty() {
-            "フォルダを選択".into()
+            tr("フォルダを選択").into()
         } else {
             file_basename(cwd).into()
         },
@@ -74,15 +76,20 @@ pub(crate) fn workspace_summary(
         editors: if local {
             available
                 .iter()
-                .map(|id| (*id, editors::editor_label(*id, manager).into()))
+                .map(|id| (*id, localized(editors::editor_label(*id, manager).into())))
                 .collect()
         } else {
             Vec::new()
         },
         editor,
         editor_label: editor
-            .map(|id| format!("{}で開く", editors::editor_label(id, manager)))
-            .unwrap_or_else(|| "エディターで開く".into()),
+            .map(|id| {
+                tr_format(
+                    "{0}で開く",
+                    [&localized(editors::editor_label(id, manager).into())],
+                )
+            })
+            .unwrap_or_else(|| tr("エディターで開く").into()),
         sources: sources
             .into_iter()
             .map(|path| (path.clone(), file_basename(path).into()))
@@ -154,7 +161,7 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
                         .min_w_0(),
                 )
                 .child(
-                    native::button("arrow.clockwise", "差分を更新", load)
+                    native::button("arrow.clockwise", tr("差分を更新"), load)
                         .prop("enabled", move || {
                             json!(!pending.get() && connection.settings.with(|p| p.connected()))
                         })
@@ -198,7 +205,16 @@ pub(crate) fn agents(host: String) -> impl IntoElement {
     });
     let agents = computed(move || connection.publication.with(|p| Shared(p.agents.clone())));
     native("bex.details")
-        .prop("data", move || agents.with(|rows| agent_data(rows)))
+        .prop("data", move || {
+            agents.with(|rows| {
+                let rows = rows.iter().cloned().map(|row| AgentSummary {
+                    status: localized(row.status),
+                    detail: row.detail.map(localized),
+                    ..row
+                });
+                agent_data(&rows.collect::<Vec<_>>())
+            })
+        })
         .flex_1()
         .min_h_0()
 }

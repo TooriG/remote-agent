@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::{
     Connection,
     files::{Browser, TextFile},
@@ -75,7 +76,7 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                         .min_w_0(),
                 )
                 .child(
-                    native::text_button(json!("保存"), move || {
+                    native::text_button(json!(tr("保存")), move || {
                         connection.client.with(|client| {
                             client.dispatch(
                                 &host.get(),
@@ -94,12 +95,18 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                 ),
         )
         .child(text(move || {
-            controls.with(|controls| controls.conflict_notice.clone().unwrap_or_default())
+            controls.with(|controls| {
+                controls
+                    .conflict_notice
+                    .clone()
+                    .map(localized)
+                    .unwrap_or_default()
+            })
         }))
-        .child(when(busy, || text("処理中…")))
+        .child(when(busy, || text(tr("処理中…"))))
         .child(when(
             move || controls.with(|controls| controls.truncated),
-            || text(file_preview_truncation_notice()),
+            || text(localized(file_preview_truncation_notice())),
         ))
         .child(
             input()
@@ -141,15 +148,15 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                 .items_center()
                 .gap_2()
                 .child(
-                    native::button("arrow.clockwise", "再読込", move || {
+                    native::button("arrow.clockwise", tr("再読込"), move || {
                         let modified = controls.with_untracked(|controls| controls.modified);
                         spawn(async move {
                             if modified
                                 && !nsh_base::alert_dialog()
-                                    .title("再読込")
-                                    .description("保存していない編集を破棄して再読込しますか？")
-                                    .cancel("cancel", "キャンセル")
-                                    .destructive("reload", "編集を破棄して再読込")
+                                    .title(tr("再読込"))
+                                    .description(tr("保存していない編集を破棄して再読込しますか？"))
+                                    .cancel("cancel", tr("キャンセル"))
+                                    .destructive("reload", tr("編集を破棄して再読込"))
                                     .show()
                                     .await
                                     .is_ok_and(|answer| answer.action.as_deref() == Some("reload"))
@@ -175,7 +182,7 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                 .child(
                     native::button(
                         "square.and.arrow.up",
-                        "プレビュー・共有",
+                        tr("プレビュー・共有"),
                         move || {
                             preview.load(crate::media::receive(
                                 connection.client.get().download(host.get(), path.get()),
@@ -185,7 +192,7 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                     .w(px(44.0))
                     .h(px(44.0)),
                 )
-                .child(native::text_button(json!("AIで編集"), move || {
+                .child(native::text_button(json!(tr("AIで編集")), move || {
                     connection.client.with(|client| {
                         client.dispatch(
                             &host.get(),

@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::{Connection, native};
 use agent_core::state::{Intent, operations as op};
 use nsh_core::{GlassEffect, element::input, prelude::*};
@@ -39,9 +40,9 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let stop_label = move || {
         controls.with(|c| {
             if c.interrupt_phase == Some(op::OperationPhase::Running) {
-                "停止中"
+                tr("停止中")
             } else {
-                "停止"
+                tr("停止")
             }
         })
     };
@@ -51,9 +52,9 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         } else if stopping() {
             stop_label().into()
         } else if recording.get() {
-            "文字起こしして送信".into()
+            tr("文字起こしして送信").into()
         } else {
-            "送信".into()
+            tr("送信").into()
         }
     });
     let enabled = move || {
@@ -131,12 +132,12 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                 answering.with(|question| {
                     question
                         .as_ref()
-                        .map(|question| question.placeholder.clone())
+                        .map(|question| localized(question.placeholder.clone()))
                         .unwrap_or_else(|| {
                             if is_desktop() {
-                                "AI に依頼する"
+                                tr("AI に依頼する")
                             } else {
-                                "メッセージを入力"
+                                tr("メッセージを入力")
                             }
                             .into()
                         })
@@ -219,12 +220,12 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             .child(
                 native::menu(
                     "plus",
-                    "添付",
-                    native::choices(&["写真を選択", "ファイルを選択"]),
+                    tr("添付"),
+                    native::choices(&[tr("写真を選択"), tr("ファイルを選択")]),
                     move |item| {
                         let host = connection.host.get_untracked();
                         let key = controls.with_untracked(|c| c.navigation.draft_key.clone());
-                        if item == "写真を選択" {
+                        if item == tr("写真を選択") {
                             let picked = pick_images(nsh_core::picker::PickRequest::new(true, 10));
                             spawn(async move {
                                 let images = picked.await;
@@ -288,7 +289,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                 && controls.with(|c| c.running_turn.is_some())
                         },
                         move || {
-                            native::button("stop.fill", "停止", interrupt)
+                            native::button("stop.fill", tr("停止"), interrupt)
                                 .min_w(px(44.0))
                                 .min_h(px(44.0))
                                 .prop("enabled", move || {
@@ -301,7 +302,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     .row_start(move || if collapsed() { 1_i16 } else { 2_i16 }),
             )
             .child(
-                native::button("arrow.up", "送信", submit)
+                native::button("arrow.up", tr("送信"), submit)
                     .min_w(px(44.0))
                     .min_h(px(44.0))
                     .col_start(move || if collapsed() { 4_i16 } else { 5_i16 })
@@ -367,7 +368,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                         move || {
                             ui::icon_button_sized(
                                 Icon::PLUS,
-                                "ファイルを添付",
+                                tr("ファイルを添付"),
                                 40.0,
                                 24.0,
                                 move || {
@@ -453,7 +454,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     move || {
                         let directory = directory.get();
                         if directory.is_empty() {
-                            "チャット".to_owned()
+                            tr("チャット").to_owned()
                         } else {
                             agent_core::presentation::markdown::file_basename(&directory).to_owned()
                         }
@@ -491,7 +492,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         ))
         .child(when(
             move || connection.uploading() || controls.with(|c| c.transferring),
-            || text("添付ファイルを転送中…"),
+            || text(tr("添付ファイルを転送中…")),
         ))
         .child(when(
             move || !is_desktop(),
@@ -587,7 +588,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                     },
                                 ))
                                 .child(
-                                    native::button("xmark", "添付を削除", move || {
+                                    native::button("xmark", tr("添付を削除"), move || {
                                         connection.dispatch(Intent::RemoveAttachment {
                                             draft_key: controls
                                                 .with_untracked(|c| c.navigation.draft_key.clone()),
@@ -621,7 +622,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         .child(when(
             move || controls.with(|c| !c.connected),
             move || {
-                text("Host 未接続")
+                text(tr("Host 未接続"))
                     .text_color(move || nsh_base::theme().muted_foreground)
                     .text_size(px(11.0))
             },
@@ -651,7 +652,7 @@ pub(crate) fn pick_files(
                     .collect(),
             ),
             Ok(None) => {}
-            Err(reason) => native::message("添付", reason),
+            Err(reason) => native::message(tr("添付"), reason),
         }
     });
 }

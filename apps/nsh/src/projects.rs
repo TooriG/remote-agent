@@ -1,5 +1,6 @@
 //! The list owns its native project editor; Core owns project decisions and persistence.
 use crate::application::{Application, ListScope, ListSource};
+use crate::l10n::{localized, tr};
 use crate::{native, shared::Shared};
 use agent_core::{
     presentation::{
@@ -30,7 +31,7 @@ pub(crate) fn menu(
             project,
             sections,
             local,
-            "フォルダを開く",
+            tr("フォルダを開く"),
         ),
         scope,
     ))
@@ -39,9 +40,9 @@ pub(crate) fn menu(
 fn encode(items: Vec<ProjectMenuItem>, scope: &ListScope) -> Vec<Value> {
     items.into_iter().map(|item| match item {
             ProjectMenuItem::Separator => json!({"separator": true}),
-            ProjectMenuItem::Submenu { title, items } => json!({"title": title, "children": encode(items, scope)}),
+            ProjectMenuItem::Submenu { title, items } => json!({"title": localized(title), "children": encode(items, scope)}),
             ProjectMenuItem::Action { title, action, checked, enabled } => json!({
-                "title": title, "selected": checked, "enabled": enabled,
+                "title": localized(title), "selected": checked, "enabled": enabled,
                 "id": serde_json::to_string(&Command { scope: scope.clone(), action }).expect("project menu commands serialize"),
             }),
         }).collect()
@@ -55,7 +56,7 @@ pub(crate) fn header_menu(
 ) -> Value {
     let mut items = Vec::new();
     if desktop {
-        items.push(json!({"id": "add", "title": "フォルダをプロジェクトに追加…", "enabled": sources.iter().any(|source| source.scope.host == selected_host && source.scope.host == "local" && source.connected)}));
+        items.push(json!({"id": "add", "title": tr("フォルダをプロジェクトに追加…"), "enabled": sources.iter().any(|source| source.scope.host == selected_host && source.scope.host == "local" && source.connected)}));
     }
     if !hidden.is_empty() {
         let hidden: Vec<_> = sources
@@ -79,7 +80,7 @@ pub(crate) fn header_menu(
                 )
             })
             .collect();
-        items.push(json!({"title": "非表示のプロジェクトを戻す", "children": hidden}));
+        items.push(json!({"title": tr("非表示のプロジェクトを戻す"), "children": hidden}));
     }
     json!(items)
 }
@@ -173,9 +174,10 @@ impl Projects {
                 #[cfg(not(target_os = "macos"))]
                 let _ = path;
             }
-            ProjectAction::OpenFolder(_) => {
-                native::message("フォルダを開く", "接続先のフォルダはこの端末では開けません")
-            }
+            ProjectAction::OpenFolder(_) => native::message(
+                tr("フォルダを開く"),
+                tr("接続先のフォルダはこの端末では開けません"),
+            ),
             _ => unreachable!("project operations resolve in Core"),
         }
     }
@@ -209,7 +211,7 @@ impl Projects {
                     }
                 }
                 Ok(_) => {}
-                Err(reason) => native::message("プロジェクトを追加", reason),
+                Err(reason) => native::message(tr("プロジェクトを追加"), reason),
             }
         });
     }
@@ -237,8 +239,8 @@ impl Projects {
                 if !self.same_scope(&editor.scope) {
                     self.editor.set(None);
                     native::message(
-                        "プロジェクトを編集",
-                        "接続先が変わりました。プロジェクトを開き直してください",
+                        tr("プロジェクトを編集"),
+                        tr("接続先が変わりました。プロジェクトを開き直してください"),
                     );
                     return;
                 }
@@ -252,7 +254,7 @@ impl Projects {
                 {
                     self.editor.update(|editor| {
                         if let Some(editor) = editor {
-                            editor.error = Some(reason.into());
+                            editor.error = Some(localized(reason.into()));
                         }
                     });
                     return;

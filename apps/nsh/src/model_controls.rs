@@ -1,4 +1,5 @@
 use crate::Connection;
+use crate::l10n::{localized, tr};
 #[cfg(not(target_os = "macos"))]
 use crate::native;
 use crate::ui::Enabled;
@@ -49,9 +50,10 @@ pub(crate) fn controls() -> View {
         });
     });
     let label = computed(move || {
-        connection
-            .settings
-            .with(|p| p.selected_model_name().unwrap_or_else(|| "モデル".into()))
+        connection.settings.with(|p| {
+            p.selected_model_name()
+                .unwrap_or_else(|| tr("モデル").into())
+        })
     });
     let trigger = crate::ui::text_button(
         move || SharedString::from(label.get()),
@@ -209,7 +211,10 @@ pub(crate) fn provider_mark(id: &str) -> Option<(&'static str, nsh_core::element
 /// account, the model search and list, and the response settings.
 #[cfg(target_os = "macos")]
 fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -> View {
-    use crate::ui::{self, Icon, colors};
+    use crate::{
+        l10n::tr_format,
+        ui::{self, Icon, colors},
+    };
     let field = move |key: &'static str| {
         move || {
             data.with(|data| {
@@ -264,7 +269,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
             },
         ));
     let account = nsh_base::button()
-        .accessibility_label(Some(SharedString::from("アカウントと週間残量")))
+        .accessibility_label(Some(SharedString::from(tr("アカウントと週間残量"))))
         .p_2()
         .gap_2()
         .rounded(px(8.0))
@@ -279,7 +284,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                     text(move || {
                         field("account")()["title"]
                             .as_str()
-                            .unwrap_or("未選択")
+                            .unwrap_or(tr("未選択"))
                             .to_owned()
                     })
                     .flex_1()
@@ -337,9 +342,9 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                 move || {
                     text(move || {
                         if field("loading")().as_bool().unwrap_or(false) {
-                            "モデルを読み込み中…"
+                            tr("モデルを読み込み中…")
                         } else {
-                            "利用可能なモデルがありません"
+                            tr("利用可能なモデルがありません")
                         }
                     })
                     .p_2()
@@ -385,9 +390,9 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                 move || {
                     ui::text_button(
                         move || {
-                            SharedString::from(format!(
-                                "モデルIDを指定: {}",
-                                field("customModel")().as_str().unwrap_or_default()
+                            SharedString::from(tr_format(
+                                "モデルIDを指定: {0}",
+                                [&field("customModel")().as_str().unwrap_or_default()],
                             ))
                         },
                         move || act("custom", ""),
@@ -399,7 +404,10 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
         ui::text_button(
             move || {
                 let current = field("quick")()[key].clone();
-                SharedString::from(format!("{title}: {}", current.as_str().unwrap_or("既定")))
+                SharedString::from(format!(
+                    "{title}: {}",
+                    current.as_str().unwrap_or(tr("既定"))
+                ))
             },
             move || {
                 let quick = field("quick")();
@@ -427,15 +435,15 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
             move || {
                 let permissions = field("permissions")();
                 let selected = permissions["selected"].clone();
-                SharedString::from(format!(
-                    "アクセス権限: {}",
-                    permissions["choices"]
+                SharedString::from(tr_format(
+                    "アクセス権限: {0}",
+                    [&permissions["choices"]
                         .as_array()
                         .into_iter()
                         .flatten()
                         .find(|choice| choice["id"] == selected)
                         .and_then(|choice| choice["title"].as_str())
-                        .unwrap_or("未設定")
+                        .unwrap_or(tr("未設定"))],
                 ))
             },
             move || {
@@ -479,7 +487,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                             .child(notice["recovery"].as_str().map(|recovery| {
                                 ui::text_button(recovery.to_owned(), move || act("recover", &id))
                             }))
-                            .child(ui::text_button("閉じる", move || {
+                            .child(ui::text_button(tr("閉じる"), move || {
                                 act("dismiss", &dismiss)
                             })),
                     )
@@ -492,8 +500,8 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                 .h(px(32.0))
                 .px_2()
                 .text_size(px(16.0))
-                .placeholder("モデルを検索")
-                .label("モデルを検索")
+                .placeholder(tr("モデルを検索"))
+                .label(tr("モデルを検索"))
                 .value(move || field("query")().as_str().unwrap_or_default().to_owned())
                 .on_change(move |value: &str| act("search", value)),
         )
@@ -529,7 +537,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                                 .as_array()
                                 .is_some_and(|e| !e.is_empty())
                         },
-                        move || choice_menu("effort", "思考の深さ", "effort"),
+                        move || choice_menu("effort", tr("思考の深さ"), "effort"),
                     ))
                     .child(when(
                         move || {
@@ -537,7 +545,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                                 .as_array()
                                 .is_some_and(|s| s.len() > 1)
                         },
-                        move || choice_menu("speed", "速度", "speed"),
+                        move || choice_menu("speed", tr("速度"), "speed"),
                     ))
             },
         ))
@@ -577,23 +585,24 @@ fn picker_data(p: &Presentation, picker: &Picker) -> Value {
         "models": settings.models_matching(picker.provider, picker.query.clone()).iter().map(|model| json!({"id": model.id, "title": model.display_name})).collect::<Vec<_>>(),
         "selectedModel": settings.current_model().map(|model| model.id),
         "loading": settings.models_loading(picker.provider),
-        "errors": settings.model_error_messages(picker.provider),
+        "errors": settings.model_error_messages(picker.provider).into_iter().map(localized).collect::<Vec<_>>(),
         "notices": settings.notices().iter().map(|notice| json!({
             "id": serde_json::to_string(&notice.id).expect("Core error IDs are serializable"),
-            "title": notice.title, "text": notice.text.to_string(), "recovery": notice.recovery_label,
+            "title": localized(notice.title.clone()), "text": localized(notice.text.to_string()), "recovery": notice.recovery_label.clone().map(localized),
         })).collect::<Vec<_>>(),
         "customModel": p.snapshot.custom_model_choice(picker.provider, &picker.query).map(|model| model.id),
         "quick": (selected.as_ref().map(|model| model.provider) == picker.provider).then(|| json!({
             "efforts": controls.efforts, "effort": controls.effort,
-            "speeds": controls.speed_choices.iter().map(|choice| json!({"id": choice.id, "title": choice.label})).collect::<Vec<_>>(),
+            "speeds": controls.speed_choices.iter().map(|choice| json!({"id": choice.id, "title": localized(choice.label.clone())})).collect::<Vec<_>>(),
             "speed": controls.speed_choices.iter().find(|choice| choice.selected).map(|choice| &choice.id),
         })),
         "permissions": (permissions.provider == picker.provider && permissions.version.is_some()).then(|| json!({
             "selected": permissions.mode.and_then(|mode| PERMISSION_CHOICES.iter().position(|choice| choice.0 == mode)).map(|index| index.to_string()),
-            "choices": PERMISSION_CHOICES.iter().enumerate().map(|(index, (_, title, _))| json!({"id": index.to_string(), "title": title})).collect::<Vec<_>>(),
+            "choices": PERMISSION_CHOICES.iter().enumerate().map(|(index, (_, title, _))| json!({"id": index.to_string(), "title": localized((*title).into())})).collect::<Vec<_>>(),
         })),
         "account": account.as_ref().map(|account| json!({"title": account.email.as_ref().unwrap_or(&account.id), "asset": crate::accounts::icon(account.provider),
-            "usage": settings.account_weekly_usage(account.provider, account.id.clone()),
+            "usage": settings.account_weekly_usage(account.provider, account.id.clone()).into_iter()
+                .map(|window| agent_protocol::operations::UsageWindow { label: localized(window.label), ..window }).collect::<Vec<_>>(),
         })),
     })
 }

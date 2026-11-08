@@ -1,5 +1,6 @@
 //! NSH's native-component boundary. Standard OS controls own their drawing,
 //! intrinsic sizes, accessibility, menus, search and input behavior.
+use crate::l10n::{localized, tr};
 use nsh_core::{element::NativeView, prelude::*};
 use serde_json::{Value, json};
 
@@ -18,8 +19,9 @@ impl RowIndicators {
             .map(thread_activity_label)
             .into_iter()
             .chain(self.worktree.map(worktree_status_label))
+            .map(localized)
             .collect::<Vec<_>>()
-            .join("、")
+            .join(tr("、"))
     }
 }
 
@@ -212,12 +214,13 @@ pub fn toolbar(title: Memo<String>, action: impl Fn(&str) + 'static) -> NativeVi
 
 pub fn message(title: impl Into<String>, description: impl Into<String>) {
     let title = title.into();
-    let description = description.into();
+    // Callers pass their own copy or a reason Core composed.
+    let description = localized(description.into());
     spawn(async move {
         let _ = nsh_base::alert_dialog()
             .title(title)
             .description(description)
-            .action("close", "閉じる")
+            .action("close", tr("閉じる"))
             .show()
             .await;
     });
@@ -227,7 +230,10 @@ pub fn open_link(url: impl Into<String>) {
     let url = url.into();
     spawn(async move {
         if !open_url(url).await {
-            message("リンクを開けませんでした", "開くアプリを確認してください。");
+            message(
+                tr("リンクを開けませんでした"),
+                tr("開くアプリを確認してください。"),
+            );
         }
     });
 }

@@ -1,5 +1,6 @@
 //! The application owns Host requests and editor lifetime across native roots.
 use super::Application;
+use crate::l10n::tr;
 use agent_core::{
     panels::PanelKind,
     presentation::worktrees::{normalize_worktree_settings, worktree_removal_reason},
@@ -228,14 +229,17 @@ impl Application {
                             agent_core::presentation::error::error_text(&reason.to_string())
                                 .to_string(),
                         ),
-                        Err(_) => Some("設定の応答が無効です。".into()),
+                        Err(_) => Some(tr("設定の応答が無効です。").into()),
                     };
                     failure = failure.or(error);
                 }
                 let Some(owner) = owner.upgrade() else { return };
                 let settings = owner.client.worktree_settings(&host);
-                let failure =
-                    failure.or_else(|| settings.is_none().then(|| "設定の応答が無効です。".into()));
+                let failure = failure.or_else(|| {
+                    settings
+                        .is_none()
+                        .then(|| tr("設定の応答が無効です。").into())
+                });
                 owner.state.send_if_modified(|state| {
                     let Some(editor) = &mut Arc::make_mut(state).worktrees else {
                         return false;
@@ -276,6 +280,7 @@ mod tests {
     ) -> (tokio::runtime::Runtime, Arc<Application>) {
         // These tests publish explicit Host facts. Discovery must not race those facts.
         let selection_path = root.join("connection-selection.json");
+        let language_path = root.join("language.json");
         let (runtime, client, _) = crate::client::Client::new(root, None).unwrap();
         let (state, _) = tokio::sync::watch::channel(Arc::new(State::default()));
         let app = Arc::new(Application {
@@ -286,6 +291,7 @@ mod tests {
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
             selection_path,
+            language_path,
         });
         (runtime, app)
     }

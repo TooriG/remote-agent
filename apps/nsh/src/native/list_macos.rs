@@ -1,5 +1,6 @@
 //! AppKit owns hierarchy, disclosure controls, keyboard navigation and selection.
 use super::{ListRow, macos::symbol};
+use crate::l10n::tr;
 use nsh_core::JsonValue;
 use nsh_platform_macos::{ComponentContext, NativeComponent};
 use objc2::{
@@ -299,9 +300,9 @@ fn cell_view(
         let menu = super::macos::menu_button(mtm);
         menu.setBordered(false);
         menu.setAccessibilityLabel(Some(&NSString::from_str(if heading {
-            "プロジェクトを管理"
+            tr("プロジェクトを管理")
         } else {
-            "プロジェクトの操作"
+            tr("プロジェクトの操作")
         })));
         if let Some(item) = menu.itemAtIndex(0) {
             item.setImage(
@@ -335,9 +336,9 @@ fn cell_view(
             };
             button.setImage(symbol("square.and.pencil").as_deref());
             button.setBordered(false);
-            button.setAccessibilityLabel(Some(&NSString::from_str(
+            button.setAccessibilityLabel(Some(&NSString::from_str(tr(
                 "このプロジェクトで新しいチャット",
-            )));
+            ))));
             stack.addArrangedSubview(&button);
             NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
                 button.widthAnchor().constraintEqualToConstant(24.0),

@@ -1,4 +1,5 @@
 //! Host paths use core's authenticated transfer; native views receive local copies.
+use crate::l10n::{localized, tr, tr_format};
 use crate::{
     Connection,
     client::{Client, LocalFile},
@@ -58,7 +59,7 @@ impl Preview {
                     Ok(file) => self.show(file),
                     Err(reason) => {
                         self.state.set(PreviewState::Closed);
-                        native::message("ファイル", reason);
+                        native::message(tr("ファイル"), reason);
                     }
                 }
             })
@@ -84,10 +85,10 @@ pub(crate) fn preview() -> impl Element {
                     preview.state.set(PreviewState::Closed);
                 } else if &*event.name == "error" {
                     preview.state.set(PreviewState::Closed);
-                    native::message("プレビュー", "このファイルをプレビューできませんでした。");
+                    native::message(tr("プレビュー"), tr("このファイルをプレビューできませんでした。"));
                 }
             }))
-        .child(when(move || matches!(preview.state.get(), PreviewState::Loading(_)), || text("ファイルを読み込み中…")))
+        .child(when(move || matches!(preview.state.get(), PreviewState::Loading(_)), || text(tr("ファイルを読み込み中…"))))
 }
 
 pub(crate) async fn receive(
@@ -112,22 +113,23 @@ pub(crate) async fn load_image(
             .strip_prefix("data:")
             .and_then(|value| value.split_once(';'))
             .map(|(mime, _)| mime)
-            .ok_or("画像を読み取れませんでした。")?;
-        let extension = native::image_extension(mime).ok_or("この画像形式を利用できません。")?;
+            .ok_or(tr("画像を読み取れませんでした。"))?;
+        let extension =
+            native::image_extension(mime).ok_or(tr("この画像形式を利用できません。"))?;
         let data = ImageSource {
             uri: source.into(),
             ..Default::default()
         }
         .inline()
         .data
-        .ok_or("画像を読み取れませんでした。")?;
+        .ok_or(tr("画像を読み取れませんでした。"))?;
         client.cache_image(data.to_vec(), extension)
     } else if source.starts_with("https://") || source.starts_with("http://") {
         let response = fetch(source).await?;
         if !response.ok() {
-            return Err(format!(
-                "画像を取得できませんでした (HTTP {})。",
-                response.status()
+            return Err(tr_format(
+                "画像を取得できませんでした (HTTP {0})。",
+                [&response.status()],
             ));
         }
         let extension = response
@@ -137,7 +139,7 @@ pub(crate) async fn load_image(
         client.cache_image(response.body, extension)
     } else {
         let file = markdown_file_target(source, cwd, MarkdownFileSurface::Mobile)
-            .ok_or("画像の場所を読み取れませんでした。")?;
+            .ok_or(tr("画像の場所を読み取れませんでした。"))?;
         client.download(host, file.path)
     };
     receive(transfer).await
@@ -186,7 +188,7 @@ pub(crate) fn image_view(
                 .w_full()
                 .h(px(height))
                 .object_fit(ResizeMode::Contain)
-                .label("画像を拡大")
+                .label(tr("画像を拡大"))
                 .role(AccessibilityRole::ImageButton)
                 .on_error(move |reason: &str| decode_error.set(Some(reason.into())))
                 .on_press(move || {
@@ -196,7 +198,10 @@ pub(crate) fn image_view(
                 })
             },
         ))
-        .child(when(move || loaded.loading(), || text("画像を読み込み中…")))
+        .child(when(
+            move || loaded.loading(),
+            || text(tr("画像を読み込み中…")),
+        ))
         .child(when(
             move || loaded.error().is_some() || decode_error.get().is_some(),
             move || {
@@ -206,9 +211,10 @@ pub(crate) fn image_view(
                         loaded
                             .error()
                             .or_else(|| decode_error.get())
+                            .map(localized)
                             .unwrap_or_default()
                     }))
-                    .child(native::text_button(json!("再試行"), move || {
+                    .child(native::text_button(json!(tr("再試行")), move || {
                         decode_error.set(None);
                         loaded.refetch()
                     }))

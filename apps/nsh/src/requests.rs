@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::{Connection, native};
 use agent_core::{
     presentation::conversation::{answer_from_json, request_input_default},
@@ -48,12 +49,12 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                         error.set(None);
                         respond(answer);
                     }
-                    Err(reason) => error.set(Some(reason)),
+                    Err(reason) => error.set(Some(localized(reason))),
                 };
                 view()
                     .gap_2()
                     .p_2()
-                    .child(text(move || request.with(|r| r.title.clone())))
+                    .child(text(move || request.with(|r| localized(r.title.clone()))))
                     .child(text(move || request.with(|r| r.body.clone())).selectable(true))
                     .child(text(move || request.with(|r| r.details.clone())).selectable(true))
                     .child(each(
@@ -61,7 +62,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                         |choice: &agent_protocol::requests::Choice| choice.id.clone(),
                         move |choice, _| {
                             native::text_button(
-                                move || json!(choice.with(|c| c.label.clone())),
+                                move || json!(choice.with(|c| localized(c.label.clone()))),
                                 move || {
                                     let id = choice.with_untracked(|c| c.id.clone());
                                     let answer = if request.with_untracked(|r| {
@@ -103,15 +104,15 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                                     move || url.get().is_some(),
                                     move || {
                                         native::text_button(
-                                            json!("リンクを開く"),
+                                            json!(tr("リンクを開く")),
                                             move || {
                                                 if let Some(url) = url.get_untracked() {
                                                     let opened = open_url(url);
                                                     spawn(async move {
                                                         if !opened.await {
                                                             native::message(
-                                                                "リンクを開けませんでした",
-                                                                "OSがリンクを開けませんでした。",
+                                                                tr("リンクを開けませんでした"),
+                                                                tr("OSがリンクを開けませんでした。"),
                                                             );
                                                         }
                                                     });
@@ -132,7 +133,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                                     },
                                 ))
                                 .child(
-                                    native::text_button(json!("確認して送信"), submit)
+                                    native::text_button(json!(tr("確認して送信")), submit)
                                         .prop("enabled", move || json!(enabled())),
                                 )
                                 .child(when(
@@ -149,7 +150,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                                             .flex_row()
                                             .gap_2()
                                             .child(
-                                                native::text_button(json!("辞退"), move || {
+                                                native::text_button(json!(tr("辞退")), move || {
                                                     respond(Answer::Elicitation {
                                                         action: ElicitationAnswer::Decline,
                                                     })
@@ -158,7 +159,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                                             )
                                             .child(
                                                 native::text_button(
-                                                    json!("キャンセル"),
+                                                    json!(tr("キャンセル")),
                                                     move || {
                                                         respond(Answer::Elicitation {
                                                             action: ElicitationAnswer::Cancel,
@@ -178,7 +179,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                     .child(text(move || {
                         connection.composer.with(|p| {
                             p.request_error(request.with(|request| request.id.clone()))
-                                .map(|error| error.to_string())
+                                .map(|error| localized(error.to_string()))
                                 .unwrap_or_default()
                         })
                     }))
@@ -211,11 +212,15 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                     .child(text(move || prompt.with(|p| p.question.header.clone())))
                     .child(text(move || prompt.with(|p| p.question.prompt.clone())))
                     .child(text(move || {
-                        prompt.with(|p| p.progress.clone().unwrap_or_default())
+                        prompt.with(|p| p.progress.clone().map(localized).unwrap_or_default())
                     }))
                     .child(when(
                         move || prompt.with(|p| p.status.is_some()),
-                        move || text(move || prompt.with(|p| p.status.clone().unwrap_or_default())),
+                        move || {
+                            text(move || {
+                                prompt.with(|p| p.status.clone().map(localized).unwrap_or_default())
+                            })
+                        },
                     ))
                     .child(each(
                         move || prompt.with(|p| p.question.choices.clone()),
@@ -256,7 +261,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                     .child(when(
                         move || prompt.with(|p| p.can_go_back),
                         move || {
-                            native::text_button(json!("前の質問へ"), move || {
+                            native::text_button(json!(tr("前の質問へ")), move || {
                                 connection.dispatch(Intent::AnswerQuestion {
                                     request_id: prompt.with_untracked(|p| p.request_id.clone()),
                                     action: agent_core::questions::QuestionAction::Back,
@@ -266,7 +271,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                         },
                     ))
                     .child(
-                        native::text_button(json!("スキップ"), move || {
+                        native::text_button(json!(tr("スキップ")), move || {
                             following.set(true);
                             connection.dispatch(Intent::Respond(op::Respond {
                                 request_id: prompt.with_untracked(|p| p.request_id.clone()),
@@ -278,7 +283,7 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                     .child(text(move || {
                         connection.composer.with(|p| {
                             p.request_error(prompt.with(|p| p.request_id.clone()))
-                                .map(|error| error.to_string())
+                                .map(|error| localized(error.to_string()))
                                 .unwrap_or_default()
                         })
                     }))

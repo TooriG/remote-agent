@@ -1,4 +1,5 @@
 use crate::application::{ListRequest, ListScope, ListSource};
+use crate::l10n::{localized, tr, tr_format};
 use crate::shared::Shared;
 use crate::{Connection, native};
 use agent_core::{
@@ -107,20 +108,20 @@ fn rows(
                 selected_host,
                 sources,
             ),
-            ..Row::new("プロジェクト".into(), Action::ProjectHeader, None)
+            ..Row::new(tr("プロジェクト").into(), Action::ProjectHeader, None)
         });
     }
     let Some(list) = list else {
         return rows;
     };
     let more_title = if desktop {
-        "もっと表示する"
+        tr("もっと表示する")
     } else {
-        "もっと見る"
+        tr("もっと見る")
     };
     if let Some(notice) = &list.notice {
         rows.push(Row::new(
-            notice.clone(),
+            localized(notice.clone()),
             Action::Notice("list".into()),
             None,
         ));
@@ -134,8 +135,8 @@ fn rows(
         list.projects
             .iter()
             .map(|project| (project.pinned, project.section.as_deref())),
-        "プロジェクト",
-        "ピン留め",
+        tr("プロジェクト"),
+        tr("ピン留め"),
     );
     for (project, heading) in list.projects.iter().zip(headings) {
         let Some(source) = sources
@@ -191,12 +192,12 @@ fn rows(
     if list.projects.is_empty() {
         let (title, action) = if list.loading_projects {
             (
-                "プロジェクトを読み込み中…",
+                tr("プロジェクトを読み込み中…"),
                 Action::Loading("projects".into()),
             )
         } else {
             (
-                "登録されたプロジェクトはありません",
+                tr("登録されたプロジェクトはありません"),
                 Action::Notice("projects".into()),
             )
         };
@@ -206,11 +207,15 @@ fn rows(
         rows.push(Row {
             loading: list.loading_projects,
             enabled: !list.loading_projects && !list.loading_chats,
-            ..Row::new("もっとプロジェクトを表示".into(), Action::Projects, None)
+            ..Row::new(
+                tr("もっとプロジェクトを表示").into(),
+                Action::Projects,
+                None,
+            )
         });
     }
     if !desktop || !list.threads.is_empty() {
-        rows.push(Row::new("チャット".into(), Action::Heading(None), None));
+        rows.push(Row::new(tr("チャット").into(), Action::Heading(None), None));
     }
     for thread in &list.threads {
         if let Some(source) = sources
@@ -222,7 +227,7 @@ fn rows(
     }
     if list.threads.is_empty() && !list.loading_chats && !desktop {
         rows.push(Row::new(
-            "チャットがありません".into(),
+            tr("チャットがありません").into(),
             Action::Notice("chats".into()),
             None,
         ));
@@ -245,19 +250,19 @@ fn project_children(
     let mut rows = Vec::new();
     if project.loading && !project.has_more {
         rows.push(Row::new(
-            "読み込み中…".into(),
+            tr("読み込み中…").into(),
             Action::Loading(project.id.clone()),
             Some(scope.clone()),
         ));
     }
     if let Some(error) = &project.error {
         rows.push(Row::new(
-            error.to_string(),
+            localized(error.to_string()),
             Action::Notice(project.id.clone()),
             Some(scope.clone()),
         ));
         rows.push(Row::new(
-            "再試行".into(),
+            tr("再試行").into(),
             Action::Retry(project.id.clone()),
             Some(scope.clone()),
         ));
@@ -493,8 +498,10 @@ fn desktop_rows(
                 move |item, _| {
                     let item = item.get_untracked();
                     let id = item["id"].as_str().unwrap_or_default().to_owned();
-                    let title =
-                        format!("一覧に戻す: {}", item["title"].as_str().unwrap_or_default());
+                    let title = tr_format(
+                        "一覧に戻す: {0}",
+                        [&item["title"].as_str().unwrap_or_default()],
+                    );
                     menu_row()
                         .on_press(move || activate("menu", &id, None))
                         .mt_1()
@@ -524,7 +531,7 @@ fn desktop_row(
                 .child(add.map(|enabled| {
                     ui::icon_button(
                         Icon::FOLDER_PLUS,
-                        "プロジェクトを追加",
+                        tr("プロジェクトを追加"),
                         move || activate("menu", "add", None),
                     )
                     .enabled(move || enabled)
@@ -554,7 +561,7 @@ fn desktop_row(
                 });
                 ui::small_icon_button(
                     Icon::NEW_CHAT,
-                    "このプロジェクトで新しいチャット",
+                    tr("このプロジェクトで新しいチャット"),
                     move || activate("compose", &compose_id, None),
                 )
                 .enabled(move || connected)
@@ -592,7 +599,7 @@ fn desktop_row(
                         .group_hover(|s| s.opacity(1.0))
                         .child(ui::small_icon_button(
                             Icon::ELLIPSIS,
-                            "プロジェクトのメニュー",
+                            tr("プロジェクトのメニュー"),
                             move || {
                                 ui::popup(&menu, move |command| activate("menu", command, None))
                             },

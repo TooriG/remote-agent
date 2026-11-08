@@ -5,6 +5,7 @@ use crate::{
 };
 use agent_core::{
     client::AgentError,
+    localization::UiLanguage,
     panels::{PanelKind, PanelLayout, PanelScope, Panels},
     presentation::view::Presentation,
     state::{DraftKey, Intent},
@@ -56,6 +57,7 @@ pub(crate) struct State {
     pub side_chats: BTreeMap<u64, SideChat>,
     pub browser_renderer: String,
     pub worktrees: Option<WorktreeEditor>,
+    pub language: UiLanguage,
     uploads: BTreeMap<uuid::Uuid, (String, DraftKey)>,
 }
 
@@ -77,6 +79,7 @@ impl Default for State {
             side_chats: BTreeMap::new(),
             browser_renderer: String::new(),
             worktrees: None,
+            language: UiLanguage::default(),
             uploads: BTreeMap::new(),
         }
     }
@@ -187,6 +190,9 @@ pub(crate) struct Application {
     runtime: tokio::runtime::Handle,
     jobs: tokio_util::task::TaskTracker,
     selection_path: PathBuf,
+    /// Only the Mac settings change the language.
+    #[cfg(any(target_os = "macos", test))]
+    language_path: PathBuf,
 }
 
 impl Application {
@@ -202,10 +208,18 @@ impl Application {
     ) -> Result<(tokio::runtime::Runtime, Arc<Self>), AgentError> {
         let selection_path = root.join("connection-selection.json");
         let selection = connections::load_selection(&selection_path)?;
+        let language_path = root.join("language.json");
+        // An unreadable choice falls back to the default, as a first launch.
+        let language = crate::storage::read(&language_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        crate::l10n::set(language);
         let (runtime, client, incoming) = Client::new(root, local)?;
         let (state, _) = watch::channel(Arc::new(State {
             host: selection.host_id.clone().unwrap_or_default(),
             all_hosts: selection.all,
+            language,
             ..State::default()
         }));
         let application = Arc::new(Self {
@@ -216,6 +230,8 @@ impl Application {
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
             selection_path,
+            #[cfg(any(target_os = "macos", test))]
+            language_path,
         });
         application.persist_selection(selection);
         let owner = Arc::downgrade(&application);
@@ -251,6 +267,19 @@ impl Application {
         if start {
             self.client.pair(invitation);
         }
+    }
+
+    /// Saves the UI language, then publishes it so the root is made again in it.
+    #[cfg(any(target_os = "macos", test))]
+    pub fn select_language(&self, language: UiLanguage) {
+        if let Err(reason) = agent_local_host::save_private_json(&self.language_path, &language) {
+            self.state
+                .send_modify(|state| Arc::make_mut(state).failure = Some(reason.to_string()));
+            return;
+        }
+        crate::l10n::set(language);
+        self.state
+            .send_modify(|state| Arc::make_mut(state).language = language);
     }
 
     pub fn dismiss_failure(&self) {
@@ -632,6 +661,22 @@ mod tests {
             "mounted views retain immutable snapshots"
         );
         runtime.block_on(application.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn a_selected_language_is_published_and_restored_on_the_next_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, application) = Application::new(directory.path().into(), None).unwrap();
+        assert_eq!(application.snapshot().language, UiLanguage::Japanese);
+        application.select_language(UiLanguage::English);
+        assert_eq!(application.snapshot().language, UiLanguage::English);
+        assert_eq!(crate::l10n::tr("設定"), "Settings");
+        runtime.block_on(application.shutdown()).unwrap();
+        let (runtime, restored) = Application::new(directory.path().into(), None).unwrap();
+        assert_eq!(restored.snapshot().language, UiLanguage::English);
+        restored.select_language(UiLanguage::Japanese);
+        assert_eq!(crate::l10n::tr("設定"), "設定");
+        runtime.block_on(restored.shutdown()).unwrap();
     }
 
     #[test]

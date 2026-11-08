@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr, tr_format};
 use crate::{Connection, application::Host, native};
 use nsh_core::{element::input, prelude::*};
 use serde_json::json;
@@ -10,12 +11,12 @@ pub(crate) fn selector(
     let connection = use_context::<Connection>().unwrap();
     native::menu(
         "desktopcomputer",
-        "接続先",
+        tr("接続先"),
         move || {
             let all = list_scope && connection.state.with(|state| state.all_hosts);
             let mut entries = Vec::new();
             if list_scope {
-                entries.push(json!({"id":"", "title":"すべての接続先", "symbol":"square.stack", "selected":all}));
+                entries.push(json!({"id":"", "title":tr("すべての接続先"), "symbol":"square.stack", "selected":all}));
                 entries.push(json!({"separator":true}));
             }
             entries.extend(hosts.with(|hosts| hosts.iter().map(|host| json!({"id":host.id,"title":host.name,"selected":!all && host.id == selected.get()})).collect::<Vec<_>>()));
@@ -29,7 +30,7 @@ pub(crate) fn selector(
         },
     )
     .prop("title", move || {
-        if list_scope && connection.state.with(|state| state.all_hosts) { return json!("すべての接続先"); }
+        if list_scope && connection.state.with(|state| state.all_hosts) { return json!(tr("すべての接続先")); }
         json!(hosts.with(|hosts| {
             hosts
                 .iter()
@@ -41,7 +42,7 @@ pub(crate) fn selector(
                         host.name.clone()
                     }
                 })
-                .unwrap_or_else(|| "接続先".into())
+                .unwrap_or_else(|| tr("接続先").into())
         }))
     })
     .prop("identifier", json!(if list_scope { "connections.list" } else { "connections.destination" }))
@@ -81,7 +82,7 @@ pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> imp
     };
     #[cfg(target_os = "macos")]
     {
-        native::menu("desktopcomputer", "接続先", items, select)
+        native::menu("desktopcomputer", tr("接続先"), items, select)
             .prop("title", move || json!(name()))
             .prop("appearance", json!("plain"))
     }
@@ -112,7 +113,7 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
     view()
         .gap_4()
         .text_color(move || nsh_base::theme().foreground)
-        .child(heading("接続先"))
+        .child(heading(tr("接続先")))
         .child(
             view()
                 .rounded(px(12.0))
@@ -128,7 +129,7 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                         ui::setting(
                             host.name,
                             String::new,
-                            ui::text_button("接続", move || {
+                            ui::text_button(tr("接続"), move || {
                                 connection.application.with(|application| {
                                     application.select_host(id.clone(), false)
                                 });
@@ -140,18 +141,18 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                     },
                 )),
         )
-        .child(heading("PCを追加"))
+        .child(heading(tr("PCを追加")))
         .child(when(move || confirmation.get().is_none(), move || {
             ui::card(vec![view()
                 .px_5()
                 .py_4()
                 .gap_3()
-                .child(text("PCのBexで発行した接続情報を貼り付けてください。").text_size(px(13.0)).text_color(colors::MUTED))
+                .child(text(tr("PCのBexで発行した接続情報を貼り付けてください。")).text_size(px(13.0)).text_color(colors::MUTED))
                 .child(input().masked(true)
                     .auto_correct(false).auto_capitalize(AutoCapitalize::None)
                     .value(move || invitation.get())
                     .on_change(move |text: &str| invitation.set(text.into()))
-                    .placeholder("接続情報")
+                    .placeholder(tr("接続情報"))
                     .text_color(move || nsh_base::theme().foreground)
                     .w_full()
                     .h(px(36.0))
@@ -159,13 +160,13 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                     .rounded(px(ui::RADIUS))
                     .border_1()
                     .border_color(colors::BORDER))
-                .child(view().flex_row().justify_end().child(ui::text_button("接続先を確認", move || {
+                .child(view().flex_row().justify_end().child(ui::text_button(tr("接続先を確認"), move || {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|time| time.as_secs()).unwrap_or_default();
                     match agent_core::client::native::parse_invitation(invitation.get_untracked(), now) {
                         Ok(value) => { confirmation.set(Some(value)); error.set(None); }
-                        Err(reason) => error.set(Some(reason.to_string())),
+                        Err(reason) => error.set(Some(localized(reason.to_string()))),
                     }
                 })))])
         }))
@@ -175,18 +176,18 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                 .py_4()
                 .gap_3()
                 .child(text(confirmed(|value| value.host_name.clone())).font_weight(FontWeight::MEDIUM))
-                .child(text("メッセージ・添付ファイル・作業に必要なプロジェクトの内容を、このPCと利用するAIサービスに送信します。"))
+                .child(text(tr("メッセージ・添付ファイル・作業に必要なプロジェクトの内容を、このPCと利用するAIサービスに送信します。")))
                 .child(text(confirmed(|value| {
-                    let recipients = Some(value.ai_recipients.join("、")).filter(|value| !value.is_empty()).unwrap_or_else(|| "未設定".into());
-                    format!("AI処理：{recipients}")
+                    let recipients = Some(value.ai_recipients.join(tr("、"))).filter(|value| !value.is_empty()).unwrap_or_else(|| tr("未設定").into());
+                    tr_format("AI処理：{0}", [&recipients])
                 })))
-                .child(text(confirmed(|value| value.transcription_recipient.as_ref().map(|recipient| format!("音声入力：{recipient}（文字起こし）")).unwrap_or_default())))
-                .child(text("共有PCでは、管理者などが内容を閲覧できる場合があります。").text_size(px(13.0)).text_color(colors::MUTED))
+                .child(text(confirmed(|value| value.transcription_recipient.as_ref().map(|recipient| tr_format("音声入力：{0}（文字起こし）", [recipient])).unwrap_or_default())))
+                .child(text(tr("共有PCでは、管理者などが内容を閲覧できる場合があります。")).text_size(px(13.0)).text_color(colors::MUTED))
                 .child(view().flex_row().justify_end().gap_2()
-                    .child(ui::text_button("変更", move || {
+                    .child(ui::text_button(tr("変更"), move || {
                         confirmation.set(None); invitation.set(String::new());
                     }).enabled(move || !connection.pairing.get()))
-                    .child(ui::text_button("同意して接続", move || {
+                    .child(ui::text_button(tr("同意して接続"), move || {
                         if !connection.pairing.get_untracked() && let Some(invitation) = confirmation.get_untracked() {
                             connection.application.with(|application| application.pair(invitation));
                         }

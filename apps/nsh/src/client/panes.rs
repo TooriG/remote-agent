@@ -1,5 +1,6 @@
 //! Core panes share their Host session; only a closed surface retires its pane.
 use super::*;
+use crate::l10n::tr;
 use agent_core::client::native::AgentPane;
 use agent_protocol::session::ProviderKind;
 use tokio::sync::OnceCell;
@@ -50,9 +51,9 @@ impl Client {
             let result = tokio::select! {
                 _ = pane.stop.cancelled() => return,
                 result = async {
-                    if pane.host != host { return Err(error("サイドチャットの接続先が変わりました。")); }
+                    if pane.host != host { return Err(error(tr("サイドチャットの接続先が変わりました。"))); }
                     let core = pane.core.get_or_try_init(|| async {
-                        let session = owner.sessions.session(host.clone()).ok_or_else(|| error("接続先が選択されていません"))?;
+                        let session = owner.sessions.session(host.clone()).ok_or_else(|| error(tr("接続先が選択されていません")))?;
                         let core = session.ready().await?.open_pane(cwd).await?;
                         owner.observe_pane(id, core.clone(), pane.stop.clone());
                         Ok::<_, AgentError>(core)
@@ -93,7 +94,7 @@ impl Client {
             .get(&id)
             .filter(|pane| pane.host == host && !pane.stop.is_cancelled())
             .and_then(|pane| pane.core.get().cloned())
-            .ok_or_else(|| error("サイドチャットが開いていません。"))
+            .ok_or_else(|| error(tr("サイドチャットが開いていません。")))
     }
 
     pub(super) fn close_panes(&self) {

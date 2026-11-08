@@ -1,6 +1,8 @@
 //! The worktree settings page: the application owns the editor's lifetime and
 //! Core owns its Host operations; this page keeps only the unsaved inputs.
+use super::choice;
 use crate::application::{WorktreeAction, WorktreeEditor};
+use crate::l10n::{localized, tr, tr_format};
 use crate::ui::{self, Enabled, colors};
 use crate::{Connection, native};
 use agent_protocol::models::{Worktree, WorktreeSettings};
@@ -106,13 +108,13 @@ pub(super) fn page(connection: Connection) -> View {
             move || project_cleanup(inputs, project, enabled, edit),
         ))
         .child(when(busy, || {
-            text("設定を通信中…")
+            text(tr("設定を通信中…"))
                 .text_size(px(13.0))
                 .text_color(colors::MUTED)
         }))
         .child(when(
             move || !connected.get(),
-            || text("作業環境との接続を確認してください。").text_size(px(13.0)),
+            || text(tr("作業環境との接続を確認してください。")).text_size(px(13.0)),
         ))
         .child(when(
             move || editor.with(|e| e.as_ref().is_some_and(|e| e.error.is_some())),
@@ -129,18 +131,6 @@ fn heading(title: &'static str) -> Text {
 
 fn note(content: &'static str) -> Text {
     text(content).text_size(px(12.0)).text_color(colors::MUTED)
-}
-
-/// A popup button: the current choice, opening its menu.
-fn choice(
-    label: impl Fn() -> String + Copy + 'static,
-    items: impl Fn() -> serde_json::Value + Copy + 'static,
-    select: impl Fn(&str) + Clone + 'static,
-) -> ui::Control {
-    ui::text_button(
-        move || SharedString::from(format!("{} ▾", label())),
-        move || ui::popup(&items(), select.clone()),
-    )
 }
 
 /// Which Host and project the settings apply to; only cleanup varies by project.
@@ -166,7 +156,7 @@ fn scope(
                 .iter()
                 .find(|h| h.id == host)
                 .map(|h| h.name.clone())
-                .unwrap_or_else(|| "環境を選択".into())
+                .unwrap_or_else(|| tr("環境を選択").into())
         })
     };
     let project_name = move || {
@@ -180,7 +170,7 @@ fn scope(
                             .map(|(_, name)| name.clone())
                     })
                 })
-                .unwrap_or_else(|| "すべてのプロジェクト".into())
+                .unwrap_or_else(|| tr("すべてのプロジェクト").into())
         })
     };
     let host_items = move || {
@@ -195,7 +185,7 @@ fn scope(
     let project_items = move || {
         let selected = project.get_untracked();
         let mut items = vec![
-            json!({"id": "", "title": "すべてのプロジェクト", "selected": selected.is_none()}),
+            json!({"id": "", "title": tr("すべてのプロジェクト"), "selected": selected.is_none()}),
         ];
         items.extend(projects.with_untracked(|all| {
             all.iter()
@@ -205,12 +195,12 @@ fn scope(
         json!(items)
     };
     ui::card(vec![ui::setting(
-        "適用範囲",
+        tr("適用範囲"),
         move || {
             if project.with(Option::is_none) {
-                "この環境に保存し、新しい会話に適用します。".into()
+                tr("この環境に保存し、新しい会話に適用します。").into()
             } else {
-                "プロジェクトごとに変えられるのは自動削除だけです。".into()
+                tr("プロジェクトごとに変えられるのは自動削除だけです。").into()
             }
         },
         view()
@@ -280,20 +270,20 @@ fn shared(
     };
     view()
         .gap_4()
-        .child(heading("作成と保存先"))
+        .child(heading(tr("作成と保存先")))
         .child(ui::card(vec![
             ui::setting(
-                "新規セッションをワークツリーで開始",
-                || "元の作業フォルダと分けて、新しい会話を進めます。".into(),
+                tr("新規セッションをワークツリーで開始"),
+                || tr("元の作業フォルダと分けて、新しい会話を進めます。").into(),
                 switch(
-                    "新規セッションをワークツリーで開始",
+                    tr("新規セッションをワークツリーで開始"),
                     value(|s| s.create_on_new_session),
                     enabled,
                     move |on| edit(&|s| s.create_on_new_session = on),
                 ),
             ),
             view().px_5().py_4().gap_2().child(field(
-                "この環境の絶対パス（空欄で既定）",
+                tr("この環境の絶対パス（空欄で既定）"),
                 move || inputs.with(|s| s.as_ref().map(|s| s.worktree_directory.clone()).unwrap_or_default()),
                 enabled,
                 move |text| {
@@ -302,14 +292,14 @@ fn shared(
                 },
             )),
         ]))
-        .child(note("保存先に「セッション名/リポジトリ名」の構成で作ります。空欄なら元のリポジトリ内の .worktree に保存します。既存のワークツリーは移動しません。"))
-        .child(heading("コピー対象"))
+        .child(note(tr("保存先に「セッション名/リポジトリ名」の構成で作ります。空欄なら元のリポジトリ内の .worktree に保存します。既存のワークツリーは移動しません。")))
+        .child(heading(tr("コピー対象")))
         .child(ui::card(vec![
             ui::setting(
-                "作成時にファイルをコピー",
-                || "作成時に、指定したファイルを元のリポジトリからコピーします。".into(),
+                tr("作成時にファイルをコピー"),
+                || tr("作成時に、指定したファイルを元のリポジトリからコピーします。").into(),
                 switch(
-                    "作成時にファイルをコピー",
+                    tr("作成時にファイルをコピー"),
                     value(|s| s.copy_on_create),
                     enabled,
                     move |on| edit(&|s| s.copy_on_create = on),
@@ -317,7 +307,7 @@ fn shared(
             ),
             view().px_5().py_4().child(
                 field(
-                    "コピー対象",
+                    tr("コピー対象"),
                     move || inputs.with(|s| s.as_ref().map(|s| s.copy_paths.join("\n")).unwrap_or_default()),
                     enabled,
                     move |text| {
@@ -329,13 +319,13 @@ fn shared(
                 .min_h(px(88.0)),
             ),
         ]))
-        .child(note("リポジトリからの相対パスを1行に1つ指定します（例: .env、config/local）。存在しないパスはスキップします。"))
-        .child(heading("自動削除"))
+        .child(note(tr("リポジトリからの相対パスを1行に1つ指定します（例: .env、config/local）。存在しないパスはスキップします。")))
+        .child(heading(tr("自動削除")))
         .child(ui::card(vec![ui::setting(
-            "取り込み済みを自動削除",
-            || "既定ブランチより先のコミットがない作業場所を1時間ごとに削除します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留します。ブランチと会話履歴は残ります。".into(),
+            tr("取り込み済みを自動削除"),
+            || tr("既定ブランチより先のコミットがない作業場所を1時間ごとに削除します。実行中・回答待ち・ターミナル使用中・ローカル変更ありの場合は保留します。ブランチと会話履歴は残ります。").into(),
             switch(
-                "取り込み済みを自動削除",
+                tr("取り込み済みを自動削除"),
                 value(|s| s.delete_unchanged),
                 enabled,
                 move |on| edit(&|s| s.delete_unchanged = on),
@@ -359,30 +349,30 @@ fn project_cleanup(
     };
     let shared_label = move || {
         if inputs.with(|s| s.as_ref().is_some_and(|s| s.delete_unchanged)) {
-            "すべてのプロジェクトと同じ（オン）"
+            tr("すべてのプロジェクトと同じ（オン）")
         } else {
-            "すべてのプロジェクトと同じ（オフ）"
+            tr("すべてのプロジェクトと同じ（オフ）")
         }
     };
     let label = move || match current() {
         None => shared_label().to_owned(),
-        Some(true) => "オン".to_owned(),
-        Some(false) => "オフ".to_owned(),
+        Some(true) => tr("オン").to_owned(),
+        Some(false) => tr("オフ").to_owned(),
     };
     let items = move || {
         let current = untracked(current);
         json!([
             {"id": "shared", "title": untracked(shared_label), "selected": current.is_none()},
-            {"id": "on", "title": "オン", "selected": current == Some(true)},
-            {"id": "off", "title": "オフ", "selected": current == Some(false)},
+            {"id": "on", "title": tr("オン"), "selected": current == Some(true)},
+            {"id": "off", "title": tr("オフ"), "selected": current == Some(false)},
         ])
     };
     view()
         .gap_4()
-        .child(heading("自動削除"))
+        .child(heading(tr("自動削除")))
         .child(ui::card(vec![ui::setting(
-            "取り込み済みを自動削除",
-            || "このプロジェクトの作業場所に適用します。".into(),
+            tr("取り込み済みを自動削除"),
+            || tr("このプロジェクトの作業場所に適用します。").into(),
             choice(label, items, move |id: &str| {
                 let Some(project) = project.get_untracked() else {
                     return;
@@ -413,16 +403,23 @@ fn failure(
     save: impl Fn() + Copy + 'static,
 ) -> View {
     ui::card(vec![ui::setting(
-        "保存できませんでした",
-        move || editor.with(|e| e.as_ref().and_then(|e| e.error.clone()).unwrap_or_default()),
+        tr("保存できませんでした"),
+        move || {
+            editor.with(|e| {
+                e.as_ref()
+                    .and_then(|e| e.error.clone())
+                    .map(localized)
+                    .unwrap_or_default()
+            })
+        },
         view()
             .flex_row()
             .gap_2()
             .child(
-                ui::text_button("再読み込み", move || emit(WorktreeAction::Load {}))
+                ui::text_button(tr("再読み込み"), move || emit(WorktreeAction::Load {}))
                     .enabled(move || !busy() && connected.get()),
             )
-            .child(ui::text_button("保存を再試行", save).enabled(move || {
+            .child(ui::text_button(tr("保存を再試行"), save).enabled(move || {
                 !busy()
                     && connected.get()
                     && editor.with(|e| e.as_ref().is_some_and(|e| e.settings.is_some()))
@@ -449,9 +446,9 @@ fn managed(
             view()
                 .flex_row()
                 .items_center()
-                .child(heading("作成済みのワークツリー").flex_1())
+                .child(heading(tr("作成済みのワークツリー")).flex_1())
                 .child(
-                    ui::text_button("ワークツリー一覧を更新", move || {
+                    ui::text_button(tr("ワークツリー一覧を更新"), move || {
                         emit(WorktreeAction::Load {})
                     })
                     .enabled(idle),
@@ -459,7 +456,7 @@ fn managed(
         )
         .child(when(
             move || rows.with(Option::is_none),
-            || note("一覧を読み込み中…"),
+            || note(tr("一覧を読み込み中…")),
         ))
         .child(when(
             move || rows.with(|rows| rows.as_ref().is_some_and(Vec::is_empty)),
@@ -468,7 +465,7 @@ fn managed(
                     view()
                         .px_5()
                         .py_4()
-                        .child(note("Bexで作成したワークツリーはありません。")),
+                        .child(note(tr("Bexで作成したワークツリーはありません。"))),
                 ])
             },
         ))
@@ -493,16 +490,17 @@ fn worktree(
                 cwd,
                 row.path.clone(),
             )
+            .map(localized)
         })
     };
     let remove = move || {
         let path = row.with_untracked(|row| row.path.clone());
         spawn(async move {
             if nsh_base::alert_dialog()
-                .title("作業ディレクトリを削除しますか？")
-                .description("この作業ディレクトリを削除します。ブランチと会話履歴は残ります。次のメッセージ送信時に、元プロジェクトの main から同じ場所に作り直します。")
-                .cancel("cancel", "キャンセル")
-                .destructive("remove", "削除")
+                .title(tr("作業ディレクトリを削除しますか？"))
+                .description(tr("この作業ディレクトリを削除します。ブランチと会話履歴は残ります。次のメッセージ送信時に、元プロジェクトの main から同じ場所に作り直します。"))
+                .cancel("cancel", tr("キャンセル"))
+                .destructive("remove", tr("削除"))
                 .show()
                 .await
                 .is_ok_and(|answer| answer.action.as_deref() == Some("remove"))
@@ -539,7 +537,7 @@ fn worktree(
                         .font_weight(FontWeight::SEMIBOLD),
                     )
                     .child(
-                        ui::text_button("変更を確認", move || {
+                        ui::text_button(tr("変更を確認"), move || {
                             emit(WorktreeAction::Review {
                                 path: row.with_untracked(|row| row.path.clone()),
                             })
@@ -547,7 +545,7 @@ fn worktree(
                         .enabled(idle),
                     )
                     .child(
-                        ui::text_button("削除…", remove)
+                        ui::text_button(tr("削除…"), remove)
                             .enabled(move || idle() && reason().is_none()),
                     ),
             )
@@ -564,7 +562,7 @@ fn worktree(
                     let label = move || {
                         thread.with(|t| {
                             SharedString::from(if t.active {
-                                format!("実行中 · {}", t.name)
+                                tr_format("実行中 · {0}", [&t.name])
                             } else {
                                 t.name.clone()
                             })

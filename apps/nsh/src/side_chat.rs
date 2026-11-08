@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::{Connection, native, shared::Shared};
 use agent_core::presentation::view::Presentation;
 use nsh_core::prelude::*;
@@ -58,14 +59,14 @@ pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
                         text(move || {
                             failure
                                 .get()
-                                .map(|error| error.to_string())
+                                .map(|error| localized(error.to_string()))
                                 .unwrap_or_default()
                         })
                         .selectable(true)
                         .text_color(move || nsh_base::theme().destructive),
                     )
                     .child(
-                        native::text_button(json!("再試行"), move || {
+                        native::text_button(json!(tr("再試行")), move || {
                             parent.application.with(|app| app.prepare_side_chat(id))
                         })
                         .prop("identifier", json!("sideChat.retry")),

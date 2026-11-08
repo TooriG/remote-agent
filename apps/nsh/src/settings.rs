@@ -1,8 +1,13 @@
 //! The desktop settings, as T3 Code's: a blurred overlay whose searchable
 //! sections sit beside a breadcrumb, each section a set of grouped rows.
 use crate::ui::{self, Enabled, Icon, colors};
-use crate::{Connection, Navigation, application::Host, environment};
-use agent_core::presentation::connections::ConnectionAgent;
+use crate::{
+    Connection, Navigation,
+    application::Host,
+    environment,
+    l10n::{self, localized, tr},
+};
+use agent_core::{localization::UiLanguage, presentation::connections::ConnectionAgent};
 use agent_protocol::session::ProviderKind;
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::json;
@@ -27,19 +32,19 @@ impl Page {
 
     fn title(self) -> &'static str {
         match self {
-            Self::General => "一般",
-            Self::Providers => "プロバイダー",
-            Self::Environments => "環境",
-            Self::Worktrees => "ワークツリー",
+            Self::General => tr("一般"),
+            Self::Providers => tr("プロバイダー"),
+            Self::Environments => tr("環境"),
+            Self::Worktrees => tr("ワークツリー"),
         }
     }
 
     fn description(self) -> &'static str {
         match self {
-            Self::General => "この端末で使用するアプリの設定です。",
-            Self::Providers => "選択した環境のプロバイダー・アカウント・更新を管理します。",
-            Self::Environments => "作業する環境と、このPCへ接続する端末を管理します。",
-            Self::Worktrees => "新しい会話の作業場所と、作成済みのワークツリーを管理します。",
+            Self::General => tr("この端末で使用するアプリの設定です。"),
+            Self::Providers => tr("選択した環境のプロバイダー・アカウント・更新を管理します。"),
+            Self::Environments => tr("作業する環境と、このPCへ接続する端末を管理します。"),
+            Self::Worktrees => tr("新しい会話の作業場所と、作成済みのワークツリーを管理します。"),
         }
     }
 
@@ -148,12 +153,12 @@ fn navigation(page: Signal<Page>) -> View {
         .child(
             crate::native::search(query)
                 .prop("appearance", json!("plain"))
-                .prop("placeholder", json!("設定を検索"))
+                .prop("placeholder", json!(tr("設定を検索")))
                 .h(px(32.0))
                 .mb_2(),
         )
         .child(
-            text("設定")
+            text(tr("設定"))
                 .text_size(px(12.0))
                 .text_color(colors::MUTED)
                 .px_2()
@@ -192,14 +197,18 @@ fn header(page: Signal<Page>, close: impl Fn() + 'static, locked: Memo<bool>) ->
         .px_5()
         .border_b_1()
         .border_b_color(colors::BORDER)
-        .child(text("設定").text_size(px(14.0)).text_color(colors::MUTED))
+        .child(
+            text(tr("設定"))
+                .text_size(px(14.0))
+                .text_color(colors::MUTED),
+        )
         .child(text("/").text_size(px(14.0)).text_color(colors::MUTED))
         .child(
             text(move || page.get().title())
                 .flex_1()
                 .text_size(px(14.0)),
         )
-        .child(ui::icon_button(Icon::CLOSE, "閉じる", close).enabled(move || !locked.get()))
+        .child(ui::icon_button(Icon::CLOSE, tr("閉じる"), close).enabled(move || !locked.get()))
 }
 
 fn heading(page: Signal<Page>) -> View {
@@ -223,17 +232,65 @@ fn general(connection: Connection) -> View {
         ui::setting(
             "Bex Host",
             move || environment::host_software(connection),
-            ui::text_button("バージョン情報を再読み込み", move || {
+            ui::text_button(tr("バージョン情報を再読み込み"), move || {
                 environment::reload_host_software(connection)
             })
             .enabled(connected),
         ),
         ui::setting(
-            "アップデート",
-            || environment::UPDATE_NOTE.to_owned(),
-            ui::text_button("アップデートを確認", environment::check_updates),
+            tr("アップデート"),
+            || environment::update_note().to_owned(),
+            ui::text_button(tr("アップデートを確認"), environment::check_updates),
+        ),
+        ui::setting(
+            tr("表示言語"),
+            || tr("アプリで使用する言語を選択します。").to_owned(),
+            language(connection),
         ),
     ])
+}
+
+/// The UI language. Choosing one makes the whole window again in it.
+fn language(connection: Connection) -> ui::Control {
+    const LANGUAGES: [(UiLanguage, &str); 2] = [
+        (UiLanguage::Japanese, "日本語"),
+        (UiLanguage::English, "English"),
+    ];
+    let current = l10n::language();
+    let name = move || {
+        LANGUAGES
+            .into_iter()
+            .find_map(|(language, name)| (language == current).then(|| name.to_owned()))
+            .unwrap_or_default()
+    };
+    let items = move || {
+        json!(
+            LANGUAGES
+                .map(|(language, name)| json!({"id": language.code(), "title": name, "selected": language == current}))
+        )
+    };
+    choice(name, items, move |id: &str| {
+        if let Some((language, _)) = LANGUAGES
+            .into_iter()
+            .find(|(language, _)| language.code() == id)
+        {
+            connection
+                .application
+                .with(|app| app.select_language(language));
+        }
+    })
+}
+
+/// A popup button: the current choice, opening its menu.
+fn choice(
+    label: impl Fn() -> String + Copy + 'static,
+    items: impl Fn() -> serde_json::Value + Copy + 'static,
+    select: impl Fn(&str) + Clone + 'static,
+) -> ui::Control {
+    ui::text_button(
+        move || SharedString::from(format!("{} ▾", label())),
+        move || ui::popup(&items(), select.clone()),
+    )
 }
 
 /// The Host's providers beside the selected one's accounts.
@@ -253,7 +310,7 @@ fn providers(connection: Connection) -> View {
         .gap_4()
         .child(
             view().flex_row().justify_end().child(
-                ui::text_button("状態を確認", move || {
+                ui::text_button(tr("状態を確認"), move || {
                     environment::reload_providers(connection)
                 })
                 .enabled(move || environment::providers_reloadable(connection)),
@@ -286,7 +343,7 @@ fn providers(connection: Connection) -> View {
                 ))),
         )
         .child(
-            text(environment::PROVIDERS_NOTE)
+            text(environment::providers_note())
                 .text_size(px(12.0))
                 .text_color(colors::MUTED),
         )
@@ -339,10 +396,12 @@ fn provider_row(
                         .child(
                             text(move || {
                                 agent.with(|a| {
-                                    a.error
-                                        .as_ref()
-                                        .map(ToString::to_string)
-                                        .unwrap_or_else(|| a.label.clone())
+                                    localized(
+                                        a.error
+                                            .as_ref()
+                                            .map(ToString::to_string)
+                                            .unwrap_or_else(|| a.label.clone()),
+                                    )
                                 })
                             })
                             .text_size(px(12.0))

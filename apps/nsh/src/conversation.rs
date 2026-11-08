@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::ui::Enabled;
 use crate::{Connection, shared::Shared};
 use agent_core::{
@@ -115,14 +116,14 @@ fn project(
                     (Kind::Activity, item.data.body.clone().or_else(|| item.data.title.clone()).unwrap_or_default())
                 }
                 ConversationRowContent::ActivityHeader { activity } => {
-                    (Kind::Activity, activity.activity_summary)
+                    (Kind::Activity, localized(activity.activity_summary))
                 }
                 ConversationRowContent::Preparation { preparation } => {
-                    (Kind::Activity, preparation.text)
+                    (Kind::Activity, localized(preparation.text))
                 }
-                ConversationRowContent::ProviderHandoff { text } => (Kind::Activity, text),
-                ConversationRowContent::Error { error } => (Kind::Activity, error.message),
-                ConversationRowContent::InProgress { .. } => (Kind::Activity, "作業中…".into()),
+                ConversationRowContent::ProviderHandoff { text } => (Kind::Activity, localized(text)),
+                ConversationRowContent::Error { error } => (Kind::Activity, localized(error.message)),
+                ConversationRowContent::InProgress { .. } => (Kind::Activity, tr("作業中…").into()),
                 ConversationRowContent::PendingRequest { .. } => return None,
             };
             Some(Row {
@@ -226,7 +227,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                 SharedString::from(history.with(|history| {
                                     history
                                         .as_ref()
-                                        .map(|history| history.load_label.clone())
+                                        .map(|history| localized(history.load_label.clone()))
                                         .unwrap_or_default()
                                 }))
                             },
@@ -250,14 +251,16 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                             history
                                 .as_ref()
                                 .and_then(|history| history.error.as_ref())
-                                .map(ToString::to_string)
+                                .map(|error| localized(error.to_string()))
                                 .unwrap_or_default()
                         })
                     }))
             },
         ))
         .child(text(move || {
-            connection.context.with(|p| p.history_notice().unwrap_or_default())
+            connection
+                .context
+                .with(|p| p.history_notice().map(localized).unwrap_or_default())
         }))
         .child(
             virtual_list(
@@ -270,7 +273,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                         move || row.with(|r| r.as_ref().is_some_and(|r| r.kind == Kind::Activity));
                     let detail = computed(move || row.with(|r| r.as_ref().and_then(|r| r.detail.clone())));
                     let label = move || row.with(|row| row.as_ref().map(|row| {
-                        row.progress.as_ref().map(|progress| progress.label(clock.get().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()).into()).unwrap_or_else(|| row.body.clone())
+                        row.progress.as_ref().map(|progress| localized(progress.label(clock.get().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64())).into()).unwrap_or_else(|| row.body.clone())
                     }));
                     view()
                         .w_full()
@@ -387,7 +390,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                 row.with(|row| row.as_ref().is_some_and(|row| row.retry.is_some()))
                             },
                             move || {
-                                crate::ui::text_button("再試行", move || {
+                                crate::ui::text_button(tr("再試行"), move || {
                                     following.set(true);
                                     if let Some(retry) = row.with_untracked(|row| {
                                         row.as_ref().and_then(|row| row.retry.clone())
@@ -421,7 +424,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
         )
         .child(when(is_desktop, move || minimap(rows, top_row, list, following)))
         .child(when(move || !following.get(), move || {
-            crate::ui::icon_button_sized(crate::ui::Icon::ARROW_DOWN, "最新のメッセージへ", 32.0, 16.0, move || following.set(true))
+            crate::ui::icon_button_sized(crate::ui::Icon::ARROW_DOWN, tr("最新のメッセージへ"), 32.0, 16.0, move || following.set(true))
                 .bg(crate::ui::colors::RAISED)
                 .border_1()
                 .border_color(crate::ui::colors::BORDER)
@@ -594,9 +597,9 @@ fn steer_marker() -> View {
         .mr_1()
         .mb_1()
         .text_color(colors::MUTED)
-        .label("実行中の作業に追加で指示しました")
+        .label(tr("実行中の作業に追加で指示しました"))
         .child(ui::icon(Icon::STEER, 12.0))
-        .child(text("追加の指示").text_size(px(12.0)))
+        .child(text(tr("追加の指示")).text_size(px(12.0)))
 }
 
 /// A response's actions, as the desktop client's: copy, fork from here, its time.
@@ -623,7 +626,7 @@ fn response_actions(row: Memo<Option<Row>>) -> View {
         .mt_2()
         .child(ui::icon_button(
             Icon::COPY,
-            "回答をコピー",
+            tr("回答をコピー"),
             move || {
                 if let Some(row) = row.get_untracked() {
                     set_clipboard(row.body.to_string());
@@ -633,7 +636,7 @@ fn response_actions(row: Memo<Option<Row>>) -> View {
         .child(when(
             move || fork().is_some(),
             move || {
-                ui::icon_button(Icon::FORK, "ここから会話を分岐", move || {
+                ui::icon_button(Icon::FORK, tr("ここから会話を分岐"), move || {
                     if let (Some(thread_id), Some(last_turn_id)) =
                         (untracked(thread), untracked(fork))
                     {
@@ -649,7 +652,7 @@ fn response_actions(row: Memo<Option<Row>>) -> View {
             },
         ))
         .child(when(forking, || {
-            text("分岐を作成中…")
+            text(tr("分岐を作成中…"))
                 .text_size(px(12.0))
                 .text_color(colors::MUTED)
         }))
@@ -671,7 +674,7 @@ fn user_actions(row: Memo<Option<Row>>) -> View {
         .child(time(row).mr_2())
         .child(ui::icon_button(
             Icon::COPY,
-            "発言をコピー",
+            tr("発言をコピー"),
             move || {
                 if let Some(text) = body() {
                     set_clipboard(text);
@@ -680,7 +683,7 @@ fn user_actions(row: Memo<Option<Row>>) -> View {
         ))
         .child(ui::icon_button(
             Icon::PENCIL,
-            "入力欄で編集",
+            tr("入力欄で編集"),
             move || {
                 let Some(text) = body() else { return };
                 let draft_key = connection

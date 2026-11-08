@@ -1,4 +1,5 @@
 //! Capture is AVFAudio's; preparation, transcription and draft updates are core's.
+use crate::l10n::tr;
 use crate::ui::Enabled;
 use crate::{Connection, native};
 use agent_core::{client::DictationPreparation, state::DraftKey};
@@ -27,7 +28,7 @@ impl Capture {
             AVAudioApplication::requestRecordPermissionWithCompletionHandler(&permission);
         }
         if !receive.recv().await.map_err(|reason| reason.to_string())? {
-            return Err("設定アプリでBexのマイクへのアクセスを許可してください。".into());
+            return Err(tr("設定アプリでBexのマイクへのアクセスを許可してください。").into());
         }
         Ok(())
     }
@@ -51,7 +52,7 @@ impl Capture {
                 1,
                 true,
             )
-            .ok_or("録音形式を作成できませんでした。")?;
+            .ok_or(tr("録音形式を作成できませんでした。"))?;
             AVAudioRecorder::initWithURL_format_error(AVAudioRecorder::alloc(), &url, &format)
                 .map_err(|reason| reason.localizedDescription().to_string())?
         };
@@ -62,7 +63,7 @@ impl Capture {
             _session: session,
         };
         if !unsafe { capture.recorder.record() } {
-            return Err("録音を開始できませんでした。".into());
+            return Err(tr("録音を開始できませんでした。").into());
         }
         Ok(capture)
     }
@@ -71,7 +72,7 @@ impl Capture {
         // The recorder and buffer stay owned here until the sample copy completes.
         unsafe {
             if !self.recorder.isRecording() {
-                return Err("録音が中断されました。もう一度録音してください。".into());
+                return Err(tr("録音が中断されました。もう一度録音してください。").into());
             }
             self.recorder.stop();
             let url = NSURL::fileURLWithPath(&NSString::from_str(&self.file.to_string_lossy()));
@@ -85,18 +86,18 @@ impl Capture {
             let length = u32::try_from(file.length())
                 .ok()
                 .filter(|length| *length > 0)
-                .ok_or("音声を録音できませんでした。")?;
+                .ok_or(tr("音声を録音できませんでした。"))?;
             let buffer = AVAudioPCMBuffer::initWithPCMFormat_frameCapacity(
                 AVAudioPCMBuffer::alloc(),
                 &file.processingFormat(),
                 length,
             )
-            .ok_or("録音データを読み込めませんでした。")?;
+            .ok_or(tr("録音データを読み込めませんでした。"))?;
             file.readIntoBuffer_error(&buffer)
                 .map_err(|reason| reason.localizedDescription().to_string())?;
             let channels = buffer.int16ChannelData();
             if channels.is_null() {
-                return Err("録音データを読み込めませんでした。".into());
+                return Err(tr("録音データを読み込めませんでした。").into());
             }
             let samples =
                 std::slice::from_raw_parts((*channels).as_ptr(), buffer.frameLength() as usize);
@@ -137,8 +138,8 @@ impl AudioSession {
             previous
                 .session
                 .setCategory_mode_options_error(
-                    AVAudioSessionCategoryRecord.ok_or("録音を利用できません。")?,
-                    AVAudioSessionModeMeasurement.ok_or("録音を利用できません。")?,
+                    AVAudioSessionCategoryRecord.ok_or(tr("録音を利用できません。"))?,
+                    AVAudioSessionModeMeasurement.ok_or(tr("録音を利用できません。"))?,
                     AVAudioSessionCategoryOptions::empty(),
                 )
                 .map_err(|reason| reason.localizedDescription().to_string())?;
@@ -234,7 +235,7 @@ impl Dictation {
                     audio,
                     send,
                 ),
-                Err(reason) => native::message("音声入力", reason),
+                Err(reason) => native::message(tr("音声入力"), reason),
             }
         }
     }
@@ -247,7 +248,7 @@ impl Dictation {
             .child(
                 crate::ui::icon_button_sized(
                     crate::ui::Icon::MICROPHONE,
-                    "音声をCodexで文字起こし",
+                    tr("音声をCodexで文字起こし"),
                     40.0,
                     20.0,
                     move || {
@@ -261,7 +262,7 @@ impl Dictation {
                             {
                                 Ok(preparation) => preparation,
                                 Err(reason) => {
-                                    native::message("音声入力", reason.to_string());
+                                    native::message(tr("音声入力"), reason.to_string());
                                     return;
                                 }
                             };
@@ -287,7 +288,7 @@ impl Dictation {
                                         }));
                                         self.active.set(true);
                                     }
-                                    Err(reason) => native::message("音声入力", reason),
+                                    Err(reason) => native::message(tr("音声入力"), reason),
                                 }
                             });
                         }
@@ -313,7 +314,7 @@ impl Dictation {
                 move || {
                     crate::ui::icon_button_sized(
                         crate::ui::Icon::CLOSE,
-                        "録音を取り消す",
+                        tr("録音を取り消す"),
                         40.0,
                         20.0,
                         move || self.cancel(),
@@ -322,11 +323,11 @@ impl Dictation {
             ))
             .child(when(
                 move || self.requesting.get(),
-                || text("マイクの許可を確認中…"),
+                || text(tr("マイクの許可を確認中…")),
             ))
             .child(when(
                 move || connection.composer.with(|p| p.controls.transcribing),
-                || text("文字起こし中…"),
+                || text(tr("文字起こし中…")),
             ))
     }
 }

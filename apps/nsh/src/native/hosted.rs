@@ -1,4 +1,5 @@
 //! Own Swift hosting views and their callback context across the C ABI.
+use crate::l10n::tr;
 use nsh_core::JsonValue;
 use objc2::rc::Retained;
 use std::{ffi::c_void, ptr::NonNull, rc::Rc};
@@ -72,7 +73,7 @@ impl Hosted {
             let handle = NonNull::new(unsafe {
                 (bridge.create)((&mut *context as *mut ComponentContext).cast(), event)
             })
-            .ok_or_else(|| "表示を作成できませんでした。".to_owned())?;
+            .ok_or_else(|| tr("表示を作成できませんでした。").to_owned())?;
             let resource = Resource {
                 bridge,
                 handle,

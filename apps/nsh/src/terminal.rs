@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::{Connection, native, shared::Shared, workbench::Workbench};
 use agent_core::{
     panels::PanelSurface,
@@ -84,12 +85,13 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
         )
         .child(text(move || {
             if loading.get() {
-                "接続中…".to_owned()
+                tr("接続中…").to_owned()
             } else {
                 terminal.with(|terminal| {
                     terminal
                         .as_ref()
                         .and_then(|terminal| terminal.status.clone())
+                        .map(localized)
                         .unwrap_or_default()
                 })
             }
@@ -103,7 +105,7 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                 })
             },
             move || {
-                native::text_button(json!("再接続"), move || {
+                native::text_button(json!(tr("再接続")), move || {
                     if let Some(size) = size.get_untracked() {
                         start(size);
                     }

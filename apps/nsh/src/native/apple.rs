@@ -1,4 +1,5 @@
 //! The application's signed Swift framework stays loaded with its registered metadata.
+use crate::l10n::{tr, tr_format};
 use libloading::Library;
 use objc2::rc::Retained;
 use objc2_foundation::{NSBundle, NSString};
@@ -17,7 +18,7 @@ pub(super) unsafe fn symbol<T: Copy>(name: &[u8]) -> Result<T, String> {
         .get_or_init(|| {
             let directory = NSBundle::mainBundle()
                 .privateFrameworksPath()
-                .ok_or_else(|| "アプリ内のネイティブ部品が見つかりません。".to_owned())?;
+                .ok_or_else(|| tr("アプリ内のネイティブ部品が見つかりません。").to_owned())?;
             let path =
                 PathBuf::from(directory.to_string()).join("BexNshNative.framework/BexNshNative");
             // Even a symbol lookup failure must not unload registered Swift/ObjC metadata.
@@ -33,7 +34,7 @@ pub(super) unsafe fn symbol<T: Copy>(name: &[u8]) -> Result<T, String> {
 }
 
 pub(super) fn failure(reason: &str) -> Retained<PlatformView> {
-    let message = NSString::from_str(&format!("画面を開けませんでした。\n{reason}"));
+    let message = NSString::from_str(&tr_format("画面を開けませんでした。\n{0}", [&reason]));
     #[cfg(target_os = "macos")]
     {
         let label = objc2_app_kit::NSTextField::labelWithString(

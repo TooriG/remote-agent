@@ -1,4 +1,5 @@
 //! UI intents and publications cross this boundary; ClientSessions owns Host state.
+use crate::l10n::tr;
 use crate::storage::{self, Host, Storage, error};
 use agent_core::{
     client::{
@@ -207,7 +208,7 @@ impl Client {
         }
         self.sessions
             .session(host.into())
-            .ok_or_else(|| error("接続先が選択されていません"))?
+            .ok_or_else(|| error(tr("接続先が選択されていません")))?
             .dispatch(intent)
     }
 
@@ -278,7 +279,7 @@ impl Client {
                     return Err(error("client is closing"));
                 }
                 let store = session
-                    .ok_or_else(|| error("接続先が選択されていません"))?
+                    .ok_or_else(|| error(tr("接続先が選択されていません")))?
                     .ready()
                     .await?;
                 store.browser(request).await
@@ -383,7 +384,7 @@ impl Client {
             .session(host.into())
             .and_then(|session| session.store())
             .map(|store| store.prepare_dictation())
-            .ok_or_else(|| error("Host 未接続"))
+            .ok_or_else(|| error(tr("Host 未接続")))
     }
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]

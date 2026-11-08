@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::ui::Enabled;
 use crate::{Connection, shared::Shared};
 use agent_core::{
@@ -90,6 +91,7 @@ pub(crate) fn details(
                 .accessibility_label(Some(SharedString::from(item.with_untracked(|item| {
                     item.as_ref()
                         .and_then(|item| item.source.data.title.clone())
+                        .map(localized)
                         .unwrap_or_default()
                 }))))
                 .flex_row()
@@ -113,6 +115,7 @@ pub(crate) fn details(
                         item.with(|item| {
                             item.as_ref()
                                 .and_then(|item| item.source.data.title.clone())
+                                .map(localized)
                                 .unwrap_or_default()
                         })
                     })
@@ -137,15 +140,17 @@ pub(crate) fn details(
                         view()
                             .gap_2()
                             .child(text(move || {
-                                error().map(|error| error.to_string()).unwrap_or_default()
+                                error()
+                                    .map(|error| localized(error.to_string()))
+                                    .unwrap_or_default()
                             }))
                             .child(
                                 crate::ui::text_button(
                                     move || {
                                         SharedString::from(if running() {
-                                            "詳細を読み込み中…"
+                                            tr("詳細を読み込み中…")
                                         } else {
-                                            "詳細を読み込む"
+                                            tr("詳細を読み込む")
                                         })
                                     },
                                     load,

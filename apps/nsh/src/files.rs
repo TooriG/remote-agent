@@ -1,3 +1,4 @@
+use crate::l10n::{localized, tr};
 use crate::{Connection, client::Client, media::Preview, native, workbench::Workbench};
 use agent_core::{
     panels::{PanelKind, PanelScope},
@@ -107,7 +108,7 @@ impl Browser {
             if !source.starts_with('#') {
                 spawn(async move {
                     if !open_url(source).await {
-                        native::message("リンク", "このリンクを開けませんでした。");
+                        native::message(tr("リンク"), tr("このリンクを開けませんでした。"));
                     }
                 });
             }
@@ -137,11 +138,14 @@ impl Browser {
                     }) => self.open_file(path, line, host, client),
                     Err(reason) => {
                         self.preview.close();
-                        native::message("ファイル", reason);
+                        native::message(tr("ファイル"), reason);
                     }
                     _ => {
                         self.preview.close();
-                        native::message("ファイル", "ファイルの場所を確認できませんでした。");
+                        native::message(
+                            tr("ファイル"),
+                            tr("ファイルの場所を確認できませんでした。"),
+                        );
                     }
                 }
             })
@@ -261,20 +265,20 @@ pub(crate) fn screen(id: u64) -> impl Element {
         .child(text(move || key.with(|key| key.root.clone())).selectable(true).truncate().text_size(px(12.0)).w_full())
         .child(view().flex_row().items_center().gap_2()
             .child(view().flex_1())
-            .child(native::button("arrow.clockwise", "更新", move || send(FileTreeAction::Refresh)).w(px(44.0)).h(px(44.0)))
-            .child(native::button("arrow.up.left.and.arrow.down.right", "すべてのフォルダーを展開", move || send(FileTreeAction::ToggleAll))
+            .child(native::button("arrow.clockwise", tr("更新"), move || send(FileTreeAction::Refresh)).w(px(44.0)).h(px(44.0)))
+            .child(native::button("arrow.up.left.and.arrow.down.right", tr("すべてのフォルダーを展開"), move || send(FileTreeAction::ToggleAll))
                 .prop("symbol", move || json!(if tree.with(|tree| tree.all_expanded) { "arrow.down.right.and.arrow.up.left" } else { "arrow.up.left.and.arrow.down.right" }))
                 .prop("label", move || json!(tree.with(|tree| tree.toggle_all_label.clone())))
                 .prop("enabled", move || json!(tree.with(|tree| tree.can_expand_all))).w(px(44.0)).h(px(44.0))))
-        .child(native("bex.search").prop("placeholder", json!("ファイルを検索")).prop("value", move || json!(tree.with(|tree| tree.query.clone()))).on_native_event(move |event: &NativeEvent| {
+        .child(native("bex.search").prop("placeholder", json!(tr("ファイルを検索"))).prop("value", move || json!(tree.with(|tree| tree.query.clone()))).on_native_event(move |event: &NativeEvent| {
             if &*event.name == "change" && let Some(text) = event.data.as_str() { send(FileTreeAction::Query { text: text.into() }); }
         }).w_full())
-        .child(text(move || tree.with(|tree| tree.error.as_ref().map(ToString::to_string).unwrap_or_default())))
+        .child(text(move || tree.with(|tree| tree.error.as_ref().map(|error| localized(error.to_string())).unwrap_or_default())))
         .child(when(move || tree.with(|tree| tree.rows.is_empty()), move || text(move || tree.with(|tree| {
-            if tree.pending { "ファイルを読み込み中…" } else if tree.error.is_some() { "更新して再試行してください。" }
-            else if tree.query.trim().is_empty() { "ファイルはありません" } else { "一致するファイルはありません" }
+            if tree.pending { tr("ファイルを読み込み中…") } else if tree.error.is_some() { tr("更新して再試行してください。") }
+            else if tree.query.trim().is_empty() { tr("ファイルはありません") } else { tr("一致するファイルはありません") }
         }))))
-        .child(when(move || tree.with(|tree| tree.truncated), || text("ほかにも一致する項目があります。検索語を絞り込んでください。")))
+        .child(when(move || tree.with(|tree| tree.truncated), || text(tr("ほかにも一致する項目があります。検索語を絞り込んでください。"))))
         .child(native("bex.list").prop("items", move || json!(tree.with(|tree| tree.rows.iter().map(|row| json!({
             "id": row.path, "title": row.label,
             "symbol": if row.kind == agent_protocol::file_tree::EntryKind::Directory { "folder" } else { "" },

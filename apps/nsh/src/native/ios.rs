@@ -1,5 +1,6 @@
 //! Standard UIKit objects, hosted through NSH's native-component API.
 //! No drawing, hit testing, menu layout, font metrics or navigation is replaced.
+use crate::l10n::tr;
 use block2::RcBlock;
 use nsh_core::JsonValue;
 use nsh_platform_ios::{ComponentContext, Components, NativeComponent};
@@ -445,7 +446,7 @@ impl Search {
         let delegate = SearchDelegate::new(mtm, context.clone());
         let view = UISearchBar::initWithFrame(UISearchBar::alloc(mtm), CGRect::ZERO);
         view.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-        view.setPlaceholder(Some(&NSString::from_str("チャットを検索")));
+        view.setPlaceholder(Some(&NSString::from_str(tr("チャットを検索"))));
         context.set_size(
             0.0,
             view.sizeThatFits(CGSize::new(320.0, f64::MAX)).height as f32,
@@ -491,9 +492,9 @@ impl Toolbar {
         let mtm = MainThreadMarker::new().unwrap();
         let view = UIToolbar::initWithFrame(UIToolbar::alloc(mtm), CGRect::ZERO);
         let items = [
-            (UIBarButtonSystemItem::Search, "search", "検索"),
+            (UIBarButtonSystemItem::Search, "search", tr("検索")),
             (UIBarButtonSystemItem::FlexibleSpace, "", ""),
-            (UIBarButtonSystemItem::Compose, "compose", "新しい会話"),
+            (UIBarButtonSystemItem::Compose, "compose", tr("新しい会話")),
         ]
         .into_iter()
         .map(|(kind, id, label)| {

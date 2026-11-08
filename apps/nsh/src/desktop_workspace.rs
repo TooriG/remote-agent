@@ -1,5 +1,6 @@
 //! Native workspace controls consume Core publications and keep Host operations in Core.
 use crate::details::WorkspaceSummary;
+use crate::l10n::tr;
 use crate::{Connection, workbench::Workbench};
 use agent_core::{
     panels::PanelKind,
@@ -22,7 +23,7 @@ pub(crate) fn choose_folder(connection: Connection) {
                 }
             }
             Ok(None) => {}
-            Err(reason) => crate::native::message("フォルダー", reason),
+            Err(reason) => crate::native::message(tr("フォルダー"), reason),
         }
     });
 }
@@ -150,8 +151,8 @@ fn summary_card(
         .bg(colors::RAISED)
         .text_color(colors::FOREGROUND)
         .child(heading(
-            "ワークスペース",
-            ui::icon_button(Icon::REFRESH, "変更を更新", move || act(Action::Refresh))
+            tr("ワークスペース"),
+            ui::icon_button(Icon::REFRESH, tr("変更を更新"), move || act(Action::Refresh))
                 .enabled(move || enabled() && has_directory()),
         ))
         .child(
@@ -178,7 +179,7 @@ fn summary_card(
                         .disabled(move || !has_directory() || summary.with(|s| s.editor.is_none())),
                     )
                     .child(
-                        ui::icon_button(Icon::CHEVRON_DOWN, "エディターを選択", move || {
+                        ui::icon_button(Icon::CHEVRON_DOWN, tr("エディターを選択"), move || {
                             let editors = summary.with_untracked(|s| {
                                 s.editors
                                     .iter()
@@ -207,7 +208,7 @@ fn summary_card(
             },
         ))
         .child(
-            row(Icon::REPLACE, || "変更".to_owned())
+            row(Icon::REPLACE, || tr("変更").to_owned())
                 .on_press(move || act(Action::Diff))
                 .disabled(move || !enabled() || !has_directory())
                 .child(
@@ -223,14 +224,14 @@ fn summary_card(
         )
         .child(view().h(px(1.0)).my_2().bg(colors::BORDER))
         .child(heading(
-            "ソース",
-            ui::icon_button(Icon::PLUS, "ソースを追加", move || act(Action::Attach))
+            tr("ソース"),
+            ui::icon_button(Icon::PLUS, tr("ソースを追加"), move || act(Action::Attach))
                 .enabled(enabled),
         ))
         .child(when(
             move || summary.with(|s| s.sources.is_empty()),
             || {
-                text("添付ファイルがここに表示されます")
+                text(tr("添付ファイルがここに表示されます"))
                     .py_2()
                     .text_size(px(14.0))
                     .line_height(px(20.0))
@@ -247,7 +248,7 @@ fn summary_card(
             },
         ))
         .child(
-            row(Icon::FOLDER, || "すべてのファイル".to_owned())
+            row(Icon::FOLDER, || tr("すべてのファイル").to_owned())
                 .on_press(move || act(Action::Files))
                 .disabled(move || !enabled()),
         )
@@ -324,7 +325,7 @@ pub(crate) fn draft_hero() -> View {
         if !items.is_empty() {
             items.push(json!({"separator": true}));
         }
-        items.push(json!({"id": CHOOSE_FOLDER, "title": "フォルダを選択…"}));
+        items.push(json!({"id": CHOOSE_FOLDER, "title": tr("フォルダを選択…")}));
         ui::popup(&json!(items), move |id| {
             if id == CHOOSE_FOLDER {
                 choose_folder(connection);
@@ -342,13 +343,17 @@ pub(crate) fn draft_hero() -> View {
         .child(when(
             move || !chat(),
             move || {
+                // The project menu takes the template's slot, wherever the language puts it.
+                let headline = tr("{0}で何を作りますか？");
+                let (before, after) = headline.split_once("{0}").unwrap_or((headline, ""));
                 view()
                     .flex_row()
                     .items_center()
                     .justify_center()
                     .max_w(relative(1.0))
+                    .child(text(before).text_size(px(30.0)))
                     .child(project_menu(project, 30.0, colors::FOREGROUND, choose))
-                    .child(text("で何を作りますか？").text_size(px(30.0)))
+                    .child(text(after).text_size(px(30.0)))
             },
         ))
         .child(when(
@@ -359,15 +364,15 @@ pub(crate) fn draft_hero() -> View {
                     .text_color(colors::MUTED)
                     .hover(|s| s.text_color(colors::FOREGROUND))
                     .on_press(move || connection.dispatch(Intent::NewChat { cwd: String::new() }))
-                    .child(text("プロジェクトなしで始める").text_size(px(14.0)))
+                    .child(text(tr("プロジェクトなしで始める")).text_size(px(14.0)))
             },
         ))
         .child(when(chat, || {
-            text("何に取り組みますか？").text_size(px(30.0))
+            text(tr("何に取り組みますか？")).text_size(px(30.0))
         }))
         .child(when(chat, move || {
             project_menu(
-                || "プロジェクトなし".to_owned(),
+                || tr("プロジェクトなし").to_owned(),
                 14.0,
                 colors::MUTED,
                 choose,
@@ -392,7 +397,7 @@ fn project_menu(
         .rounded(px(ui::RADIUS))
         .text_color(color)
         .hover(|s| s.bg(colors::GHOST_HOVER))
-        .accessibility_label(Some(SharedString::from("プロジェクトを選択")))
+        .accessibility_label(Some(SharedString::from(tr("プロジェクトを選択"))))
         .on_press(choose)
         .child(
             text(label)
