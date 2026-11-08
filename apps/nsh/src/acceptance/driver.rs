@@ -21,7 +21,7 @@
 //! with `BEX_ACCEPTANCE_RESUME`, and the driver goes on after the steps the file
 //! already records. A `capture` step's artifact is its screenshot; its views
 //! are the `.json` beside it.
-use super::script::{Find, Key, Line, Modifiers, Step};
+use super::script::{Composition, Find, Key, Line, Modifiers, Step};
 use objc2::{
     MainThreadMarker, Message, msg_send,
     rc::Retained,
@@ -237,6 +237,7 @@ fn limit(step: &Step) -> Duration {
     match step {
         Step::Press(find)
         | Step::Type(find, _)
+        | Step::Compose(find, _)
         | Step::Paste(find)
         | Step::Undo(find)
         | Step::Scroll(find, ..)
@@ -299,6 +300,12 @@ fn attempt(
                 if actual { "enabled" } else { "disabled" }.into(),
             )
         }),
+        Step::Compose(find, composition) => {
+            on_element(&Tree::read(mtm, menus), find, |tree, index| {
+                compose(tree, index, composition)
+                    .map(|()| format!("{composition:?} in {}", tree.nodes[index].describe()))
+            })
+        }
         Step::ExpectHeight(find, points, above) => {
             element_is(&Tree::read(mtm, menus), find, |object| {
                 let frame: NSRect = unsafe { msg_send![object, accessibilityFrame] };
@@ -1049,6 +1056,38 @@ fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
             unsafe { msg_send![&*responder, insertText: &*text, replacementRange: nowhere] };
     } else {
         let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
+    }
+    Ok(())
+}
+
+/// Takes `composition` as AppKit hands an input method's work to the focused
+/// text view: no input source changes, so the user's is never touched.
+fn compose(tree: &Tree, index: usize, composition: &Composition) -> Result<(), String> {
+    let responder = editor(tree, index)?;
+    if !responds(
+        &responder,
+        sel!(setMarkedText:selectedRange:replacementRange:),
+    ) {
+        return Err(format!("{} takes no composition", tree.nodes[index].describe()));
+    }
+    // No replacement range: the marked text, or else the selection.
+    let marked = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+    match composition {
+        Composition::Mark(text) => {
+            let caret = NSRange::new(text.encode_utf16().count(), 0);
+            let text = NSString::from_str(text);
+            let _: () = unsafe {
+                msg_send![&*responder, setMarkedText: &*text, selectedRange: caret, replacementRange: marked]
+            };
+        }
+        Composition::Commit(text) => {
+            let text = NSString::from_str(text);
+            let _: () =
+                unsafe { msg_send![&*responder, insertText: &*text, replacementRange: marked] };
+        }
+        Composition::Unmark => {
+            let _: () = unsafe { msg_send![&*responder, unmarkText] };
+        }
     }
     Ok(())
 }

@@ -100,7 +100,10 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Conversation: a turn's work that fails to load shows why under the opened row, with a retry | not yet | the Host reads turn details from its transcript database, which it holds open in one SQLite connection for its lifetime; making the file unreadable from outside (chmod, swapping it) does not fail the read, and the provider is asked only for conversations never saved. The core context test covers the state; the view was checked by hand with a temporary Host failure |
 | Conversation: steering a running turn, minimap beside the lane | covered | steering, queued-input, minimap |
 | Conversation: live Thinking and work rows (T3 Code's shimmer), expandable thoughts | covered | thinking, live-work; the shimmer itself is screenshot evidence only |
+| Conversation: one without a message yet (a side chat's) opens empty and sends its first message | covered | empty-conversation |
 | Composer: model picker | covered | model-picker |
+| Composer: why a send waits (another agent chosen while the conversation works) | covered | provider-switch |
+| Composer: Japanese input method (confirming return, sending while composing) | covered | input-method |
 | Composer: DeepSeek's OpenRouter route, Flash 4.1 pick and models | covered | openrouter |
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: controls fit narrow windows, none cut off | covered | composer-narrow |

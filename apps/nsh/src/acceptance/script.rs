@@ -27,6 +27,12 @@
 //!   on the middle of the first element `<label>` names (a link in text
 //!   included), with `<modifiers>` held: `none`, or `cmd`, `shift`, `option`
 //!   and `ctrl` joined by `+`.
+//! - `mark <label> <text> [after <anchor>] [timeout-ms]`: focuses that element
+//!   and makes `<text>` its input method's marked text, replacing the marked
+//!   text before it, as a Japanese input method does while converting.
+//! - `commit <label> <text> ...` / `unmark <label> ...`: ends that composition
+//!   as an input method does, inserting `<text>` in place of the marked text or
+//!   accepting the marked text as it is.
 //! - `expect <text> [after <anchor>] [timeout-ms]` / `expect_absent ...`: waits
 //!   until some element's text contains `<text>`, or none does.
 //! - `expect_count <text> <n> [after <anchor>] [timeout-ms]`: waits until
@@ -111,6 +117,8 @@ pub(crate) enum Step {
     WithoutCodex,
     Press(Find),
     Type(Find, String),
+    /// An input method's composition in the element: what it marks or commits.
+    Compose(Find, Composition),
     Key(Key),
     Click(Modifiers, Find),
     Expect(Find),
@@ -155,6 +163,18 @@ pub(crate) enum Step {
     Screenshot(String),
     Dump(String),
     Capture(String),
+}
+
+/// A step of an input method's composition, as AppKit's `NSTextInputClient`
+/// receives it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Composition {
+    /// `setMarkedText:selectedRange:replacementRange:` with this text.
+    Mark(String),
+    /// `insertText:replacementRange:` with this text, replacing the marked text.
+    Commit(String),
+    /// `unmarkText`: the marked text stays as it is.
+    Unmark,
 }
 
 /// What a step looks for, and how long it waits for it.
@@ -288,6 +308,13 @@ fn step(words: &[String]) -> Result<Step, String> {
             },
             find(target, rest)?,
         ),
+        ("mark", [target, text, rest @ ..]) => {
+            Step::Compose(find(target, rest)?, Composition::Mark((*text).to_owned()))
+        }
+        ("commit", [target, text, rest @ ..]) => {
+            Step::Compose(find(target, rest)?, Composition::Commit((*text).to_owned()))
+        }
+        ("unmark", [target, rest @ ..]) => Step::Compose(find(target, rest)?, Composition::Unmark),
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
         ("expect_apart", [text, other, rest @ ..]) => {
@@ -680,6 +707,31 @@ mod tests {
         );
         assert_eq!(lines[0].number, 2);
         assert_eq!(lines[3].source, "press \"新しい チャット\"");
+    }
+
+    #[test]
+    fn compositions_mark_commit_or_unmark_an_element() {
+        let steps: Vec<_> = parse("mark 入力 か\ncommit 入力 会話 after 見出し\nunmark 入力 500\n")
+            .unwrap()
+            .into_iter()
+            .map(|line| line.step)
+            .collect();
+        let field = |after: Option<&str>, timeout| Find {
+            text: "入力".into(),
+            after: after.map(Into::into),
+            timeout,
+        };
+        assert_eq!(
+            steps,
+            [
+                Step::Compose(field(None, DEFAULT_TIMEOUT), Composition::Mark("か".into())),
+                Step::Compose(
+                    field(Some("見出し"), DEFAULT_TIMEOUT),
+                    Composition::Commit("会話".into())
+                ),
+                Step::Compose(field(None, Duration::from_millis(500)), Composition::Unmark),
+            ]
+        );
     }
 
     #[test]
