@@ -10,6 +10,11 @@ press 発言をコピー
 expect_clipboard "[selection] [immediate] 回答を選択します"
 press 回答をコピー
 expect_clipboard "Second paragraph stays unselected."
+# A selection in the user's message copies with ⌘C, the Edit menu's Copy.
+select "*回答を選択します" 回答 after 右パネルを切り替え
+activate
+key cmd+c
+expect_clipboard 回答
 select "*Needle Alpha*" Alpha
 menu "*Needle Alpha*"
 press チャットに追加

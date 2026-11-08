@@ -43,8 +43,8 @@ first; the note says which), **n/a** (no Mac equivalent).
 | DeviceNavigationUITests.testPhysicalDeviceCanPairWithManualPayload | n/a | physical device |
 | DictationUITests.testSimulatorDictationContinuesPastThirtySecondsAndReachesHost | not yet | recording needs the system's microphone permission, whose prompt reaches the user running the scenarios; the driver can only decline it |
 | DictationUITests.testSimulatorDictationPermissionDenialPreservesDraftAndSend | covered | dictation-denied (`microphone deny`) |
-| HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | not yet | needs a long conversation that is still running |
-| HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | not yet | `scroll` works; the reading position is screenshot evidence only |
+| HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | not yet | the reading position is not observable: NSH's conversation list gives accessibility no scroll area or position, only the rows it has made |
+| HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | not yet | `scroll` works, but the reading position is not observable (as above) |
 | HistoryUITests.testSimulatorRendersVisualizationAndReopensIt | partial | visualization (the Mac offers the file and opens it in the tool panel; it does not render it inline) |
 | HistoryUITests.testSimulatorRendersMarkdownTableAndReopensIt | covered | markdown-table |
 | HistoryUITests.testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText | covered | long-markdown |
@@ -73,11 +73,11 @@ first; the note says which), **n/a** (no Mac equivalent).
 | SynchronizationUITests.testSimulatorFetchesNewTaskWhenReturningToList | n/a | the Mac sidebar is always shown |
 | SynchronizationUITests.testSimulatorMarksUnseenCompletionUntilOpened | covered | unseen-completion |
 | SynchronizationUITests.testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt | covered | queued-input |
-| TurnUITests.testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions | not yet | the reading position is screenshot evidence only |
+| TurnUITests.testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions | not yet | the reading position is not observable (as above) |
 | TurnUITests.testSimulatorSelectsPluginAndSkillFromComposer | covered | composer (skills; the fixture lists no plugins) |
 | TurnUITests.testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft | covered | message-actions |
 | TurnUITests.testSimulatorOpensSideChatWithoutLosingOriginalDraft | covered | side-chat |
-| TurnUITests.testSimulatorCopiesSelectedOrWholeUserMessageText | partial | message-actions (whole messages); copying a selection uses the system menu, whose titles follow the system language |
+| TurnUITests.testSimulatorCopiesSelectedOrWholeUserMessageText | covered | message-actions (whole messages, and a selection in the user's message with ⌘C) |
 | TurnUITests.testSimulatorKeepsChatUnassignedAfterSendingAndReopening | covered | send-message |
 | TurnUITests.testSimulatorApprovalEditorAndDraftSurviveReconnect | covered | relaunch-draft (approval, a saved edit in the diff, and the draft after `relaunch`) |
 | WorktreeUITests.testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus | covered | merged-worktrees |
@@ -110,4 +110,4 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Accessibility: VoiceOver reads in the visual order | blocked | on an NSH patch. NSH's virtual list keeps its cells by recycling slot (nsh-core `core/components.rs`, `VirtualListState::cells`), and nsh-platform-macos `src/view.rs` `accessibility_children` (the `accessibilityChildren` override) returns AppKit's subview order, so a recycled list reads in slot order: a conversation reads a turn's "3秒 作業しました" before the user's message above it. The fix: in that override, for a virtual list's cell container, return the cells sorted by row position (frame top first, in the flipped view's coordinates), the rest unchanged. The sidebar, main column, header, composer (left to right), right panel, settings and sheets already read in visual order |
 | Onboarding without a Host | n/a | the desktop app always lists this PC's Host and starts it when needed, so the Mac never lacks one; pairing another PC is in the environment settings (environment-settings) |
 | Keyboard shortcuts | partial | composer (Return sends), terminal-paste (⌘V), model-picker (Escape closes it); the desktop client's completion keys are missing: with the completion list open, Return sends the draft instead of choosing, and Escape leaves the list open (GPUI's composer `completion_key`); owned by nsh-parity-composer |
-| Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet |
+| Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet: the desktop client drew Mermaid blocks (core's `markdown_diagram`), NSH shows them as code |

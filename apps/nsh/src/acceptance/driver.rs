@@ -1056,6 +1056,13 @@ fn select(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
         value[..start].encode_utf16().count(),
         text.encode_utf16().count(),
     );
+    // A drag takes the keyboard focus to the text it selects, where the Edit
+    // menu's Copy then acts.
+    if let (Some(view), Some(window)) = (object.downcast_ref::<NSView>(), &node.window)
+        && view.acceptsFirstResponder()
+    {
+        window.makeFirstResponder(Some(view));
+    }
     let _: () = unsafe { msg_send![&**object, setAccessibilitySelectedTextRange: range] };
     Ok(())
 }
