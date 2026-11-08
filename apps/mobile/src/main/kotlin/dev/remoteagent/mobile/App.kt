@@ -735,7 +735,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
                     ModelPickerDialog(model.settings, selected, model::perform, dismiss)
                 },
             ) { transferState ->
-                AttachmentButton(model.selectionKey, model::attach, transferState)
+                AttachmentButton(model.selectionKey, model::attach, model.composer.canAttach(), transferState)
             }
         }
     }

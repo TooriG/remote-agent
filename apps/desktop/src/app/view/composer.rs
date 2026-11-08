@@ -349,13 +349,7 @@ impl ComposerContent {
                     cx,
                     |_, _, cx| cx.emit(ComposerAction::Send),
                 )
-                .disabled(
-                    !model.connected
-                        || !model.provider_available
-                        || model.busy
-                        || empty
-                        || model.input_unavailable.is_some(),
-                )
+                .disabled(!model.can_send || model.busy)
             });
             let microphone = Button::new("dictation-toggle")
                 .icon(Icon::default().path("icons/microphone.svg").size(px(20.)))
@@ -365,7 +359,7 @@ impl ComposerContent {
                 .large()
                 .tooltip(language.text("音声をCodexで文字起こし"))
                 .accessibility_label(language.text("音声をCodexで文字起こし"))
-                .disabled(!model.connected || model.busy)
+                .disabled(!model.can_dictate || model.busy)
                 .on_click(cx.listener(|s, _, window, cx| {
                     s.input.read(cx).focus_handle(cx).focus(window, cx);
                     cx.emit(ComposerAction::StartDictation);
@@ -537,7 +531,7 @@ impl ComposerContent {
                                 .h(px(40.))
                                 .large()
                                 .disabled(
-                                    !model.connected
+                                    !model.can_attach
                                         || (!model.remote.is_none() && model.cwd.is_empty())
                                         || model.busy,
                                 ),
@@ -662,6 +656,10 @@ struct ComposerModel {
     empty: bool,
     connected: bool,
     busy: bool,
+    /// Core availability; `busy` adds this window's own local work.
+    can_send: bool,
+    can_dictate: bool,
+    can_attach: bool,
     provider_available: bool,
     input_unavailable: Option<String>,
     phase: Option<Phase>,
@@ -688,15 +686,19 @@ impl Desktop {
         let composer = &self.publication.composer;
         let controls = &composer.controls;
         let permission = &self.publication.settings.permission;
+        let empty = self.composer.input.read(cx).value().trim().is_empty()
+            && composer.draft.attachments.is_empty();
         ComposerModel {
             key: controls.navigation.draft_key.clone(),
             session: controls.navigation.thread_id.clone(),
             attachments: composer.draft.attachments.clone(),
             running: controls.running_turn.clone(),
-            empty: self.composer.input.read(cx).value().trim().is_empty()
-                && composer.draft.attachments.is_empty(),
+            empty,
             connected: controls.connected,
             busy: self.busy(),
+            can_send: composer.can_send(!empty),
+            can_dictate: composer.can_dictate(),
+            can_attach: composer.can_attach(),
             provider_available: controls.provider.is_some(),
             input_unavailable: controls.unavailable.clone(),
             phase: self.dictation.as_ref().map(|state| state.phase),

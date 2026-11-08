@@ -127,7 +127,6 @@ struct ThreadScreen: View {
         .background(Color(UIColor.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ConversationComposer(model: model, mediaPresentation: mediaPresentation,
-                                 hasConversation: conversation != nil,
                                  isSideChat: isSideChat, openTools: openTools)
         }
     }
