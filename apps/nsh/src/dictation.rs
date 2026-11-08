@@ -216,7 +216,7 @@ impl Dictation {
         this
     }
 
-    fn cancel(self) {
+    pub fn cancel(self) {
         self.generation.update(|value| *value += 1);
         self.recording.replace(None);
         self.active.set(false);

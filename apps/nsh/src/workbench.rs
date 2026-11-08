@@ -436,9 +436,25 @@ fn layout_menu(workspace: Workbench) {
     });
 }
 
-/// T3 Code's empty panel: the tools as rows under a heading.
+/// T3 Code's empty panel: the tools as rows under a heading, each with its
+/// key. As T3 Code's launcher it takes the keyboard, so a tool's key opens it
+/// until a text field is focused again.
 fn picker() -> impl IntoElement {
     use ui::colors;
+    if is_desktop() {
+        dismiss_keyboard();
+        // Which tools are enabled changes; their keys do not.
+        for tool in agent_core::panels::panel_tools(false, false) {
+            on_key_with(
+                &tool.shortcut.to_lowercase(),
+                KeyOptions {
+                    when: nsh_core::keymap::When::NotEditing,
+                    repeat: false,
+                },
+                move |_| open_tool(&tool.key),
+            );
+        }
+    }
     view()
         .flex_1()
         .min_h_0()
@@ -461,7 +477,12 @@ fn picker() -> impl IntoElement {
                     tools,
                     |tool: &PanelTool| tool.key.clone(),
                     move |tool, _| {
-                        let PanelTool { kind, label, .. } = tool.get_untracked();
+                        let PanelTool {
+                            kind,
+                            label,
+                            shortcut,
+                            ..
+                        } = tool.get_untracked();
                         nsh_base::button()
                             .flex_row()
                             .items_center()
@@ -482,6 +503,11 @@ fn picker() -> impl IntoElement {
                                     .text_size(px(14.0))
                                     .number_of_lines(1),
                             )
+                            .child(when(is_desktop, move || {
+                                text(shortcut.clone())
+                                    .text_size(px(12.0))
+                                    .text_color(colors::MUTED)
+                            }))
                     },
                 )),
         )

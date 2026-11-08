@@ -16,8 +16,6 @@
 //!   same name in the conversation).
 //! - `type <label> <text> [after <anchor>] [timeout-ms]`: focuses that element
 //!   and inserts `<text>`.
-//! - `paste <label> [after <anchor>] [timeout-ms]`: focuses that element and
-//!   inserts the clipboard's text, as the Edit menu's Paste does.
 //! - `key <name>`: a key with optional modifiers, as `return`, `escape`, `cmd+,`
 //!   or `shift+f10`.
 //! - `click <modifiers> <label> [after <anchor>] [timeout-ms]`: a mouse click
@@ -43,6 +41,13 @@
 //!   `choose` reads it) exists and is not empty.
 //! - `expect_clipboard <text> [timeout-ms]`: waits until the clipboard's text
 //!   contains `<text>`. The driver restores the clipboard when the scenario ends.
+//! - `copy <text>` / `copy_image [text]`: puts `<text>` on the clipboard, or an
+//!   image with `[text]` beside it, as a screenshot tool or a page copies one.
+//! - `paste <label> [after <anchor>] [timeout-ms]`: focuses that element and
+//!   pastes the clipboard into it, as Edit > Paste does (a posted ⌘V reaches
+//!   no field while the app is in the background).
+//! - `undo <label> [after <anchor>] [timeout-ms]`: focuses that element and
+//!   undoes its last edit, as Edit > Undo does.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -64,7 +69,6 @@ pub(crate) enum Step {
     Control(String),
     Press(Find),
     Type(Find, String),
-    Paste(Find),
     Key(Key),
     Click(Modifiers, Find),
     Expect(Find),
@@ -81,6 +85,13 @@ pub(crate) enum Step {
     Choose(String),
     ExpectFile(String, Duration),
     ExpectClipboard(String, Duration),
+    /// Text for the clipboard, with an image when `image`.
+    Copy {
+        text: String,
+        image: bool,
+    },
+    Paste(Find),
+    Undo(Find),
     Wait(Duration),
     Screenshot(String),
     Dump(String),
@@ -194,7 +205,6 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("first-launch", []) => Step::FirstLaunch,
         ("press", [target, rest @ ..]) => Step::Press(find(target, rest)?),
         ("type", [target, text, rest @ ..]) => Step::Type(find(target, rest)?, (*text).to_owned()),
-        ("paste", [target, rest @ ..]) => Step::Paste(find(target, rest)?),
         ("key", [name]) => Step::Key(key(name)?),
         ("click", [held, target, rest @ ..]) => Step::Click(
             if *held == "none" {
@@ -230,6 +240,20 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("expect_clipboard", [text, timeout]) => {
             Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
         }
+        ("copy", [text]) => Step::Copy {
+            text: (*text).to_owned(),
+            image: false,
+        },
+        ("copy_image", []) => Step::Copy {
+            text: String::new(),
+            image: true,
+        },
+        ("copy_image", [text]) => Step::Copy {
+            text: (*text).to_owned(),
+            image: true,
+        },
+        ("paste", [target, rest @ ..]) => Step::Paste(find(target, rest)?),
+        ("undo", [target, rest @ ..]) => Step::Undo(find(target, rest)?),
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
@@ -360,10 +384,10 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\nfirst-launch\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             paste 接続情報\nscroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png\n\
-             expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
-             dump tree_1\n",
+             expect_clipboard \"a b\" 500\ncopy \"a b\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
+             fixture /release-inputs\nwait 250\nscreenshot after-send\ndump tree_1\n",
         )
         .unwrap();
         let steps: Vec<_> = lines.iter().map(|line| line.step.clone()).collect();
@@ -392,11 +416,6 @@ mod tests {
                 }),
                 Step::ExpectAbsent(Find {
                     text: "x".into(),
-                    after: None,
-                    timeout: DEFAULT_TIMEOUT
-                }),
-                Step::Paste(Find {
-                    text: "接続情報".into(),
                     after: None,
                     timeout: DEFAULT_TIMEOUT
                 }),
@@ -442,6 +461,28 @@ mod tests {
                 ),
                 Step::ExpectFile("/tmp/b.png".into(), DEFAULT_TIMEOUT),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
+                Step::Copy {
+                    text: "a b".into(),
+                    image: false
+                },
+                Step::Copy {
+                    text: String::new(),
+                    image: true
+                },
+                Step::Copy {
+                    text: "説明".into(),
+                    image: true
+                },
+                Step::Paste(Find {
+                    text: "入力欄".into(),
+                    after: Some("見出し".into()),
+                    timeout: DEFAULT_TIMEOUT
+                }),
+                Step::Undo(Find {
+                    text: "入力欄".into(),
+                    after: None,
+                    timeout: Duration::from_millis(500)
+                }),
                 Step::Control("/release-inputs".into()),
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
@@ -556,6 +597,11 @@ mod tests {
             (
                 "expect_clipboard a b c",
                 "line 1: unknown step or wrong arguments: expect_clipboard",
+            ),
+            ("copy", "line 1: unknown step or wrong arguments: copy"),
+            (
+                "copy_image a b",
+                "line 1: unknown step or wrong arguments: copy_image",
             ),
             (
                 "fixture release-inputs",

@@ -88,7 +88,7 @@ pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> imp
     }
     #[cfg(not(target_os = "macos"))]
     {
-        ui::labeled_button(Icon::MONITOR, name, move || {
+        ui::labeled_button(Icon::MONITOR, name, name, move || {
             ui::popup(&untracked(items), select)
         })
         .child(ui::icon(Icon::CHEVRON_DOWN, 14.0))

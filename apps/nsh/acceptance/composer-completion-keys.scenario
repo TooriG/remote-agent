@@ -1,0 +1,25 @@
+# As the desktop client's composer, the completion list answers the keys while
+# the field keeps the focus: the arrows move the highlight, Return inserts the
+# highlighted skill instead of sending, and Escape closes the list. The list
+# shows fixture-explain above fixture-review.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "/"
+expect "Explain fixture code" 10000
+key down
+screenshot highlighted
+key return
+expect "$fixture-review" 10000
+expect_absent "Review fixture changes"
+type "AI に依頼する" "/"
+expect "Explain fixture code" 10000
+key down
+key up
+key return
+expect "$fixture-review $fixture-explain" 10000
+type "AI に依頼する" "/"
+expect "Review fixture changes" 10000
+key escape
+expect_absent "Review fixture changes"
+expect "$fixture-review $fixture-explain /"
+expect_absent "シミュレータで完了しました。"

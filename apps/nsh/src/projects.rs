@@ -85,6 +85,53 @@ pub(crate) fn header_menu(
     json!(items)
 }
 
+/// Adds a folder the user picks as a project of this device's Host, which
+/// starts a chat in it; a WSL distro's folder goes to that distro's Host.
+pub(crate) fn add_folder(
+    application: Stored<Arc<Application>>,
+    host: &str,
+    sources: &[ListSource],
+) {
+    if !is_desktop() || host != "local" {
+        return;
+    }
+    let Some(scope) = sources
+        .iter()
+        .find(|source| source.scope.host == host)
+        .map(|source| source.scope.clone())
+    else {
+        return;
+    };
+    let choice = pick_paths(nsh_core::file_dialog::OpenDialog::folders());
+    spawn(async move {
+        match choice.await {
+            Ok(Some(paths)) => {
+                if let Some(path) = paths.into_iter().next() {
+                    application.with(|application| {
+                        match application.open_wsl_folder(&path, |cwd| {
+                            Intent::AddProject(op::AddProject { cwd })
+                        }) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                application.list_action(
+                                    &scope,
+                                    Intent::AddProject(op::AddProject {
+                                        cwd: path.to_string_lossy().into_owned(),
+                                    }),
+                                    false,
+                                );
+                            }
+                            Err(reason) => native::message(tr("プロジェクトを追加"), reason),
+                        }
+                    });
+                }
+            }
+            Ok(_) => {}
+            Err(reason) => native::message(tr("プロジェクトを追加"), reason),
+        }
+    });
+}
+
 #[derive(Clone, PartialEq)]
 struct Editor {
     id: String,
@@ -127,7 +174,9 @@ impl Projects {
 
     pub fn select(self, command: &str) {
         if command == "add" {
-            self.pick_folder();
+            self.sources.with_untracked(|sources| {
+                add_folder(self.application, &self.host.get_untracked(), sources)
+            });
             return;
         }
         let Ok(command) = serde_json::from_str::<Command>(command) else {
@@ -187,48 +236,6 @@ impl Projects {
             ),
             _ => unreachable!("project operations resolve in Core"),
         }
-    }
-
-    fn pick_folder(self) {
-        if !is_desktop() || self.host.get_untracked() != "local" {
-            return;
-        }
-        let Some(scope) = self.sources.with_untracked(|sources| {
-            sources
-                .iter()
-                .find(|source| source.scope.host == self.host.get_untracked())
-                .map(|source| source.scope.clone())
-        }) else {
-            return;
-        };
-        let choice = pick_paths(nsh_core::file_dialog::OpenDialog::folders());
-        spawn(async move {
-            match choice.await {
-                Ok(Some(paths)) => {
-                    if let Some(path) = paths.into_iter().next() {
-                        self.application.with(|application| {
-                            match application.open_wsl_folder(&path, |cwd| {
-                                Intent::AddProject(op::AddProject { cwd })
-                            }) {
-                                Ok(true) => {}
-                                Ok(false) => {
-                                    application.list_action(
-                                        &scope,
-                                        Intent::AddProject(op::AddProject {
-                                            cwd: path.to_string_lossy().into_owned(),
-                                        }),
-                                        false,
-                                    );
-                                }
-                                Err(reason) => native::message(tr("プロジェクトを追加"), reason),
-                            }
-                        });
-                    }
-                }
-                Ok(_) => {}
-                Err(reason) => native::message(tr("プロジェクトを追加"), reason),
-            }
-        });
     }
 
     /// Saves the open editor's labels once Core accepts them; a rejection stays

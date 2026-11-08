@@ -96,8 +96,12 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork |
 | Conversation: steering a running turn, minimap | covered | steering, queued-input |
 | Composer: model picker | covered | model-picker |
+| Composer: DeepSeek's OpenRouter route, Flash 4.1 pick and models | covered | openrouter |
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
+| Composer: paste text at the selection and undo it, paste an image | partial | composer-paste; text copied with an image is pasted too (T3 Code leaves it out), since NSH settles a paste's text before the app hears of it |
+| Composer: Escape discards a recording | not yet | dictation needs microphone permission |
+| Composer: folder menu (no project, a project, another folder) | covered | folder-menu |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
 | Changed-files bar and review | covered | review-panel, worktree-review, diff-files (a file row opens the diff at that file) |
 | Diff: binary files, file menu, copying the diff | covered | diff-files |
@@ -117,5 +121,5 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Settings: importing existing projects | partial | onboarding (the same import as the first run); opening it from the settings has no scenario |
 | Settings: phone connection QR code, copying the invitation, allowed devices | covered | phone-pairing |
 | Settings: adding a PC over SSH or a pasted invitation, removing a saved connection | partial | saved-connections (an SSH destination that would be an option is refused; no SSH server runs) |
-| Keyboard shortcuts | partial | composer (Return sends); the app binds no other shortcut (⌘, does nothing) |
+| Keyboard shortcuts | partial | composer (Return sends), composer-completion-keys (arrows, Return and Escape in the completion list), tool-keys (the empty tool panel's keys); ⌘, does nothing |
 | Markdown tables, diagrams, images, file links | covered | markdown-table, markdown-document, mermaid, images, visualization, file-chips |

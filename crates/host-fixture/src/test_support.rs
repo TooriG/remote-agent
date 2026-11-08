@@ -56,6 +56,7 @@ impl HostFixture {
         name: &str,
         accounts: bool,
         claude: Option<&Path>,
+        deepseek: Option<&Path>,
     ) -> Result<Self> {
         #[cfg(unix)]
         {
@@ -110,6 +111,16 @@ impl HostFixture {
                 }
             };
             backends.push(backend);
+        }
+        if let Some(program) = deepseek {
+            backends.push(
+                host_daemon::providers::deepseek::DeepSeek::load(
+                    program.to_owned(),
+                    directory.join("deepseek"),
+                )
+                .await?
+                .into(),
+            );
         }
         eprintln!("Host fixture: providers ready; starting RPC");
         let service = HostRpcService::new(

@@ -976,6 +976,7 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                 "skills/list" => {
                     context.respond(id, &json!({"data":[{"cwd":params["cwds"][0],"skills":[
                         {"name":"fixture-review","path":"/fixture/skills/review/SKILL.md","description":"Review fixture changes","enabled":true},
+                        {"name":"fixture-explain","path":"/fixture/skills/explain/SKILL.md","description":"Explain fixture code","enabled":true},
                         {"name":"disabled-skill","path":"/fixture/disabled/SKILL.md","description":"Disabled","enabled":false}
                     ],"errors":[]}]}))?;
                 }

@@ -4,7 +4,9 @@ use crate::l10n::{localized, tr};
 use crate::native;
 use crate::ui::Enabled;
 use agent_core::{
-    presentation::{permissions::PERMISSION_CHOICES, view::Presentation},
+    presentation::{
+        model_settings::OPENROUTER_MODEL_QUERY, permissions::PERMISSION_CHOICES, view::Presentation,
+    },
     state::{DraftKey, Intent, operations as op},
 };
 use agent_protocol::session::ProviderKind;
@@ -13,8 +15,10 @@ use nsh_core::element::{ImageSrc, input};
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
 
+/// The open model form: which draft of which Host and account it applies to,
+/// and the models it shows.
 #[derive(Clone, PartialEq)]
-struct Picker {
+pub(crate) struct Picker {
     id: String,
     host: String,
     storage: String,
@@ -29,10 +33,28 @@ impl Picker {
     }
 }
 
+/// Opens the model form for `connection`'s draft on `provider`'s models (the
+/// draft's provider when `None`) matching `query`.
+pub(crate) fn open(connection: Connection, provider: Option<ProviderKind>, query: &str) {
+    let host = connection.host.get_untracked();
+    connection
+        .model_picker
+        .set(Some(connection.publication.with_untracked(|p| Picker {
+            id: uuid::Uuid::new_v4().to_string(),
+            host,
+            storage: p.snapshot.connection.storage_scope.clone(),
+            draft: p.settings.draft_key(),
+            provider: provider.or(p.settings.provider()),
+            query: query.into(),
+        })));
+    connection.dispatch(Intent::ReadProviderSettings(op::ReadProviderSettings {}));
+    connection.dispatch(Intent::ListAccounts(op::ListAccounts {}));
+}
+
 pub(crate) fn controls() -> View {
     let connection = use_context::<Connection>().unwrap();
     let publication = connection.publication;
-    let picker = signal(None::<Picker>);
+    let picker = connection.model_picker;
     effect(move || {
         let host = connection.host.get();
         publication.with(|p| {
@@ -57,19 +79,7 @@ pub(crate) fn controls() -> View {
     });
     let trigger = crate::ui::text_button(
         move || SharedString::from(label.get()),
-        move || {
-            let host = connection.host.get_untracked();
-            picker.set(Some(publication.with_untracked(|p| Picker {
-                id: uuid::Uuid::new_v4().to_string(),
-                host,
-                storage: p.snapshot.connection.storage_scope.clone(),
-                draft: p.settings.draft_key(),
-                provider: p.settings.provider(),
-                query: String::new(),
-            })));
-            connection.dispatch(Intent::ReadProviderSettings(op::ReadProviderSettings {}));
-            connection.dispatch(Intent::ListAccounts(op::ListAccounts {}));
-        },
+        move || open(connection, None, ""),
     )
     .enabled(move || {
         connection.settings.with(|p| p.connected())
@@ -183,9 +193,16 @@ fn act(connection: Connection, picker: Signal<Option<Picker>>, action: &str, val
             {
                 connection.dispatch(intent);
                 // As T3 Code's popover, choosing a model closes it; the form's
-                // other settings keep it open to adjust several.
+                // other settings keep it open to adjust several. As the desktop
+                // client's, the OpenRouter pick shows OpenRouter's models instead.
                 if cfg!(target_os = "macos") && matches!(action, "model" | "custom") {
                     picker.set(None);
+                } else if action == "openrouter-flash" {
+                    picker.update(|picker| {
+                        if let Some(picker) = picker {
+                            picker.query = OPENROUTER_MODEL_QUERY.into();
+                        }
+                    });
                 }
             }
         }
@@ -483,6 +500,10 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                 .value(move || field("query")().as_str().unwrap_or_default().to_owned())
                 .on_change(move |value: &str| act("search", value)),
         )
+        .child(when(
+            move || !field("openrouter")().is_null(),
+            move || openrouter_picks(field("openrouter"), disabled, act),
+        ))
         .child(models)
         .child(each(
             move || field("errors")().as_array().cloned().unwrap_or_default(),
@@ -538,6 +559,52 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
         .child(body)
 }
 
+/// The desktop client's OpenRouter shortcuts over DeepSeek's models: where the
+/// selected model's requests go, Flash 4.1 through OpenRouter, and OpenRouter's models.
+#[cfg(desktop)]
+fn openrouter_picks(
+    picks: impl Fn() -> Value + Copy + 'static,
+    disabled: impl Fn() -> bool + Copy + 'static,
+    act: impl Fn(&str, &str) + Copy + 'static,
+) -> View {
+    use crate::ui::{self, Selected};
+    let flash_selected = move || picks()["flashSelected"].as_bool().unwrap_or(false);
+    view()
+        .items_start()
+        .gap_2()
+        .child(when(
+            move || picks()["route"].is_string(),
+            move || {
+                text(move || picks()["route"].as_str().unwrap_or_default().to_owned())
+                    .text_size(px(14.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+            },
+        ))
+        .child(when(
+            move || picks()["flash"].as_bool().unwrap_or(false),
+            move || {
+                ui::text_button(
+                    move || {
+                        SharedString::from(if flash_selected() {
+                            tr("OpenRouter · Flash 4.1 選択中")
+                        } else {
+                            tr("OpenRouter経由のFlash 4.1を選択")
+                        })
+                    },
+                    move || act("openrouter-flash", ""),
+                )
+                .selected_when(flash_selected)
+                .enabled(move || !disabled())
+            },
+        ))
+        .child(
+            ui::text_button(tr("OpenRouterのモデル一覧を表示"), move || {
+                act("search", OPENROUTER_MODEL_QUERY)
+            })
+            .enabled(move || !disabled()),
+        )
+}
+
 fn picker_data(p: &Presentation, picker: &Picker) -> Value {
     let settings = &p.settings;
     let selected = settings.selected_model();
@@ -565,6 +632,10 @@ fn picker_data(p: &Presentation, picker: &Picker) -> Value {
             "title": localized(notice.title.clone()), "text": localized(notice.text.to_string()), "recovery": notice.recovery_label.clone().map(localized),
         })).collect::<Vec<_>>(),
         "customModel": p.snapshot.custom_model_choice(picker.provider, &picker.query).map(|model| model.id),
+        "openrouter": settings.openrouter_picks(picker.provider).map(|picks| json!({
+            "route": picks.route.map(|route| crate::l10n::tr_format("選択中の送信先: {0}", [&route])),
+            "flash": picks.flash.is_some(), "flashSelected": picks.flash_selected,
+        })),
         "quick": (selected.as_ref().map(|model| model.provider) == picker.provider).then(|| json!({
             "efforts": controls.efforts, "effort": controls.effort,
             "speeds": controls.speed_choices.iter().map(|choice| json!({"id": choice.id, "title": localized(choice.label.clone())})).collect::<Vec<_>>(),
@@ -619,6 +690,10 @@ fn picker_intent(p: &Presentation, picker: &Picker, action: &str, value: &str) -
             model: p
                 .snapshot
                 .custom_model_choice(picker.provider, &picker.query)?,
+        },
+        "openrouter-flash" => Intent::SelectModel {
+            thread_id,
+            model: p.settings.openrouter_picks(picker.provider)?.flash?,
         },
         "effort" => Intent::SelectEffort {
             thread_id,
@@ -763,6 +838,31 @@ mod tests {
         ] {
             assert!(picker_intent(&p, &picker, action, value).is_none());
         }
+    }
+
+    #[test]
+    fn deepseek_form_offers_flash_through_openrouter_once_the_host_lists_it() {
+        let (mut state, mut picker) = fixture();
+        picker.provider = Some(ProviderKind::DeepSeek);
+        let p = Presentation::project(Arc::new(state.clone()), None);
+        assert_eq!(
+            picker_data(&p, &picker)["openrouter"],
+            json!({"route": null, "flash": false, "flashSelected": false})
+        );
+        assert!(picker_intent(&p, &picker, "openrouter-flash", "").is_none());
+        let flash = r#"["openrouter","deepseek/deepseek-v4.1-flash"]"#;
+        Arc::make_mut(&mut state.catalog.models).push(
+            serde_json::from_value(json!({"id":"deepseek:router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":flash},"displayName":"OpenRouter · DeepSeek V4.1 Flash"}))
+                .unwrap(),
+        );
+        let p = Presentation::project(Arc::new(state), None);
+        assert_eq!(picker_data(&p, &picker)["openrouter"]["flash"], true);
+        assert!(
+            matches!(picker_intent(&p, &picker, "openrouter-flash", ""), Some(Intent::SelectModel {model, thread_id}) if model.provider == ProviderKind::DeepSeek && model.id == flash && thread_id == picker.draft)
+        );
+        picker.provider = Some(ProviderKind::Codex);
+        assert!(picker_data(&p, &picker)["openrouter"].is_null());
+        assert!(picker_intent(&p, &picker, "openrouter-flash", "").is_none());
     }
 
     #[test]

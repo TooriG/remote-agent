@@ -1,23 +1,38 @@
 use crate::Connection;
 use crate::ui::{self, Icon, colors};
 use agent_core::{
-    composer::{candidate_label, insert_invocation},
+    composer::{CompletionKey, candidate_label, completion_key, insert_invocation},
     state::Intent,
 };
 use agent_protocol::composer::{ComposerCandidate, InvocationKind};
 use nsh_core::prelude::*;
 
-/// Catalog filtering and insertion remain core decisions; the list is T3 Code's
-/// command menu above the composer.
+/// Catalog filtering, insertion and what keys do remain core decisions; the list
+/// is T3 Code's command menu above the composer, whose keys work it while the
+/// field keeps the focus, as the desktop client's.
 pub(crate) fn suggestions(focus: impl Fn() + Copy + 'static) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
+    let draft = computed(move || connection.composer.with(|p| p.draft.text.clone()));
+    // Each edit of the draft lists from the top again and reopens a closed list.
+    let highlighted = signal(0_usize);
+    let dismissed = signal(false);
+    effect(move || {
+        draft.with(|_| ());
+        highlighted.set(0);
+        dismissed.set(false);
+    });
     let suggestions = computed(move || {
+        if dismissed.get() {
+            return None;
+        }
         connection.composer.with(|p| {
             let text = p.draft.text.clone();
             let cursor = text.len() as u32;
             p.composer_suggestions(text, cursor)
         })
     });
+    let candidates =
+        move || suggestions.with(|s| s.as_ref().map(|s| s.candidates.clone()).unwrap_or_default());
     let insert = move |invocation: agent_protocol::composer::Invocation| {
         let (thread_id, text) = connection.publication.with_untracked(|p| {
             (
@@ -60,20 +75,53 @@ pub(crate) fn suggestions(focus: impl Fn() + Copy + 'static) -> impl IntoElement
                         suggestions.with(|s| s.as_ref().is_some_and(|s| !s.candidates.is_empty()))
                     },
                     move || {
+                        if is_desktop() {
+                            for (key, repeat) in [
+                                ("up", true),
+                                ("down", true),
+                                ("return", false),
+                                ("tab", false),
+                                ("escape", false),
+                            ] {
+                                on_key_with(
+                                    key,
+                                    KeyOptions {
+                                        when: nsh_core::keymap::When::Always,
+                                        repeat,
+                                    },
+                                    move |_| {
+                                        let listed = candidates();
+                                        match completion_key(
+                                            key,
+                                            highlighted.get_untracked(),
+                                            listed.len(),
+                                        ) {
+                                            Some(CompletionKey::Highlight(index)) => {
+                                                highlighted.set(index)
+                                            }
+                                            Some(CompletionKey::Insert(index)) => {
+                                                insert(listed[index].invocation.clone())
+                                            }
+                                            Some(CompletionKey::Dismiss) => dismissed.set(true),
+                                            None => {}
+                                        }
+                                    },
+                                );
+                            }
+                        }
                         ui::card(vec![
                             view().child(scroll().max_h(px(4.0 * 40.0 + 8.0)).child(
                                 view().p_1().child(each(
-                                    move || {
-                                        suggestions.with(|s| {
-                                            s.as_ref()
-                                                .map(|s| s.candidates.clone())
-                                                .unwrap_or_default()
-                                        })
-                                    },
+                                    candidates,
                                     |candidate: &ComposerCandidate| {
                                         candidate.invocation.path.clone()
                                     },
-                                    move |candidate, _| row(candidate.get_untracked(), insert),
+                                    move |candidate, index| {
+                                        row(candidate.get_untracked(), insert).style_when(
+                                            move || index.get() == highlighted.get(),
+                                            |s| s.bg(colors::SELECTED),
+                                        )
+                                    },
                                 )),
                             )),
                         ])
@@ -87,7 +135,7 @@ pub(crate) fn suggestions(focus: impl Fn() + Copy + 'static) -> impl IntoElement
 fn row(
     candidate: ComposerCandidate,
     insert: impl Fn(agent_protocol::composer::Invocation) + 'static,
-) -> impl IntoElement {
+) -> nsh_base::ButtonElement {
     let ComposerCandidate {
         invocation,
         description,

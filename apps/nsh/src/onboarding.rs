@@ -198,6 +198,10 @@ fn choice(connection: Connection, host: Host) -> View {
         let id = host.id.clone();
         move || connection.host.get() == id
     });
+    let label = {
+        let label = stored(host.label());
+        move || label.get()
+    };
     view()
         .gap_3()
         .p_4()
@@ -217,10 +221,8 @@ fn choice(connection: Connection, host: Host) -> View {
                     } else {
                         Icon::MONITOR
                     },
-                    {
-                        let label = stored(host.label());
-                        move || label.get()
-                    },
+                    label,
+                    label,
                     move || {
                         connection
                             .application

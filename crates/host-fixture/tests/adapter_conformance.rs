@@ -128,6 +128,7 @@ async fn start(root: &Path, memory: Arc<Memory>) -> HostFixture {
         "adapter conformance",
         false,
         Some(claude),
+        None,
     )
     .await
     .unwrap()
@@ -1404,6 +1405,7 @@ async fn codex_queues_when_the_native_turn_is_not_observed() {
         Arc::new(Memory::default()),
         "queue conformance",
         false,
+        None,
         None,
     )
     .await

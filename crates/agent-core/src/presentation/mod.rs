@@ -15,6 +15,7 @@ pub mod diff;
 pub mod editors;
 pub mod error;
 pub mod files;
+pub mod folder_menu;
 pub mod host_management;
 pub mod media;
 pub mod model_settings;

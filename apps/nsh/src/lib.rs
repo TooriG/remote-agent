@@ -90,6 +90,8 @@ pub(crate) struct Connection {
     composer_ref: ElementRef,
     /// The desktop composer's box, which rows dragged from a file tree drop on.
     composer_box: ElementRef,
+    /// The composer's open model form, which the settings can open too.
+    model_picker: Signal<Option<model_controls::Picker>>,
 }
 
 /// What every connection of one application shares.
@@ -131,6 +133,7 @@ impl Connection {
             pane,
             composer_ref: element_ref(),
             composer_box: element_ref(),
+            model_picker: signal(None),
         }
     }
 

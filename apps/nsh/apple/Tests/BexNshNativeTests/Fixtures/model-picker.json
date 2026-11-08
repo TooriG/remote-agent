@@ -16,6 +16,7 @@
       "errors": [],
       "notices": [],
       "customModel": "日本語",
+      "openrouter": null,
       "quick": {
         "efforts": ["low", "medium"],
         "effort": "medium",

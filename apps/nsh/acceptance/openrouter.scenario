@@ -1,0 +1,22 @@
+# As the desktop client's, DeepSeek's model form names where the selected
+# model's requests go, and a saved OpenRouter key leads from the settings to
+# OpenRouter's models, where Flash 4.1 through OpenRouter is one press.
+expect "何に取り組みますか？" 30000
+press モデル
+press "DeepSeek Harness"
+expect "選択中の送信先: DeepSeek公式" 20000
+expect "OpenRouterのモデル一覧を表示"
+expect_absent "OpenRouter経由のFlash 4.1を選択"
+press アカウントと週間残量
+press 接続先 10000
+press OpenRouter
+type APIキー "sk-or-fixture" after キーの発行ページ
+press 保存
+expect "保存済み（キーは非表示）" 20000
+screenshot key
+press OpenRouterのモデル一覧を開く
+expect "OpenRouter · DeepSeek: DeepSeek V4.1 Flash" 20000
+press "OpenRouter経由のFlash 4.1を選択"
+expect "OpenRouter · Flash 4.1 選択中" 10000
+expect "選択中の送信先: OpenRouter"
+screenshot flash
