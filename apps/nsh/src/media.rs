@@ -170,10 +170,12 @@ pub(crate) fn image_view(
         key.get();
         decode_error.set(None);
     });
+    let failed = move || loaded.error().is_some() || decode_error.get().is_some();
     // TextView's image wrapper has intrinsic width; a percentage alone collapses it.
+    // A failed image keeps only its message's height, not the image's.
     view()
         .w(px(width))
-        .min_h(px(height))
+        .style_when(move || !failed(), |s| s.min_h(px(height)))
         .max_w(relative(1.0))
         .gap_2()
         .child(when(
@@ -202,25 +204,22 @@ pub(crate) fn image_view(
             move || loaded.loading(),
             || text(tr("画像を読み込み中…")),
         ))
-        .child(when(
-            move || loaded.error().is_some() || decode_error.get().is_some(),
-            move || {
-                view()
-                    .gap_2()
-                    .child(text(move || {
-                        loaded
-                            .error()
-                            .or_else(|| decode_error.get())
-                            .map(localized)
-                            .unwrap_or_default()
-                    }))
-                    .child(view().flex_row().child(crate::ui::text_button(
-                        tr("再試行"),
-                        move || {
-                            decode_error.set(None);
-                            loaded.refetch()
-                        },
-                    )))
-            },
-        ))
+        .child(when(failed, move || {
+            view()
+                .gap_2()
+                .child(text(move || {
+                    loaded
+                        .error()
+                        .or_else(|| decode_error.get())
+                        .map(localized)
+                        .unwrap_or_default()
+                }))
+                .child(view().flex_row().child(crate::ui::text_button(
+                    tr("再試行"),
+                    move || {
+                        decode_error.set(None);
+                        loaded.refetch()
+                    },
+                )))
+        }))
 }

@@ -181,6 +181,11 @@ fn act(connection: Connection, picker: Signal<Option<Picker>>, action: &str, val
                 publication.with_untracked(|p| picker_intent(p, &current, action, value))
             {
                 connection.dispatch(intent);
+                // As T3 Code's popover, choosing a model closes it; the form's
+                // other settings keep it open to adjust several.
+                if cfg!(target_os = "macos") && matches!(action, "model" | "custom") {
+                    picker.set(None);
+                }
             }
         }
     }

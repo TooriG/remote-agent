@@ -18,6 +18,7 @@ final class MessageTests: XCTestCase {
             }
             view.update(document)
             XCTAssertEqual(view.text.string, "日本語 👋 ファイル")
+            XCTAssertEqual(view.text.accessibilityIdentifier(), "message.user-text")
             XCTAssertNotNil(view.text.textStorage)
             XCTAssertNotNil(view.text.layoutManager)
             view.frame = CGRect(x: 0, y: 0, width: 400, height: 100)

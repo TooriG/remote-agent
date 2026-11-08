@@ -1,5 +1,6 @@
 //! Core supplies Markdown semantics; TextKit owns native selection, layout and menus.
 use crate::Connection;
+use crate::conversation::Kind;
 use crate::l10n::tr;
 use agent_core::{
     panels::PanelScope,
@@ -58,10 +59,12 @@ impl Surroundings {
     }
 }
 
+/// `kind` is whose text it is: the native text names its role for accessibility
+/// and dims an activity's.
 pub(crate) fn content(
     surroundings: Surroundings,
     blocks: impl Fn() -> Vec<MarkdownBlock> + 'static,
-    secondary: impl Fn() -> bool + Copy + 'static,
+    kind: impl Fn() -> Kind + Copy + 'static,
 ) -> nsh_core::element::View {
     let connection = surroundings.connection;
     let target = computed(move || {
@@ -81,14 +84,14 @@ pub(crate) fn content(
         .expect("display targets contain only serializable values")
     });
     let content = computed(move || parts(blocks()));
-    view_parts(surroundings, move || content.get(), target, secondary)
+    view_parts(surroundings, move || content.get(), target, kind)
 }
 
 fn view_parts(
     surroundings: Surroundings,
     parts: impl Fn() -> Vec<Part> + 'static,
     target: Memo<String>,
-    secondary: impl Fn() -> bool + Copy + 'static,
+    kind: impl Fn() -> Kind + Copy + 'static,
 ) -> nsh_core::element::View {
     let Surroundings {
         connection, files, ..
@@ -109,12 +112,13 @@ fn view_parts(
                     native("bex.messageText")
                         .prop("data", move || {
                             part.with(|(_, part)| {
-                        let (Part::Text(blocks) | Part::Code { blocks, .. }) = part else {
-                            return Value::Null;
-                        };
-                        json!({"blocks": blocks, "secondary": secondary(), "target": target.get(),
-                        "sideChat": connection.pane.is_none()})
-                    })
+                                let (Part::Text(blocks) | Part::Code { blocks, .. }) = part else {
+                                    return Value::Null;
+                                };
+                                json!({"blocks": blocks, "secondary": kind() == Kind::Activity,
+                        "role": if kind() == Kind::User { "user" } else { "assistant" },
+                        "target": target.get(), "sideChat": connection.pane.is_none()})
+                            })
                         })
                         .on_native_event(move |event: &NativeEvent| {
                             let Some(text) = event.data["text"].as_str().filter(|s| !s.is_empty())
@@ -280,7 +284,7 @@ fn view_parts(
                 );
             })
             .into_element(),
-            Part::Table { .. } => table(surroundings, part, target, secondary).into_element(),
+            Part::Table { .. } => table(surroundings, part, target, kind).into_element(),
         },
     ))
 }
@@ -291,7 +295,7 @@ fn table(
     surroundings: Surroundings,
     part: ReadSignal<(usize, Part)>,
     target: Memo<String>,
-    secondary: impl Fn() -> bool + Copy + 'static,
+    kind: impl Fn() -> Kind + Copy + 'static,
 ) -> impl IntoElement {
     use crate::ui::colors;
     let copy = move |markdown: bool| {
@@ -355,7 +359,7 @@ fn table(
                                         surroundings,
                                         move || cell.with(|(_, parts)| parts.clone()),
                                         target,
-                                        secondary,
+                                        kind,
                                     ))
                             },
                         ))
@@ -533,7 +537,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            json!({"blocks": blocks, "secondary": false, "target": "opaque-native-menu-target", "sideChat": true}),
+            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true}),
             expected
         );
     }

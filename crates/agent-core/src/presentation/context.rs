@@ -15,10 +15,37 @@ struct ForkControl {
     phase: OperationPhase,
 }
 
+/// What the pane shows for its selected conversation while it has no history
+/// to render: never a new chat's prompt, which would read as a different one.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
+pub enum ConversationOpening {
+    /// Its history is on its way from the Host.
+    Loading,
+    /// Reading its history failed; opening it again retries.
+    Failed { error: super::error::ErrorText },
+}
+
+impl ConversationOpening {
+    fn project(snapshot: &Snapshot) -> Option<Self> {
+        let session = snapshot.pane.navigation.thread_id.clone()?;
+        if snapshot.conversation_thread().is_some() {
+            return None;
+        }
+        Some(
+            match snapshot.operation_error(OperationKey::History { session }) {
+                Some(error) => Self::Failed { error },
+                None => Self::Loading,
+            },
+        )
+    }
+}
+
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct ConversationContext {
     navigation: Navigation,
+    opening: Option<ConversationOpening>,
     title: Option<String>,
     home: Option<String>,
     directory: String,
@@ -35,6 +62,7 @@ impl ConversationContext {
         let next = Self {
             workspace_error: snapshot.operation_error(OperationKey::WorkspaceReview),
             navigation: snapshot.pane.navigation.as_ref().clone(),
+            opening: ConversationOpening::project(snapshot),
             title: session.and_then(|id| {
                 snapshot
                     .sessions
@@ -90,6 +118,9 @@ impl ConversationContext {
     pub fn navigation(&self) -> Navigation {
         self.navigation.clone()
     }
+    pub fn opening(&self) -> Option<ConversationOpening> {
+        self.opening.clone()
+    }
     pub fn title(&self) -> Option<String> {
         self.title.clone()
     }
@@ -122,5 +153,57 @@ impl ConversationContext {
             Some(OperationPhase::Failed { message }) => Some(super::error::error_text(&message)),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        models,
+        session::{ProviderKind, SessionRef},
+        state::operations::OperationState,
+    };
+
+    #[test]
+    fn a_selected_conversation_without_history_loads_then_offers_a_retry() {
+        let session = SessionRef::new(ProviderKind::Codex, "opening".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        let opening = |snapshot: &Snapshot| ConversationContext::project(snapshot, None).opening();
+        assert_eq!(opening(&snapshot), None, "a new chat opens nothing");
+
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+            Some(session.clone());
+        assert_eq!(opening(&snapshot), Some(ConversationOpening::Loading));
+        let key = OperationKey::History {
+            session: session.clone(),
+        };
+        snapshot.operations.insert(
+            key.clone(),
+            OperationState {
+                generation: 1,
+                phase: OperationPhase::Running,
+            },
+        );
+        assert_eq!(opening(&snapshot), Some(ConversationOpening::Loading));
+        snapshot.operations.insert(
+            key.clone(),
+            OperationState {
+                generation: 2,
+                phase: OperationPhase::Failed {
+                    message: "history unavailable".into(),
+                },
+            },
+        );
+        assert_eq!(
+            opening(&snapshot),
+            Some(ConversationOpening::Failed {
+                error: crate::presentation::error::error_text("history unavailable")
+            })
+        );
+
+        Arc::make_mut(&mut snapshot.sessions.conversations)
+            .insert(session, Arc::new(models::Thread::default()));
+        assert_eq!(opening(&snapshot), None, "its history shows instead");
     }
 }

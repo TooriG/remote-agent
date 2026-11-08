@@ -64,7 +64,6 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             isAutomaticTextCompletionEnabled = false
             enabledTextCheckingTypes = 0
             delegate = self
-            setAccessibilityIdentifier("message.assistant-text")
         }
 
         @available(*, unavailable)
@@ -129,6 +128,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         func update(_ document: MessageDocument) {
             guard text.document != document else { return }
             text.document = document
+            text.setAccessibilityIdentifier("message.\(document.role)-text")
             refresh()
         }
 
@@ -192,7 +192,6 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             textContainerInset = .zero
             textContainer.lineFragmentPadding = 0
             delegate = self
-            accessibilityIdentifier = "message.assistant-text"
         }
 
         @available(*, unavailable)
@@ -253,6 +252,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         func update(_ document: MessageDocument) {
             guard text.document != document else { return }
             text.document = document
+            text.accessibilityIdentifier = "message.\(document.role)-text"
             refresh()
         }
 

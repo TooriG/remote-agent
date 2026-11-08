@@ -121,7 +121,7 @@ pub(crate) fn control() -> View {
             .offset(px(8.0))
             .popup_class("bg-[#0f0f0f] rounded-[16px] border border-[#303030]")
             .trigger(trigger)
-            .child(menu(permissions, dispatch)),
+            .child(menu(permissions, dispatch, move || open.set(false))),
     )
 }
 
@@ -129,6 +129,7 @@ pub(crate) fn control() -> View {
 fn menu(
     permissions: Memo<Permissions>,
     dispatch: impl Fn(Option<Intent>) + Copy + 'static,
+    close: impl Fn() + Copy + 'static,
 ) -> View {
     let heading = view()
         .w(px(430.0))
@@ -144,7 +145,14 @@ fn menu(
     PERMISSION_CHOICES
         .into_iter()
         .fold(heading, |menu, (mode, label, description)| {
-            menu.child(choice(permissions, dispatch, mode, label, description))
+            menu.child(choice(
+                permissions,
+                dispatch,
+                close,
+                mode,
+                label,
+                description,
+            ))
         })
         .child(when(
             move || permissions.with(|p| p.loading),
@@ -175,6 +183,7 @@ fn menu(
 fn choice(
     permissions: Memo<Permissions>,
     dispatch: impl Fn(Option<Intent>) + Copy + 'static,
+    close: impl Fn() + Copy + 'static,
     mode: PermissionMode,
     label: &'static str,
     description: &'static str,
@@ -199,7 +208,11 @@ fn choice(
         })
         .hover(|s| s.bg(colors::GHOST_HOVER))
         .disabled_style(|s| s.opacity(0.5))
-        .on_press(move || dispatch(permissions.with_untracked(|p| p.update(mode))))
+        // As T3 Code's menu, choosing a mode closes it.
+        .on_press(move || {
+            dispatch(permissions.with_untracked(|p| p.update(mode)));
+            close();
+        })
         .child(ui::icon(Icon::SHIELD, 16.0))
         .child(
             view()

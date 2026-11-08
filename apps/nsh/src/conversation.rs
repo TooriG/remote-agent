@@ -3,8 +3,8 @@ use crate::ui::Enabled;
 use crate::{Connection, shared::Shared};
 use agent_core::{
     presentation::conversation::{
-        ActivityPresentation, ConversationRowContent, RenderedConversation, WorkProgress,
-        activity_is_expanded,
+        ActivityPresentation, ConversationRowContent, RenderedConversation, TurnErrorPresentation,
+        WorkProgress, activity_is_expanded,
     },
     state::{Intent, operations as op},
 };
@@ -23,8 +23,9 @@ pub(crate) fn reveal_row(list: ElementRef, index: u32) {
     });
 }
 
+/// Whose a row is.
 #[derive(Clone, Copy, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     User,
     Response,
     Activity,
@@ -46,6 +47,7 @@ struct Row {
     time: Option<String>,
     /// A message sent while its turn worked; only the first of a run says so.
     steer: bool,
+    error: Option<TurnErrorPresentation>,
 }
 
 fn project(
@@ -101,6 +103,7 @@ fn project(
             let actions = matches!(&row.content, ConversationRowContent::Response { show_actions: true, .. });
             let fork = match &row.content { ConversationRowContent::Response { fork_turn_id, .. } => fork_turn_id.clone(), _ => None };
             let retry = match &row.content { ConversationRowContent::Preparation { preparation } => preparation.retry.clone(), _ => None };
+            let error = match &row.content { ConversationRowContent::Error { error } => Some(error.clone()), _ => None };
             let detail = match &row.content {
                 ConversationRowContent::Activity { item, turn_id } if item.data.collapsible => {
                     Some(crate::activity::Item { source: Shared(item.clone()), turn: turn_id.clone() })
@@ -141,6 +144,7 @@ fn project(
                 progress,
                 time,
                 steer,
+                error,
             })
         })
         .collect::<Vec<_>>()
@@ -190,13 +194,16 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
         expanded.set(HashMap::new());
         expanded_items.set(HashSet::new());
     });
+    // Shared, so that a row reads it cheaply through `try_get`.
     let rows = computed(move || {
-        connection.conversation.with(|conversation| {
-            conversation
-                .as_ref()
-                .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
-                .unwrap_or_default()
-        })
+        Shared(std::sync::Arc::new(connection.conversation.with(
+            |conversation| {
+                conversation
+                    .as_ref()
+                    .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
+                    .unwrap_or_default()
+            },
+        )))
     });
     effect(move || {
         target.get();
@@ -215,11 +222,17 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             });
         }
     });
-    let history = computed(move || connection.context.with(|p| p.history()));
+    // A conversation still opening says why itself, retry included.
+    let history = computed(move || {
+        connection
+            .context
+            .with(|p| p.opening().is_none().then(|| p.history()).flatten())
+    });
     view()
         .flex_1()
         .min_h_0()
         .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
+        .child(opening(connection))
         .child(when(
             move || history.get().is_some(),
             move || {
@@ -269,14 +282,16 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
         }))
         .child(
             virtual_list(
-                move || rows.with(Vec::len),
+                move || rows.with(|rows| rows.len()),
                 move |at| {
-                    let row = computed(move || rows.with(|rows| rows.get(at.index()).cloned()));
+                    // The list's cells can outlive the list's own values while a
+                    // conversation closes: a row then reads as none.
+                    let row = computed(move || rows.try_get().and_then(|rows| rows.get(at.index()).cloned()));
                     let user =
                         move || row.with(|r| r.as_ref().is_some_and(|r| r.kind == Kind::User));
-                    let activity =
-                        move || row.with(|r| r.as_ref().is_some_and(|r| r.kind == Kind::Activity));
+                    let kind = move || row.with(|r| r.as_ref().map_or(Kind::Response, |r| r.kind));
                     let detail = computed(move || row.with(|r| r.as_ref().and_then(|r| r.detail.clone())));
+                    let error = computed(move || row.with(|r| r.as_ref().and_then(|r| r.error.clone())));
                     let label = move || row.with(|row| row.as_ref().map(|row| {
                         row.progress.as_ref().map(|progress| localized(progress.label(clock.get().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64())).into()).unwrap_or_else(|| row.body.clone())
                     }));
@@ -362,13 +377,17 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         })
                                         .style_when(move || !user(), |s| s.w_full())
                                         .child(when(
+                                            move || error.with(Option::is_some),
+                                            move || error_card(error),
+                                        ))
+                                        .child(when(
                                             move || row.with(|row| row.as_ref().is_some_and(|row| {
-                                                !row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse) && row.detail.is_none()
+                                                !row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse) && row.detail.is_none() && row.error.is_none()
                                             })),
                                             move || crate::rich_text::content(
                                                 surroundings,
                                                 move || label().map(|text| agent_core::presentation::markdown::markdown_blocks(text.to_string())).unwrap_or_default(),
-                                                activity,
+                                                kind,
                                             ),
                                         )),
                                 )
@@ -446,7 +465,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
 /// T3 Code's timeline minimap: marks for user messages at the left edge that
 /// widen toward the pointer, preview the exchange and jump to it.
 fn minimap(
-    rows: Memo<Vec<Row>>,
+    rows: Memo<Shared<Vec<Row>>>,
     top_row: Signal<usize>,
     list: ElementRef,
     following: Signal<bool>,
@@ -606,6 +625,135 @@ fn fold_row(
                     || ui::icon(Icon::CHEVRON_RIGHT, 14.0),
                 )),
         )
+}
+
+/// A selected conversation whose history has not arrived: it is loading, or
+/// its read failed and can be retried.
+fn opening(connection: Connection) -> View {
+    use crate::ui::{self, colors};
+    use agent_core::presentation::context::ConversationOpening;
+    let opening = computed(move || connection.context.with(|p| p.opening()));
+    let failure = move || match opening.get() {
+        Some(ConversationOpening::Failed { error }) => Some(error),
+        _ => None,
+    };
+    view()
+        .w_full()
+        .items_center()
+        .child(when(
+            move || opening.get() == Some(ConversationOpening::Loading),
+            || {
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .py_8()
+                    .text_color(colors::MUTED)
+                    .child(ui::spinner())
+                    .child(text(tr("会話を読み込み中…")).text_size(px(14.0)))
+            },
+        ))
+        .child(when(
+            move || failure().is_some(),
+            move || {
+                view()
+                    .items_center()
+                    .gap_2()
+                    .py_8()
+                    .px_6()
+                    .child(
+                        text(move || {
+                            failure()
+                                .map(|error| localized(error.to_string()))
+                                .unwrap_or_default()
+                        })
+                        .selectable(true),
+                    )
+                    .child(ui::text_button(tr("再試行"), move || {
+                        if let Some(thread) = connection
+                            .context
+                            .with_untracked(|p| p.navigation().thread_id)
+                        {
+                            connection.dispatch(Intent::ReadThread(op::ReadThread::open(thread)));
+                        }
+                    }))
+            },
+        ))
+}
+
+/// A turn's error, as the desktop client's card: what failed, the provider's
+/// message and details, copyable as one text; a reconnecting stream reads as
+/// work in progress rather than a failure.
+fn error_card(error: Memo<Option<TurnErrorPresentation>>) -> View {
+    use crate::ui::{self, Icon, colors};
+    use nsh_core::element::rgb;
+    let read = move |read: fn(&TurnErrorPresentation) -> String| {
+        move || error.with(|error| error.as_ref().map(read).unwrap_or_default())
+    };
+    let reconnecting =
+        move || error.with(|error| error.as_ref().is_some_and(|e| e.is_reconnecting));
+    let details = read(|error| error.details.clone().unwrap_or_default());
+    view()
+        .w_full()
+        .p_3()
+        .gap_2()
+        .rounded(px(8.0))
+        .bg(colors::RAISED)
+        .border_1()
+        .border_color(colors::BORDER)
+        .child(
+            text(tr("この応答"))
+                .text_size(px(12.0))
+                .text_color(colors::MUTED),
+        )
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(when(reconnecting, ui::spinner))
+                .child(
+                    text(read(|error| localized(error.title.clone())))
+                        .flex_1()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || {
+                            error.with(|error| match error {
+                                Some(error) if error.is_reconnecting => colors::MUTED,
+                                Some(error) if error.is_usage_limit => rgb(0xe5b567),
+                                _ => rgb(0xff8e86),
+                            })
+                        }),
+                )
+                .child(ui::row_icon_button(
+                    Icon::COPY,
+                    tr("エラーの詳細をコピー"),
+                    move || {
+                        if let Some(error) = error.get_untracked() {
+                            set_clipboard(format!(
+                                "{}\n{}\n{}",
+                                error.title,
+                                error.message,
+                                error.details.unwrap_or_default()
+                            ));
+                        }
+                    },
+                )),
+        )
+        .child(
+            text(read(|error| localized(error.message.clone())))
+                .selectable(true)
+                .text_size(px(14.0)),
+        )
+        .child(when(
+            move || !details().is_empty(),
+            move || {
+                text(details)
+                    .selectable(true)
+                    .number_of_lines(3)
+                    .text_size(px(12.0))
+                    .text_color(colors::MUTED)
+            },
+        ))
 }
 
 /// Marks a message that steered the working turn (T3 Code's "Steer").

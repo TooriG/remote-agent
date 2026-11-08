@@ -7729,6 +7729,22 @@
         }
       }
     },
+    "会話を読み込み中…": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会話を読み込み中…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading conversation…"
+          }
+        }
+      }
+    },
     "会話を検索": {
       "localizations": {
         "ja": {

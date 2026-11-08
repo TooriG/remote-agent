@@ -449,17 +449,17 @@ fn diff_line(line: Memo<Option<DiffRow>>) -> View {
 
 pub(crate) fn agents(host: String) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
-    let host = stored(host);
     let thread_id = connection
         .context
         .with_untracked(|p| p.navigation().thread_id);
     connection
         .client
-        .with(|client| client.dispatch(&host.get(), None, Intent::WatchAgents { thread_id }));
+        .with(|client| client.dispatch(&host, None, Intent::WatchAgents { thread_id }));
+    // The cleanup owns `host`: the view's stored values are released before it runs.
     cleanup(move || {
-        connection.client.with(|client| {
-            client.dispatch(&host.get(), None, Intent::WatchAgents { thread_id: None })
-        })
+        connection
+            .client
+            .with(|client| client.dispatch(&host, None, Intent::WatchAgents { thread_id: None }))
     });
     let agents = computed(move || connection.publication.with(|p| Shared(p.agents.clone())));
     agents_panel(agents)

@@ -170,7 +170,7 @@ pub(crate) fn details(
                                 .unwrap_or_default()
                         })
                     },
-                    || false,
+                    || crate::conversation::Kind::Response,
                 ))
         }))
 }

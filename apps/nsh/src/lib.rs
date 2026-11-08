@@ -288,8 +288,12 @@ fn app_content(
     let hero = view;
     let content = move || {
         let following = signal(true);
-        let welcome =
-            computed(move || is_desktop() && connection.conversation.with(Option::is_none));
+        // A selected conversation still opening is not a new one.
+        let welcome = computed(move || {
+            is_desktop()
+                && connection.conversation.with(Option::is_none)
+                && connection.context.with(|p| p.opening().is_none())
+        });
         // As T3 Code's draft hero, a new conversation centers its composer.
         view()
             .flex_1()
@@ -420,17 +424,26 @@ fn app_content(
                 .text_color(ui::colors::FOREGROUND)
                 .child(media::preview())
                 .child(native("bex.browser.host").w(px(0.0)).h(px(0.0)))
-                .child(when(
-                    move || sidebar.get(),
-                    move || sidebar::sidebar(hosts, move || toolbar_action("compose")),
-                ))
                 .child(
+                    // The settings overlay is modal: what it covers is out of
+                    // reach of assistive technologies while it shows.
                     view()
                         .flex_1()
                         .min_w_0()
-                        .child(notices())
-                        .child(when(move || hosts.with(Vec::is_empty), connections::hero))
-                        .child(when(move || !hosts.with(Vec::is_empty), main)),
+                        .flex_row()
+                        .accessibility_elements_hidden(move || settings.get())
+                        .child(when(
+                            move || sidebar.get(),
+                            move || sidebar::sidebar(hosts, move || toolbar_action("compose")),
+                        ))
+                        .child(
+                            view()
+                                .flex_1()
+                                .min_w_0()
+                                .child(notices())
+                                .child(when(move || hosts.with(Vec::is_empty), connections::hero))
+                                .child(when(move || !hosts.with(Vec::is_empty), main)),
+                        ),
                 )
                 .child(when(
                     move || settings.get(),

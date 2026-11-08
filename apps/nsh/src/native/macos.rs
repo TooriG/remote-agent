@@ -294,6 +294,8 @@ struct Menu {
     view: Retained<NSPopUpButton>,
     context: ComponentContext,
     target: Retained<ActionTarget>,
+    symbol: String,
+    label: Option<String>,
 }
 impl Menu {
     fn new(context: ComponentContext) -> Self {
@@ -304,6 +306,15 @@ impl Menu {
             view,
             context,
             target,
+            symbol: String::new(),
+            label: None,
+        }
+    }
+
+    /// A pull-down button reads its image's description, so that is its label.
+    fn apply_symbol(&self) {
+        if let Some(item) = self.view.itemAtIndex(0) {
+            item.setImage(symbol(&self.symbol, self.label.as_deref()).as_deref());
         }
     }
 }
@@ -392,12 +403,13 @@ impl NativeComponent for Menu {
             "appearance" => self
                 .view
                 .setBordered(value.and_then(JsonValue::as_str) != Some("plain")),
-            "label" => self.view.setAccessibilityLabel(
-                value
-                    .and_then(JsonValue::as_str)
-                    .map(NSString::from_str)
-                    .as_deref(),
-            ),
+            "label" => {
+                self.label = value.and_then(JsonValue::as_str).map(str::to_owned);
+                self.view.setAccessibilityLabel(
+                    self.label.as_deref().map(NSString::from_str).as_deref(),
+                );
+                self.apply_symbol();
+            }
             "title" => {
                 let title = NSString::from_str(value.and_then(JsonValue::as_str).unwrap_or(""));
                 // A pull-down button displays its first item's title.
@@ -406,14 +418,11 @@ impl NativeComponent for Menu {
                 }
             }
             "symbol" => {
-                if let Some(item) = self.view.itemAtIndex(0) {
-                    item.setImage(
-                        value
-                            .and_then(JsonValue::as_str)
-                            .and_then(|name| symbol(name, None))
-                            .as_deref(),
-                    );
-                }
+                self.symbol = value
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                self.apply_symbol();
             }
             "enabled" => self
                 .view

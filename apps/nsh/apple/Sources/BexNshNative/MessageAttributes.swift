@@ -35,10 +35,12 @@ struct MessageParagraph: Decodable, Equatable {
 struct MessageDocument: Decodable, Equatable {
     let blocks: [MessageParagraph]
     let secondary: Bool
+    /// Whose text it is, `user` or `assistant`, as its accessibility identifier names it.
+    let role: String
     let target: String
     let sideChat: Bool
 
-    static let empty = MessageDocument(blocks: [], secondary: false, target: "", sideChat: false)
+    static let empty = MessageDocument(blocks: [], secondary: false, role: "assistant", target: "", sideChat: false)
 }
 
 @MainActor enum MessageAttributes {

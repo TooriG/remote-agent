@@ -32,6 +32,7 @@
     }
   ],
   "secondary": false,
+  "role": "user",
   "target": "opaque-native-menu-target",
   "sideChat": true
 }

@@ -316,6 +316,9 @@ fn shared(
                     },
                 )
                 .multiline(true)
+                // A multiline field shows its placeholder as a separate label,
+                // so the field itself is named.
+                .label(tr("コピー対象"))
                 .min_h(px(88.0)),
             ),
         ]))

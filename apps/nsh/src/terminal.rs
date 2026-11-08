@@ -15,7 +15,9 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
     let host = stored(host);
     let cwd = stored(surface.path.unwrap_or_default());
     let handle = stored(workspace.terminal_handle(surface.id));
-    let started = stored(false);
+    // The view's owner releases its stored values before its cleanup runs, so
+    // what the cleanup reads lives outside them.
+    let started = std::rc::Rc::new(std::cell::Cell::new(false));
     let size = signal(None::<agent_protocol::operations::TerminalSize>);
     let resource = computed(move || {
         connection
@@ -43,8 +45,8 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
             .client
             .with(|client| client.dispatch(&host.get(), None, intent))
     };
-    let start = move |size| {
-        started.replace(true);
+    let start = move |started: &std::cell::Cell<bool>, size| {
+        started.set(true);
         send(Intent::StartTerminal(op::StartTerminal {
             handle: handle.get(),
             cwd: cwd.get(),
@@ -67,11 +69,19 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
             }));
         }
     });
-    cleanup(move || {
-        if started.get() {
-            send(Intent::DetachTerminal(op::DetachTerminal {
-                handle: handle.get(),
-            }));
+    cleanup({
+        let started = started.clone();
+        let (host, handle) = (host.get(), handle.get());
+        move || {
+            if started.get() {
+                connection.client.with(|client| {
+                    client.dispatch(
+                        &host,
+                        None,
+                        Intent::DetachTerminal(op::DetachTerminal { handle }),
+                    )
+                });
+            }
         }
     });
     // T3 Code's terminal fills its panel; Bex's folder, status and reconnection
@@ -125,17 +135,21 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                                 .is_some_and(|terminal| terminal.status.is_some())
                         })
                     },
-                    move || {
-                        ui::text_button(tr("再接続"), move || {
-                            if let Some(size) = size.get_untracked() {
-                                start(size);
-                            }
-                        })
-                        .enabled(move || {
-                            size.get().is_some()
-                                && connection.settings.with(|p| p.connected())
-                                && !loading.get()
-                        })
+                    {
+                        let started = started.clone();
+                        move || {
+                            let started = started.clone();
+                            ui::text_button(tr("再接続"), move || {
+                                if let Some(size) = size.get_untracked() {
+                                    start(&started, size);
+                                }
+                            })
+                            .enabled(move || {
+                                size.get().is_some()
+                                    && connection.settings.with(|p| p.connected())
+                                    && !loading.get()
+                            })
+                        }
                     },
                 )),
         )
@@ -169,7 +183,7 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                         }
                         size.set(Some(next));
                         if !started.get() {
-                            start(next);
+                            start(&started, next);
                         }
                     }
                     "input" if input.get_untracked() => {
