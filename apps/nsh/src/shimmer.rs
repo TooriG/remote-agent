@@ -4,11 +4,14 @@
 //! spans, the glyphs before the band, one per slice of it and after it, each
 //! slice in its own blend of the two colors; a step moves glyphs between them.
 //!
-//! As T3's `observeVisibleAnimation`, it moves only while its row is in the
-//! list (the list makes only rows near its viewport) and the app is in use,
-//! stopping where it is, and never under Reduce Motion, where the label reads
-//! plainly. In use is the active app: a window behind another app's stays
-//! still. A step that leaves every glyph where it was changes nothing.
+//! A line's icon, as in T3's Thinking row, takes the band's color at its
+//! center.
+//!
+//! As T3's `observeVisibleAnimation`, it moves only while it shows: its row
+//! is in the list (the list makes only rows near its viewport) and the app's
+//! window is on screen, focused or not. It stops where it is, and never moves
+//! under Reduce Motion, where the line reads plainly. A step that leaves
+//! every glyph where it was changes nothing.
 use crate::ui::colors;
 use nsh_core::{platform::Lifecycle, prelude::*};
 use std::time::Duration;
@@ -28,6 +31,9 @@ const PERIOD: Duration = Duration::from_millis(2200);
 /// `4.5rem`.
 const BAND: f32 = 72.0;
 const SLICES: usize = 8;
+/// A line's icon and its gap to the label (`gap_3`).
+const ICON: f32 = 16.0;
+const GAP: f32 = 12.0;
 
 impl Sweep {
     /// How much of the foreground color the band gives at `x` points into it.
@@ -111,13 +117,18 @@ fn blend(opacity: f32) -> Rgba {
     }
 }
 
-/// `label` on one line in `size`-point text, swept by `sweep`.
-pub(crate) fn label(label: impl Fn() -> String + 'static, sweep: Sweep, size: f32) -> View {
+/// `label` on one line in `size`-point text after `icon`, swept by `sweep`.
+pub(crate) fn line(
+    icon: Option<crate::ui::Icon>,
+    label: impl Fn() -> String + 'static,
+    sweep: Sweep,
+    size: f32,
+) -> View {
     let step = signal(0_u32);
     let width = signal(0_f32);
     let label = computed(label);
     let centers = computed(move || label.with(|label| centers(label, size)));
-    let moving = computed(move || lifecycle() == Lifecycle::Active && !reduce_motion());
+    let moving = computed(move || lifecycle() != Lifecycle::Background && !reduce_motion());
     effect(move || {
         if moving.get() {
             // Spawned under this effect: it stops when the effect runs again
@@ -127,17 +138,20 @@ pub(crate) fn label(label: impl Fn() -> String + 'static, sweep: Sweep, size: f3
             });
         }
     });
+    // Positions are the line's own: the icon first, the label after it.
+    let lead = if icon.is_some() { ICON + GAP } else { 0.0 };
+    let left = computed(move || {
+        if reduce_motion() {
+            // Everything is before the band.
+            f32::INFINITY
+        } else {
+            // As T3's band, across the line as wide as it shows.
+            let shown = centers.with(|(_, extent)| width.get().min(*extent));
+            sweep.band_left(step.get(), lead + shown)
+        }
+    });
     let split = computed(move || {
-        centers.with(|(centers, extent)| {
-            // Under Reduce Motion every glyph is before the band.
-            let left = if reduce_motion() {
-                f32::INFINITY
-            } else {
-                // As T3's band, across the label as wide as it shows.
-                sweep.band_left(step.get(), width.get().min(*extent))
-            };
-            label.with(|label| parts(label, centers, left))
-        })
+        centers.with(|(centers, _)| label.with(|label| parts(label, centers, left.get() - lead)))
     });
     let slice = BAND / SLICES as f32;
     let spans = (0..SLICES + 2).fold(text(""), |line, part| {
@@ -151,11 +165,22 @@ pub(crate) fn label(label: impl Fn() -> String + 'static, sweep: Sweep, size: f3
                 .text_color(color),
         )
     });
-    view()
-        .flex_1()
-        .min_w_0()
-        .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
-        .child(spans.number_of_lines(1).text_size(px(size)))
+    let line = view().flex_1().min_w_0().flex_row().items_center().gap_3();
+    match icon {
+        Some(icon) => line.child(
+            view()
+                .text_color(move || blend(sweep.opacity(ICON / 2.0 - left.get())))
+                .child(crate::ui::icon(icon, ICON)),
+        ),
+        None => line,
+    }
+    .child(
+        view()
+            .flex_1()
+            .min_w_0()
+            .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
+            .child(spans.number_of_lines(1).text_size(px(size))),
+    )
 }
 
 #[cfg(test)]

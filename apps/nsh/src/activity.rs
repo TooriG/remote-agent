@@ -140,7 +140,8 @@ pub(crate) fn details(
                     16.0,
                 ))
                 .child(when(live, move || {
-                    crate::shimmer::label(summary, crate::shimmer::Sweep::Shine, 14.0)
+                    // As T3's `live-tool-shine`, over the label alone.
+                    crate::shimmer::line(None, summary, crate::shimmer::Sweep::Shine, 14.0)
                 }))
                 .child(when(
                     move || !live(),
@@ -212,21 +213,18 @@ pub(crate) enum Status {
     SettingUp,
 }
 
+/// A row keeps its status: it is made for the one it shows.
 pub(crate) fn status(status: Memo<Option<Status>>, body: impl Fn() -> String + 'static) -> View {
-    let thinking = move || status.get() == Some(Status::Thinking);
+    let thinking = status.get_untracked() == Some(Status::Thinking);
     view()
         .w_full()
+        .h(px(24.0))
         .flex_row()
         .items_center()
-        .gap_3()
-        .h(px(24.0))
-        .text_color(crate::ui::colors::MUTED)
-        .child(when(thinking, || {
-            crate::ui::icon(crate::ui::Icon::work("reasoning"), 16.0)
-        }))
-        .child(crate::shimmer::label(
+        .child(crate::shimmer::line(
+            thinking.then(|| crate::ui::Icon::work("reasoning")),
             move || {
-                if thinking() {
+                if thinking {
                     tr("思考中").to_owned()
                 } else {
                     body()
