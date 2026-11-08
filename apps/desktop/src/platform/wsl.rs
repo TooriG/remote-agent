@@ -19,116 +19,22 @@ pub(crate) struct ProjectSelection {
 
 pub(crate) fn choice(distro: &str) -> RemoteHost {
     RemoteHost {
-        id: format!("wsl:{distro}"),
-        name: format!("WSL ({distro})"),
+        id: agent_local_host::wsl::host_id(distro),
+        name: agent_local_host::wsl::host_name(distro),
         ticket: String::new(),
     }
 }
 
 pub(crate) async fn distributions() -> anyhow::Result<Vec<String>> {
-    if !cfg!(windows) {
-        return Ok(Vec::new());
-    }
-    let output = run(None, &["--list", "--quiet"], None).await?;
-    agent_local_host::wsl::parse_distros(&output)
-}
-
-async fn run(distro: Option<&str>, args: &[&str], input: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let executable =
-        PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into()))
-            .join("System32")
-            .join("wsl.exe");
-    let mut command = tokio::process::Command::new(executable);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
-    if let Some(distro) = distro {
-        agent_local_host::wsl::validate_distro(distro)?;
-        command.args(["--distribution", distro]);
-    }
-    let mut child = command
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    tokio::time::timeout(Duration::from_secs(60), async {
-        if let Some(input) = input {
-            child.stdin.take().unwrap().write_all(input).await?;
-        }
-        drop(child.stdin.take());
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let read = |reader: tokio::process::ChildStdout| async move {
-            let mut bytes = Vec::new();
-            reader.take(65537).read_to_end(&mut bytes).await?;
-            Ok::<_, std::io::Error>(bytes)
-        };
-        let mut error = Vec::new();
-        let mut stderr = stderr.take(65537);
-        let (stdout, _) = tokio::try_join!(read(stdout), stderr.read_to_end(&mut error))?;
-        anyhow::ensure!(
-            stdout.len() <= 65536 && error.len() <= 65536,
-            "WSL response is too large"
-        );
-        let status = child.wait().await?;
-        anyhow::ensure!(
-            status.success(),
-            "WSL: {}",
-            String::from_utf8_lossy(&error).trim()
-        );
-        Ok::<_, anyhow::Error>(stdout)
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("WSL startup timed out"))?
+    agent_local_host::wsl::distributions().await
 }
 
 async fn bootstrap(distro: &str, allow_upgrade: bool) -> anyhow::Result<LocalClientAccess> {
-    let bundle = std::env::current_exe()?.with_file_name("wsl-runtime");
-    anyhow::ensure!(
-        bundle.join("revision").is_file(),
-        "The WSL runtime is missing; install the complete Windows package"
-    );
-    // Positional arguments protect spaces and shell metacharacters in the
-    // Windows install path; the login shell supplies the user's provider PATH.
-    let path = bundle
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Invalid WSL runtime path"))?;
-    let bundle_env = format!("BEX_WSL_BUNDLE={}", path.replace('\\', "/"));
-    let scope = if isolated_host()? {
-        let directory = state_dir().map_err(anyhow::Error::msg)?;
-        ring::digest::digest(
-            &ring::digest::SHA256,
-            directory.as_os_str().as_encoded_bytes(),
-        )
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
-    } else {
-        String::new()
+    let scope = agent_local_host::launch::HostScope {
+        directory: state_dir().map_err(anyhow::Error::msg)?,
+        isolated: isolated_host()?,
     };
-    let scope_env = format!("BEX_WSL_SCOPE={scope}");
-    let upgrade_env = format!("BEX_WSL_ALLOW_UPGRADE={}", u8::from(allow_upgrade));
-    let bytes = run(
-        Some(distro),
-        &[
-            "--exec",
-            "env",
-            &bundle_env,
-            &scope_env,
-            &upgrade_env,
-            "sh",
-            "-c",
-            "exec \"${SHELL:-/bin/sh}\" -lc 'exec sh -s -- \"$BEX_WSL_BUNDLE\"'",
-        ],
-        Some(include_bytes!(
-            "../../../../crates/agent-local-host/src/wsl-bootstrap.sh"
-        )),
-    )
-    .await?;
-    LocalClientAccess::from_process_output(bytes)
+    agent_local_host::wsl::bootstrap(distro, &std::env::current_exe()?, &scope, allow_upgrade).await
 }
 
 impl Connections {
@@ -250,9 +156,7 @@ impl Connections {
         let cwd = path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid project path"))?;
-        if cfg!(windows)
-            && let Some(path) = agent_local_host::wsl::parse_unc(cwd)?
-        {
+        if let Some(path) = agent_local_host::wsl::folder(cwd)? {
             return Ok(ProjectSelection {
                 remote: Some(self.wsl_host(&path.distro).await?),
                 cwd: path.linux_path,

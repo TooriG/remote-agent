@@ -136,7 +136,7 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
 }
 
 /// The desktop's first screen before any Host: T3 Code's hero over pairing a PC.
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 pub(crate) fn hero() -> impl IntoElement {
     use crate::ui::colors;
     scroll().flex_1().child(

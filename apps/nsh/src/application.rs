@@ -58,9 +58,12 @@ pub(crate) struct State {
     pub browser_renderer: String,
     pub worktrees: Option<WorktreeEditor>,
     pub language: UiLanguage,
-    /// This app's own update, on the Mac.
-    #[cfg(target_os = "macos")]
+    /// This app's own update, on the desktop.
+    #[cfg(desktop)]
     pub update: Option<agent_core::updates::UpdateState>,
+    /// The update's worker waits for this app to end its event loop.
+    #[cfg(desktop)]
+    pub quitting: bool,
     uploads: BTreeMap<uuid::Uuid, (String, DraftKey)>,
 }
 
@@ -83,8 +86,10 @@ impl Default for State {
             browser_renderer: String::new(),
             worktrees: None,
             language: UiLanguage::default(),
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             update: None,
+            #[cfg(desktop)]
+            quitting: false,
             uploads: BTreeMap::new(),
         }
     }
@@ -195,10 +200,10 @@ pub(crate) struct Application {
     runtime: tokio::runtime::Handle,
     jobs: tokio_util::task::TaskTracker,
     selection_path: PathBuf,
-    /// Only the Mac settings change the language.
-    #[cfg(any(target_os = "macos", test))]
+    /// Only the desktop settings change the language.
+    #[cfg(any(desktop, test))]
     language_path: PathBuf,
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     updater: Option<Arc<agent_core::updates::Updater>>,
 }
 
@@ -223,10 +228,10 @@ impl Application {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         crate::l10n::set(language);
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         let scope = local.clone();
         let (runtime, client, incoming) = Client::new(root, local)?;
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         let updater = scope.map(|scope| {
             agent_core::updates::Updater::start(
                 scope,
@@ -248,13 +253,13 @@ impl Application {
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
             selection_path,
-            #[cfg(any(target_os = "macos", test))]
+            #[cfg(any(desktop, test))]
             language_path,
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             updater,
         });
         application.persist_selection(selection);
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         application.publish_update();
         let owner = Arc::downgrade(&application);
         let stop = application.stop.clone();
@@ -265,14 +270,21 @@ impl Application {
                     update = incoming.recv() => match update { Ok(update) => update, Err(_) => break },
                 };
                 let Some(owner) = owner.upgrade() else { break };
+                let listed = matches!(update, Update::Hosts(_));
                 owner.state.send_modify(|state| Arc::make_mut(state).receive(update));
+                // A chosen WSL distro's Host starts once it is listed; the
+                // client starts no distro on its own.
+                let host = owner.snapshot().host.clone();
+                if listed && agent_local_host::wsl::host_distro(&host).is_some() {
+                    owner.client.reconnect(host);
+                }
             }
         }, runtime.handle());
         Ok((runtime, application))
     }
 
     /// Views read the update with the rest of the application's state.
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     fn publish_update(self: &Arc<Self>) {
         let Some(mut updates) = self.updater.as_ref().map(|updater| updater.subscribe()) else {
             return;
@@ -298,7 +310,7 @@ impl Application {
         );
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub fn select_update_channel(&self, channel: agent_core::updates::Channel) {
         if let Some(updater) = &self.updater {
             updater.select_channel(channel);
@@ -307,8 +319,8 @@ impl Application {
 
     /// Checks, downloads or restarts into a release, as the update's phase allows.
     /// The restart quits once the worker that replaces this app is waiting.
-    #[cfg(target_os = "macos")]
-    pub fn advance_update(&self) {
+    #[cfg(desktop)]
+    pub fn advance_update(self: &Arc<Self>) {
         use agent_core::updates::UpdatePhase;
         let Some(updater) = self.updater.clone() else {
             return;
@@ -318,12 +330,17 @@ impl Application {
             UpdatePhase::Current | UpdatePhase::Failed(_) => updater.check(),
             UpdatePhase::Available(_) => updater.download(),
             UpdatePhase::Ready(_) => {
+                let owner = Arc::downgrade(self);
                 self.runtime.spawn(async move {
                     if let Some(lease) = updater.restart().await {
                         // The worker replaces the app after this process exits
                         // and releases the lock.
                         std::mem::forget(lease);
-                        nsh_platform_macos::quit_app();
+                        if let Some(owner) = owner.upgrade() {
+                            owner
+                                .state
+                                .send_modify(|state| Arc::make_mut(state).quitting = true);
+                        }
                     }
                 });
             }
@@ -352,7 +369,7 @@ impl Application {
     }
 
     /// Saves the UI language, then publishes it so the root is made again in it.
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(any(desktop, test))]
     pub fn select_language(&self, language: UiLanguage) {
         if let Err(reason) = agent_local_host::save_private_json(&self.language_path, &language) {
             self.state

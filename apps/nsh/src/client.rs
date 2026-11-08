@@ -1,6 +1,6 @@
 //! UI intents and publications cross this boundary; ClientSessions owns Host state.
 use crate::l10n::tr;
-use crate::storage::{self, Host, Storage, error};
+use crate::storage::{self, HandedKeys, Host, Storage, error};
 use agent_core::{
     client::{
         AgentError,
@@ -51,6 +51,8 @@ pub(crate) struct Client {
     /// This machine's Host, started from the app bundle when it is stopped.
     local: Option<HostScope>,
     local_startup: tokio::sync::Mutex<()>,
+    /// The keys WSL distros' Hosts handed over, which their sessions connect with.
+    handed: Arc<HandedKeys>,
     updates: async_channel::Sender<Update>,
     panes: std::sync::Mutex<std::collections::BTreeMap<u64, Arc<panes::Pane>>>,
 }
@@ -90,6 +92,7 @@ impl Client {
             hosts: Default::default(),
             local,
             local_startup: Default::default(),
+            handed: Default::default(),
             updates,
             panes: Default::default(),
         });
@@ -120,9 +123,19 @@ impl Client {
         } else {
             serde_json::from_slice(&bytes).map_err(error)?
         };
-        hosts.retain(|host| host.id != LOCAL);
+        hosts.retain(saved);
         if let Some(scope) = &self.local {
             hosts.insert(0, local_profile(scope).await?);
+            // WSL is optional: saved Hosts restore without it.
+            match agent_local_host::wsl::distributions().await {
+                Ok(distros) => hosts.extend(distros.iter().map(|distro| Host {
+                    id: agent_local_host::wsl::host_id(distro),
+                    name: agent_local_host::wsl::host_name(distro),
+                    ticket: String::new(),
+                    local_directory: None,
+                })),
+                Err(reason) => self.report(reason),
+            }
         }
         let mut registry = self.hosts.lock().await;
         if self.closing.load(Ordering::SeqCst) {
@@ -143,6 +156,7 @@ impl Client {
         let storage = Arc::new(Storage {
             root: self.root.clone(),
             host: host.clone(),
+            handed: self.handed.clone(),
         });
         let session = self
             .sessions
@@ -152,7 +166,11 @@ impl Client {
             match session.clone().ready().await {
                 Ok(_) => {
                     owner.observe(host.id.clone(), session.clone());
-                    owner.resume(session, host).await;
+                    // A distro's Host starts only once it is chosen: starting
+                    // WSL is not free.
+                    if agent_local_host::wsl::host_distro(&host.id).is_none() {
+                        owner.resume(session, host).await;
+                    }
                 }
                 Err(reason) => owner.report(reason),
             }
@@ -182,6 +200,22 @@ impl Client {
     /// A paired Host's saved ticket, or this machine's Host's current one,
     /// starting it when it is stopped.
     async fn ticket(&self, host: Host) -> Result<String, AgentError> {
+        if let Some((distro, scope)) =
+            agent_local_host::wsl::host_distro(&host.id).zip(self.local.as_ref())
+        {
+            // Only this instance's first start may replace an older WSL Host.
+            let executable = agent_local_host::launch::host_executable().map_err(error)?;
+            let access = agent_local_host::wsl::bootstrap(
+                distro,
+                &executable,
+                scope,
+                !self.handed.has(&host.id),
+            )
+            .await
+            .map_err(error)?;
+            self.handed.hand(&host.id, access.secret);
+            return Ok(access.ticket.to_string());
+        }
         let Some(scope) = self.local.as_ref().filter(|_| host.id == LOCAL) else {
             return Ok(host.ticket);
         };
@@ -289,6 +323,12 @@ impl Client {
     }
 
     pub fn reconnect(self: &Arc<Self>, host: String) {
+        self.connect_then(host, None);
+    }
+
+    /// Reaches `host`, then dispatches `intent` to it: a project picked in a
+    /// distro's folder is added once its Host runs.
+    pub fn connect_then(self: &Arc<Self>, host: String, intent: Option<Intent>) {
         let owner = self.clone();
         self.spawn(async move {
             let profile = owner
@@ -299,9 +339,12 @@ impl Client {
                 .find(|profile| profile.id == host)
                 .cloned();
             if let Some(profile) = profile
-                && let Some(session) = owner.sessions.session(host)
+                && let Some(session) = owner.sessions.session(host.clone())
             {
                 owner.resume(session, profile).await;
+                if let Some(intent) = intent {
+                    owner.dispatch(&host, None, intent);
+                }
             }
         });
     }
@@ -361,6 +404,7 @@ impl Client {
         let storage = Arc::new(Storage {
             root: self.root.clone(),
             host: host.clone(),
+            handed: self.handed.clone(),
         });
         let session = self
             .sessions
@@ -377,7 +421,7 @@ impl Client {
         let path = self.root.join("hosts.json");
         let saved = next
             .iter()
-            .filter(|host| host.id != LOCAL)
+            .filter(|host| saved(host))
             .cloned()
             .collect::<Vec<_>>();
         if let Err(reason) = tokio::task::spawn_blocking(move || {
@@ -468,6 +512,11 @@ impl Client {
     }
 }
 
+/// Paired Hosts are saved; this PC's and its WSL distros' are found again.
+fn saved(host: &Host) -> bool {
+    host.id != LOCAL && agent_local_host::wsl::host_distro(&host.id).is_none()
+}
+
 /// This machine's Host where it runs or will start, before it is ready.
 async fn local_profile(scope: &HostScope) -> Result<Host, AgentError> {
     let local = scope.discover().await.map_err(error)?;
@@ -501,6 +550,7 @@ mod tests {
         let storage = Storage {
             root: root.into(),
             host: host.clone(),
+            handed: Default::default(),
         };
         let mut snapshot = Snapshot::default();
         snapshot.connection.connection_disabled = true;
@@ -550,6 +600,7 @@ mod tests {
         Storage {
             root: directory.path().into(),
             host: local.clone(),
+            handed: Default::default(),
         }
         .save(
             StorageKey::LocalState,

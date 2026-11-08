@@ -30,6 +30,21 @@ pub fn file_preview_mime_type(path: String) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Whether a client opens `path` in its image viewer, by its file name. Apple
+/// clients ask their platform's type registry instead.
+pub fn is_image_file(path: &str) -> bool {
+    file_preview_mime_type(path.into()).is_some_and(|mime| mime.starts_with("image/"))
+}
+
+/// The file name extension a client saves an image of `mime` under.
+pub fn image_extension(mime: &str) -> Option<&'static str> {
+    let mime = mime.trim().to_ascii_lowercase();
+    FILE_MIME_TYPES
+        .iter()
+        .find(|(_, candidate)| candidate.starts_with("image/") && *candidate == mime)
+        .map(|(extension, _)| *extension)
+}
+
 const FILE_MIME_TYPES: &[(&str, &str)] = &[
     ("3gp", "video/3gpp"),
     ("7z", "application/x-7z-compressed"),
@@ -135,5 +150,26 @@ mod tests {
     #[case("/repo/video.mp4/", None)]
     fn binary_files_bypass_text_reads(#[case] path: &str, #[case] mime: Option<&str>) {
         assert_eq!(file_preview_mime_type(path.into()).as_deref(), mime);
+    }
+
+    #[test]
+    fn images_are_recognized_by_name_and_saved_under_their_type() {
+        for path in [r"C:\shots\Screen.PNG", "/repo/a.webp", "/repo/icon.svg"] {
+            assert!(is_image_file(path), "{path}");
+        }
+        for path in [
+            "/repo/clip.mp4",
+            "/repo/notes.md",
+            "/repo/png",
+            "/repo/a.png/",
+        ] {
+            assert!(!is_image_file(path), "{path}");
+        }
+        assert_eq!(image_extension("image/png"), Some("png"));
+        assert_eq!(image_extension(" Image/JPEG "), Some("jpeg"));
+        assert_eq!(image_extension("image/svg+xml"), Some("svg"));
+        // Only images: a video's extension is not an image's.
+        assert_eq!(image_extension("video/mp4"), None);
+        assert_eq!(image_extension("image/x-unknown"), None);
     }
 }

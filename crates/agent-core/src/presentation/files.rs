@@ -12,7 +12,9 @@ mod preview;
 pub use mobile::{
     MobileFileAction, MobileFileMenuItem, mobile_file_menu, mobile_file_open_request,
 };
-pub use preview::{file_preview_mime_type, file_preview_truncation_notice};
+pub use preview::{
+    file_preview_mime_type, file_preview_truncation_notice, image_extension, is_image_file,
+};
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 pub fn mobile_file_icon(path: String) -> String {

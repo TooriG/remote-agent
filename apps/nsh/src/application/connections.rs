@@ -149,6 +149,31 @@ impl Application {
         }
     }
 
+    /// A folder picked on this PC inside a WSL distro belongs to that distro's
+    /// Host: it becomes the chosen Host, which runs `intent` for the folder's
+    /// Linux path once it is reached. Whether the folder was a distro's.
+    pub fn open_wsl_folder(
+        &self,
+        path: &Path,
+        intent: impl FnOnce(String) -> Intent,
+    ) -> Result<bool, String> {
+        let Some(folder) = agent_local_host::wsl::folder(&path.to_string_lossy())
+            .map_err(|reason| reason.to_string())?
+        else {
+            return Ok(false);
+        };
+        let host = agent_local_host::wsl::host_id(&folder.distro);
+        if !self.activate_host(&host, true) {
+            return Err(crate::l10n::tr_format(
+                "{0} が見つかりません。",
+                [&agent_local_host::wsl::host_name(&folder.distro)],
+            ));
+        }
+        self.client
+            .connect_then(host, Some(intent(folder.linux_path)));
+        Ok(true)
+    }
+
     fn activate_host(&self, host: &str, keep_list: bool) -> bool {
         self.state.send_if_modified(|state| {
             if self.stop.is_cancelled()
@@ -270,6 +295,7 @@ mod tests {
             Storage {
                 root: root.into(),
                 host: host.clone(),
+                handed: Default::default(),
             }
             .save(
                 StorageKey::LocalState,

@@ -1,6 +1,6 @@
 use crate::Connection;
 use crate::l10n::{localized, tr};
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(desktop))]
 use crate::native;
 use crate::ui::Enabled;
 use agent_core::{
@@ -8,7 +8,7 @@ use agent_core::{
     state::{DraftKey, Intent, operations as op},
 };
 use agent_protocol::session::ProviderKind;
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 use nsh_core::element::{ImageSrc, input};
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
@@ -83,7 +83,7 @@ pub(crate) fn controls() -> View {
         })
     });
     let act = move |action: &str, value: &str| act(connection, picker, action, value);
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     {
         use nsh_core::overlay::{Align, Placement};
         view().flex_row().items_center().child(
@@ -102,7 +102,7 @@ pub(crate) fn controls() -> View {
                 .child(panel(data, act)),
         )
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(desktop))]
     {
         view().flex_row().items_center().child(trigger).child(
             native("bex.details")
@@ -192,7 +192,7 @@ fn act(connection: Connection, picker: Signal<Option<Picker>>, action: &str, val
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 pub(crate) fn provider_mark(id: &str) -> Option<(&'static str, nsh_core::element::Rgba)> {
     use crate::ui::colors::FOREGROUND;
     use nsh_core::element::rgb;
@@ -215,7 +215,7 @@ pub(crate) fn provider_mark(id: &str) -> Option<(&'static str, nsh_core::element
 
 /// The desktop model form, as the desktop client's popover: the agents beside the
 /// account, the model search and list, and the response settings.
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -> View {
     use crate::{
         l10n::tr_format,

@@ -8,7 +8,6 @@ use crate::{
 };
 use agent_core::presentation::markdown::{MarkdownFileSurface, markdown_file_target};
 use nsh_core::{ImageSource, prelude::*};
-use serde_json::json;
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -73,10 +72,13 @@ impl Preview {
 
 pub(crate) fn preview() -> impl Element {
     let preview = use_context::<Preview>().unwrap();
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    return drawn_preview(preview);
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     view()
         .child(native("bex.preview")
             .h(px(0.0))
-            .prop("path", move || json!(preview.state.with(|file| match file {
+            .prop("path", move || serde_json::json!(preview.state.with(|file| match file {
                 PreviewState::Ready(file) => file.path.to_string_lossy().into_owned(),
                 _ => String::new(),
             })))
@@ -89,6 +91,109 @@ pub(crate) fn preview() -> impl Element {
                 }
             }))
         .child(when(move || matches!(preview.state.get(), PreviewState::Loading(_)), || text(tr("ファイルを読み込み中…"))))
+}
+
+/// The preview where QuickLook is not: an image in NSH's own viewer over the
+/// window; another file in the app the system opens it with, while a bar keeps
+/// its local copy until it is dismissed.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn drawn_preview(preview: Preview) -> View {
+    use crate::ui::{self, Icon, colors};
+    use nsh_core::element::{overlay, rgba};
+    let file = computed(move || match preview.state.get() {
+        PreviewState::Ready(file) => Some(file),
+        _ => None,
+    });
+    let image = move || {
+        file.with(|file| {
+            file.as_ref()
+                .is_some_and(|file| native::image_file(&file.path))
+        })
+    };
+    let path = move || {
+        file.with(|file| {
+            file.as_ref()
+                .map(|file| file.path.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        })
+    };
+    effect(move || {
+        let Some(file) = file.get().filter(|file| !native::image_file(&file.path)) else {
+            return;
+        };
+        let opened = open_path(file.path.clone());
+        spawn(async move {
+            if let Err(reason) = opened.await {
+                preview.state.set(PreviewState::Closed);
+                native::message(tr("プレビュー"), reason);
+            }
+        });
+    });
+    view()
+        .child(when(image, move || {
+            overlay()
+                .absolute()
+                .inset_0()
+                .items_center()
+                .justify_center()
+                .p_8()
+                .bg(rgba(0x000000cc))
+                .on_press(move || preview.close())
+                .child(
+                    nsh_core::element::image(path)
+                        .w_full()
+                        .h_full()
+                        .object_fit(ResizeMode::Contain)
+                        .label(tr("プレビュー"))
+                        .on_error(move |_: &str| {
+                            preview.close();
+                            native::message(
+                                tr("プレビュー"),
+                                tr("このファイルをプレビューできませんでした。"),
+                            );
+                        }),
+                )
+                .child(
+                    view()
+                        .absolute()
+                        .top(px(16.0))
+                        .right(px(16.0))
+                        .child(ui::icon_button(Icon::CLOSE, tr("閉じる"), move || {
+                            preview.close()
+                        })),
+                )
+        }))
+        .child(when(
+            move || file.with(Option::is_some) && !image(),
+            move || {
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_b_color(colors::BORDER)
+                    .child(
+                        text(move || {
+                            file.with(|file| {
+                                file.as_ref()
+                                    .and_then(|file| file.path.file_name())
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default()
+                            })
+                        })
+                        .flex_1()
+                        .min_w_0()
+                        .number_of_lines(1),
+                    )
+                    .child(ui::text_button(tr("閉じる"), move || preview.close()))
+            },
+        ))
+        .child(when(
+            move || matches!(preview.state.get(), PreviewState::Loading(_)),
+            || text(tr("ファイルを読み込み中…")),
+        ))
 }
 
 pub(crate) async fn receive(

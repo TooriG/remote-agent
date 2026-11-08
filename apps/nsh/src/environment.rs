@@ -1,8 +1,9 @@
 use crate::l10n::{localized, tr, tr_format};
+use crate::ui::{self, Enabled};
 use crate::{Connection, application::Host, connections, native};
 use agent_core::presentation::connections::ConnectionAgent;
 use agent_core::state::{Intent, operations as op};
-use nsh_core::{element::NativeView, prelude::*};
+use nsh_core::prelude::*;
 use serde_json::json;
 
 pub(crate) fn overview(hosts: Memo<Vec<Host>>) -> impl IntoElement {
@@ -133,15 +134,15 @@ pub(crate) fn connection_status(connection: Connection) -> String {
 }
 
 /// Whether this PC accepts connections from the selected Host's devices.
-pub(crate) fn connection_switch(connection: Connection) -> NativeView {
-    native::switch(
-        json!(tr("このPCへの接続")),
-        move || json!(connection.settings.with(|p| p.connection_enabled())),
+pub(crate) fn connection_switch(connection: Connection) -> ui::Switch {
+    ui::switch(
+        || tr("このPCへの接続").into(),
+        move || connection.settings.with(|p| p.connection_enabled()),
         move |enabled| {
             connection.dispatch(Intent::SetConnectionEnabled { enabled });
         },
     )
-    .prop("enabled", move || json!(!connection.host.get().is_empty()))
+    .enabled(move || !connection.host.get().is_empty())
 }
 
 pub(crate) fn host_software(connection: Connection) -> String {
@@ -192,10 +193,10 @@ pub(crate) fn providers_reloadable(connection: Connection) -> bool {
 pub(crate) fn provider_switch(
     connection: Connection,
     agent: ReadSignal<ConnectionAgent>,
-) -> NativeView {
-    native::switch(
-        move || json!(agent.with(|a| tr_format("{0}を使用", [&a.name]))),
-        move || json!(agent.with(|a| a.enabled)),
+) -> ui::Switch {
+    ui::switch(
+        move || agent.with(|a| tr_format("{0}を使用", [&a.name])),
+        move || agent.with(|a| a.enabled),
         move |enabled| {
             connection.dispatch(Intent::SetProviderEnabled(op::SetProviderEnabled {
                 provider: agent.with_untracked(|a| a.provider),
@@ -203,10 +204,12 @@ pub(crate) fn provider_switch(
             }))
         },
     )
-    .prop("enabled", move || {
-        json!(connection.settings.with(|p| p.connected()
-            && p.provider_settings_loaded()
-            && !p.provider_settings_busy()
-            && p.account_login().is_none()))
+    .enabled(move || {
+        connection.settings.with(|p| {
+            p.connected()
+                && p.provider_settings_loaded()
+                && !p.provider_settings_busy()
+                && p.account_login().is_none()
+        })
     })
 }

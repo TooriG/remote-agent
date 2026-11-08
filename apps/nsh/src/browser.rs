@@ -9,6 +9,19 @@ use nsh_core::{AutoCapitalize, KeyboardType, element::input, platform::Lifecycle
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 
+/// The Mac's WebKit pages live in this hidden container while no viewer shows
+/// them. Windows shows the Host's rendered pages and renders none itself.
+#[cfg(desktop)]
+pub(crate) fn host() -> AnyElement {
+    #[cfg(target_os = "macos")]
+    return native("bex.browser.host")
+        .w(px(0.0))
+        .h(px(0.0))
+        .into_element();
+    #[cfg(not(target_os = "macos"))]
+    view().into_element()
+}
+
 pub(crate) fn screen() -> impl IntoElement {
     let workspace = use_context::<Workbench>().unwrap();
     let thread = computed(move || match workspace.scope.get().draft {
@@ -201,6 +214,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
             .or_else(|| notice.get())
             .map(localized)
     });
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     let native_action = move |event: &NativeEvent| {
         if event.data.get("DismissCredentials").is_some() {
             credentials.set(None);
@@ -254,6 +268,17 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
         .child(when(
             move || !native_page.get(),
             move || {
+                #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+                return drawn::page(
+                    image,
+                    frame,
+                    accepts_input,
+                    answering,
+                    credentials,
+                    viewport,
+                    send,
+                );
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
                 native("bex.browser.remote")
                     .prop("data", move || {
                         browser_data(
@@ -658,6 +683,160 @@ fn menu(frame: &BrowserFrame) -> serde_json::Value {
     json!(items)
 }
 
+/// The Host's rendered page where SwiftUI does not show it: the image fitted
+/// to the panel, a click at its page coordinates, and the page's dialog. The
+/// Host's credential imports are offered only on Apple platforms.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+mod drawn {
+    use crate::l10n::tr;
+    use crate::{shared::Shared, ui};
+    use agent_core::presentation::conversation::ActionTone;
+    use agent_protocol::browser::{BrowserAction, BrowserCredentials, BrowserFrame};
+    use nsh_core::prelude::*;
+
+    pub(super) fn page(
+        image: Signal<String>,
+        frame: Signal<Shared<BrowserFrame>>,
+        accepts_input: Memo<bool>,
+        answering: Signal<bool>,
+        credentials: Signal<Option<BrowserCredentials>>,
+        viewport: Signal<(f64, f64)>,
+        send: impl Fn(BrowserAction) -> bool + Copy + 'static,
+    ) -> AnyElement {
+        // The page's own size, which clicks are reported in.
+        let page = move || frame.with(|f| (f64::from(f.width), f64::from(f.height)));
+        let scale = move || {
+            let ((width, height), (shown_width, shown_height)) = (page(), viewport.get());
+            if width <= 0.0 || height <= 0.0 {
+                return 1.0;
+            }
+            (shown_width / width).min(shown_height / height).min(1.0)
+        };
+        let dialog = computed(move || {
+            if answering.get() {
+                None
+            } else {
+                frame.with(|f| f.dialog.clone())
+            }
+        });
+        let reply = signal(String::new());
+        effect(move || {
+            if credentials.with(Option::is_some) {
+                credentials.set(None);
+                crate::native::message(
+                    tr("ブラウザのメニュー"),
+                    tr("この端末ではブラウザデータを取り込めません。"),
+                );
+            }
+        });
+        view()
+            .flex_1()
+            .min_h_0()
+            .bg(ui::colors::SURFACE)
+            .label(tr("ブラウザ"))
+            .on_layout(move |bounds: &Bounds<Points>| {
+                viewport.set((
+                    f64::from(bounds.size.width.0),
+                    f64::from(bounds.size.height.0),
+                ))
+            })
+            .child(when(
+                move || image.with(String::is_empty),
+                || {
+                    view()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .gap_2()
+                        .p_4()
+                        .child(text(tr("プレビューはまだありません")).text_size(px(15.0)))
+                        .child(
+                            text(tr("URLを入力するか、AIにブラウザ操作を依頼してください。"))
+                                .text_color(ui::colors::MUTED),
+                        )
+                },
+            ))
+            .child(when(
+                move || !image.with(String::is_empty),
+                move || {
+                    nsh_core::element::image(move || {
+                        format!("data:image/jpeg;base64,{}", image.get())
+                    })
+                    .w(move || px((page().0 * scale()) as f32))
+                    .h(move || px((page().1 * scale()) as f32))
+                    .on_press(move |event: &PressEvent| {
+                        if !accepts_input.get_untracked() {
+                            return;
+                        }
+                        let scale = scale();
+                        send(BrowserAction::Click {
+                            x: f64::from(event.position.x.0) / scale,
+                            y: f64::from(event.position.y.0) / scale,
+                        });
+                    })
+                },
+            ))
+            .child(when(
+                move || dialog.with(Option::is_some),
+                move || {
+                    let answer = move |accept: bool| {
+                        let text = if accept {
+                            reply.get_untracked()
+                        } else {
+                            String::new()
+                        };
+                        reply.set(String::new());
+                        send(BrowserAction::Dialog { accept, text });
+                    };
+                    view()
+                        .absolute()
+                        .left(px(16.0))
+                        .right(px(16.0))
+                        .top(px(16.0))
+                        .gap_3()
+                        .p_4()
+                        .rounded(px(12.0))
+                        .border_1()
+                        .border_color(ui::colors::BORDER)
+                        .bg(ui::colors::BACKGROUND)
+                        .child(
+                            text(move || {
+                                dialog
+                                    .with(|d| d.as_ref().map(|d| d.message.clone()))
+                                    .unwrap_or_default()
+                            })
+                            .selectable(true),
+                        )
+                        .child(when(
+                            move || dialog.with(|d| d.as_ref().is_some_and(|d| d.prompt)),
+                            move || {
+                                ui::field()
+                                    .label(tr("入力"))
+                                    .value(move || reply.get())
+                                    .on_change(move |text: &str| reply.set(text.to_owned()))
+                            },
+                        ))
+                        .child(
+                            view()
+                                .flex_row()
+                                .justify_end()
+                                .gap_2()
+                                .child(ui::action_button(
+                                    tr("キャンセル"),
+                                    ActionTone::Secondary,
+                                    move || answer(false),
+                                ))
+                                .child(ui::action_button("OK", ActionTone::Primary, move || {
+                                    answer(true)
+                                })),
+                        )
+                },
+            ))
+            .into_element()
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 fn browser_data(
     image: &str,
     enabled: bool,

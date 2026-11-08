@@ -1,6 +1,14 @@
 fn main() {
     let manifest = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     println!("cargo:rerun-if-changed=ios-simulator.entitlements");
+    // `desktop`: the window shell the Mac and Windows apps share.
+    println!("cargo::rustc-check-cfg=cfg(desktop)");
+    if matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("macos" | "windows")
+    ) {
+        println!("cargo::rustc-cfg=desktop");
+    }
     if std::env::var("TARGET").is_ok_and(|target| target.ends_with("-apple-ios-sim")) {
         // Xcode embeds Simulator entitlements in Mach-O. Keeping them out of
         // the ad-hoc macOS signature also keeps the Simulator binary launchable.

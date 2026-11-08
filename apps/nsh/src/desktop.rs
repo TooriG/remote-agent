@@ -1,7 +1,12 @@
-//! One NSH surface draws the whole window; WebKit's pages are owned by a hosted container.
+//! One NSH surface draws the whole window: AppKit's on the Mac, Win32's on Windows.
+//! On the Mac, WebKit's pages are owned by a hosted container.
 use crate::{Area, application::Application, shared::Shared};
 use nsh_core::element::*;
-use nsh_platform_macos::{AppOptions, AppSource, Root, run_app};
+#[cfg(target_os = "macos")]
+use nsh_platform_macos as platform;
+#[cfg(windows)]
+use nsh_platform_windows as platform;
+use platform::{AppOptions, AppSource, Root, run_app};
 use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
@@ -55,6 +60,15 @@ pub(super) fn root(application: Arc<Application>, area: Area) -> Root {
     })
 }
 
+/// Ends the app's event loop once an update's worker waits to replace it.
+pub(crate) fn quit() {
+    #[cfg(target_os = "macos")]
+    nsh_platform_macos::quit_app();
+    // Windows' app ends with its only window.
+    #[cfg(windows)]
+    nsh_core::element::desktop::close_window();
+}
+
 pub fn run() -> std::process::ExitCode {
     // The app's data follows its Host's scope, so a source build keeps apart
     // from the installed app as their Hosts do.
@@ -67,46 +81,61 @@ pub fn run() -> std::process::ExitCode {
                     .map(|(runtime, app)| (runtime, app, Some(directory)))
             }) {
             Ok(service) => service,
-            Err(reason) => {
-                eprintln!("{reason}");
-                return std::process::ExitCode::FAILURE;
-            }
+            Err(reason) => return fail(&reason.to_string()),
         };
-    nsh_platform_macos::set_components(crate::register_macos);
+    #[cfg(target_os = "macos")]
+    nsh_platform_macos::set_components(crate::native::macos::register);
     let options = AppOptions {
         app_id: "app.bex.desktop".into(),
         title: "Bex".into(),
         size: (1360, 900),
         // Closing hides the window; the Dock reopens it, and Quit stops the app.
+        #[cfg(target_os = "macos")]
         keep_alive_on_close: true,
         ..Default::default()
     };
-    let browser = crate::native::browser_macos::Service::new(
-        application.clone(),
-        runtime.handle().clone(),
-        local_directory,
-    );
-    crate::native::browser_macos::register(&options.components, browser.clone());
+    #[cfg(target_os = "macos")]
+    let browser = {
+        let browser = crate::native::browser_macos::Service::new(
+            application.clone(),
+            runtime.handle().clone(),
+            local_directory,
+        );
+        crate::native::browser_macos::register(&options.components, browser.clone());
+        browser
+    };
+    // Windows' pages are the Host's rendered images; no local renderer starts.
+    #[cfg(windows)]
+    let _ = local_directory;
+    #[cfg(target_os = "macos")]
     let acceptance = match crate::acceptance::from_environment(
         objc2::MainThreadMarker::new().expect("the app starts on the main thread"),
     ) {
         Ok(acceptance) => acceptance,
-        Err(reason) => {
-            eprintln!("{reason}");
-            return std::process::ExitCode::FAILURE;
-        }
+        Err(reason) => return fail(&reason),
     };
     let result = run_app(
         AppSource::Rust(root(application.clone(), Area::Shell)),
         options,
     );
+    #[cfg(target_os = "macos")]
     runtime.block_on(browser.shutdown().wait());
     if let Err(reason) = runtime.block_on(application.shutdown()) {
-        eprintln!("{reason}");
-        return std::process::ExitCode::FAILURE;
+        return fail(&reason.to_string());
     }
+    #[cfg(target_os = "macos")]
     if acceptance.is_some_and(|passed| !passed.get()) {
         return std::process::ExitCode::FAILURE;
     }
     result
+}
+
+/// A failure before or after the window: on the console on the Mac, in a
+/// message box on Windows, whose app has no console.
+fn fail(reason: &str) -> std::process::ExitCode {
+    #[cfg(target_os = "macos")]
+    eprintln!("{reason}");
+    #[cfg(windows)]
+    nsh_platform_windows::fatal_error(reason);
+    std::process::ExitCode::FAILURE
 }

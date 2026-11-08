@@ -1809,6 +1809,22 @@
         }
       }
     },
+    "{0} が見つかりません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} が見つかりません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} wasn't found."
+          }
+        }
+      }
+    },
     "{0} にリセット": {
       "localizations": {
         "ja": {
@@ -2957,6 +2973,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Camera unavailable on this device."
+          }
+        }
+      }
+    },
+    "この端末ではブラウザデータを取り込めません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この端末ではブラウザデータを取り込めません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Browser data can't be imported on this device."
           }
         }
       }

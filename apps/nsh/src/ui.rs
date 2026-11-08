@@ -18,7 +18,7 @@ pub(crate) mod colors {
     pub(crate) const BORDER: Rgba = rgb(0x303030);
     pub(crate) const FOREGROUND: Rgba = rgb(0xe6e6e6);
     pub(crate) const MUTED: Rgba = rgb(0xa6a6a6);
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "ios"))]
     pub(crate) const ACCENT: Rgba = rgb(0x346bf1);
     /// A ghost control under the pointer: the selection fill at half opacity.
     pub(crate) const GHOST_HOVER: Rgba = rgba(0x28282880);
@@ -60,11 +60,11 @@ impl Icon {
     pub(crate) const CHECK: Self = icon!(Check, "checkmark");
     pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown, "chevron.down");
     pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight, "chevron.right");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const CHEVRON_UP: Self = icon!(ChevronUp, "chevron.up");
     pub(crate) const CLOSE: Self = icon!(X, "xmark");
     pub(crate) const COPY: Self = icon!(Copy, "doc.on.doc");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const DETAILS: Self = icon!(SquareMenu, "list.bullet.rectangle");
     pub(crate) const DIFF: Self = icon!(Diff, "plusminus");
     pub(crate) const ELLIPSIS: Self = icon!(Ellipsis, "ellipsis");
@@ -73,7 +73,7 @@ impl Icon {
     pub(crate) const FILE_PEN: Self = icon!(FilePen, "square.and.pencil");
     pub(crate) const BRAIN: Self = icon!(Brain, "brain");
     pub(crate) const REPLACE: Self = icon!(Replace, "arrow.left.arrow.right");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const FOLDER_OPEN: Self = icon!(FolderOpen, "folder");
     pub(crate) const FILE_TEXT: Self = icon!(FileText, "doc");
     pub(crate) const EXTERNAL_LINK: Self = icon!(ExternalLink, "arrow.up.right.square");
@@ -91,9 +91,9 @@ impl Icon {
     pub(crate) const MONITOR: Self = icon!(Monitor);
     pub(crate) const NEW_CHAT: Self = icon!(SquarePen, "square.and.pencil");
     pub(crate) const PENCIL: Self = icon!(Pencil, "pencil");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const PANEL_LEFT_CLOSE: Self = icon!(PanelLeftClose, "sidebar.left");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const PANEL_LEFT_OPEN: Self = icon!(PanelLeftOpen, "sidebar.left");
     pub(crate) const PANEL_RIGHT: Self = icon!(PanelRight, "sidebar.right");
     pub(crate) const PLUS: Self = icon!(Plus, "plus");
@@ -106,13 +106,13 @@ impl Icon {
     pub(crate) const EXPAND_ALL: Self = icon!(ChevronsUpDown, "arrow.up.left.and.arrow.down.right");
     pub(crate) const COLLAPSE_ALL: Self =
         icon!(ChevronsDownUp, "arrow.down.right.and.arrow.up.left");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const SETTINGS: Self = icon!(Settings, "gearshape");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const SLIDERS: Self = icon!(Settings2, "slider.horizontal.3");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const FOLDER_TREE: Self = icon!(FolderTree, "folder");
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     pub(crate) const SERVER: Self = icon!(Server, "server.rack");
     pub(crate) const BOT: Self = icon!(Bot, "cpu");
     pub(crate) const STEER: Self = icon!(Redo2, "arrow.uturn.forward");
@@ -498,11 +498,188 @@ pub(crate) fn labeled_button(
         .max_w(px(260.0))
 }
 
-#[cfg(target_os = "macos")]
-impl Enabled for Control {
+/// On Apple platforms the app's controls are the platform's native components.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+impl Enabled for nsh_core::element::NativeView {
     fn enabled(self, enabled: impl Fn() -> bool + Copy + 'static) -> Self {
         self.prop("enabled", move || serde_json::json!(enabled()))
     }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+impl Enabled for nsh_base::SwitchElement {
+    fn enabled(self, enabled: impl Fn() -> bool + Copy + 'static) -> Self {
+        self.disabled(nsh_core::element::Prop::bind(move || !enabled()))
+    }
+}
+
+/// A control shown as on: AppKit's selected state, or the selection fill.
+#[cfg(desktop)]
+pub(crate) trait Selected {
+    fn selected_when(self, selected: impl Fn() -> bool + Copy + 'static) -> Self;
+}
+
+#[cfg(target_os = "macos")]
+impl Selected for Control {
+    fn selected_when(self, selected: impl Fn() -> bool + Copy + 'static) -> Self {
+        self.prop("selected", move || serde_json::json!(selected()))
+    }
+}
+
+#[cfg(windows)]
+impl Selected for Control {
+    fn selected_when(self, selected: impl Fn() -> bool + Copy + 'static) -> Self {
+        self.style_when(selected, |s| s.bg(colors::SELECTED))
+    }
+}
+
+/// A labeled on/off setting, its label for assistive technologies: the
+/// platform's switch on Apple platforms, NSH's in T3 Code's look elsewhere.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) type Switch = nsh_core::element::NativeView;
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub(crate) type Switch = nsh_base::SwitchElement;
+
+pub(crate) fn switch(
+    label: impl Fn() -> String + 'static,
+    value: impl Fn() -> bool + 'static,
+    change: impl Fn(bool) + 'static,
+) -> Switch {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    return native("bex.switch")
+        .prop("label", move || serde_json::json!(label()))
+        .prop("value", move || serde_json::json!(value()))
+        .on_native_event(move |event: &NativeEvent| {
+            if &*event.name == "change"
+                && let Some(value) = event.data.as_bool()
+            {
+                change(value);
+            }
+        });
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        use nsh_core::element::{Prop, white};
+        nsh_base::switch()
+            .checked(Prop::bind(value))
+            .accessibility_label(Prop::bind(move || Some(SharedString::from(label()))))
+            .on_change(move |next: &bool| change(*next))
+            .flex_shrink_0()
+            .disabled_style(|s| s.opacity(0.5))
+            .track_style(|s| {
+                s.w(px(36.0))
+                    .h(px(20.0))
+                    .p(px(2.0))
+                    .rounded_full()
+                    .bg(colors::BORDER)
+                    .checked(|s| s.bg(colors::ACCENT))
+            })
+            .thumb_style(|s| {
+                s.size(px(16.0))
+                    .rounded_full()
+                    .bg(white())
+                    .checked(|s| s.translate_x(px(16.0)))
+            })
+    }
+}
+
+/// A search field showing `value` and reporting each change: the platform's
+/// on Apple platforms, an NSH field elsewhere. Without a placeholder the
+/// platform's own shows.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) type SearchField = nsh_core::element::NativeView;
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub(crate) type SearchField = nsh_core::element::Input;
+
+pub(crate) fn search_field(
+    value: impl Fn() -> String + 'static,
+    change: impl Fn(&str) + 'static,
+    placeholder: Option<&'static str>,
+) -> SearchField {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        let field = native("bex.search")
+            .prop("value", move || serde_json::json!(value()))
+            .on_native_event(move |event: &NativeEvent| {
+                if &*event.name == "change"
+                    && let Some(text) = event.data.as_str()
+                {
+                    change(text);
+                }
+            });
+        match placeholder {
+            Some(placeholder) => field.prop("placeholder", serde_json::json!(placeholder)),
+            None => field,
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        let placeholder = placeholder.unwrap_or(crate::l10n::tr("検索"));
+        field()
+            .label(placeholder)
+            .placeholder(placeholder)
+            .value(value)
+            .on_change(move |text: &str| change(text))
+            .text_size(px(13.0))
+            .h(px(28.0))
+    }
+}
+
+/// The search field of a desktop list, borderless in AppKit's look on the Mac.
+#[cfg(desktop)]
+pub(crate) fn search(query: Signal<String>, placeholder: Option<&'static str>) -> SearchField {
+    let field = search_field(
+        move || query.get(),
+        move |text| query.set(text.to_owned()),
+        placeholder,
+    );
+    #[cfg(target_os = "macos")]
+    let field = field.prop("appearance", serde_json::json!("plain"));
+    field
+}
+
+/// A share of a known extent (a usage window): AppKit's or UIKit's indicator
+/// on Apple platforms, an NSH bar elsewhere.
+pub(crate) fn progress(value: impl Fn() -> f64 + 'static) -> AnyElement {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    return native("bex.progress")
+        .prop("value", move || serde_json::json!(value()))
+        .w_full()
+        .h(px(8.0))
+        .into_element();
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    nsh_base::progress()
+        .value(nsh_core::element::Prop::bind(move || value() as f32))
+        .w_full()
+        .track_style(|s| s.w_full().h(px(8.0)).rounded_full().bg(colors::BORDER))
+        .indicator_style(|s| s.h_full().rounded_full().bg(colors::FOREGROUND))
+        .into_element()
+}
+
+/// A menu button titled with its current choice: the platform's on Apple
+/// platforms, a ghost button opening the platform's popup elsewhere.
+pub(crate) fn choice_menu(
+    symbol: &'static str,
+    label: &'static str,
+    title: impl Fn() -> String + Copy + 'static,
+    items: impl Fn() -> Value + 'static,
+    select: impl Fn(&str) + Clone + 'static,
+) -> impl Enabled + IntoElement {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    return crate::native::menu(symbol, label, items, move |id| select(id))
+        .prop("title", move || serde_json::json!(title()));
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let _ = symbol;
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    ghost(
+        label,
+        view()
+            .gap_1()
+            .child(text(title).text_size(px(14.0)).number_of_lines(1))
+            .child(icon(Icon::CHEVRON_DOWN, 14.0)),
+    )
+    .h(px(28.0))
+    .px_2()
+    .on_press(move || popup(&items(), select.clone()))
 }
 
 /// Shows `items` (`{id, title, enabled, selected}`, `{separator}`, `{title, children}`)

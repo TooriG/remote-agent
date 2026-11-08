@@ -3,7 +3,7 @@ use crate::l10n::tr;
 use crate::{
     Connection,
     application::{Host, ListRequest, Navigation},
-    ui::{self, Enabled, Icon, colors},
+    ui::{self, Enabled, Icon, Selected, colors},
 };
 use nsh_core::prelude::*;
 use serde_json::json;
@@ -45,12 +45,7 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                         .flex_row()
                         .items_center()
                         .gap_1()
-                        .child(
-                            crate::native::search(query)
-                                .prop("appearance", json!("plain"))
-                                .flex_1()
-                                .min_w_0(),
-                        )
+                        .child(ui::search(query, None).flex_1().min_w_0())
                         .child(
                             ui::icon_button(Icon::NEW_CHAT, tr("新しいチャット"), compose)
                                 .enabled(connected),
@@ -103,7 +98,12 @@ pub(crate) fn header(expanded: bool, toggle: impl Fn() + 'static) -> View {
         .flex_row()
         .items_center()
         .gap_2()
-        .pl(px(88.0))
+        // The Mac's window controls lead the title bar; Windows' end it.
+        .pl(px(if cfg!(target_os = "macos") {
+            88.0
+        } else {
+            12.0
+        }))
         .pr_3()
         .window_drag(true)
         .child(
@@ -138,7 +138,9 @@ pub(crate) fn conversation_header(
         .flex_row()
         .items_center()
         .gap_2()
-        .px_4()
+        .pl_4()
+        // Windows draws its window controls over the title bar's end.
+        .pr(move || px(16.0 + nsh_core::element::desktop::title_bar().right.0))
         .window_drag(true)
         .style_when(move || !sidebar.get(), |s| s.pl_0())
         .child(when(
@@ -159,7 +161,7 @@ pub(crate) fn conversation_header(
                     tr("スレッド詳細を切り替え"),
                     move || details.update(|open| *open = !*open),
                 )
-                .prop("selected", move || json!(details.get())),
+                .selected_when(move || details.get()),
             )
         }))
         .child(when(

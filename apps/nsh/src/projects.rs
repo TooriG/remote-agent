@@ -171,7 +171,14 @@ impl Projects {
             ProjectAction::OpenFolder(path) if command.scope.host == "local" => {
                 #[cfg(target_os = "macos")]
                 native::macos::open_directory(&path);
-                #[cfg(not(target_os = "macos"))]
+                // File Explorer opens a folder as its default app.
+                #[cfg(windows)]
+                spawn(async move {
+                    if let Err(reason) = open_path(path).await {
+                        native::message(tr("フォルダを開く"), reason);
+                    }
+                });
+                #[cfg(not(desktop))]
                 let _ = path;
             }
             ProjectAction::OpenFolder(_) => native::message(
@@ -200,13 +207,21 @@ impl Projects {
                 Ok(Some(paths)) => {
                     if let Some(path) = paths.into_iter().next() {
                         self.application.with(|application| {
-                            application.list_action(
-                                &scope,
-                                Intent::AddProject(op::AddProject {
-                                    cwd: path.to_string_lossy().into_owned(),
-                                }),
-                                false,
-                            )
+                            match application.open_wsl_folder(&path, |cwd| {
+                                Intent::AddProject(op::AddProject { cwd })
+                            }) {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    application.list_action(
+                                        &scope,
+                                        Intent::AddProject(op::AddProject {
+                                            cwd: path.to_string_lossy().into_owned(),
+                                        }),
+                                        false,
+                                    );
+                                }
+                                Err(reason) => native::message(tr("プロジェクトを追加"), reason),
+                            }
                         });
                     }
                 }

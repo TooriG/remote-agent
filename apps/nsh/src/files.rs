@@ -21,7 +21,6 @@ use nsh_core::{
     element::{ImageSrc, Rgba, rgb, rgba},
     prelude::*,
 };
-use serde_json::json;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 #[derive(Clone, Copy)]
@@ -384,18 +383,13 @@ pub(crate) fn screen(id: u64) -> impl Element {
                 )),
         )
         .child(
-            native("bex.search")
-                .prop("placeholder", json!(tr("ファイルを検索")))
-                .prop("value", move || json!(tree.with(|tree| tree.query.clone())))
-                .on_native_event(move |event: &NativeEvent| {
-                    if &*event.name == "change"
-                        && let Some(text) = event.data.as_str()
-                    {
-                        send(FileTreeAction::Query { text: text.into() });
-                    }
-                })
-                .mx_2()
-                .my_2(),
+            ui::search_field(
+                move || tree.with(|tree| tree.query.clone()),
+                move |text| send(FileTreeAction::Query { text: text.into() }),
+                Some(tr("ファイルを検索")),
+            )
+            .mx_2()
+            .my_2(),
         )
         .child(when(
             move || tree.with(|tree| tree.error.is_some()),

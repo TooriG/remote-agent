@@ -4,7 +4,6 @@ use crate::{Connection, native};
 use agent_core::state::{Intent, operations as op};
 use agent_protocol::{dsh::KeyProvider, session::ProviderKind};
 use nsh_core::{element::input, platform::Lifecycle, prelude::*};
-use serde_json::json;
 
 pub(crate) fn icon(provider: ProviderKind) -> &'static str {
     match provider {
@@ -269,12 +268,9 @@ fn usage(account: ReadSignal<agent_protocol::operations::Account>) -> impl IntoE
                             )
                         })
                     }))
-                    .child(
-                        native("bex.progress")
-                            .prop("value", move || json!(window.with(|w| w.remaining_percent)))
-                            .w_full()
-                            .h(px(8.0)),
-                    )
+                    .child(ui::progress(move || {
+                        window.with(|w| f64::from(w.remaining_percent))
+                    }))
                     .child(
                         text(move || {
                             window.with(|w| {
@@ -467,9 +463,9 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
     let enabled = move || !busy.get() && !connection.settings.with(|p| p.credential_busy());
     view().items_start().gap_3()
         .child(text(tr("APIキー")).text_size(px(18.0)))
-        .child(native::menu("key", tr("接続先"), native::items(KeyProvider::ALL.into_iter().map(|provider| (provider.reference(), provider.label()))), move |id| {
+        .child(ui::choice_menu("key", tr("接続先"), move || selected.get().label().into(), || native::items(KeyProvider::ALL.into_iter().map(|provider| (provider.reference(), provider.label()))), move |id: &str| {
             if let Some(provider) = KeyProvider::ALL.into_iter().find(|p| p.reference() == id) { selected.set(provider); key.set(String::new()); }
-        }).prop("title", move || json!(selected.get().label())).prop("enabled", move || json!(enabled())))
+        }).enabled(enabled))
         .child(text(move || control.with(|c| c.as_ref().map(|c| localized(c.status.clone())).unwrap_or_default())))
         .child(ui::text_button(tr("キーの発行ページ"), move || { native::open_link(selected.get_untracked().key_url()); }))
         .child(input().masked(true).auto_correct(false).auto_capitalize(AutoCapitalize::None)

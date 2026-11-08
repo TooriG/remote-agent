@@ -11,19 +11,46 @@ use agent_protocol::{editors::EditorId, models::ChangedFile};
 use nsh_core::prelude::*;
 use serde_json::json;
 
-/// Starts a new conversation in a folder the user picks.
+/// Starts a new conversation in a folder the user picks: in a WSL distro's
+/// folder on that distro's Host, from which the dialog starts while it is chosen.
 pub(crate) fn choose_folder(connection: Connection) {
-    let choice = pick_paths(nsh_core::file_dialog::OpenDialog::folders());
+    let dialog = nsh_core::file_dialog::OpenDialog::folders();
+    let start =
+        agent_local_host::wsl::host_distro(&connection.host.get_untracked()).and_then(|distro| {
+            let cwd = connection
+                .composer
+                .with_untracked(|c| c.controls.navigation.cwd.clone());
+            let cwd = if cwd.is_empty() {
+                connection
+                    .context
+                    .with_untracked(|c| c.home())
+                    .unwrap_or_else(|| "/home".into())
+            } else {
+                cwd
+            };
+            agent_local_host::wsl::to_unc(distro, &cwd).ok()
+        });
+    let choice = pick_paths(match start {
+        Some(start) => dialog.directory(start),
+        None => dialog,
+    });
     spawn(async move {
-        match choice.await {
-            Ok(Some(paths)) => {
-                if let Some(path) = paths.into_iter().next() {
-                    connection.dispatch(Intent::NewChat {
-                        cwd: path.to_string_lossy().into_owned(),
-                    });
-                }
-            }
-            Ok(None) => {}
+        let picked = match choice.await {
+            Ok(Some(paths)) => paths.into_iter().next(),
+            Ok(None) => None,
+            Err(reason) => return crate::native::message(tr("フォルダー"), reason),
+        };
+        let Some(path) = picked else {
+            return;
+        };
+        match connection
+            .application
+            .with(|application| application.open_wsl_folder(&path, |cwd| Intent::NewChat { cwd }))
+        {
+            Ok(true) => {}
+            Ok(false) => connection.dispatch(Intent::NewChat {
+                cwd: path.to_string_lossy().into_owned(),
+            }),
             Err(reason) => crate::native::message(tr("フォルダー"), reason),
         }
     });

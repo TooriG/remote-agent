@@ -9,9 +9,9 @@ mod client;
 mod composer;
 mod connections;
 mod conversation;
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 mod desktop;
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 mod desktop_workspace;
 mod details;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -25,30 +25,30 @@ mod media;
 mod model_controls;
 mod native;
 mod notices;
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 mod permissions;
 mod projects;
 mod requests;
 mod rich_text;
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 mod settings;
 mod shared;
 mod side_chat;
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 mod sidebar;
 mod storage;
 mod terminal;
+#[cfg(any(not(any(target_os = "macos", target_os = "ios")), test))]
+mod terminal_screen;
 mod threads;
 mod ui;
 mod workbench;
 mod worktrees;
 
-#[cfg(target_os = "macos")]
-pub use desktop::run as run_macos;
+#[cfg(desktop)]
+pub use desktop::run as run_desktop;
 #[cfg(target_os = "ios")]
 pub use native::ios::register as register_ios;
-#[cfg(target_os = "macos")]
-pub use native::macos::register as register_macos;
 
 use agent_core::{
     presentation::{
@@ -174,7 +174,7 @@ pub fn App() -> impl IntoElement {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Area {
     Mobile,
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     Shell,
 }
 
@@ -232,12 +232,12 @@ fn app_content(
     let navigate = move |action| application.with(|application| application.navigate(action));
     let account_locked = computed(move || state.with(|state| state.account_locked()));
     let close_settings = move || navigate(Navigation::Settings(false));
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     let sidebar = computed(move || state.with(|state| state.sidebar));
     let searching = signal(false);
     let query = signal(String::new());
     let primary = area == Area::Mobile;
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     let primary = primary || area == Area::Shell;
     if primary {
         effect(move || client.with(|client| client.scene(lifecycle() == Lifecycle::Active)));
@@ -284,9 +284,9 @@ fn app_content(
             _ => navigate(Navigation::Settings(true)),
         }
     };
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     let hero = desktop_workspace::draft_hero;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(desktop))]
     let hero = view;
     let content = move || {
         let following = signal(true);
@@ -330,10 +330,16 @@ fn app_content(
             ))
     };
     match area {
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         Area::Shell => {
             use nsh_core::{desktop::TitleBarStyle, element::desktop::set_title_bar};
             set_title_bar(TitleBarStyle::Hidden, Some(px(sidebar::HEADER_HEIGHT)));
+            // An update's worker replaces the app once its event loop ends.
+            effect(move || {
+                if state.with(|state| state.quitting) {
+                    desktop::quit();
+                }
+            });
             let tools = move || {
                 !settings.get() && !hosts.with(Vec::is_empty) && workspace.state.with(|s| s.open)
             };
@@ -425,7 +431,7 @@ fn app_content(
                 .bg(ui::colors::BACKGROUND)
                 .text_color(ui::colors::FOREGROUND)
                 .child(media::preview())
-                .child(native("bex.browser.host").w(px(0.0)).h(px(0.0)))
+                .child(browser::host())
                 .child(
                     // The settings overlay is modal: what it covers is out of
                     // reach of assistive technologies while it shows.
@@ -548,7 +554,14 @@ fn app_content(
                                 .child(connections::selector(hosts, host, true))
                                 .child(when(
                                     move || searching.get(),
-                                    move || native::search(query).w_full(),
+                                    move || {
+                                        ui::search_field(
+                                            move || query.get(),
+                                            move |text| query.set(text.to_owned()),
+                                            None,
+                                        )
+                                        .w_full()
+                                    },
                                 ))
                                 .child(list())
                                 .child(native::toolbar(title, toolbar_action).w_full())

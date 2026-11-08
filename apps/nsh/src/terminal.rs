@@ -3,11 +3,9 @@ use crate::ui::{self, Enabled, Icon, colors};
 use crate::{Connection, shared::Shared, workbench::Workbench};
 use agent_core::{
     panels::PanelSurface,
-    presentation::terminals::terminal_grid,
     state::{Intent, operations as op},
 };
 use nsh_core::prelude::*;
-use serde_json::json;
 
 pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
@@ -153,31 +151,20 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                     },
                 )),
         )
-        .child(
-            native("bex.terminal")
-                .prop("input", move || json!(input.get()))
-                .prop("output", move || {
-                    terminal.with(|terminal| {
-                        terminal
-                            .as_ref()
-                            .map(|terminal| json!(&terminal.output))
-                            .unwrap_or_else(|| json!([]))
-                    })
+        .child(grid(
+            move || input.get(),
+            move || {
+                terminal.with(|terminal| {
+                    terminal
+                        .as_ref()
+                        .map(|terminal| terminal.output.clone())
+                        .unwrap_or_default()
                 })
-                .on_native_event(move |event: &NativeEvent| match &*event.name {
-                    "resize" => {
-                        let Some(next) = event.data["cols"]
-                            .as_i64()
-                            .and_then(|cols| i32::try_from(cols).ok())
-                            .zip(
-                                event.data["rows"]
-                                    .as_i64()
-                                    .and_then(|rows| i32::try_from(rows).ok()),
-                            )
-                            .and_then(|(cols, rows)| terminal_grid(cols, rows))
-                        else {
-                            return;
-                        };
+            },
+            {
+                let started = started.clone();
+                move |report| match report {
+                    Report::Resize(next) => {
                         if size.get_untracked() == Some(next) {
                             return;
                         }
@@ -186,25 +173,76 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                             start(&started, next);
                         }
                     }
-                    "input" if input.get_untracked() => {
-                        if let Ok(data) = serde_json::from_value::<Vec<u8>>(event.data.clone()) {
-                            send(Intent::WriteTerminal(op::WriteTerminal {
-                                handle: handle.get(),
-                                data,
-                            }));
-                        }
+                    Report::Input(data) if input.get_untracked() => {
+                        send(Intent::WriteTerminal(op::WriteTerminal {
+                            handle: handle.get(),
+                            data,
+                        }));
                     }
-                    "ack" => {
-                        if let Some(sequence) = event.data.as_u64() {
-                            send(Intent::AcknowledgeTerminal {
-                                handle: handle.get(),
-                                sequence,
-                            });
-                        }
-                    }
-                    _ => {}
-                })
-                .flex_1()
-                .min_h_0(),
-        )
+                    Report::Input(_) => {}
+                    Report::Ack(sequence) => send(Intent::AcknowledgeTerminal {
+                        handle: handle.get(),
+                        sequence,
+                    }),
+                }
+            },
+        ))
 }
+
+/// What the grid reports to the terminal it shows.
+pub(crate) enum Report {
+    Resize(agent_protocol::operations::TerminalSize),
+    Input(Vec<u8>),
+    Ack(u64),
+}
+
+/// The terminal's grid: SwiftTerm on Apple platforms, which reports through
+/// its native events.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn grid(
+    input: impl Fn() -> bool + 'static,
+    output: impl Fn() -> Vec<agent_core::state::TerminalOutput> + 'static,
+    report: impl Fn(Report) + 'static,
+) -> impl IntoElement {
+    use agent_core::presentation::terminals::terminal_grid;
+    use serde_json::json;
+    native("bex.terminal")
+        .prop("input", move || json!(input()))
+        .prop("output", move || json!(output()))
+        .on_native_event(move |event: &NativeEvent| {
+            let data = &event.data;
+            match &*event.name {
+                "resize" => {
+                    if let Some(size) = data["cols"]
+                        .as_i64()
+                        .and_then(|cols| i32::try_from(cols).ok())
+                        .zip(
+                            data["rows"]
+                                .as_i64()
+                                .and_then(|rows| i32::try_from(rows).ok()),
+                        )
+                        .and_then(|(cols, rows)| terminal_grid(cols, rows))
+                    {
+                        report(Report::Resize(size));
+                    }
+                }
+                "input" => {
+                    if let Ok(bytes) = serde_json::from_value::<Vec<u8>>(data.clone()) {
+                        report(Report::Input(bytes));
+                    }
+                }
+                "ack" => {
+                    if let Some(sequence) = data.as_u64() {
+                        report(Report::Ack(sequence));
+                    }
+                }
+                _ => {}
+            }
+        })
+        .flex_1()
+        .min_h_0()
+}
+
+/// The terminal's grid elsewhere: the screen NSH draws from the same bytes.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+use crate::terminal_screen::grid;

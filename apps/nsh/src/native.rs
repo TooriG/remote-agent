@@ -68,10 +68,7 @@ pub fn image_extension(mime: &str) -> Option<String> {
             .map(|value| value.to_string())
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    {
-        let _ = mime;
-        None
-    }
+    agent_core::presentation::files::image_extension(mime).map(str::to_owned)
 }
 
 pub fn image_file(path: &std::path::Path) -> bool {
@@ -89,10 +86,8 @@ pub fn image_file(path: &std::path::Path) -> bool {
             .is_some_and(|(file, image)| file.conformsToType(&image))
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    {
-        let _ = path;
-        false
-    }
+    path.to_str()
+        .is_some_and(agent_core::presentation::files::is_image_file)
 }
 
 pub fn button(symbol: &'static str, label: &'static str, press: impl Fn() + 'static) -> NativeView {
@@ -131,35 +126,6 @@ pub fn text_button(title: impl IntoReactive<Value>, press: impl Fn() + 'static) 
         .on_native_event(move |event: &NativeEvent| {
             if &*event.name == "press" {
                 press();
-            }
-        })
-}
-
-pub fn search(query: Signal<String>) -> NativeView {
-    native("bex.search")
-        .prop("value", move || json!(query.get()))
-        .on_native_event(move |event: &NativeEvent| {
-            if &*event.name == "change"
-                && let Some(text) = event.data.as_str()
-            {
-                query.set(text.to_owned());
-            }
-        })
-}
-
-pub fn switch(
-    label: impl IntoReactive<Value>,
-    value: impl IntoReactive<Value>,
-    change: impl Fn(bool) + 'static,
-) -> NativeView {
-    native("bex.switch")
-        .prop("label", label)
-        .prop("value", value)
-        .on_native_event(move |event: &NativeEvent| {
-            if &*event.name == "change"
-                && let Some(value) = event.data.as_bool()
-            {
-                change(value);
             }
         })
 }
@@ -214,5 +180,11 @@ pub fn date_time(seconds: i64) -> String {
         .to_string()
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    seconds.to_string()
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| seconds.to_string())
 }

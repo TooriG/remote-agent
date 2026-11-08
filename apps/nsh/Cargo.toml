@@ -49,6 +49,18 @@ block2 = "=0.6.2"
 objc2-uniform-type-identifiers = "=0.3.2"
 objc2-avf-audio = { version = "=0.3.2", default-features = false, features = ["std", "block2", "AVAudioApplication", "AVAudioRecorder", "AVAudioFormat", "AVAudioTypes", "AVAudioFile", "AVAudioBuffer", "AVAudioSession", "AVAudioSessionTypes"] }
 
+[target.'cfg(windows)'.dependencies]
+nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3", default-features = false }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+
+# The Host streams a terminal's bytes; off Apple platforms, which hand them to
+# SwiftTerm, the app emulates and draws the screen itself.
+[target.'cfg(not(any(target_os = "ios", target_os = "macos")))'.dependencies]
+alacritty_terminal = "=0.26.0"
+
+[dev-dependencies]
+alacritty_terminal = "=0.26.0"
+
 # Desktop update flow; the iPhone app is updated by its store.
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 agent-core = { path = "../../crates/agent-core", features = ["app-updates"] }

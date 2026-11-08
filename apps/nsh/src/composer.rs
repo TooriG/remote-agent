@@ -366,7 +366,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                 .enabled(attach_enabled)
             },
         ));
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         let controls_row = controls_row.child(crate::permissions::control());
         view()
             .w_full()
@@ -478,7 +478,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         .pt(move || if is_desktop() { px(8.0) } else { px(12.0) })
         .pb(move || if is_desktop() { px(16.0) } else { px(12.0) })
         .gap(move || if is_desktop() { px(4.0) } else { px(8.0) });
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     let column = column.child(when(is_desktop, crate::desktop_workspace::review_card));
     column
         .child(crate::requests::panels(following))

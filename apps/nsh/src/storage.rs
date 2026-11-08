@@ -5,7 +5,7 @@ use agent_core::client::{
     session::ClientPlatform,
 };
 use serde::{Deserialize, Serialize};
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, sync::Arc};
 
 pub(crate) fn error(reason: impl std::fmt::Display) -> AgentError {
     AgentError::Failed {
@@ -24,6 +24,32 @@ pub(crate) struct Host {
 pub(crate) struct Storage {
     pub root: PathBuf,
     pub host: Host,
+    pub handed: Arc<HandedKeys>,
+}
+
+/// The device keys a local process handed this client for its Host (a WSL
+/// distro's bootstrap on Windows), by Host id. They live as long as the client.
+#[derive(Default)]
+pub(crate) struct HandedKeys(std::sync::Mutex<std::collections::BTreeMap<String, [u8; 32]>>);
+
+impl HandedKeys {
+    pub fn hand(&self, host: &str, key: [u8; 32]) {
+        self.keys().insert(host.into(), key);
+    }
+
+    pub fn has(&self, host: &str) -> bool {
+        self.keys().contains_key(host)
+    }
+
+    fn key(&self, host: &str) -> Option<[u8; 32]> {
+        self.keys().get(host).copied()
+    }
+
+    fn keys(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeMap<String, [u8; 32]>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 impl Storage {
@@ -60,6 +86,9 @@ impl ClientStorage for Storage {
 
 impl ClientPlatform for Storage {
     fn identity(&self) -> Result<Vec<u8>, AgentError> {
+        if let Some(key) = self.handed.key(&self.host.id) {
+            return Ok(key.to_vec());
+        }
         if let Some(directory) = &self.host.local_directory {
             return agent_local_host::load_local_identity(directory)
                 .map(|identity| identity.to_bytes().to_vec())
@@ -100,9 +129,57 @@ fn identity(host: &str) -> Result<Vec<u8>, AgentError> {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+/// A paired Host's device key, in the user's Windows Credential Manager.
+#[cfg(windows)]
+fn identity(host: &str) -> Result<Vec<u8>, AgentError> {
+    use windows::{
+        Win32::{
+            Foundation::ERROR_NOT_FOUND,
+            Security::Credentials::{
+                CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
+                CredWriteW,
+            },
+        },
+        core::{HSTRING, PWSTR},
+    };
+    let target = HSTRING::from(format!("com.bex.nsh.identity/{host}"));
+    let mut stored: *mut CREDENTIALW = std::ptr::null_mut();
+    // SAFETY: CredReadW fills `stored` with a buffer CredFree releases after
+    // its blob is copied.
+    match unsafe { CredReadW(&target, CRED_TYPE_GENERIC, None, &mut stored) } {
+        Ok(()) => unsafe {
+            let credential = &*stored;
+            let bytes = std::slice::from_raw_parts(
+                credential.CredentialBlob,
+                credential.CredentialBlobSize as usize,
+            )
+            .to_vec();
+            CredFree(stored.cast());
+            Ok(bytes)
+        },
+        Err(reason) if reason.code() == ERROR_NOT_FOUND.to_hresult() => {
+            let mut bytes = agent_core::client::native::generate_identity();
+            let credential = CREDENTIALW {
+                Type: CRED_TYPE_GENERIC,
+                TargetName: PWSTR(target.as_ptr().cast_mut()),
+                CredentialBlobSize: u32::try_from(bytes.len()).map_err(error)?,
+                CredentialBlob: bytes.as_mut_ptr(),
+                Persist: CRED_PERSIST_LOCAL_MACHINE,
+                ..Default::default()
+            };
+            // SAFETY: the target and blob outlive the call, which copies them.
+            unsafe { CredWriteW(&credential, 0) }.map_err(error)?;
+            Ok(bytes)
+        }
+        Err(reason) => Err(error(reason)),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios", windows)))]
 fn identity(_: &str) -> Result<Vec<u8>, AgentError> {
-    Err(error("This client requires Apple Keychain."))
+    Err(error(
+        "This client requires Apple Keychain or Windows Credential Manager.",
+    ))
 }
 
 /// The iPhone app's data. The desktop keeps its data in its local Host's scope.

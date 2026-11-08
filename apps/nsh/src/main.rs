@@ -1,10 +1,12 @@
-#[cfg(target_os = "macos")]
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+#[cfg(desktop)]
 fn main() -> std::process::ExitCode {
     // The updater's commands run before any window or Host connection.
     if agent_local_host::install::run_command(agent_core::updates::build_number()) {
         return std::process::ExitCode::SUCCESS;
     }
-    agent_nsh::run_macos()
+    agent_nsh::run_desktop()
 }
 
 #[cfg(target_os = "ios")]
@@ -17,7 +19,7 @@ fn main() {
     );
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(desktop, target_os = "ios")))]
 fn main() {
-    eprintln!("Build the NSH preview for macOS or the iPhone simulator.");
+    eprintln!("Build the NSH client for macOS, Windows or the iPhone simulator.");
 }

@@ -1,10 +1,10 @@
 //! The worktree settings page: the application owns the editor's lifetime and
 //! Core owns its Host operations; this page keeps only the unsaved inputs.
 use super::choice;
+use crate::Connection;
 use crate::application::{WorktreeAction, WorktreeEditor};
 use crate::l10n::{localized, tr, tr_format};
 use crate::ui::{self, Enabled, colors};
-use crate::{Connection, native};
 use agent_protocol::models::{Worktree, WorktreeSettings};
 use nsh_core::{
     element::{Input, input},
@@ -229,11 +229,10 @@ fn scope(
 fn switch(
     label: &'static str,
     value: impl Fn() -> bool + 'static,
-    enabled: impl Fn() -> bool + 'static,
+    enabled: impl Fn() -> bool + Copy + 'static,
     change: impl Fn(bool) + 'static,
-) -> nsh_core::element::NativeView {
-    native::switch(json!(label), move || json!(value()), change)
-        .prop("enabled", move || json!(enabled()))
+) -> ui::Switch {
+    ui::switch(move || label.into(), value, change).enabled(enabled)
 }
 
 fn field(

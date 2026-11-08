@@ -21,7 +21,7 @@ use nsh_core::{
 use std::{collections::BTreeSet, sync::Arc};
 
 /// The desktop workspace card's content: the folder, its editors, review and sources.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(desktop, test))]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct WorkspaceSummary {
     pub directory: String,
@@ -38,7 +38,7 @@ pub(crate) struct WorkspaceSummary {
     pub sources: Vec<(String, String)>,
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(desktop, test))]
 pub(crate) fn workspace_summary(
     p: &agent_core::presentation::view::Presentation,
     local: bool,

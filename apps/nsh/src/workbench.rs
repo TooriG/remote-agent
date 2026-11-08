@@ -224,7 +224,15 @@ fn header(workspace: Workbench, leading: Option<AnyElement>) -> View {
         .items_center()
         .gap_1()
         .pl_2()
-        .pr_3()
+        // Windows draws its window controls over the end of a top bar.
+        .pr(move || {
+            let controls = if workspace.state.with(|s| s.layout) == PanelLayout::Bottom {
+                0.0
+            } else {
+                nsh_core::element::desktop::title_bar().right.0
+            };
+            px(12.0 + controls)
+        })
         .window_drag(true)
         .child(leading)
         .child(

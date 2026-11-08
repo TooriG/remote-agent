@@ -2,10 +2,11 @@
 use crate::Connection;
 use crate::conversation::Kind;
 use crate::l10n::tr;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use agent_core::{panels::PanelScope, state::Intent};
 use agent_core::{
-    panels::PanelScope,
     presentation::markdown::{MarkdownAlignment, MarkdownBlock, MarkdownRun, MarkdownStyle},
-    state::{DraftKey, Intent},
+    state::DraftKey,
 };
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
@@ -108,6 +109,7 @@ fn view_parts(
             Part::Text(_) | Part::Code { .. } => {
                 let is_code = move || part.with(|(_, part)| matches!(part, Part::Code { .. }));
                 let wrap = signal(false);
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
                 let message = move || {
                     native("bex.messageText")
                         .prop("data", move || {
@@ -181,6 +183,8 @@ fn view_parts(
                         })
                         .min_h(px(20.0))
                 };
+                #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+                let message = move || drawn::message(part, secondary, target, connection, files);
                 view()
                     .w_full()
                     .gap_2()
@@ -398,6 +402,130 @@ fn table(
                     move || copy(false),
                 )),
         )
+}
+
+/// Message text NSH lays out where TextKit does not: each paragraph of the
+/// native document as selectable styled text, its links opened as TextKit's
+/// are. Selection copies; quoting a selection and asking a side chat about it
+/// are TextKit's menu, which these texts do not have.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+mod drawn {
+    use super::{Part, Target};
+    use crate::{Connection, ui::colors};
+    use nsh_core::{element::rgb, prelude::*};
+    use serde_json::Value;
+
+    pub(super) fn message(
+        part: ReadSignal<(usize, Part)>,
+        secondary: impl Fn() -> bool + Copy + 'static,
+        target: Memo<String>,
+        connection: Connection,
+        files: crate::files::Browser,
+    ) -> View {
+        let open = move |link: String| {
+            let Ok(target) = serde_json::from_str::<Target>(&target.get_untracked()) else {
+                return;
+            };
+            files.open(
+                link,
+                target.cwd,
+                target.home,
+                target.host,
+                connection.client.get(),
+            );
+        };
+        view()
+            .w_full()
+            .min_h(px(20.0))
+            .gap_2()
+            .selectable(true)
+            .child(each(
+                move || {
+                    part.with(|(_, part)| match part {
+                        Part::Text(blocks) | Part::Code { blocks, .. } => blocks
+                            .iter()
+                            .enumerate()
+                            .map(|(index, block)| (index, block.clone()))
+                            .collect(),
+                        _ => Vec::new(),
+                    })
+                },
+                |(index, block): &(usize, Value)| (*index, block.to_string()),
+                move |block, _| paragraph(block.get_untracked().1, secondary(), open),
+            ))
+    }
+
+    /// One paragraph of the document `rich_text::paragraph` writes.
+    fn paragraph(block: Value, secondary: bool, open: impl Fn(String) + Copy + 'static) -> View {
+        let code = block["code"].as_bool().unwrap_or(false);
+        let size = match block["header"].as_u64() {
+            Some(1) => 22.0,
+            Some(2) => 18.0,
+            Some(3) => 16.0,
+            _ if code => 13.0,
+            _ => 14.0,
+        };
+        let mut line = text("").text_size(px(size)).text_color(if secondary {
+            colors::MUTED
+        } else {
+            colors::FOREGROUND
+        });
+        if block["header"].is_u64() {
+            line = line.font_weight(FontWeight::SEMIBOLD);
+        }
+        if code {
+            line = line.font_family(SharedString::from("monospace"));
+        }
+        line = match block["alignment"].as_str() {
+            Some("center") => line.text_center(),
+            Some("right") => line.text_right(),
+            _ => line,
+        };
+        if let Some(marker) = block["marker"].as_str() {
+            line = line.child(text(format!("{marker} ")).text_color(colors::MUTED));
+        }
+        for run in block["runs"].as_array().into_iter().flatten() {
+            let mut span = text(run["text"].as_str().unwrap_or_default().to_owned());
+            if run["strong"].as_bool().unwrap_or(false) {
+                span = span.font_weight(FontWeight::BOLD);
+            }
+            if run["emphasis"].as_bool().unwrap_or(false) {
+                span = span.italic();
+            }
+            if run["strikethrough"].as_bool().unwrap_or(false) {
+                span = span.line_through();
+            }
+            if run["code"].as_bool().unwrap_or(false) && !code {
+                span = span
+                    .font_family(SharedString::from("monospace"))
+                    .bg(colors::RAISED);
+            }
+            // The app's look is dark: a run's own color is its dark variant.
+            if let Some(color) = run["darkColor"]
+                .as_u64()
+                .and_then(|c| u32::try_from(c).ok())
+            {
+                span = span.text_color(rgb(color));
+            }
+            if let Some(link) = run["link"].as_str().map(str::to_owned) {
+                span = span
+                    .text_color(colors::ACCENT)
+                    .underline()
+                    .on_press(move || open(link.clone()));
+            }
+            line = line.child(span);
+        }
+        let depth = block["depth"].as_u64().unwrap_or(0) as f32;
+        let quoted = block["quoted"].as_bool().unwrap_or(false);
+        view()
+            .w_full()
+            .pl(px(depth * 16.0 + if quoted { 12.0 } else { 0.0 }))
+            .style_when(
+                move || quoted,
+                |s| s.border_l_1().border_l_color(colors::BORDER),
+            )
+            .child(line)
+    }
 }
 
 fn paragraph(runs: Vec<MarkdownRun>, style: &MarkdownStyle) -> Value {
