@@ -682,8 +682,12 @@ impl Threads {
         let observed_turns = thread.borrow().turns.len();
         let suffix = self.turn_suffix(thread_id, observed_turns);
         let turn_id = format!("fixture-turn-{suffix}");
+        // A turn starts now, so clients show its real elapsed time.
+        let started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |elapsed| elapsed.as_secs());
         let turn = Rc::new(RefCell::new(
-            json!({"id":turn_id,"status":"inProgress","items":[],"startedAt":1}),
+            json!({"id":turn_id,"status":"inProgress","items":[],"startedAt":started_at}),
         ));
         thread.borrow_mut().turns.push(turn.clone());
         thread
