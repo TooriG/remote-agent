@@ -51,7 +51,8 @@ test("catalog probes cannot run user hooks, tools or automatic IDE connections",
       assert.equal(options.env.CLAUDE_CODE_AUTO_CONNECT_IDE, "0");
       assert.equal(options.env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, "1");
     } else {
-      assert.equal(options.settings, undefined);
+      // Claude streams its thinking as text only when asked for summaries.
+      assert.deepEqual(options.settings, { showThinkingSummaries: true });
       assert.equal(options.allowedTools, undefined);
     }
   }

@@ -80,6 +80,9 @@ export async function runBridge(lines: AsyncIterable<string>, emit: (event: Reco
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.browser ? { mcpServers: { agent_browser: config.browser } } : {}),
     settingSources: ["user", "project", "local"],
+    // Current models omit thinking text unless summaries are requested;
+    // clients show it as Thinking, as T3 Code does.
+    settings: { showThinkingSummaries: true },
     systemPrompt: { type: "preset", preset: "claude_code" },
     includePartialMessages: true,
     extraArgs: { "replay-user-messages": null },

@@ -275,7 +275,7 @@ async fn terminal_capacity_failures_continue_the_same_thread_five_times_without_
         let log = fixture.starts(index + 2).await;
         assert_eq!(
             log["starts"][index + 1],
-            serde_json::json!({"threadId":"task","input":[],"model":"chosen-model","effort":"high","serviceTierForTurn":"fast"})
+            serde_json::json!({"threadId":"task","input":[],"model":"chosen-model","effort":"high","serviceTierForTurn":"fast","summary":"detailed"})
         );
         fixture
             .service
@@ -335,6 +335,8 @@ async fn new_input_overtakes_a_waiting_retry_and_gets_a_fresh_budget() {
     fixture.advance(2).await;
     let log = fixture.starts(2).await;
     assert_eq!(log["starts"][1]["input"][0]["text"], "new request");
+    // Codex summarizes its reasoning only when a turn asks.
+    assert_eq!(log["starts"][1]["summary"], "detailed");
     fixture.fail("turn-2", "serverOverloaded").await;
     fixture.advance(2).await;
     fixture.starts(3).await;
