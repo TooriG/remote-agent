@@ -40,6 +40,10 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         /// The modifier keys of the click being handled: a link opens from
         /// within it, where `NSApp.currentEvent` may be another event.
         private var clickModifiers: NSEvent.ModifierFlags = []
+        /// A drag is choosing the selection: only where it ends is reported.
+        private var selecting = false
+        /// NSH was last told of a selection, not of its end.
+        private var reported = false
 
         init() {
             let storage = NSTextStorage()
@@ -78,8 +82,52 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
 
         override func mouseDown(with event: NSEvent) {
             clickModifiers = event.modifierFlags
-            defer { clickModifiers = [] }
+            selecting = true
+            defer {
+                clickModifiers = []
+                selecting = false
+                reportSelection()
+            }
+            // AppKit tracks the drag in here until the button is released.
             super.mouseDown(with: event)
+        }
+
+        func textViewDidChangeSelection(_: Notification) {
+            if !selecting { reportSelection() }
+        }
+
+        override func resignFirstResponder() -> Bool {
+            let resigned = super.resignFirstResponder()
+            if resigned, reported {
+                reported = false
+                action?(["action": "selection", "text": ""])
+            }
+            return resigned
+        }
+
+        /// Tells NSH what is selected and where, in the window's content from
+        /// its top left, for the bar of actions over it; or that nothing is.
+        private func reportSelection() {
+            let range = selectedRange()
+            guard range.length > 0, NSMaxRange(range) <= (textStorage?.length ?? 0),
+                  let manager = layoutManager, let container = textContainer,
+                  let content = window?.contentView
+            else {
+                if reported {
+                    reported = false
+                    action?(["action": "selection", "text": ""])
+                }
+                return
+            }
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let box = manager.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+            let frame = content.convert(box, from: self)
+            let top = content.isFlipped ? frame.minY : content.bounds.height - frame.maxY
+            reported = true
+            action?(["action": "selection", "text": (string as NSString).substring(with: range),
+                     "target": document.target, "sideChat": document.sideChat,
+                     "bounds": [frame.minX, top, frame.width, frame.height]])
         }
 
         override func menu(for event: NSEvent) -> NSMenu? {

@@ -21,7 +21,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 mod browser;
 mod pane;
 pub use browser::{BrowserSession, BrowserUpdate};
-pub use pane::Pane;
+pub use pane::{Pane, SideChatStart};
 
 const MAX_COMMANDS: usize = 256;
 const MAX_RPC_JOBS: usize = 32;

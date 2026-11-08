@@ -111,6 +111,7 @@ pub fn run() -> std::process::ExitCode {
         // The app is drawn dark: the frame and menus Windows draws follow it.
         #[cfg(windows)]
         appearance: platform::Appearance::Dark,
+        menu_labels: menu_labels(),
         ..Default::default()
     };
     #[cfg(windows)]
@@ -150,6 +151,40 @@ pub fn run() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
     result
+}
+
+/// The menus NSH makes itself, in the UI language the app starts in: the Mac's
+/// menu bar (the app menu, Edit and Window) and Windows' menus of text fields
+/// and selectable text. NSH takes them once, so a language chosen later
+/// labels them from the next launch.
+fn menu_labels() -> nsh_core::desktop::MenuLabels {
+    use crate::l10n::tr;
+    use nsh_core::desktop::{MenuLabels, MenuRole};
+    let mut labels = MenuLabels::default();
+    labels.roles = [
+        (MenuRole::About, tr("Bexについて")),
+        (MenuRole::Hide, tr("Bexを非表示")),
+        (MenuRole::HideOthers, tr("ほかを非表示")),
+        (MenuRole::ShowAll, tr("すべてを表示")),
+        (MenuRole::Quit, tr("Bexを終了")),
+        (MenuRole::Undo, tr("取り消す")),
+        (MenuRole::Redo, tr("やり直す")),
+        (MenuRole::Cut, tr("カット")),
+        (MenuRole::Copy, tr("コピー")),
+        (MenuRole::Paste, tr("ペースト")),
+        (MenuRole::SelectAll, tr("すべてを選択")),
+        (MenuRole::Minimize, tr("しまう")),
+        (MenuRole::Zoom, tr("拡大/縮小")),
+        (MenuRole::ToggleFullScreen, tr("フルスクリーンにする")),
+        (MenuRole::Close, tr("閉じる")),
+    ]
+    .into_iter()
+    .map(|(role, label)| (role, label.to_owned()))
+    .collect();
+    labels.edit_menu = Some(tr("編集").to_owned());
+    labels.window_menu = Some(tr("ウインドウ").to_owned());
+    labels.delete = Some(tr("削除").to_owned());
+    labels
 }
 
 /// A failure before or after the window: on the console on the Mac, in a

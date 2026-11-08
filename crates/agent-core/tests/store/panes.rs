@@ -1,4 +1,5 @@
 use super::*;
+use agent_core::store::SideChatStart;
 
 #[rstest::rstest]
 #[case::default_provider(None, "Needle\nsecond", "codex", "> Needle\n> second\n\n")]
@@ -33,7 +34,10 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
     let failed = tokio::spawn({
         let pane = pane.clone();
         let selection = selection.to_owned();
-        async move { pane.prepare_side_chat(provider, selection).await }
+        async move {
+            pane.start_side_chat(provider, SideChatStart::Quote(selection))
+                .await
+        }
     });
     let request = read_after_reviews(&mut reader, &mut writer).await;
     assert_eq!(request["method"], "host/session/create");
@@ -66,14 +70,20 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
     let retry = tokio::spawn({
         let pane = pane.clone();
         let selection = selection.to_owned();
-        async move { pane.prepare_side_chat(provider, selection).await }
+        async move {
+            pane.start_side_chat(provider, SideChatStart::Quote(selection))
+                .await
+        }
     });
     let request = read_after_reviews(&mut reader, &mut writer).await;
     assert_eq!(request["method"], "host/session/create");
     if abandon_waiter {
         retry.abort();
     }
-    let concurrent = pane.prepare_side_chat(provider, "Must not replace the first quote".into());
+    let concurrent = pane.start_side_chat(
+        provider,
+        SideChatStart::Quote("Must not replace the first quote".into()),
+    );
     tokio::pin!(concurrent);
     assert!(futures_util::poll!(concurrent.as_mut()).is_pending());
     writer.reply(&request, json!({"result":{"thread":{
@@ -117,7 +127,7 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
     })
     .await
     .unwrap();
-    pane.prepare_side_chat(provider, selection.into())
+    pane.start_side_chat(provider, SideChatStart::Quote(selection.into()))
         .await
         .unwrap();
     assert_eq!(
@@ -128,13 +138,74 @@ async fn side_chat_retries_creation_and_initializes_its_quote_once(
     store.close().await.unwrap();
 }
 
+#[rstest::rstest]
+#[case::fresh_side_chat(false)]
+#[case::shown_side_chat(true)]
+#[tokio::test]
+async fn explaining_a_selection_starts_a_conversation_that_asks_at_once(#[case] shown: bool) {
+    let (store, mut reader, mut writer) = setup(authenticated_snapshot()).await;
+    let pane = store.open_pane("/fixture".into()).unwrap();
+    let mut created = Vec::new();
+    for (index, start) in [
+        SideChatStart::Quote("Earlier".into()),
+        SideChatStart::Explain("日本語 Needle".into()),
+    ]
+    .into_iter()
+    .enumerate()
+    .skip(usize::from(!shown))
+    {
+        let starting = tokio::spawn({
+            let pane = pane.clone();
+            async move { pane.start_side_chat(None, start).await }
+        });
+        let request = read_after_reviews(&mut reader, &mut writer).await;
+        assert_eq!(request["method"], "host/session/create");
+        assert!(request["params"]["initialInput"].is_null());
+        let id = format!("side-{index}");
+        writer
+            .reply(
+                &request,
+                json!({"result":{"thread":{
+                    "id":{"provider":"codex","id":id},"cwd":"/fixture","turns":[],"status":"idle"
+                }}}),
+            )
+            .await
+            .unwrap();
+        created.push((SessionRef::new(ProviderKind::Codex, id).unwrap(), starting));
+    }
+    let (explained, explaining) = created.pop().unwrap();
+    let submit = read_after_reviews(&mut reader, &mut writer).await;
+    assert_eq!(submit["method"], "host/session/submit");
+    assert_eq!(submit["params"]["session"]["id"], explained.id.as_str());
+    assert_eq!(
+        submit["params"]["input"][0]["text"]["text"],
+        "次の選択範囲について詳しく説明してください。\n\n日本語 Needle"
+    );
+    writer
+        .reply(&submit, json!({"result":{"turnId":"explained"}}))
+        .await
+        .unwrap();
+    explaining.await.unwrap().unwrap();
+    let snapshot = pane.snapshot().unwrap();
+    assert_eq!(
+        snapshot.panes.get(pane.id()).unwrap().navigation.thread_id,
+        Some(explained)
+    );
+    // The side chat shown before keeps its quoted draft.
+    for (earlier, starting) in created {
+        starting.await.unwrap().unwrap();
+        assert_eq!(snapshot.input.drafts[&earlier.into()].text, "> Earlier\n\n");
+    }
+    store.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn side_chat_without_an_agent_or_after_close_cannot_change_input() {
     let store = Arc::new(Store::offline(Snapshot::default(), None));
     let pane = store.open_pane("/fixture".into()).unwrap();
     let before = pane.snapshot().unwrap();
     let error = pane
-        .prepare_side_chat(None, "Needle".into())
+        .start_side_chat(None, SideChatStart::Quote("Needle".into()))
         .await
         .unwrap_err();
     assert_eq!(
@@ -144,9 +215,12 @@ async fn side_chat_without_an_agent_or_after_close_cannot_change_input() {
     assert_eq!(pane.snapshot().unwrap(), before);
     pane.close();
     assert!(
-        pane.prepare_side_chat(Some(ProviderKind::Codex), "Needle".into())
-            .await
-            .is_err()
+        pane.start_side_chat(
+            Some(ProviderKind::Codex),
+            SideChatStart::Quote("Needle".into())
+        )
+        .await
+        .is_err()
     );
     store.close().await.unwrap();
 }
@@ -160,7 +234,7 @@ async fn abandoning_side_chat_creation_does_not_keep_its_pane_alive() {
     let preparing = tokio::spawn({
         let pane = pane.clone();
         async move {
-            pane.prepare_side_chat(None, "Abandoned selection".into())
+            pane.start_side_chat(None, SideChatStart::Quote("Abandoned selection".into()))
                 .await
         }
     });
@@ -201,7 +275,10 @@ async fn closing_a_side_chat_during_creation_cannot_apply_its_quote_to_another_p
     let preparing = tokio::spawn({
         let pane = pane.clone();
         let selection = selection.to_owned();
-        async move { pane.prepare_side_chat(None, selection).await }
+        async move {
+            pane.start_side_chat(None, SideChatStart::Quote(selection))
+                .await
+        }
     });
     let request = read_after_reviews(&mut reader, &mut writer).await;
     assert_eq!(request["method"], "host/session/create");

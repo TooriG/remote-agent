@@ -6,6 +6,15 @@ use agent_protocol::session::ProviderKind;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
+/// What a side chat begins with.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SideChatStart {
+    /// The selection quoted in its draft; nothing for an empty one.
+    Quote(String),
+    /// A request to explain the selection, sent at once.
+    Explain(String),
+}
+
 pub(super) struct Pane {
     host: String,
     core: OnceCell<Arc<AgentPane>>,
@@ -28,7 +37,7 @@ impl Client {
         host: String,
         cwd: String,
         provider: Option<ProviderKind>,
-        selection: String,
+        start: SideChatStart,
     ) {
         let pane = {
             let mut panes = self.panes.lock().unwrap();
@@ -58,7 +67,10 @@ impl Client {
                         owner.observe_pane(id, core.clone(), pane.stop.clone());
                         Ok::<_, AgentError>(core)
                     }).await?;
-                    core.prepare_side_chat(provider, selection).await?;
+                    match start {
+                        SideChatStart::Quote(text) => core.prepare_side_chat(provider, text).await?,
+                        SideChatStart::Explain(text) => core.explain_in_side_chat(provider, text).await?,
+                    }
                     core.presentation()
                 } => result.map_err(|reason| reason.to_string()),
             };
@@ -126,7 +138,7 @@ mod tests {
                     host.id.clone(),
                     "/same".into(),
                     Some(ProviderKind::Codex),
-                    String::new(),
+                    SideChatStart::Quote(String::new()),
                 );
                 tokio::time::timeout(Duration::from_secs(10), async {
                     loop {
@@ -259,7 +271,13 @@ mod tests {
                 "primary"
             );
             client.shutdown().await.unwrap();
-            client.prepare_side_chat(33, host.id, "/late".into(), None, String::new());
+            client.prepare_side_chat(
+                33,
+                host.id,
+                "/late".into(),
+                None,
+                SideChatStart::Quote(String::new()),
+            );
             assert!(client.panes.lock().unwrap().is_empty());
         });
     }

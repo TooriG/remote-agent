@@ -1,0 +1,26 @@
+# The menus NSH makes itself read in the UI language: the menu bar's app menu,
+# Edit and Window in Japanese, and in English from the launch after English is
+# chosen.
+expect "何に取り組みますか？" 30000
+expect_menu_bar "Bexについて"
+expect_menu_bar "Bexを非表示"
+expect_menu_bar "Bexを終了"
+expect_menu_bar 編集
+expect_menu_bar 取り消す after 編集
+expect_menu_bar カット after 編集
+expect_menu_bar コピー after 編集
+expect_menu_bar ペースト after 編集
+expect_menu_bar すべてを選択 after 編集
+expect_menu_bar ウインドウ
+expect_menu_bar しまう after ウインドウ
+press 設定を開く
+press "日本語 ▾"
+press English
+expect "Display language" 10000
+relaunch
+expect "What should we work on?" 30000
+expect_menu_bar "Quit Bex"
+expect_menu_bar Edit
+expect_menu_bar Undo after Edit
+expect_menu_bar "Select All" after Edit
+expect_menu_bar Window

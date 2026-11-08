@@ -248,6 +248,8 @@ fn limit(step: &Step) -> Duration {
         | Step::Hover(find)
         | Step::Expect(find)
         | Step::ExpectAbsent(find)
+        | Step::ExpectMenuBar(find)
+        | Step::ExpectScrolled(find, ..)
         | Step::ExpectCount(find, _)
         | Step::ExpectEnabled(find, _)
         | Step::ExpectHeight(find, ..)
@@ -289,6 +291,21 @@ fn attempt(
         Step::Dump(name) => artifact(dump(&Tree::read(mtm, menus), output, name)),
         Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
+        Step::ExpectMenuBar(find) => shown(&Tree::menu_bar(mtm), find, true),
+        Step::ExpectScrolled(find, from, to) => {
+            element_is(&Tree::read(mtm, menus), find, |object| {
+                match (text(object, sel!(accessibilityRole)), scrolled(object)) {
+                    (Some(role), Some(at)) if role == "AXScrollArea" => (
+                        (*from..=*to).contains(&at),
+                        format!("a scroll area scrolled to {at:.3}"),
+                    ),
+                    (role, _) => (
+                        false,
+                        format!("{} with no vertical scroll bar", role.unwrap_or_default()),
+                    ),
+                }
+            })
+        }
         Step::ExpectApart(find, other) => apart(&Tree::read(mtm, menus), find, other),
         Step::ExpectInside(find) => inside(&Tree::read(mtm, menus), find),
         Step::ExpectCount(find, count) => counted(&Tree::read(mtm, menus), find, *count),
@@ -439,6 +456,17 @@ fn element_is(
     } else {
         Attempt::Pending(message)
     }
+}
+
+/// Where a scroll area's vertical scroll bar says it is scrolled to.
+fn scrolled(object: &AnyObject) -> Option<f64> {
+    if !responds(object, sel!(accessibilityVerticalScrollBar)) {
+        return None;
+    }
+    let bar: Option<Retained<AnyObject>> =
+        unsafe { msg_send![object, accessibilityVerticalScrollBar] };
+    let value: Option<Retained<AnyObject>> = unsafe { msg_send![&*bar?, accessibilityValue] };
+    Some(value?.downcast::<NSNumber>().ok()?.doubleValue())
 }
 
 fn done(result: Result<String, String>) -> Attempt {
@@ -868,6 +896,15 @@ impl Tree {
         }
     }
 
+    /// The app's menu bar and its menus, which the windows' tree leaves out.
+    fn menu_bar(mtm: MainThreadMarker) -> Self {
+        let mut tree = Self { nodes: Vec::new() };
+        if let Some(bar) = NSApplication::sharedApplication(mtm).mainMenu() {
+            tree.menu(&bar, &bar, None, 0);
+        }
+        tree
+    }
+
     fn menu(
         &mut self,
         menu: &Retained<NSMenu>,
@@ -1068,7 +1105,10 @@ fn compose(tree: &Tree, index: usize, composition: &Composition) -> Result<(), S
         &responder,
         sel!(setMarkedText:selectedRange:replacementRange:),
     ) {
-        return Err(format!("{} takes no composition", tree.nodes[index].describe()));
+        return Err(format!(
+            "{} takes no composition",
+            tree.nodes[index].describe()
+        ));
     }
     // No replacement range: the marked text, or else the selection.
     let marked = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
@@ -1126,7 +1166,9 @@ fn editor(tree: &Tree, index: usize) -> Result<Retained<objc2_app_kit::NSRespond
         None if responds(object, sel!(controlView)) => unsafe { msg_send![&**object, controlView] },
         None => None,
     };
-    let focused = view.is_some_and(|view| focus(window, &view));
+    // Focusing a field that has the focus would end its composition, as
+    // leaving it does.
+    let focused = view.is_some_and(|view| holds_focus(window, &view) || focus(window, &view));
     if !focused {
         return Err(format!(
             "{} could not take the keyboard focus",
@@ -1142,6 +1184,14 @@ fn editor(tree: &Tree, index: usize) -> Result<Retained<objc2_app_kit::NSRespond
         return Err(format!("{} does not edit text", node.describe()));
     }
     Ok(responder)
+}
+
+/// Whether `view`, or a view inside it (a field's editor), has the focus.
+fn holds_focus(window: &NSWindow, view: &NSView) -> bool {
+    window
+        .firstResponder()
+        .and_then(|responder| responder.downcast::<NSView>().ok())
+        .is_some_and(|focused| focused.isDescendantOf(view))
 }
 
 /// Focuses `view`, or the first view inside it that takes the focus (a field in

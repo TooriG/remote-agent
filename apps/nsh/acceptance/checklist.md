@@ -43,8 +43,8 @@ first; the note says which), **n/a** (no Mac equivalent).
 | DeviceNavigationUITests.testPhysicalDeviceCanPairWithManualPayload | n/a | physical device |
 | DictationUITests.testSimulatorDictationContinuesPastThirtySecondsAndReachesHost | not yet | recording needs the system's microphone permission, whose prompt reaches the user running the scenarios; the driver can only decline it |
 | DictationUITests.testSimulatorDictationPermissionDenialPreservesDraftAndSend | covered | dictation-denied (`microphone deny`) |
-| HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | blocked | on the NSH patch that gives a scrolled list its position (Accessibility rows below) |
-| HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | blocked | as above; `scroll` already works |
+| HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | partial | history-position (opens at the end, `expect_scrolled`); the fixture's long history ends interrupted, not running |
+| HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | not yet | the list now says where it is, and a wheel scroll up while a turn streams is pulled back to the end: only a drag stops the conversation following its end (`conversation::list`, `following`) |
 | HistoryUITests.testSimulatorRendersVisualizationAndReopensIt | partial | visualization (the Mac offers the file and opens it in the tool panel, as the desktop client did; only the iPhone renders it inline) |
 | HistoryUITests.testSimulatorRendersMarkdownTableAndReopensIt | covered | markdown-table |
 | HistoryUITests.testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText | covered | long-markdown |
@@ -73,7 +73,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | SynchronizationUITests.testSimulatorFetchesNewTaskWhenReturningToList | n/a | the Mac sidebar is always shown |
 | SynchronizationUITests.testSimulatorMarksUnseenCompletionUntilOpened | covered | unseen-completion |
 | SynchronizationUITests.testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt | covered | queued-input |
-| TurnUITests.testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions | blocked | on the NSH patch that gives a scrolled list its position (Accessibility rows below) |
+| TurnUITests.testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions | covered | history-position |
 | TurnUITests.testSimulatorSelectsPluginAndSkillFromComposer | covered | composer (skills; the fixture lists no plugins) |
 | TurnUITests.testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft | covered | message-actions |
 | TurnUITests.testSimulatorOpensSideChatWithoutLosingOriginalDraft | covered | side-chat |
@@ -96,6 +96,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Conversation: messages, folded work, approvals, questions | covered | send-message, folded-work, live-work, approval, question-choice, question-skip, question-back |
 | Conversation: errors, reconnecting, opening and its failure | covered | failed-turn, retry-stream, history-loading, history-retry |
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork, claude-fork-while-running, fork-failure |
+| Conversation: a selection's bar of actions (add to chat, explain in a side chat, ask in one), gone on scroll or deselect; the right-click menu | covered | selection-bar, selection-bar-scroll |
 | Conversation: a message the Host may not have received goes back to the composer or is discarded | covered | unresolved-submission |
 | Conversation: a turn's work that fails to load shows why under the opened row, with a retry | not yet | the Host reads turn details from its transcript database, which it holds open in one SQLite connection for its lifetime; making the file unreadable from outside (chmod, swapping it) does not fail the read, and the provider is asked only for conversations never saved. The core context test covers the state; the view was checked by hand with a temporary Host failure |
 | Conversation: steering a running turn, minimap beside the lane | covered | steering, queued-input, minimap |
@@ -109,7 +110,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Composer: controls fit narrow windows, none cut off | covered | composer-narrow |
 | Sidebar: a sheet over the content below 768 points, closing on its toggle, Escape or a choice | covered | composer-narrow |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer, dictation-denied; recording needs the system's microphone permission |
-| Composer: paste text at the selection and undo it, paste an image | partial | composer-paste; text copied with an image is pasted too (T3 Code leaves it out), since NSH settles a paste's text before the app hears of it |
+| Composer: paste text at the selection and undo it (Edit > Undo and ⌘Z), paste an image without the text copied with it | covered | composer-paste |
 | Composer: Escape discards a recording | not yet | recording needs the system's microphone permission |
 | Composer: folder menu (no project, a project, another folder) | covered | folder-menu |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
@@ -124,10 +125,11 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Tool panel: layout, browser, terminal, agents, side chat | covered | review-panel (layout), tools, browser, terminal-paste, terminal-query, terminal-reopen, side-chat |
 | Settings: general, providers, environment, worktrees | covered | settings, environment-settings |
 | Settings: display language | covered | display-language |
+| The menus NSH makes (app, Edit, Window) in the UI language | covered | menu-labels (Japanese, and English from the launch after English is chosen) |
 | Settings: accounts, updates, worktree editing | partial | accounts, account-sign-in, account-claude, account-switch, worktree-settings; updates not yet: アップデートを確認 opens the releases page in the default browser, outside the app |
 | Accessibility: the settings overlay is modal, message roles | covered | settings-modal, send-message |
-| Accessibility: VoiceOver reads in the visual order | blocked | on an NSH patch. NSH's virtual list keeps its cells by recycling slot (nsh-core `core/components.rs`, `VirtualListState::cells`), and nsh-platform-macos `src/view.rs` `accessibility_children` (the `accessibilityChildren` override) returns AppKit's subview order, so a recycled list reads in slot order: a conversation reads a turn's "3秒 作業しました" before the user's message above it. The fix: in that override, for a virtual list's cell container, return the cells sorted by row position (frame top first, in the flipped view's coordinates), the rest unchanged. The sidebar, main column, header, composer (left to right), right panel, settings and sheets already read in visual order |
-| Accessibility: a scrolled list says where it is | blocked | on an NSH patch. NSH scrolls its own views (`ViewKind::Scroll`, also every list), and nsh-platform-macos `src/access.rs` `base_role` gives them no scroll role (`Role::None` with `ViewKind::Scroll` falls to `Ax::Group`/`Ax::Generic`), so VoiceOver and the driver see no scroll area or position in a conversation. The fix: map `ViewKind::Scroll` to `AXScrollArea` there, give it a vertical scroll bar whose value is the offset over the scrollable length, and post its value change from `src/scroll.rs` `moved_to`, which already reports each new offset. Until then the reading-position rows (HistoryUITests, TurnUITests) stay blocked |
+| Accessibility: VoiceOver reads in the visual order | covered | reading-order (a question reads before its turn's work and answer after scrolling back and forth) |
+| Accessibility: a scrolled list says where it is | covered | reading-order, history-position (`expect_scrolled`: the conversation is an AXScrollArea whose vertical scroll bar gives its position) |
 | Onboarding without a Host | n/a | the desktop app always lists this PC's Host and starts it when needed, so the Mac never lacks one; pairing another PC is in the environment settings (environment-settings, saved-connections) |
 | First-run setup: environment and AI, then importing projects from history | covered | onboarding |
 | Settings: importing existing projects | partial | onboarding (the same import as the first run); opening it from the settings has no scenario |

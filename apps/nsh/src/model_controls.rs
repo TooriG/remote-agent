@@ -126,8 +126,8 @@ pub(crate) fn controls(
             )
     };
     #[cfg(not(desktop))]
-    let trigger =
-        crate::ui::text_button(move || SharedString::from(label.get()), open_picker).enabled(enabled);
+    let trigger = crate::ui::text_button(move || SharedString::from(label.get()), open_picker)
+        .enabled(enabled);
     let data = computed(move || {
         picker.with(|picker| {
             picker

@@ -1099,7 +1099,11 @@ mod notice_tests {
             notices[0].recovery_label.as_deref(),
             Some("会話一覧を再読み込み")
         );
-        assert!(snapshot.error_notices("", ErrorScope::Application).is_empty());
+        assert!(
+            snapshot
+                .error_notices("", ErrorScope::Application)
+                .is_empty()
+        );
         let recovery = snapshot
             .error_recovery(ErrorId::Operation { key, generation: 3 })
             .unwrap();

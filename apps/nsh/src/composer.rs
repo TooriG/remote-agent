@@ -1,7 +1,7 @@
 use crate::l10n::{localized, tr, tr_format};
 use crate::{Connection, native};
-use agent_core::presentation::folder_menu::{FolderChoice, folder_choices};
 use agent_core::presentation::composer::footer;
+use agent_core::presentation::folder_menu::{FolderChoice, folder_choices};
 use agent_core::state::{Intent, operations as op};
 use nsh_core::{GlassEffect, element::input, prelude::*};
 use serde_json::json;
@@ -215,12 +215,13 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     });
                 }
             })
-            // As the desktop client's composer, a pasted image (a screenshot) is
-            // attached. The field pastes text itself, so a paste stays undoable;
-            // NSH settles that before the app hears of the paste, so text copied
-            // with an image is pasted as well.
+            // As T3 Code's and the desktop client's composers, pasted images (a
+            // screenshot) and files are attached and the text copied with them
+            // is left out. The field inserts a paste of text alone itself, so
+            // it stays undoable.
+            .paste_behavior(nsh_core::PasteBehavior::ReportFiles)
             .on_paste(move |paste: &nsh_core::PasteEvent| {
-                let images: Vec<_> = paste
+                let sources: Vec<_> = paste
                     .files
                     .iter()
                     .filter(|file| file.mime.starts_with("image/"))
@@ -228,13 +229,18 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                         name: file.name.clone(),
                         bytes: file.data.clone(),
                     })
+                    .chain(paste.uris.iter().filter_map(|uri| {
+                        let path = url::Url::parse(uri).ok()?.to_file_path().ok()?;
+                        let is_image = native::image_file(&path);
+                        Some(crate::client::AttachmentSource::File { path, is_image })
+                    }))
                     .collect();
-                if !images.is_empty() && can_attach() {
+                if !sources.is_empty() && can_attach() {
                     let host = connection.host.get_untracked();
                     let key = controls.with_untracked(|c| c.navigation.draft_key.clone());
                     connection
                         .application
-                        .with(|app| app.attach(host, connection.pane, key, images));
+                        .with(|app| app.attach(host, connection.pane, key, sources));
                 }
             })
             .on_focus(move || focused.set(true))

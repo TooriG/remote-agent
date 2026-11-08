@@ -1,14 +1,14 @@
 //! Core supplies Markdown semantics; TextKit owns native selection, layout and menus.
 use crate::Connection;
+use crate::client::SideChatStart;
 use crate::conversation::Kind;
 use crate::l10n::tr;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use agent_core::{panels::PanelScope, state::Intent};
 use agent_core::{
+    panels::PanelScope,
     presentation::markdown::{
         MarkdownAlignment, MarkdownBlock, MarkdownFileReference, MarkdownRun, MarkdownStyle,
     },
-    state::DraftKey,
+    state::{DraftKey, Intent},
 };
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::{Value, json};
@@ -104,17 +104,33 @@ pub(crate) struct Surroundings {
     pub files: crate::files::Browser,
     pub preview: crate::media::Preview,
     pub workspace: crate::workbench::Workbench,
+    /// The bar of actions on the text selected in the list's messages.
+    #[cfg(desktop)]
+    pub selection: crate::selection_bar::SelectionBar,
 }
 
 impl Surroundings {
-    /// The surroundings of the component being made.
+    /// The surroundings of the list being made, with a selection bar of its own.
     pub(crate) fn current() -> Self {
         Self {
             connection: use_context::<Connection>().unwrap(),
             files: use_context::<crate::files::Browser>().unwrap(),
             preview: use_context::<crate::media::Preview>().unwrap(),
             workspace: use_context::<crate::workbench::Workbench>().unwrap(),
+            #[cfg(desktop)]
+            selection: crate::selection_bar::SelectionBar::new(),
         }
+    }
+
+    /// The selection bar's view: its actions act as the text's own do.
+    #[cfg(desktop)]
+    pub(crate) fn selection_bar(self) -> impl IntoElement {
+        self.selection.view(move |name, selected| {
+            action(
+                self,
+                &json!({"action": name, "text": selected.text, "target": selected.target}),
+            )
+        })
     }
 
     /// Opens a link clicked in `target`'s text, `command` (⌘, Ctrl off the
@@ -247,13 +263,17 @@ fn target(connection: Connection) -> Memo<String> {
     })
 }
 
-/// What the native text reports: a selection quoted or asked about in a side
-/// chat, a link pressed, or an item of a file chip's menu chosen.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn native_action(surroundings: Surroundings, data: &Value) {
+/// What message text asks for: a selection quoted, explained or asked about
+/// in a side chat, a link pressed, or an item of a file chip's menu chosen.
+fn action(surroundings: Surroundings, data: &Value) {
     let Surroundings {
         connection, files, ..
     } = surroundings;
+    // TextKit's selection changed: where it is, in the window's content.
+    #[cfg(target_os = "macos")]
+    if data["action"] == "selection" {
+        return surroundings.selection.select(selected(data));
+    }
     let Some(text) = data["text"].as_str().filter(|s| !s.is_empty()) else {
         return;
     };
@@ -285,7 +305,11 @@ fn native_action(surroundings: Surroundings, data: &Value) {
                 after_answer(move || connection.composer_ref.focus());
             }
         }
-        Some("sideChat") if target.pane.is_none() => connection.application.with(|app| {
+        // From a side chat, it explains in a conversation of its own there.
+        Some("explain") if let Some(pane) = target.pane => connection
+            .application
+            .with(|app| app.explain_in_side_chat(pane, text.into())),
+        Some(action @ ("sideChat" | "explain")) => connection.application.with(|app| {
             app.open_side_chat(
                 PanelScope {
                     host: target.host,
@@ -294,7 +318,11 @@ fn native_action(surroundings: Surroundings, data: &Value) {
                 },
                 target.cwd,
                 target.provider,
-                text.into(),
+                if action == "explain" {
+                    SideChatStart::Explain(text.into())
+                } else {
+                    SideChatStart::Quote(text.into())
+                },
             );
         }),
         Some("link") => surroundings.open_link(
@@ -311,6 +339,23 @@ fn native_action(surroundings: Surroundings, data: &Value) {
         ),
         _ => {}
     }
+}
+
+/// A selection TextKit reported (`"selection"`): its text, its message's
+/// target, and its box in the window's content; nothing once it is empty.
+#[cfg(target_os = "macos")]
+fn selected(data: &Value) -> Option<crate::selection_bar::Selected> {
+    let text = data["text"].as_str().filter(|text| !text.is_empty())?;
+    let frame: Vec<f32> = serde_json::from_value(data["bounds"].clone()).ok()?;
+    let [x, y, width, height] = frame[..] else {
+        return None;
+    };
+    Some(crate::selection_bar::Selected {
+        text: text.into(),
+        target: data["target"].as_str()?.into(),
+        bounds: Bounds::new(point(px(x), px(y)), size(px(width), px(height))),
+        side_chat: data["sideChat"].as_bool().unwrap_or(false),
+    })
 }
 
 #[cfg(desktop)]
@@ -358,7 +403,7 @@ fn view_parts(
                             })
                         })
                         .on_native_event(move |event: &NativeEvent| {
-                            native_action(surroundings, &event.data)
+                            action(surroundings, &event.data)
                         })
                         .min_h(px(20.0))
                 };
@@ -690,10 +735,10 @@ mod drawn {
     pub(super) fn message(
         part: ReadSignal<(usize, Part)>,
         secondary: impl Fn() -> bool + Copy + 'static,
-        target: Memo<String>,
+        target_json: Memo<String>,
         surroundings: Surroundings,
     ) -> View {
-        let target = move || serde_json::from_str::<Target>(&target.get_untracked()).ok();
+        let target = move || serde_json::from_str::<Target>(&target_json.get_untracked()).ok();
         let links = Links {
             open: move |link: String, command: bool| {
                 if let Some(target) = target() {
@@ -714,25 +759,81 @@ mod drawn {
                 let _ = (link, id);
             },
         };
-        view()
-            .w_full()
-            .min_h(px(20.0))
-            .gap_2()
-            .selectable(true)
-            .child(each(
-                move || {
-                    part.with(|(_, part)| match part {
-                        Part::Text(blocks) | Part::Code { blocks, .. } => blocks
-                            .iter()
-                            .enumerate()
-                            .map(|(index, block)| (index, block.clone()))
-                            .collect(),
-                        _ => Vec::new(),
-                    })
-                },
-                |(index, block): &(usize, Value)| (*index, block.to_string()),
-                move |block, _| paragraph(block.get_untracked().1, secondary(), links),
-            ))
+        let message = view().w_full().min_h(px(20.0)).gap_2().selectable(true);
+        #[cfg(desktop)]
+        let message = selection_actions(message, target_json, surroundings);
+        message.child(each(
+            move || {
+                part.with(|(_, part)| match part {
+                    Part::Text(blocks) | Part::Code { blocks, .. } => blocks
+                        .iter()
+                        .enumerate()
+                        .map(|(index, block)| (index, block.clone()))
+                        .collect(),
+                    _ => Vec::new(),
+                })
+            },
+            |(index, block): &(usize, Value)| (*index, block.to_string()),
+            move |block, _| paragraph(block.get_untracked().1, secondary(), links),
+        ))
+    }
+
+    /// The selection's actions, as the Mac's text has them: the bar above the
+    /// selection, and a right click's menu with them beside Copy and Select
+    /// All, which act on the selection.
+    #[cfg(desktop)]
+    fn selection_actions(message: View, target: Memo<String>, surroundings: Surroundings) -> View {
+        use crate::l10n::tr;
+        use nsh_core::{
+            desktop::MenuRole,
+            element::desktop::{MenuItem, popup_menu_at},
+        };
+        let side_chat = surroundings.connection.pane.is_none();
+        let selected = stored(String::new());
+        message
+            .on_text_selection_change(move |event: &TextSelectionEvent| {
+                selected.replace(event.text.clone());
+                surroundings.selection.select(
+                    event
+                        .page_bounds
+                        .filter(|_| !event.text.is_empty())
+                        .map(|bounds| crate::selection_bar::Selected {
+                            text: event.text.clone(),
+                            target: target.get_untracked(),
+                            bounds,
+                            side_chat,
+                        }),
+                );
+            })
+            .on_context_menu(move |event: &ContextMenuEvent| {
+                let text = selected.get();
+                let act = |name: &'static str| {
+                    let text = text.clone();
+                    move || {
+                        super::action(
+                            surroundings,
+                            &serde_json::json!({
+                                "action": name, "text": text, "target": target.get_untracked(),
+                            }),
+                        )
+                    }
+                };
+                let mut items = Vec::new();
+                if !text.is_empty() {
+                    items.push(MenuItem::new(tr("チャットに追加")).on_select(act("quote")));
+                    items.push(MenuItem::new(tr("詳細を表示")).on_select(act("explain")));
+                    if side_chat {
+                        items.push(
+                            MenuItem::new(tr("サイドチャットで質問")).on_select(act("sideChat")),
+                        );
+                    }
+                    items.push(MenuItem::separator());
+                }
+                items.push(MenuItem::role(MenuRole::Copy).disabled(text.is_empty()));
+                items.push(MenuItem::role(MenuRole::SelectAll));
+                surroundings.selection.dismiss();
+                drop(popup_menu_at(items, event.page_position));
+            })
     }
 
     /// What a paragraph's links do: `open` a link pressed, ⌘ (Ctrl here)

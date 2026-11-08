@@ -1,0 +1,19 @@
+# A long conversation opens at its end, and each send from the end keeps the
+# latest in view, as the list's scroll bar tells VoiceOver.
+# iOS: HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport,
+# TurnUITests.testSimulatorKeepsLatestVisibleAcrossRepeatedLongHistorySubmissions
+fixture /long-conversation/long-history
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "Long conversation" 20000
+expect "Review section 14, input 0." 20000
+expect_scrolled この会話 0.99 1 10000
+type "AI に依頼する" "[immediate] 一度目の送信"
+press 送信
+expect_count "シミュレータで完了しました。" 1 30000
+expect_scrolled この会話 0.99 1 10000
+type "AI に依頼する" "[immediate] 二度目の送信"
+press 送信
+expect_count "シミュレータで完了しました。" 2 30000
+expect_scrolled この会話 0.99 1 10000
+screenshot latest

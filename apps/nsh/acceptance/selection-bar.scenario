@@ -1,0 +1,36 @@
+# Selecting text in a message shows a bar of actions just above it, inside the
+# window, as T3 Code's and the desktop client's: add it to the chat, have it
+# explained in a side chat, or ask about it in one. The bar goes once the
+# selection does or the conversation scrolls; the right-click menu stays.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[selection] [immediate] 選択の操作を確かめます"
+press 送信
+expect "Needle Alpha Bravo." 30000
+select "*Needle Alpha*" Alpha
+expect_inside 詳細を表示 10000
+expect_inside チャットに追加
+expect_inside サイドチャットで質問
+screenshot selection-bar
+press チャットに追加
+expect "> Alpha" after "AI に依頼する"
+expect_absent 詳細を表示
+# Leaving the text takes the bar away (selection-bar-scroll: scrolling too).
+select "*Needle Alpha*" Alpha
+expect 詳細を表示 10000
+click none "AI に依頼する"
+expect_absent 詳細を表示 10000
+# The right-click menu still offers the selection's actions.
+select "*Needle Alpha*" Alpha
+menu "*Needle Alpha*"
+expect サイドチャットで質問
+key escape
+# Asking in a side chat quotes the selection there.
+select "*Needle Alpha*" Bravo
+press サイドチャットで質問
+expect "> Bravo" after ツールを閉じる 10000
+# Explaining sends the side chat's first message at once.
+select "*Needle Alpha*" Alpha
+press 詳細を表示
+expect "次の選択範囲について詳しく説明してください。" after ツールを閉じる 30000
+screenshot explained

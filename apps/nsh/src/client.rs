@@ -19,6 +19,7 @@ mod panes;
 #[cfg(desktop)]
 mod ssh;
 mod transfers;
+pub(crate) use panes::SideChatStart;
 pub(crate) use transfers::{AttachmentSource, LocalFile};
 
 pub(crate) enum Update {

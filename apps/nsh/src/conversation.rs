@@ -248,7 +248,10 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             .context
             .with(|p| p.opening().is_none().then(|| p.history()).flatten())
     });
-    view()
+    let column = view();
+    #[cfg(desktop)]
+    let column = column.child(surroundings.selection_bar());
+    column
         .flex_1()
         .min_h_0()
         .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
@@ -387,44 +390,51 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                     })
                                             })
                                         };
-                                        view().w_full().child(fold_row(
-                                            move || label().unwrap_or_default().to_string(),
-                                            open,
-                                            move || {
-                                                if let Some(activity) = row.with_untracked(|row| {
-                                                    row.as_ref()
-                                                        .and_then(|row| row.activity.clone())
-                                                }) {
-                                                    let opening = !expanded.with_untracked(|all| {
-                                                        activity_is_expanded(
-                                                            &activity.status,
-                                                            all.get(&activity.id).cloned(),
-                                                        )
-                                                    });
-                                                    following.set(false);
-                                                    expanded.update(|all| {
-                                                        if opening {
-                                                            all.insert(
-                                                                activity.id.clone(),
-                                                                activity.status,
-                                                            );
-                                                        } else {
-                                                            all.remove(&activity.id);
-                                                        }
-                                                    });
-                                                    if opening
-                                                        && let Some(load) = activity.load_items
+                                        view()
+                                            .w_full()
+                                            .child(fold_row(
+                                                move || label().unwrap_or_default().to_string(),
+                                                open,
+                                                move || {
+                                                    if let Some(activity) =
+                                                        row.with_untracked(|row| {
+                                                            row.as_ref().and_then(|row| {
+                                                                row.activity.clone()
+                                                            })
+                                                        })
                                                     {
-                                                        connection
-                                                            .dispatch(Intent::LoadTurnItems(load));
+                                                        let opening =
+                                                            !expanded.with_untracked(|all| {
+                                                                activity_is_expanded(
+                                                                    &activity.status,
+                                                                    all.get(&activity.id).cloned(),
+                                                                )
+                                                            });
+                                                        following.set(false);
+                                                        expanded.update(|all| {
+                                                            if opening {
+                                                                all.insert(
+                                                                    activity.id.clone(),
+                                                                    activity.status,
+                                                                );
+                                                            } else {
+                                                                all.remove(&activity.id);
+                                                            }
+                                                        });
+                                                        if opening
+                                                            && let Some(load) = activity.load_items
+                                                        {
+                                                            connection.dispatch(
+                                                                Intent::LoadTurnItems(load),
+                                                            );
+                                                        }
+                                                        if opening {
+                                                            reveal_row(list, at.index() as u32);
+                                                        }
                                                     }
-                                                    if opening {
-                                                        reveal_row(list, at.index() as u32);
-                                                    }
-                                                }
-                                            },
-                                        ))
-                                        .child(work_load_failure(connection, row, open))
+                                                },
+                                            ))
+                                            .child(work_load_failure(connection, row, open))
                                     },
                                 ))
                                 .child(when(
@@ -547,6 +557,9 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 dragging.replace(true);
             })
             .on_scroll(move |event: &ScrollEvent| {
+                // As T3 Code's, the selection's actions go while it scrolls.
+                #[cfg(desktop)]
+                surroundings.selection.dismiss();
                 if dragging.get() {
                     following.set(
                         event.offset.y + event.size.height

@@ -97,6 +97,8 @@ impl Icon {
     pub(crate) const SHIELD: Self = icon!(Shield);
     pub(crate) const SPARKLES: Self = icon!(Sparkles);
     pub(crate) const QUESTION: Self = icon!(MessageCircleQuestionMark);
+    #[cfg(desktop)]
+    pub(crate) const QUOTE: Self = icon!(Quote);
     pub(crate) const REFRESH: Self = icon!(RotateCw);
     #[cfg(desktop)]
     pub(crate) const SEARCH: Self = icon!(Search);

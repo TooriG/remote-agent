@@ -1,6 +1,6 @@
 //! The application owns UI resources shared by native views; each view observes immutable snapshots.
 use crate::{
-    client::{Client, Update},
+    client::{Client, SideChatStart, Update},
     shared::Shared,
 };
 use agent_core::{
@@ -57,7 +57,7 @@ pub(crate) struct SideChat {
     pub pending: bool,
     pub failure: Option<agent_core::presentation::error::ErrorText>,
     provider: Option<agent_protocol::session::ProviderKind>,
-    selection: Arc<str>,
+    start: SideChatStart,
 }
 
 #[derive(Clone)]
@@ -187,6 +187,9 @@ impl State {
                         Ok(value) => {
                             pane.publication = Some(Shared(value));
                             pane.failure = None;
+                            // Its first input is in: preparing it again only
+                            // reopens its conversation.
+                            pane.start = SideChatStart::Quote(String::new());
                         }
                         Err(reason) => {
                             pane.failure = Some(agent_core::presentation::error::error_text(
@@ -543,7 +546,7 @@ impl Application {
         scope: PanelScope,
         cwd: String,
         provider: Option<agent_protocol::session::ProviderKind>,
-        selection: String,
+        start: SideChatStart,
     ) {
         let mut id = 0;
         self.state.send_modify(|state| {
@@ -561,9 +564,19 @@ impl Application {
                     pending: false,
                     failure: None,
                     provider,
-                    selection: selection.into(),
+                    start,
                 },
             );
+        });
+        self.prepare_side_chat(id);
+    }
+
+    /// Asks side chat `id` to explain `text` in a conversation of its own.
+    pub fn explain_in_side_chat(&self, id: u64, text: String) {
+        self.state.send_modify(|state| {
+            if let Some(chat) = Arc::make_mut(state).side_chats.get_mut(&id) {
+                chat.start = SideChatStart::Explain(text);
+            }
         });
         self.prepare_side_chat(id);
     }
@@ -591,12 +604,12 @@ impl Application {
             };
             pane.pending = true;
             pane.failure = None;
-            request = Some((scope.host, cwd, pane.provider, pane.selection.to_string()));
+            request = Some((scope.host, cwd, pane.provider, pane.start.clone()));
             true
         });
-        if let Some((host, cwd, provider, selection)) = request {
+        if let Some((host, cwd, provider, start)) = request {
             self.client
-                .prepare_side_chat(id, host, cwd, provider, selection);
+                .prepare_side_chat(id, host, cwd, provider, start);
         }
     }
 
@@ -700,7 +713,7 @@ mod tests {
             scope.clone(),
             "/side".into(),
             Some(ProviderKind::Codex),
-            "quote".into(),
+            SideChatStart::Quote("quote".into()),
         );
         let id = application
             .snapshot()

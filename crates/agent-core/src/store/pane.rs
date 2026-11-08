@@ -2,6 +2,15 @@
 use super::*;
 use crate::presentation::view::Presentation;
 
+/// What a side chat starts with.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SideChatStart {
+    /// The selection quoted in its draft; nothing for an empty one.
+    Quote(String),
+    /// A request to explain the selection, sent at once.
+    Explain(String),
+}
+
 pub struct Pane {
     store: Arc<Store>,
     id: String,
@@ -68,12 +77,15 @@ impl Pane {
         self.store.prepare_dictation()
     }
 
-    /// Creation and quote initialization are one operation on this pane. A retry
-    /// or a second view task must never replace an already editable draft.
-    pub async fn prepare_side_chat(
+    /// Creation and its first input are one operation on this pane. A retry
+    /// or a second view task must never replace an already editable draft:
+    /// a quote goes only into a side chat this starts. A request to explain
+    /// starts a conversation of its own each time, as the desktop client's
+    /// "詳細を表示" did, so the draft of the one shown stays as it is.
+    pub async fn start_side_chat(
         self: &Arc<Self>,
         provider: Option<crate::session::ProviderKind>,
-        text: String,
+        start: SideChatStart,
     ) -> Result<(), crate::client::AgentError> {
         use crate::client::error;
         let pane = Arc::downgrade(self);
@@ -89,7 +101,8 @@ impl Pane {
                     .panes
                     .get(pane.id())
                     .ok_or_else(|| error("pane is closed"))?;
-                if state.navigation.thread_id.is_some() {
+                if state.navigation.thread_id.is_some() && matches!(start, SideChatStart::Quote(_))
+                {
                     return Ok(());
                 }
                 let provider = provider
@@ -109,11 +122,31 @@ impl Pane {
                 return Err(error("サイドチャットを開始できませんでした。"));
             };
             let pane = pane.upgrade().ok_or_else(|| error("pane is closed"))?;
-            pane.snapshot().map_err(error)?;
-            if !text.is_empty() {
-                pane.dispatch(Intent::SetDraftText {
-                    thread_id: id.into(),
-                    text: crate::composer::append_selection_to_draft("", &text),
+            let snapshot = pane.snapshot().map_err(error)?;
+            let (text, send) = match start {
+                SideChatStart::Quote(text) if text.is_empty() => return Ok(()),
+                SideChatStart::Quote(text) => {
+                    (crate::composer::append_selection_to_draft("", &text), false)
+                }
+                SideChatStart::Explain(text) => (
+                    crate::localization::localized_ui_format(
+                        snapshot.catalog.ui_language,
+                        "次の選択範囲について詳しく説明してください。\n\n{0}".into(),
+                        vec![text],
+                    ),
+                    true,
+                ),
+            };
+            pane.dispatch(Intent::SetDraftText {
+                thread_id: id.clone().into(),
+                text,
+            })
+            .await
+            .map_err(error)?;
+            if send {
+                pane.dispatch(Intent::Submit {
+                    thread_id: Some(id),
+                    client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
                 })
                 .await
                 .map_err(error)?;

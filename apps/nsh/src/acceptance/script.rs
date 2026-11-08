@@ -35,6 +35,13 @@
 //!   accepting the marked text as it is.
 //! - `expect <text> [after <anchor>] [timeout-ms]` / `expect_absent ...`: waits
 //!   until some element's text contains `<text>`, or none does.
+//! - `expect_scrolled <label> <from> <to> [after <anchor>] [timeout-ms]`: waits
+//!   until that element is a scroll area whose vertical scroll bar says it is
+//!   scrolled between `<from>` and `<to>` (0 at the content's start, 1 at its
+//!   end), as VoiceOver reads its position.
+//! - `expect_menu_bar <text> [after <anchor>] [timeout-ms]`: waits until an
+//!   item of the app's menu bar, or of one of its menus, is titled `<text>`;
+//!   `after` names the menu it is in (`expect_menu_bar 取り消す after 編集`).
 //! - `expect_count <text> <n> [after <anchor>] [timeout-ms]`: waits until
 //!   exactly `<n>` elements' text contains `<text>`, whatever their order (a
 //!   conversation's rows read in their list's order, not the screen's).
@@ -123,6 +130,10 @@ pub(crate) enum Step {
     Click(Modifiers, Find),
     Expect(Find),
     ExpectAbsent(Find),
+    /// The element is a scroll area scrolled between the two fractions.
+    ExpectScrolled(Find, f64, f64),
+    /// An item of the menu bar shows the text.
+    ExpectMenuBar(Find),
     /// This many elements show the text.
     ExpectCount(Find, usize),
     /// The element takes presses, or not.
@@ -317,6 +328,10 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("unmark", [target, rest @ ..]) => Step::Compose(find(target, rest)?, Composition::Unmark),
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
+        ("expect_menu_bar", [text, rest @ ..]) => Step::ExpectMenuBar(find(text, rest)?),
+        ("expect_scrolled", [label, from, to, rest @ ..]) => {
+            Step::ExpectScrolled(find(label, rest)?, fraction(from)?, fraction(to)?)
+        }
         ("expect_apart", [text, other, rest @ ..]) => {
             Step::ExpectApart(find(text, rest)?, (*other).to_owned())
         }
@@ -439,6 +454,14 @@ fn wheel(target: &str, lines: &str, rest: &[&str]) -> Result<Step, String> {
     Ok(Step::Scroll(find(target, rest)?, lines, held))
 }
 
+fn fraction(value: &str) -> Result<f64, String> {
+    value
+        .parse()
+        .ok()
+        .filter(|fraction: &f64| (0.0..=1.0).contains(fraction))
+        .ok_or_else(|| format!("{value:?} is not a fraction from 0 to 1"))
+}
+
 fn points(value: &str) -> Result<f64, String> {
     value
         .parse()
@@ -535,7 +558,7 @@ mod tests {
     fn steps_take_quoted_labels_and_optional_timeouts() {
         let lines = parse(
             "# Comment\nfixture /external-conversation\nfirst-launch\nhost without-codex\n\npress \"新しい チャット\"\n\
-             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
+             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_menu_bar 取り消す after 編集\nexpect_scrolled この会話 0.5 1 after 見出し\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
              scroll 会話 -3\nscroll 画像 2 held cmd after 見出し\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nexpect_inside 送信 1000\nselect 回答 Needle\nmenu 回答 after 見出し\nhover 回答\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png contains \"a.txt:2\"\n\
              expect_clipboard \"a b\" 500\ncopy \"a\\nb\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
@@ -572,6 +595,20 @@ mod tests {
                     after: None,
                     timeout: DEFAULT_TIMEOUT
                 }),
+                Step::ExpectMenuBar(Find {
+                    text: "取り消す".into(),
+                    after: Some("編集".into()),
+                    timeout: DEFAULT_TIMEOUT
+                }),
+                Step::ExpectScrolled(
+                    Find {
+                        text: "この会話".into(),
+                        after: Some("見出し".into()),
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    0.5,
+                    1.0
+                ),
                 Step::ExpectCount(
                     Find {
                         text: "回答".into(),
@@ -814,6 +851,10 @@ mod tests {
             ("press", "line 1: unknown step or wrong arguments: press"),
             ("tap x", "line 1: unknown step or wrong arguments: tap"),
             ("window 0 700", "line 1: \"0\" is not a size in points"),
+            (
+                "expect_scrolled この会話 0 2",
+                "line 1: \"2\" is not a fraction from 0 to 1",
+            ),
             (
                 "window wide 700",
                 "line 1: \"wide\" is not a size in points",

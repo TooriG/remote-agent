@@ -1,0 +1,22 @@
+# VoiceOver reads a conversation as it shows: after scrolling up through a long
+# conversation and back, a question still reads before its turn's folded work
+# and its answer, however the list reused its rows. The list is a scroll area
+# whose vertical scroll bar says where it is.
+# iOS: HistoryUITests, TurnUITests (reading position)
+fixture /reading-conversation/reading-history
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "Reading conversation" 20000
+expect "Answer 35 ends here." 20000
+expect 作業しました after "*Reading question 35:*"
+expect "Answer 35 ends here." after "*Reading question 35:*"
+expect_scrolled この会話 0.99 1 10000
+scroll この会話 -120
+expect_scrolled この会話 0 0.98 10000
+scroll この会話 -300
+scroll この会話 120
+scroll この会話 2000
+expect_scrolled この会話 0.99 1 10000
+expect 作業しました after "*Reading question 35:*"
+expect "Answer 35 ends here." after "*Reading question 35:*"
+dump scrolled-back

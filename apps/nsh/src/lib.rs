@@ -37,6 +37,8 @@ mod projects;
 mod requests;
 mod rich_text;
 #[cfg(desktop)]
+mod selection_bar;
+#[cfg(desktop)]
 mod settings;
 mod shared;
 mod shimmer;

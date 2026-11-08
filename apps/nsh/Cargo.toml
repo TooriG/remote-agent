@@ -17,6 +17,7 @@ tokio-util = { workspace = true, features = ["rt"] }
 async-channel = "2"
 uuid = { version = "1", features = ["v4", "v5"] }
 tempfile = "3"
+url.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Lucide's own SVG files, independent of any UI framework.
 lucide-static-svg = "=1.70.0"

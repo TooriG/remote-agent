@@ -1,0 +1,11 @@
+# The bar of actions on a selection goes while the conversation scrolls, as
+# T3 Code's does.
+fixture /reading-conversation/reading-history
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "Reading conversation" 20000
+expect "Answer 35 ends here." 20000
+select "*Answer 35 ends here.*" "ends here"
+expect_inside 詳細を表示 10000
+scroll この会話 -3
+expect_absent 詳細を表示 10000
