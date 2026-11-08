@@ -596,9 +596,5 @@ pub fn register(components: &Components) {
     components.register("bex.search", Rc::new(|cx| Box::new(Search::new(cx))));
     components.register("bex.switch", Rc::new(|cx| Box::new(Switch::new(cx))));
     components.register("bex.progress", Rc::new(|cx| Box::new(Progress::new(cx))));
-    components.register(
-        "bex.list",
-        Rc::new(|cx| Box::new(super::list_macos::List::new(cx))),
-    );
     components.register("bex.toolbar", Rc::new(|cx| Box::new(Toolbar::new(cx))));
 }

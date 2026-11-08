@@ -4,7 +4,7 @@ use crate::l10n::{localized, tr};
 use nsh_core::{element::NativeView, prelude::*};
 use serde_json::{Value, json};
 
-#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize)]
 pub(crate) struct RowIndicators {
     pub activity: Option<agent_core::presentation::thread_status::ThreadActivity>,
     pub worktree: Option<agent_protocol::models::WorktreeStatus>,
@@ -23,39 +23,6 @@ impl RowIndicators {
             .collect::<Vec<_>>()
             .join(tr("、"))
     }
-}
-
-#[derive(PartialEq, serde::Deserialize)]
-#[cfg(target_os = "macos")]
-pub(super) struct ListCompose {
-    pub id: String,
-    pub enabled: bool,
-}
-
-#[derive(PartialEq, serde::Deserialize)]
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub(super) struct ListRow {
-    pub id: String,
-    pub title: String,
-    pub symbol: String,
-    #[cfg(target_os = "macos")]
-    pub png: Option<Vec<u8>>,
-    pub level: u32,
-    pub disclosure: bool,
-    #[cfg(target_os = "macos")]
-    pub menu: Option<Value>,
-    #[cfg(target_os = "macos")]
-    pub indicators: Option<RowIndicators>,
-    #[cfg(target_os = "macos")]
-    pub loading: Option<bool>,
-    #[cfg(target_os = "macos")]
-    pub enabled: Option<bool>,
-    #[cfg(target_os = "macos")]
-    pub group: bool,
-    #[cfg(target_os = "macos")]
-    pub expanded: bool,
-    #[cfg(target_os = "macos")]
-    pub compose: Option<ListCompose>,
 }
 
 pub fn items(choices: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>) -> Value {
@@ -84,8 +51,6 @@ pub mod macos;
 mod apple;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod hosted;
-#[cfg(target_os = "macos")]
-mod list_macos;
 #[cfg(target_os = "ios")]
 mod preview_ios;
 #[cfg(target_os = "macos")]

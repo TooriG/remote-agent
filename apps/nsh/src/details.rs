@@ -20,7 +20,6 @@ use nsh_core::{
 };
 use std::{collections::BTreeSet, sync::Arc};
 
-
 /// The desktop workspace card's content: the folder, its editors, review and sources.
 #[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Debug, PartialEq)]

@@ -9,13 +9,9 @@ use objc2::{
     runtime::ProtocolObject,
 };
 use objc2_core_foundation::{CGRect, CGSize};
-use objc2_foundation::{NSArray, NSIndexPath, NSInteger, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::*;
-use std::{
-    cell::{Cell, RefCell},
-    ptr::NonNull,
-    rc::Rc,
-};
+use std::{cell::Cell, ptr::NonNull, rc::Rc};
 
 fn action(context: &ComponentContext, event: &'static str, value: &str) -> Retained<UIAction> {
     let context = context.clone();
@@ -293,122 +289,6 @@ impl NativeComponent for Button {
     }
 }
 
-struct ListState {
-    context: ComponentContext,
-    items: RefCell<Vec<super::ListRow>>,
-}
-define_class!(
-    #[unsafe(super(NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[ivars = ListState]
-    struct ListDelegate;
-    unsafe impl NSObjectProtocol for ListDelegate {}
-    unsafe impl UITableViewDataSource for ListDelegate {
-        #[unsafe(method(tableView:numberOfRowsInSection:))]
-        fn rows(&self, _: &UITableView, _: NSInteger) -> NSInteger {
-            self.ivars().items.borrow().len() as NSInteger
-        }
-
-        #[unsafe(method_id(tableView:cellForRowAtIndexPath:))]
-        fn cell(&self, table: &UITableView, index: &NSIndexPath) -> Retained<UITableViewCell> {
-            let identifier = NSString::from_str("item");
-            let cell = table
-                .dequeueReusableCellWithIdentifier(&identifier)
-                .unwrap_or_else(|| {
-                    UITableViewCell::initWithStyle_reuseIdentifier(
-                        UITableViewCell::alloc(self.mtm()),
-                        UITableViewCellStyle::Default,
-                        Some(&identifier),
-                    )
-                });
-            let config = UIListContentConfiguration::cellConfiguration(self.mtm());
-            if let Some(row) = self.ivars().items.borrow().get(index.row() as usize) {
-                cell.setAccessibilityIdentifier(Some(&NSString::from_str(&row.id)));
-                config.setText(Some(&NSString::from_str(&row.title)));
-                let image = (!row.symbol.is_empty())
-                    .then(|| UIImage::systemImageNamed(&NSString::from_str(&row.symbol)))
-                    .flatten();
-                config.setImage(image.as_deref());
-                config
-                    .imageProperties()
-                    .setMaximumSize(CGSize::new(20.0, 20.0));
-                cell.setIndentationLevel(row.level as NSInteger);
-                cell.setAccessoryType(if row.disclosure {
-                    UITableViewCellAccessoryType::DisclosureIndicator
-                } else {
-                    UITableViewCellAccessoryType::None
-                });
-            }
-            cell.setContentConfiguration(Some(ProtocolObject::from_ref(&*config)));
-            cell
-        }
-    }
-    unsafe impl UIScrollViewDelegate for ListDelegate {}
-    unsafe impl UITableViewDelegate for ListDelegate {
-        #[unsafe(method(tableView:didSelectRowAtIndexPath:))]
-        fn selected(&self, table: &UITableView, index: &NSIndexPath) {
-            table.deselectRowAtIndexPath_animated(index, true);
-            let id = self
-                .ivars()
-                .items
-                .borrow()
-                .get(index.row() as usize)
-                .map(|row| row.id.clone());
-            if let Some(id) = id {
-                self.ivars().context.emit("select", id.into());
-            }
-        }
-    }
-);
-
-impl ListDelegate {
-    fn new(mtm: MainThreadMarker, context: ComponentContext) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(ListState {
-            context,
-            items: RefCell::default(),
-        });
-        unsafe { msg_send![super(this), init] }
-    }
-}
-
-struct List {
-    view: Retained<UITableView>,
-    delegate: Retained<ListDelegate>,
-}
-impl List {
-    fn new(context: ComponentContext) -> Self {
-        let mtm = MainThreadMarker::new().unwrap();
-        let delegate = ListDelegate::new(mtm, context);
-        let view = UITableView::initWithFrame_style(
-            UITableView::alloc(mtm),
-            CGRect::ZERO,
-            UITableViewStyle::Plain,
-        );
-        view.setDataSource(Some(ProtocolObject::from_ref(&*delegate)));
-        // UIKit keeps a weak reference; this component owns the protocol implementation.
-        unsafe { view.setDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
-        Self { view, delegate }
-    }
-}
-impl NativeComponent for List {
-    fn view(&self) -> &UIView {
-        &self.view
-    }
-    fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
-        if name != "items" {
-            return;
-        }
-        let rows = value
-            .and_then(|value| serde_json::from_value(value.clone()).ok())
-            .unwrap_or_default();
-        if *self.delegate.ivars().items.borrow() == rows {
-            return;
-        }
-        *self.delegate.ivars().items.borrow_mut() = rows;
-        self.view.reloadData();
-    }
-}
-
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
@@ -532,7 +412,6 @@ pub fn register(components: &Components) {
     );
     components.register("bex.button", Rc::new(|cx| Box::new(Button::new(cx))));
     components.register("bex.menu", Rc::new(|cx| Box::new(Button::new(cx))));
-    components.register("bex.list", Rc::new(|cx| Box::new(List::new(cx))));
     components.register("bex.search", Rc::new(|cx| Box::new(Search::new(cx))));
     components.register("bex.switch", Rc::new(|cx| Box::new(Switch::new(cx))));
     components.register("bex.progress", Rc::new(|cx| Box::new(Progress::new(cx))));
