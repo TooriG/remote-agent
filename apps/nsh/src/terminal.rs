@@ -83,7 +83,7 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
         }
     });
     // T3 Code's terminal fills its panel; Bex's folder, status and reconnection
-    // sit in one quiet row above it.
+    // sit in one quiet row above it, with stopping what runs in it.
     view()
         .flex_1()
         .min_h_0()
@@ -149,7 +149,15 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                             })
                         }
                     },
-                )),
+                ))
+                .child(
+                    ui::text_button(tr("終了"), move || {
+                        send(Intent::KillTerminal(op::KillTerminal {
+                            handle: handle.get(),
+                        }));
+                    })
+                    .enabled(move || input.get()),
+                ),
         )
         .child(grid(
             move || input.get(),

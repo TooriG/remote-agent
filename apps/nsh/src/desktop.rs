@@ -72,17 +72,33 @@ pub(crate) fn quit() {
 pub fn run() -> std::process::ExitCode {
     // The app's data follows its Host's scope, so a source build keeps apart
     // from the installed app as their Hosts do.
-    let (runtime, application, local_directory) =
-        match agent_local_host::launch::HostScope::from_environment(cfg!(debug_assertions))
-            .and_then(|scope| Ok((scope.resolve()?.directory, scope)))
-            .map_err(crate::storage::error)
-            .and_then(|(directory, scope)| {
-                Application::new(scope.directory.join("nsh-client"), Some(scope))
-                    .map(|(runtime, app)| (runtime, app, Some(directory)))
-            }) {
-            Ok(service) => service,
-            Err(reason) => return fail(&reason.to_string()),
-        };
+    let scope = match agent_local_host::launch::HostScope::from_environment(cfg!(debug_assertions))
+    {
+        Ok(scope) => scope,
+        Err(reason) => return fail(&reason.to_string()),
+    };
+    // The app's diagnostic log sits beside its Host's, and starts before the
+    // app's threads do.
+    let logging = agent_transport::diagnostics::initialize(
+        &scope.directory,
+        agent_transport::diagnostics::Component::Desktop,
+        env!("CARGO_PKG_VERSION"),
+        option_env!("AGENT_BUILD_REVISION").unwrap_or("development"),
+    );
+    let (runtime, application, local_directory) = match scope
+        .resolve()
+        .map(|host| host.directory)
+        .map_err(crate::storage::error)
+        .and_then(|directory| {
+            Application::new(scope.directory.join("nsh-client"), Some(scope))
+                .map(|(runtime, app)| (runtime, app, Some(directory)))
+        }) {
+        Ok(service) => service,
+        Err(reason) => return fail(&reason.to_string()),
+    };
+    if let Err(reason) = logging {
+        application.fail(format!("エラーログを保存できません: {reason}"));
+    }
     #[cfg(target_os = "macos")]
     nsh_platform_macos::set_components(crate::native::macos::register);
     let options = AppOptions {
@@ -92,8 +108,13 @@ pub fn run() -> std::process::ExitCode {
         // Closing hides the window; the Dock reopens it, and Quit stops the app.
         #[cfg(target_os = "macos")]
         keep_alive_on_close: true,
+        // The app is drawn dark: the frame and menus Windows draws follow it.
+        #[cfg(windows)]
+        appearance: platform::Appearance::Dark,
         ..Default::default()
     };
+    #[cfg(windows)]
+    crate::native::windows::register(&options.components);
     #[cfg(target_os = "macos")]
     let browser = {
         let browser = crate::native::browser_macos::Service::new(
@@ -118,6 +139,7 @@ pub fn run() -> std::process::ExitCode {
         AppSource::Rust(root(application.clone(), Area::Shell)),
         options,
     );
+    tracing::info!(target: "agent", operation = "shutdown", "Bex shutting down");
     #[cfg(target_os = "macos")]
     runtime.block_on(browser.shutdown().wait());
     if let Err(reason) = runtime.block_on(application.shutdown()) {

@@ -64,6 +64,51 @@ pub fn input_focus(
     }
 }
 
+/// Where a pointer at (`x`, `y`) on a page image shown at `scale` is in the
+/// page's own coordinates; `None` off the `width` × `height` page.
+pub fn page_point(x: f64, y: f64, scale: f64, width: u32, height: u32) -> Option<(f64, f64)> {
+    if !(scale.is_finite() && scale > 0.) {
+        return None;
+    }
+    let (x, y) = (x / scale, y / scale);
+    ((0.0..f64::from(width)).contains(&x) && (0.0..f64::from(height)).contains(&y))
+        .then_some((x, y))
+}
+
+/// A click at a pointer on the page image shown at `scale`.
+pub fn click_action(
+    x: f64,
+    y: f64,
+    scale: f64,
+    width: u32,
+    height: u32,
+) -> Option<agent_protocol::browser::BrowserAction> {
+    let (x, y) = page_point(x, y, scale, width, height)?;
+    Some(agent_protocol::browser::BrowserAction::Click { x, y })
+}
+
+/// A wheel or touchpad scroll over the page image shown at `scale`: the
+/// pointer's page point and the distance in page points, down and right
+/// positive, within what the Host accepts for one step.
+pub fn scroll_action(
+    (x, y): (f64, f64),
+    (delta_x, delta_y): (f64, f64),
+    scale: f64,
+    width: u32,
+    height: u32,
+) -> Option<agent_protocol::browser::BrowserAction> {
+    let (x, y) = page_point(x, y, scale, width, height)?;
+    let step = |delta: f64| (delta / scale).clamp(-4096., 4096.);
+    (delta_x.is_finite() && delta_y.is_finite() && (delta_x != 0. || delta_y != 0.)).then(|| {
+        agent_protocol::browser::BrowserAction::Scroll {
+            x,
+            y,
+            delta_x: step(delta_x),
+            delta_y: step(delta_y),
+        }
+    })
+}
+
 /// The address bar's text: the shown tab's URL, empty for a blank page or no tab.
 pub fn displayed_address(frame: &agent_protocol::browser::BrowserFrame) -> &str {
     frame
@@ -134,6 +179,61 @@ mod tests {
             Some("https://example.com/")
         );
         assert_eq!(tab_label(&tab("a", "Blank", "about:blank")), None);
+    }
+
+    #[test]
+    fn pointers_reach_the_page_at_its_own_scale_and_only_inside_it() {
+        use agent_protocol::browser::BrowserAction;
+        assert_eq!(page_point(50., 25., 0.5, 1280, 800), Some((100., 50.)));
+        assert_eq!(page_point(640., 0., 0.5, 1280, 800), None);
+        assert_eq!(page_point(-1., 10., 1., 1280, 800), None);
+        assert_eq!(page_point(10., 10., 0., 1280, 800), None);
+        assert_eq!(page_point(10., 10., f64::NAN, 1280, 800), None);
+        assert_eq!(page_point(10., 10., 1., 0, 0), None);
+        assert!(matches!(
+            click_action(10., 20., 0.5, 1280, 800),
+            Some(BrowserAction::Click { x, y }) if (x, y) == (20., 40.)
+        ));
+        let Some(BrowserAction::Scroll {
+            x,
+            y,
+            delta_x,
+            delta_y,
+        }) = scroll_action((10., 20.), (0., 60.), 0.5, 1280, 800)
+        else {
+            panic!("a scroll over the page scrolls it");
+        };
+        assert_eq!((x, y, delta_x, delta_y), (20., 40., 0., 120.));
+        assert!(matches!(
+            scroll_action((0., 0.), (-1e9, 1e9), 1., 1280, 800),
+            Some(BrowserAction::Scroll { delta_x, delta_y, .. }) if (delta_x, delta_y) == (-4096., 4096.)
+        ));
+        assert!(scroll_action((0., 0.), (0., 0.), 1., 1280, 800).is_none());
+        assert!(scroll_action((0., 0.), (f64::NAN, 1.), 1., 1280, 800).is_none());
+        assert!(scroll_action((2000., 0.), (0., 1.), 1., 1280, 800).is_none());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn page_actions_are_ones_the_host_accepts(
+            x in -10_000.0f64..10_000.0,
+            y in -10_000.0f64..10_000.0,
+            dx in -1e7f64..1e7,
+            dy in -1e7f64..1e7,
+            scale in 0.01f64..4.0,
+            width in 1u32..=agent_protocol::browser::MAX_WIDTH,
+            height in 1u32..=agent_protocol::browser::MAX_HEIGHT,
+        ) {
+            for action in [
+                click_action(x, y, scale, width, height),
+                scroll_action((x, y), (dx, dy), scale, width, height),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                proptest::prop_assert!(action.validate().is_ok());
+            }
+        }
     }
 
     #[test]

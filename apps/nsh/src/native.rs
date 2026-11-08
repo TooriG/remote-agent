@@ -57,6 +57,36 @@ mod preview_ios;
 mod preview_macos;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod terminal;
+#[cfg(windows)]
+pub(crate) mod windows;
+
+/// A scroll over a [`wheel_area`], in its points: `dy` toward the content's
+/// end (down), as a scroll view would move.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Scroll {
+    pub x: f32,
+    pub y: f32,
+    pub dx: f32,
+    pub dy: f32,
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
+/// A transparent view over drawn content (a Host's page, the terminal's
+/// grid) that reports each wheel or touchpad scroll over it; its own presses
+/// and moves stay its view's. Windows' component reports them.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub(crate) fn wheel_area(scrolled: impl Fn(Scroll) + 'static) -> NativeView {
+    native("bex.wheel").on_native_event(move |event: &NativeEvent| {
+        if &*event.name == "wheel"
+            && let Ok(scroll) = serde_json::from_value::<Scroll>(event.data.clone())
+        {
+            scrolled(scroll);
+        }
+    })
+}
 
 pub fn image_extension(mime: &str) -> Option<String> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]

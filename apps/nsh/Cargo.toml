@@ -64,3 +64,8 @@ alacritty_terminal = "=0.26.0"
 # Desktop update flow; the iPhone app is updated by its store.
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 agent-core = { path = "../../crates/agent-core", features = ["app-updates"] }
+
+# The desktop's diagnostic log.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+agent-transport = { path = "../../crates/agent-transport" }
+tracing.workspace = true

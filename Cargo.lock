@@ -148,6 +148,7 @@ dependencies = [
  "agent-core",
  "agent-local-host",
  "agent-protocol",
+ "agent-transport",
  "alacritty_terminal",
  "async-channel",
  "base64 0.23.1",
@@ -176,6 +177,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "tracing",
  "uuid",
  "windows",
 ]

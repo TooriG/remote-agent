@@ -383,13 +383,19 @@ impl Application {
     #[cfg(any(desktop, test))]
     pub fn select_language(&self, language: UiLanguage) {
         if let Err(reason) = agent_local_host::save_private_json(&self.language_path, &language) {
-            self.state
-                .send_modify(|state| Arc::make_mut(state).failure = Some(reason.to_string()));
+            self.fail(reason.to_string());
             return;
         }
         crate::l10n::set(language);
         self.state
             .send_modify(|state| Arc::make_mut(state).language = language);
+    }
+
+    /// Shows `reason` as the application's failure until it is dismissed.
+    #[cfg(any(desktop, test))]
+    pub fn fail(&self, reason: String) {
+        self.state
+            .send_modify(|state| Arc::make_mut(state).failure = Some(reason));
     }
 
     pub fn dismiss_failure(&self) {
