@@ -271,7 +271,7 @@ impl Operation for ReadAccountLogin {
         })
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, status: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, status: Self::Output) -> Vec<Effect> {
         if !status.completed {
             return poll_account_login(snapshot).into_iter().collect();
         }
@@ -286,20 +286,18 @@ impl Operation for ReadAccountLogin {
                 }),
             ];
         };
-        let intent = match draft {
-            Some(thread_id) => Intent::SelectAccountForDraft(SelectAccountForDraft {
+        // The Host owns the login: a pane closed meanwhile still gets the new account.
+        vec![match draft {
+            Some(thread_id) => Effect::execute(SelectAccountForDraft {
                 provider: self.provider,
                 id,
                 thread_id,
             }),
-            None => Intent::SelectAccount(SelectAccount {
+            None => Effect::execute(SelectAccount {
                 provider: self.provider,
                 id,
             }),
-        };
-        let (updated, effects) = reduce(snapshot, pane_id, Event::Intent(intent));
-        *snapshot = updated;
-        effects
+        }]
     }
 }
 

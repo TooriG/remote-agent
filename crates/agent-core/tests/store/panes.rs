@@ -1133,3 +1133,82 @@ async fn permission_results_follow_the_provider_after_navigation_or_pane_closure
     }
     store.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_login_started_in_a_closed_pane_still_selects_its_account_for_that_draft() {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let pane = store.open_pane("/fixture".into()).unwrap();
+    let draft = pane
+        .presentation()
+        .unwrap()
+        .pane()
+        .navigation
+        .draft_key
+        .clone();
+    let starting = pane.dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
+        provider: ProviderKind::Codex,
+        thread_id: Some(draft.clone()),
+    }));
+    let request = read(&mut reader).await;
+    assert_eq!(request["method"], "host/account/login/start");
+    writer.reply(&request, json!({"result":{"provider":"codex","loginId":"login","userCode":"fixture-only","requiresCodeSubmission":false,"verificationUrl":"https://example.invalid"}})).await.unwrap();
+    starting.await.unwrap();
+    // The login belongs to the Host, so closing its pane does not end it.
+    pane.close();
+    let status = tokio::time::timeout(Duration::from_secs(5), reader.read_request())
+        .await
+        .expect("the Store keeps confirming the login")
+        .unwrap()
+        .unwrap();
+    assert_eq!(status["method"], "host/account/login/status");
+    writer
+        .reply(
+            &status,
+            json!({"result":{"completed":true,"accountId":"added"}}),
+        )
+        .await
+        .unwrap();
+    let select = read(&mut reader).await;
+    assert_eq!(select["method"], "host/account/select");
+    assert_eq!(
+        select["params"],
+        json!({"provider":"codex","accountId":"added"})
+    );
+    writer
+        .reply(
+            &select,
+            json!({"result":{"provider":"codex","selectedId":"added"}}),
+        )
+        .await
+        .unwrap();
+    let models = read(&mut reader).await;
+    assert_eq!(models["method"], "host/model/list");
+    writer
+        .reply(&models, json!({"result":{"data":[{"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT","settings":{"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}}]}}))
+        .await
+        .unwrap();
+    // The draft recorded when the login started adopts the new account's models.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut snapshots = store.subscribe();
+        loop {
+            let snapshot = snapshots.borrow_and_update().clone();
+            if snapshot
+                .input
+                .drafts
+                .get(&draft)
+                .and_then(|draft| draft.model.as_ref())
+                == Some(&agent_protocol::models::ModelRef {
+                    provider: ProviderKind::Codex,
+                    id: "gpt".into(),
+                })
+            {
+                assert!(snapshot.catalog.account.login.is_none());
+                return;
+            }
+            snapshots.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the draft adopts the new account");
+    store.close().await.unwrap();
+}

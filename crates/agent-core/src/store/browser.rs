@@ -1,6 +1,8 @@
 //! One native browser view of a Host tab: its actions go to the Host in order,
 //! and the page is read again between them while the view is shown. The view
-//! drives the session by awaiting `next` until it returns nothing.
+//! drives the session by awaiting `next` until it returns nothing. Native task
+//! cancellation does not stop an awaited call, so `next` runs one call at a time
+//! and hiding the view ends a waiting call before it takes the next action.
 use super::Store;
 use crate::{
     browser::{BrowserAction, BrowserFrame, BrowserRequest},
@@ -11,6 +13,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::sync::Notify;
 
 /// The page is read this often; after a failed read the Host is retried more slowly.
 const READ_INTERVAL: Duration = Duration::from_millis(150);
@@ -56,6 +59,9 @@ pub struct BrowserSession {
     store: Arc<Store>,
     thread: SessionRef,
     state: Mutex<State>,
+    /// Held for a whole `next` call.
+    driving: tokio::sync::Mutex<()>,
+    hidden: Notify,
 }
 
 impl BrowserSession {
@@ -64,6 +70,8 @@ impl BrowserSession {
             store,
             thread,
             state: Mutex::default(),
+            driving: tokio::sync::Mutex::new(()),
+            hidden: Notify::new(),
         })
     }
 
@@ -89,6 +97,11 @@ impl BrowserSession {
         state
             .active
             .then(|| self.request(&state, BrowserAction::Read))
+    }
+
+    /// Actions that have not been sent yet; native views observe results instead.
+    pub fn pending_actions(&self) -> usize {
+        self.state.lock().unwrap().queued.len()
     }
 
     fn update(
@@ -143,6 +156,9 @@ impl BrowserSession {
     /// Reads the page only while the view is shown; queued actions are sent either way.
     pub fn set_active(&self, active: bool) {
         self.state.lock().unwrap().active = active;
+        if !active {
+            self.hidden.notify_waiters();
+        }
     }
 
     /// Identifies a native renderer that already displays the page.
@@ -155,17 +171,17 @@ impl BrowserSession {
         self.state.lock().unwrap().queued.clear();
     }
 
-    /// Actions that have not been sent yet.
-    pub fn pending_actions(&self) -> u64 {
-        self.state.lock().unwrap().queued.len() as u64
-    }
-
     /// Sends the next action, or a read while shown, after the interval and
     /// returns its result. Nothing remains once the view is hidden and every
     /// action is sent. One caller drives a session at a time.
     pub async fn next(&self) -> Option<BrowserUpdate> {
+        let _driving = self.driving.lock().await;
         let wait = self.state.lock().unwrap().wait;
-        tokio::time::sleep(wait).await;
+        tokio::select! {
+            () = tokio::time::sleep(wait) => {}
+            // The next reader of a shown view sends the queued actions.
+            () = self.hidden.notified() => return None,
+        }
         let request = self.next_request()?;
         let action = request.action.clone();
         let result = self.store.browser(request).await;

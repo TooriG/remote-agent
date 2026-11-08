@@ -52,6 +52,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.remoteagent.core.AgentStore
 import dev.remoteagent.core.BrowserAction
 import dev.remoteagent.core.BrowserCredentials
 import dev.remoteagent.core.BrowserFrame
@@ -66,17 +67,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun BrowserLauncher(
-    thread: SessionRef?,
-    profile: String?,
-    browser: (SessionRef) -> dev.remoteagent.core.BrowserSession?,
-) {
+internal fun BrowserLauncher(thread: SessionRef?, store: AgentStore?) {
     val language = LocalUiLanguage.current
     var visible by remember { mutableStateOf(false) }
     TextButton(onClick = { visible = true }, enabled = thread != null) { Text(language.text("ブラウザ")) }
     if (visible && thread != null) {
         Dialog(onDismissRequest = { visible = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Surface(Modifier.fillMaxSize().imePadding()) { BrowserPane(thread, profile, browser) { visible = false } }
+            Surface(Modifier.fillMaxSize().imePadding()) { BrowserPane(thread, store) { visible = false } }
         }
     }
 }
@@ -168,14 +165,9 @@ private suspend fun decodeBrowserImage(bytes: ByteArray): ImageBitmap? =
         }
 
 @Composable
-private fun BrowserPane(
-    thread: SessionRef,
-    profile: String?,
-    browser: (SessionRef) -> dev.remoteagent.core.BrowserSession?,
-    dismiss: () -> Unit,
-) {
-    // Each Host owns its browser; a pane for another Host starts its own session.
-    val session = remember(thread, profile) { BrowserViewState(browser(thread)) }
+private fun BrowserPane(thread: SessionRef, store: AgentStore?, dismiss: () -> Unit) {
+    // Each Store owns its browser: a newly ready or re-paired Store starts a new session.
+    val session = remember(thread, store) { BrowserViewState(store?.browserSession(thread)) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var active by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
     DisposableEffect(lifecycle) {

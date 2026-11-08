@@ -542,7 +542,50 @@ async fn a_browser_session_orders_actions_reads_while_shown_and_slows_after_fail
         retry.await.unwrap(),
         Some(BrowserUpdate::Frame { .. })
     ));
+
+    // One reader at a time: a reader the view abandoned finishes before the next starts.
+    let first = tokio::spawn({
+        let session = session.clone();
+        async move { session.next().await }
+    });
+    let second = tokio::spawn({
+        let session = session.clone();
+        async move { session.next().await }
+    });
+    let reading = read(&mut reader).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(400), reader.read_request())
+            .await
+            .is_err(),
+        "the second reader waits for the first"
+    );
+    writer
+        .reply(&reading, json!({"result":frame(5, None)}))
+        .await
+        .unwrap();
+    let reading = read(&mut reader).await;
+    writer
+        .reply(&reading, json!({"result":frame(6, None)}))
+        .await
+        .unwrap();
+    for reader in [first, second] {
+        assert!(matches!(
+            reader.await.unwrap(),
+            Some(BrowserUpdate::Frame { .. })
+        ));
+    }
+
+    // Hiding the view ends a waiting reader before it takes a queued action.
+    session.send(BrowserAction::Reload);
+    let waiting = tokio::spawn({
+        let session = session.clone();
+        async move { session.next().await }
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
     session.set_active(false);
+    assert!(waiting.await.unwrap().is_none());
+    assert_eq!(session.pending_actions(), 1);
+    session.clear();
     assert!(
         session.next().await.is_none(),
         "a hidden view stops reading"

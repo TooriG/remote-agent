@@ -155,7 +155,8 @@ internal class AndroidAppModel(private val context: Context, private val prefere
     private val sessions =
         ClientSessions(true, ClientBuild(0uL, BuildConfig.BUILD_REVISION), repository.deviceName, preferences)
     private var session: ClientSession? = null
-    private var owner: AgentStore? = null
+    // Observed so a browser pane follows the selected Host's Store.
+    private var owner by mutableStateOf<AgentStore?>(null)
 
     private val connections = mutableStateMapOf<String, Job>()
     private var pairingConnection by mutableStateOf<Job?>(null)
@@ -191,9 +192,9 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         }
     }
 
-    /** A view of [thread]'s browser on the selected Host. */
-    fun browserSession(thread: dev.remoteagent.core.SessionRef): dev.remoteagent.core.BrowserSession? =
-        owner?.browserSession(thread)
+    /** The selected Host's Store, which owns its browser. */
+    val selectedStore: AgentStore?
+        get() = owner
 
     fun perform(intent: Intent, complete: (Result<Outcome>) -> Unit = {}) {
         val store = session
@@ -704,11 +705,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
         androidx.compose.foundation.layout.Row {
             FilesLauncher(model.files, model.fileLocation.cwd, model::perform)
             TerminalLauncher(model.terminals, model.conversationContext.navigation().cwd, model::perform)
-            BrowserLauncher(
-                model.conversationContext.navigation().threadId,
-                model.connectionSelection.hostId,
-                model::browserSession,
-            )
+            BrowserLauncher(model.conversationContext.navigation().threadId, model.selectedStore)
         }
         ThreadDetailScreen(
             model.conversationContext,

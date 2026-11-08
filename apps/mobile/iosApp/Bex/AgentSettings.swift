@@ -289,11 +289,13 @@ extension ProviderAccountScreen {
         }
     }
 
+    /// A cancel requested meanwhile runs once the read finishes, as for the other login requests.
     private func readLogin(_ login: AccountLogin) {
         loginRequestInFlight = true
-        model.perform(.readAccountLogin(ReadAccountLogin(provider: login.provider, id: login.loginId))) { _ in
-            loginRequestInFlight = false
-        }
+        model.perform(
+            .readAccountLogin(ReadAccountLogin(provider: login.provider, id: login.loginId)),
+            completion: finishLoginRequest
+        )
     }
 
     private func cancelLogin() {
