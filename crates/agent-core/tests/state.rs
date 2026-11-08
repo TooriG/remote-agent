@@ -983,7 +983,7 @@ fn incomplete_model_catalog_preserves_restored_choices_and_defaults_only_new_dra
         assert_eq!(
             state.model_error_messages(None),
             if failed {
-                vec!["codex: offline"]
+                vec!["エラーが発生しました。\ncodex: offline"]
             } else {
                 vec![]
             }

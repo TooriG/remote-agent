@@ -6,6 +6,8 @@ host without-codex
 expect "何に取り組みますか？" 30000
 press モデル
 expect "Claude Code" 20000
+# The missing Codex is an error in the UI's language over its own words.
+expect "エラーが発生しました。\ncodex: failed to resolve Codex executable" 10000
 press "Claude Code"
 press アカウントと週間残量
 press アカウントを追加

@@ -17,7 +17,7 @@ screenshot compact
 press 新しいチャット
 expect_absent "Codexハーネス＋Claude接続"
 press 検証プロジェクト
-press "[markdown-table] [immediate] 表を表示します"
+press "Simulator conversation" 10000
 expect "Codexハーネス＋Claude接続" 20000
 expect "作業しました"
 expect_absent "./gradlew test"

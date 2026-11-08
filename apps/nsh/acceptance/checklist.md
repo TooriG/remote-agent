@@ -88,7 +88,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 
 | Feature | Status | Mac scenario / note |
 |---|---|---|
-| Sidebar: projects, chats, new chat, new chat in a project | covered | send-message, open-conversation, folded-work, list-pagination |
+| Sidebar: projects, chats, new chat, new chat in a project | covered | send-message, open-conversation, folded-work, list-pagination, sidebar-title (the provider's title arrives live and survives `relaunch`), project-expansion (unfolded projects survive `relaunch`) |
 | Sidebar: search, project menu, add/hide/rename project | covered | sidebar-search, projects |
 | Sidebar: unseen completions, merged worktrees | covered | unseen-completion, merged-worktrees |
 | New-chat hero: project choice, start without a project | covered | new-chat-hero |

@@ -1,6 +1,9 @@
 # A message's image and Markdown images (a Host file and an inline one) show,
-# and a generated answer's file link, a chip after its caption, opens the file
-# in the tool panel.
+# also once the conversation is opened again, where an image opens in the app's
+# viewer (image-viewer); a generated answer's file link, a chip after its
+# caption, opens the file in the tool panel. The fixture's Codex names every
+# conversation "Simulator conversation", so the images one is reopened while it
+# is the only one.
 # iOS: testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening, testSimulatorShowsGeneratedImagesAndOpensFileLinksAfterReopening
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
@@ -14,18 +17,19 @@ expect_absent "画像を読み取れませんでした"
 expect_absent "見つかりません"
 screenshot images
 press このプロジェクトで新しいチャット
+expect_absent "インライン画像です。" 10000
+press 検証プロジェクト
+press "Simulator conversation" 10000
+expect "インライン画像です。" 20000
+expect 画像を拡大
+press 画像を拡大
+expect 倍率をリセット 20000
+press 閉じる after 保存
+expect_absent 倍率をリセット
+press このプロジェクトで新しいチャット
 type "AI に依頼する" "[generated-images] [immediate] 生成画像を表示します"
 press 送信
 expect "生成画像を表示しました。" 30000
 press "ファイルを開く*"
 expect "編集を確認します。" after ツールを閉じる 20000
 screenshot file-link
-press 検証プロジェクト
-press "[images] [immediate] 画像を表示します"
-expect "インライン画像です。" 20000
-expect 画像を拡大
-# The reopened conversation's image opens in the app's viewer (image-viewer).
-press 画像を拡大
-expect 倍率をリセット 20000
-press 閉じる after 保存
-expect_absent 倍率をリセット

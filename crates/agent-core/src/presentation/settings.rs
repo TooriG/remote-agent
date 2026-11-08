@@ -441,7 +441,7 @@ mod tests {
             failed
                 .settings
                 .model_error_messages(Some(ProviderKind::Codex)),
-            ["codex: unavailable"]
+            ["エラーが発生しました。\ncodex: unavailable"]
         );
     }
 
