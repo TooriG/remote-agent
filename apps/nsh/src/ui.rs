@@ -91,6 +91,7 @@ impl Icon {
     pub(crate) const MONITOR: Self = icon!(Monitor, "desktopcomputer");
     pub(crate) const NEW_CHAT: Self = icon!(SquarePen, "square.and.pencil");
     pub(crate) const PENCIL: Self = icon!(Pencil, "pencil");
+    pub(crate) const TRASH: Self = icon!(Trash, "trash");
     #[cfg(desktop)]
     pub(crate) const PANEL_LEFT_CLOSE: Self = icon!(PanelLeftClose, "sidebar.left");
     #[cfg(desktop)]

@@ -678,6 +678,11 @@ impl Threads {
             context.error(id, -32600, "turn already active")?;
             return Ok(());
         }
+        // The provider never answers, so the Host cannot tell whether the
+        // message arrived.
+        if prompt.contains("[unanswered]") {
+            return Ok(());
+        }
         let thread = thread.clone();
         let observed_turns = thread.borrow().turns.len();
         let suffix = self.turn_suffix(thread_id, observed_turns);

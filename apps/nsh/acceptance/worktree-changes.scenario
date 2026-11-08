@@ -1,0 +1,16 @@
+# A conversation whose worktree has changes its source branch lacks says so
+# beside its running status, and the mark goes once the changes do.
+# iOS: testSimulatorShowsChangesMarkToTheRightOfRunningStatus
+fixture /merge-worktree/fresh
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+expect "Merged running task" 20000
+expect_absent "*作成元からの変更あり"
+fixture /merge-worktree/dirty
+press 会話を更新
+expect "実行中、作成元からの変更あり" 20000
+screenshot changes
+fixture /merge-worktree/clean
+press 会話を更新
+expect_absent "*作成元からの変更あり" 20000
+expect "Merged running task"

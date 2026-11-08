@@ -80,7 +80,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | TurnUITests.testSimulatorCopiesSelectedOrWholeUserMessageText | covered | message-actions (whole messages, and a selection in the user's message with ⌘C) |
 | TurnUITests.testSimulatorKeepsChatUnassignedAfterSendingAndReopening | covered | send-message |
 | TurnUITests.testSimulatorApprovalEditorAndDraftSurviveReconnect | covered | relaunch-draft (approval, a saved edit in the diff, and the draft after `relaunch`) |
-| WorktreeUITests.testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus | covered | merged-worktrees |
+| WorktreeUITests.testSimulatorShowsChangesMarkToTheRightOfRunningStatus | covered | worktree-changes |
 | WorktreeUITests.testSimulatorEditsHostWorktreeSettingsFromTaskMenu | covered | worktree-settings (from the settings; the Mac has no task menu) |
 | WorktreeUITests.testSimulatorReviewsTheOpenSessionsWorktree | covered | worktree-review, review-panel |
 
@@ -90,11 +90,13 @@ first; the note says which), **n/a** (no Mac equivalent).
 |---|---|---|
 | Sidebar: projects, chats, new chat, new chat in a project | covered | send-message, open-conversation, folded-work, list-pagination, sidebar-title (the provider's title arrives live and survives `relaunch`), project-expansion (unfolded projects survive `relaunch`) |
 | Sidebar: search, project menu, add/hide/rename project | covered | sidebar-search, projects |
-| Sidebar: unseen completions, merged worktrees | covered | unseen-completion, merged-worktrees |
+| Sidebar: a conversation's Copy submenu (path, branch, title, ID) | covered | thread-copy |
+| Sidebar: unseen completions, changes from the source branch | covered | unseen-completion, worktree-changes |
 | New-chat hero: project choice, start without a project | covered | new-chat-hero |
 | Conversation: messages, folded work, approvals, questions | covered | send-message, folded-work, live-work, approval, question-choice, question-skip, question-back |
 | Conversation: errors, reconnecting, opening and its failure | covered | failed-turn, retry-stream, history-loading, history-retry |
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork |
+| Conversation: a message the Host may not have received goes back to the composer or is discarded | covered | unresolved-submission |
 | Conversation: steering a running turn, minimap | covered | steering, queued-input |
 | Composer: model picker | covered | model-picker |
 | Composer: DeepSeek's OpenRouter route, Flash 4.1 pick and models | covered | openrouter |

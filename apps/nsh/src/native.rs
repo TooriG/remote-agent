@@ -23,10 +23,9 @@ impl RowIndicators {
     }
 }
 
-/// Whether the app keeps its Host work going now (its connection, a sign-in's
-/// polling). An iPhone app does only in the foreground, where the system lets
-/// it run; a desktop app does all the time, since the user works in other apps
-/// (the browser that signs in) while it waits.
+/// Whether the app keeps its work going now (its connection, a recording). An iPhone app
+/// does only in the foreground, where the system lets it run; a desktop app
+/// does all the time, since the user works in other apps meanwhile.
 pub(crate) fn in_use() -> bool {
     cfg!(desktop) || lifecycle() == nsh_core::platform::Lifecycle::Active
 }

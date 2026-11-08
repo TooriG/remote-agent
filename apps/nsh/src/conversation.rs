@@ -48,6 +48,9 @@ struct Row {
     /// A message sent while its turn worked; only the first of a run says so.
     steer: bool,
     error: Option<TurnErrorPresentation>,
+    /// The message's id while the Host may not have received it: it goes back
+    /// to the composer or is discarded, as the desktop client's controls do.
+    unresolved: Option<String>,
 }
 
 fn project(
@@ -104,6 +107,7 @@ fn project(
             let fork = match &row.content { ConversationRowContent::Response { fork_turn_id, .. } => fork_turn_id.clone(), _ => None };
             let retry = match &row.content { ConversationRowContent::Preparation { preparation } => preparation.retry.clone(), _ => None };
             let error = match &row.content { ConversationRowContent::Error { error } => Some(error.clone()), _ => None };
+            let unresolved = match &row.content { ConversationRowContent::User { item } => item.unknown_submission_id(), _ => None };
             let detail = match &row.content {
                 ConversationRowContent::Activity { item, turn_id } if item.data.collapsible => {
                     Some(crate::activity::Item { source: Shared(item.clone()), turn: turn_id.clone() })
@@ -145,6 +149,7 @@ fn project(
                 time,
                 steer,
                 error,
+                unresolved,
             })
         })
         .collect::<Vec<_>>()
@@ -480,7 +485,15 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                     },
                                     move || response_actions(connection, row),
                                 ))
-                                .child(when(user, move || user_actions(connection, row))),
+                                .child(when(user, move || user_actions(connection, row)))
+                                .child(when(
+                                    move || {
+                                        row.with(|row| {
+                                            row.as_ref().is_some_and(|row| row.unresolved.is_some())
+                                        })
+                                    },
+                                    move || unresolved_actions(connection, row),
+                                )),
                         )
                         .child(when(
                             move || {
@@ -959,6 +972,34 @@ fn user_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
                 connection.composer_ref.focus();
             },
         ))
+}
+
+/// A message the Host may not have received: back to the composer, or away.
+fn unresolved_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
+    use crate::ui::{self, Icon};
+    let id = move || row.with_untracked(|row| row.as_ref().and_then(|row| row.unresolved.clone()));
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .child(ui::row_icon_button(
+            Icon::PENCIL,
+            tr("入力欄へ戻す"),
+            move || {
+                if let Some(id) = id() {
+                    connection.dispatch(Intent::RestoreUnknownSubmission {
+                        client_user_message_id: id.into(),
+                    });
+                }
+            },
+        ))
+        .child(ui::row_icon_button(Icon::TRASH, tr("破棄"), move || {
+            if let Some(id) = id() {
+                connection.dispatch(Intent::DiscardUnknownSubmission {
+                    client_user_message_id: id.into(),
+                });
+            }
+        }))
 }
 
 fn time(row: Memo<Option<Row>>) -> Text {

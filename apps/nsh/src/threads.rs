@@ -3,7 +3,7 @@ use crate::l10n::{localized, tr, tr_format};
 use crate::shared::Shared;
 use crate::{Connection, native};
 use agent_core::{
-    presentation::list::{ThreadList, ThreadSummary},
+    presentation::list::{ThreadCopyItem, ThreadList, ThreadSummary},
     state::{Intent, operations as op},
 };
 use nsh_core::prelude::*;
@@ -67,6 +67,26 @@ impl Row {
         }
     }
 }
+/// A conversation's menu, as the desktop client's: a Copy submenu of its
+/// path, branch, title and ID, each item off when the conversation lacks it.
+fn copy_menu(items: &[ThreadCopyItem]) -> serde_json::Value {
+    json!([{
+        "title": tr("コピー"),
+        "children": items.iter().map(|item| json!({
+            "title": localized(item.label.clone()),
+            "id": item.value.as_ref().map(|value| json!({"copy": value}).to_string()).unwrap_or_default(),
+            "enabled": item.value.is_some(),
+        })).collect::<Vec<_>>(),
+    }])
+}
+
+/// The value a Copy item of a conversation's menu puts on the clipboard.
+fn copied(id: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(id).ok()?["copy"]
+        .as_str()
+        .map(str::to_owned)
+}
+
 fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>, scope: &ListScope) -> Row {
     let activity = agent_core::presentation::thread_status::thread_activity(
         thread.waiting,
@@ -75,6 +95,7 @@ fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>, scope: 
     );
     Row {
         level,
+        menu: copy_menu(&thread.copy_items),
         indicators: (activity.is_some() || thread.has_changes == Some(true)).then_some(
             native::RowIndicators {
                 activity,
@@ -319,7 +340,10 @@ pub(crate) fn list(query: Signal<String>, open: impl Fn() + Copy + 'static) -> A
     });
     let activate = move |name: &str, id: &str, expanded: Option<bool>| {
         if name == "menu" {
-            projects.select(id);
+            match copied(id) {
+                Some(value) => set_clipboard(value),
+                None => projects.select(id),
+            }
             return;
         }
         let Some((action, was_expanded, scope)) = entries.with_untracked(|rows| {
@@ -612,7 +636,8 @@ fn desktop_row(
             let enabled = row.enabled;
             let selected_id = id.clone();
             let active = move || selected.with(|ids| ids.contains(&selected_id));
-            menu_row()
+            let menu = row.menu.clone();
+            let item = menu_row()
                 .style_when(active, |s| {
                     s.bg(colors::SELECTED)
                         .text_color(colors::FOREGROUND)
@@ -623,7 +648,15 @@ fn desktop_row(
                 .child(row.loading.then(ui::spinner))
                 .child(row.indicators.clone().map(indicators))
                 .on_press(move || activate("select", &id, None))
-                .enabled(move || enabled)
+                .enabled(move || enabled);
+            // A secondary press opens the row's menu: a conversation's Copy.
+            view()
+                .on_context_menu(move |_: &ContextMenuEvent| {
+                    if !menu.is_null() {
+                        ui::popup(&menu, move |command| activate("menu", command, None));
+                    }
+                })
+                .child(item)
                 .into_element()
         }
     }
@@ -1049,12 +1082,11 @@ mod tests {
         thread.active = false;
         thread.waiting = false;
         thread.unread = false;
-        assert_eq!(
+        assert!(
             thread_row(&thread, 0, None, &scope("host", "scope"))
                 .indicators
                 .unwrap()
-                .changes,
-            true
+                .changes
         );
         thread.has_changes = Some(false);
         assert!(

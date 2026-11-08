@@ -725,7 +725,7 @@ fn picker_intent(p: &Presentation, picker: &Picker, action: &str, value: &str) -
             Intent::UpdatePermissionSettings(op::UpdatePermissionSettings {
                 provider: control.provider?,
                 mode: *mode,
-                version: control.version?.into(),
+                version: control.version?,
             })
         }
         _ => return None,

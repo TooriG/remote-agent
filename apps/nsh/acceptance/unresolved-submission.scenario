@@ -1,0 +1,23 @@
+# A message whose delivery the Host cannot confirm when the connection drops
+# offers to go back to the composer or be discarded, as the desktop client's
+# controls do; going back puts its text in the composer.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] 最初の依頼です"
+press 送信
+expect "シミュレータで完了しました。" 30000
+type "AI に依頼する" "[unanswered] 届いたか分からない依頼です"
+press 送信
+expect_absent "[unanswered] 届いたか分からない依頼です" after "AI に依頼する" 10000
+expect "[unanswered] 届いたか分からない依頼です" 10000
+press 設定を開く
+press 環境
+press このPCへの接続
+expect_absent 接続済み 10000
+press 閉じる
+expect 入力欄へ戻す 15000
+expect 破棄
+screenshot unresolved
+press 入力欄へ戻す
+expect "[unanswered] 届いたか分からない依頼です" after "AI に依頼する" 10000
+expect_absent 入力欄へ戻す
