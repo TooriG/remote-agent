@@ -98,6 +98,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Composer: model picker | covered | model-picker |
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: controls fit narrow windows, none cut off | covered | composer-narrow |
+| Sidebar: a sheet over the content below 768 points, closing on its toggle, Escape or a choice | covered | composer-narrow |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
 | Changed-files bar and review | covered | review-panel, worktree-review |

@@ -19,6 +19,7 @@ pub mod model_settings;
 pub mod permissions;
 pub mod project_menu;
 pub mod settings;
+pub mod sidebar;
 
 use crate::models::{
     ApprovalReviewStatus, AssistantPhase, AttachmentKind, Item, ItemBody, ToolKind, Turn,

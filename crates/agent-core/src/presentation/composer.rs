@@ -154,6 +154,13 @@ pub struct ComposerReview {
 /// The files the card lists until it is expanded.
 const REVIEW_ROWS: usize = 3;
 
+/// Whether a card this wide names its review action beside the icon, as T3
+/// Code's changed-files card does from 24rem (`@[24rem]/changed-files`);
+/// narrower, the action is its icon and the totals keep the room.
+pub fn review_action_labelled(card_width: f32) -> bool {
+    card_width >= 384.
+}
+
 impl Snapshot {
     /// The card for the open conversation's workspace changes; none for a draft
     /// or a clean workspace.

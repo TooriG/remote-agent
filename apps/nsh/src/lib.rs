@@ -232,8 +232,18 @@ fn app_content(
     let navigate = move |action| application.with(|application| application.navigate(action));
     let account_locked = computed(move || state.with(|state| state.account_locked()));
     let close_settings = move || navigate(Navigation::Settings(false));
+    // T3 Code's sidebar: a column beside the content, a sheet over it in a
+    // narrow window.
     #[cfg(desktop)]
-    let sidebar = computed(move || state.with(|state| state.sidebar));
+    let sidebar_shown = computed(move || {
+        state
+            .with(|state| state.sidebar)
+            .presentation(window().width.0)
+    });
+    #[cfg(desktop)]
+    let sidebar = computed(move || {
+        sidebar_shown.get() == agent_core::presentation::sidebar::SidebarPresentation::Beside
+    });
     let searching = signal(false);
     let query = signal(String::new());
     let primary = area == Area::Mobile;
@@ -261,7 +271,7 @@ fn app_content(
             return;
         }
         match action {
-            "sidebar" => navigate(Navigation::ToggleSidebar),
+            "sidebar" => navigate(Navigation::ToggleSidebar(window().width.0)),
             "search" => searching.update(|open| *open = !*open),
             "worktrees" => worktrees::open(),
             "browser" | "files" | "terminal" | "diff" | "agents" | "sideChat" => {
@@ -368,7 +378,7 @@ fn app_content(
                                     tools,
                                     details,
                                     details_inline,
-                                    move || navigate(Navigation::ToggleSidebar),
+                                    move || navigate(Navigation::ToggleSidebar(window().width.0)),
                                     move || {
                                         application.with(|application| {
                                             application.set_panel_open(
@@ -417,7 +427,7 @@ fn app_content(
                                     },
                                     move || {
                                         sidebar::header(false, move || {
-                                            navigate(Navigation::ToggleSidebar)
+                                            navigate(Navigation::ToggleSidebar(window().width.0))
                                         })
                                     },
                                 )
@@ -442,7 +452,9 @@ fn app_content(
                         .accessibility_elements_hidden(move || settings.get())
                         .child(when(
                             move || sidebar.get(),
-                            move || sidebar::sidebar(hosts, move || toolbar_action("compose")),
+                            move || {
+                                sidebar::sidebar(hosts, move || toolbar_action("compose"), false)
+                            },
                         ))
                         .child(
                             view()
@@ -451,7 +463,20 @@ fn app_content(
                                 .child(notices())
                                 .child(when(move || hosts.with(Vec::is_empty), connections::hero))
                                 .child(when(move || !hosts.with(Vec::is_empty), main)),
-                        ),
+                        )
+                        .child(when(
+                            move || {
+                                sidebar_shown.get()
+                                    == agent_core::presentation::sidebar::SidebarPresentation::Sheet
+                            },
+                            move || {
+                                sidebar::sheet(
+                                    hosts,
+                                    move || toolbar_action("compose"),
+                                    move || navigate(Navigation::DismissSidebarSheet),
+                                )
+                            },
+                        )),
                 )
                 .child(when(
                     move || settings.get(),

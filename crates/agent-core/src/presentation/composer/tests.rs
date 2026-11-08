@@ -278,3 +278,11 @@ fn the_review_card_folds_past_three_files_and_needs_a_conversation_with_changes(
         "a new draft has no card"
     );
 }
+
+#[test]
+fn the_review_action_is_named_from_a_24rem_card() {
+    assert!(super::review_action_labelled(384.));
+    assert!(super::review_action_labelled(720.));
+    assert!(!super::review_action_labelled(383.9));
+    assert!(!super::review_action_labelled(0.));
+}
