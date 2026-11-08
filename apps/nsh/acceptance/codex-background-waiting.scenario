@@ -1,0 +1,18 @@
+# Codex answers while a command and a subagent it started keep running: as
+# T3 Code, the conversation waits on them in the strip above the composer,
+# Stop ends the command's background terminal, and the strip clears once the
+# subagent finishes.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[background] [immediate] 開発サーバーを起動します"
+press 送信
+expect "サブエージェント 1件、コマンド 1件を待機中" 30000
+expect "Review the change、npm run dev"
+expect "作業しました"
+screenshot waiting
+press 停止
+expect "サブエージェント「Review the change」を待機中" 20000
+screenshot stopped
+fixture /codex-background/release
+expect_absent "サブエージェント「Review the change」を待機中" 20000
+screenshot finished

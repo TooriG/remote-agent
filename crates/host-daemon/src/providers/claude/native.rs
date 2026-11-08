@@ -1,7 +1,7 @@
 //! Pure translation of Claude native content into the shared conversation model.
 //! Live execution and transcript reading own state updates and use these results.
 use agent_protocol::{
-    execution::ItemStatus,
+    execution::{BackgroundOutcome, BackgroundReport, BackgroundTaskKind, ItemStatus},
     ids::ItemId,
     items::*,
     models::{Item, Model, ReasoningEffort},
@@ -283,6 +283,11 @@ pub(super) struct TaskOutcome<'a> {
 }
 
 impl TaskOutcome<'_> {
+    /// The finished work as the notification of the turn Claude wakes for names it.
+    pub fn report(&self, body: &ItemBody) -> BackgroundReport {
+        background_report(body, background_outcome(self.status))
+    }
+
     pub fn item(&self, id: ItemId, body: &ItemBody) -> Option<Item> {
         if !matches!(
             body,
@@ -303,6 +308,45 @@ impl TaskOutcome<'_> {
                 ItemContent::Inline { body }
             },
         })
+    }
+}
+
+pub(super) fn background_outcome(status: ItemStatus) -> BackgroundOutcome {
+    match status {
+        ItemStatus::Completed => BackgroundOutcome::Completed,
+        ItemStatus::Failed => BackgroundOutcome::Failed,
+        ItemStatus::Interrupted => BackgroundOutcome::Cancelled,
+        _ => BackgroundOutcome::Unknown,
+    }
+}
+
+/// The work a tool call left running, named from the call when the roster
+/// that described it is gone, as in a transcript.
+pub(super) fn background_report(body: &ItemBody, outcome: BackgroundOutcome) -> BackgroundReport {
+    let (kind, label) = match body {
+        ItemBody::CommandExecution { command, .. } => {
+            (BackgroundTaskKind::Command, Some(command.as_str()))
+        }
+        ItemBody::Subagent { prompt, .. } => (BackgroundTaskKind::Subagent, prompt.as_deref()),
+        ItemBody::ToolCall {
+            tool, arguments, ..
+        } => (
+            if tool == "Monitor" {
+                BackgroundTaskKind::Monitor
+            } else {
+                BackgroundTaskKind::BackgroundTask
+            },
+            arguments["description"].as_str(),
+        ),
+        _ => (BackgroundTaskKind::BackgroundTask, None),
+    };
+    BackgroundReport {
+        kind,
+        label: label
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned),
+        outcome,
     }
 }
 

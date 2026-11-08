@@ -126,7 +126,8 @@ fn project(
                 ConversationRowContent::Preparation { preparation } => {
                     (Kind::Activity, localized(preparation.text))
                 }
-                ConversationRowContent::ProviderHandoff { text } => (Kind::Activity, localized(text)),
+                ConversationRowContent::ProviderHandoff { text }
+                | ConversationRowContent::Notification { text } => (Kind::Activity, localized(text)),
                 ConversationRowContent::Error { error } => (Kind::Activity, localized(error.message)),
                 ConversationRowContent::InProgress { .. } => (Kind::Activity, tr("作業中…").into()),
                 ConversationRowContent::PendingRequest { .. } => return None,

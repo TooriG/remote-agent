@@ -4,7 +4,8 @@ mod roster;
 use super::native;
 use agent_protocol::{execution::BackgroundTask, ids::ItemId};
 use background::Reports;
-use roster::{Roster, task_key};
+use roster::Roster;
+pub(super) use roster::task_key;
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -27,6 +28,9 @@ pub(super) enum MessageDisposition {
 pub(super) struct Observation<'a> {
     pub echoes: Vec<(&'a str, bool)>,
     pub disposition: MessageDisposition,
+    /// Claude started a response on its own after its answer, as it does for
+    /// background work: as T3 Code, that response is a turn of its own.
+    pub woke: bool,
 }
 
 #[derive(Default)]
@@ -67,14 +71,30 @@ impl ResponseState {
         !self.roster.tasks().is_empty()
     }
 
+    /// A task the roster names, before its notification removes it.
+    pub(super) fn background_task(&self, id: &str) -> Option<&BackgroundTask> {
+        self.roster.tasks().iter().find(|task| task.id == id)
+    }
+
+    /// Claude answered; input that awaits its turn, or a stop, owns the
+    /// response instead.
+    fn answered_input(&self) -> bool {
+        self.result_received && self.pending_inputs.is_empty() && !self.interrupted
+    }
+
     /// The work an answered response waits on, as T3 Code's Waiting roster.
-    /// Nothing waits while Claude is responding or input awaits its turn.
     pub(super) fn waiting(&self) -> &[BackgroundTask] {
-        if self.result_received && self.pending_inputs.is_empty() && !self.interrupted {
+        if self.answered_input() {
             self.roster.tasks()
         } else {
             &[]
         }
+    }
+
+    /// As T3 Code, Claude's answer ends its turn while background work it
+    /// reports on later keeps the process running.
+    pub(super) fn settles(&self) -> bool {
+        self.answered_input() && (self.has_background() || self.background.pending())
     }
 
     pub(super) fn delivery(&self) -> InputDelivery {
@@ -94,6 +114,7 @@ impl ResponseState {
     pub(super) fn observe<'a>(&mut self, message: &'a Value) -> Result<Observation<'a>, String> {
         self.roster.observe(message);
         let background_level = self.observe_background(message)?;
+        let answered = self.answered_input();
         let echoes = self.consume_echoes(message);
         let disposition = if background_level {
             MessageDisposition::Applied
@@ -101,6 +122,7 @@ impl ResponseState {
             self.transition(message, !echoes.is_empty())
         };
         Ok(Observation {
+            woke: answered && echoes.is_empty() && !self.result_received,
             echoes,
             disposition,
         })

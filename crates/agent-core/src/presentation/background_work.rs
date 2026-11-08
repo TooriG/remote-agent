@@ -2,7 +2,9 @@
 //! composer strip names it:
 //! https://github.com/pingdotgg/t3code/blob/dac8b11ddc25bd5da62a367fdb6c3de777ae2986/packages/client-runtime/src/state/threadExecution.ts#L290
 use crate::localization::UiLanguage;
-use agent_protocol::execution::{BackgroundTask, BackgroundTaskKind};
+use agent_protocol::execution::{
+    BackgroundOutcome, BackgroundReport, BackgroundTask, BackgroundTaskKind,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -128,6 +130,81 @@ fn noun(kind: BackgroundTaskKind, language: UiLanguage, count: usize) -> &'stati
     }
 }
 
+/// What the background work a notification reports did, as T3 Code's
+/// notification summary names it.
+pub(crate) fn notification_title(reports: &[BackgroundReport]) -> String {
+    let named = |report: &BackgroundReport| {
+        let noun = noun(report.kind, UiLanguage::Japanese, 1);
+        match report_label(report) {
+            Some(label) => format!("{noun}「{label}」"),
+            None => noun.to_owned(),
+        }
+    };
+    let verb = match combined_outcome(reports) {
+        BackgroundOutcome::Failed => "が失敗しました",
+        BackgroundOutcome::Cancelled => "が停止されました",
+        BackgroundOutcome::Updated
+            if reports
+                .iter()
+                .all(|report| report.kind == BackgroundTaskKind::Monitor) =>
+        {
+            "が新しい出力を報告しました"
+        }
+        BackgroundOutcome::Updated => "が更新されました",
+        BackgroundOutcome::Completed | BackgroundOutcome::Unknown => "が完了しました",
+    };
+    match reports {
+        [] => format!("バックグラウンドの作業{verb}"),
+        [only] => format!("{}{verb}", named(only)),
+        _ if reports.len() > 3 || reports.iter().all(|report| report_label(report).is_none()) => {
+            let kind = reports[0].kind;
+            let noun = if reports.iter().all(|report| report.kind == kind) {
+                noun(kind, UiLanguage::Japanese, 2)
+            } else {
+                noun(BackgroundTaskKind::BackgroundTask, UiLanguage::Japanese, 2)
+            };
+            format!("{noun} {}件{verb}", reports.len())
+        }
+        _ => format!(
+            "{}{verb}",
+            reports.iter().map(named).collect::<Vec<_>>().join("、")
+        ),
+    }
+}
+
+/// A report's name on one line, shortened as T3 Code's.
+fn report_label(report: &BackgroundReport) -> Option<String> {
+    const MAX: usize = 80;
+    let line = report.label.as_deref()?.trim().lines().next()?.trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(if line.chars().count() > MAX {
+        line.chars().take(MAX - 1).chain(['…']).collect()
+    } else {
+        line.to_owned()
+    })
+}
+
+fn combined_outcome(reports: &[BackgroundReport]) -> BackgroundOutcome {
+    let has = |outcome| reports.iter().any(|report| report.outcome == outcome);
+    if has(BackgroundOutcome::Failed) {
+        BackgroundOutcome::Failed
+    } else if has(BackgroundOutcome::Cancelled) {
+        BackgroundOutcome::Cancelled
+    } else if !reports.is_empty()
+        && reports
+            .iter()
+            .all(|report| report.outcome == BackgroundOutcome::Completed)
+    {
+        BackgroundOutcome::Completed
+    } else if has(BackgroundOutcome::Updated) {
+        BackgroundOutcome::Updated
+    } else {
+        BackgroundOutcome::Unknown
+    }
+}
+
 fn join_with_and(parts: &[String]) -> String {
     match parts {
         [] => String::new(),
@@ -155,6 +232,55 @@ mod tests {
                 .collect::<Vec<_>>(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn notifications_name_what_the_work_did_as_t3_code() {
+        use BackgroundOutcome::*;
+        let report = |kind, label: Option<&str>, outcome| BackgroundReport {
+            kind,
+            label: label.map(str::to_owned),
+            outcome,
+        };
+        for (reports, title) in [
+            (
+                vec![report(Command, Some("npm run dev\nmore"), Completed)],
+                "コマンド「npm run dev」が完了しました",
+            ),
+            (
+                vec![report(Monitor, Some("Watch the build"), Updated)],
+                "モニター「Watch the build」が新しい出力を報告しました",
+            ),
+            (
+                vec![report(Subagent, None, Cancelled)],
+                "サブエージェントが停止されました",
+            ),
+            (
+                vec![
+                    report(Subagent, Some("Review"), Completed),
+                    report(Command, Some("npm test"), Failed),
+                ],
+                "サブエージェント「Review」、コマンド「npm test」が失敗しました",
+            ),
+            (
+                vec![
+                    report(Command, None, Completed),
+                    report(Command, None, Unknown),
+                ],
+                "コマンド 2件が完了しました",
+            ),
+            (
+                vec![
+                    report(Command, Some("a"), Completed),
+                    report(Monitor, Some("b"), Completed),
+                    report(Subagent, Some("c"), Completed),
+                    report(Command, Some("d"), Completed),
+                ],
+                "バックグラウンドタスク 4件が完了しました",
+            ),
+        ] {
+            assert_eq!(notification_title(&reports), title);
+        }
     }
 
     #[test]

@@ -140,6 +140,11 @@ pub enum ItemBody {
         content: Value,
     },
     Sleep {},
+    /// The background work an agent woke to report on, which starts its
+    /// report as T3 Code's notification row.
+    Notification {
+        reports: Vec<crate::execution::BackgroundReport>,
+    },
     Custom {
         provider: ProviderKind,
         kind: String,

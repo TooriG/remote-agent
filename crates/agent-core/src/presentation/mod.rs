@@ -63,7 +63,8 @@ impl<'a> From<&'a Item> for ItemMetadata<'a> {
             id: &item.id,
             client_id: item.client_input_id.as_deref(),
             kind: match item.body() {
-                ItemBody::UserMessage { .. } => GroupKind::User,
+                // A notification starts a turn as a user message does.
+                ItemBody::UserMessage { .. } | ItemBody::Notification { .. } => GroupKind::User,
                 ItemBody::AssistantText { .. } => GroupKind::Assistant,
                 ItemBody::CommandExecution { .. } => GroupKind::Command,
                 ItemBody::FileChange { .. } => GroupKind::FileChange,
@@ -417,6 +418,11 @@ pub fn item_presentation(
             true,
         ),
         ItemBody::ImageGeneration { .. } => ("imageGeneration", None, false),
+        ItemBody::Notification { reports } => (
+            "notification",
+            Some(background_work::notification_title(reports)),
+            false,
+        ),
         _ => ("unknown", Some(tool_title(item.body())), true),
     };
     ItemPresentation {

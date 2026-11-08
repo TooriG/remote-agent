@@ -188,6 +188,12 @@ private fun ConversationContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        is ConversationRowContent.Notification ->
+            Text(
+                content.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         is ConversationRowContent.User -> ThreadMessageCard(content.item, true, cwd, perform, timestampMs)
         is ConversationRowContent.Response ->
             ThreadMessageCard(

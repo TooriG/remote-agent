@@ -43,11 +43,13 @@ fn project_directory(home: &Path) -> std::path::PathBuf {
 
 fn native(session: &str, mut value: Value) {
     if value["type"] == "system" && value["subtype"] == "task_notification" {
-        let Some(tool) = value["tool_use_id"].as_str() else {
-            return;
-        };
+        // Claude saves the notification it wakes for, with the call that ran the work.
+        let tool = value["tool_use_id"]
+            .as_str()
+            .map(|tool| format!("<tool-use-id>{tool}</tool-use-id>"))
+            .unwrap_or_default();
         let prompt = format!(
-            "<task-notification><task-id>{}</task-id><tool-use-id>{tool}</tool-use-id><output-file>{}</output-file><status>{}</status><summary>{}</summary></task-notification>",
+            "<task-notification><task-id>{}</task-id>{tool}<output-file>{}</output-file><status>{}</status><summary>{}</summary></task-notification>",
             value["task_id"].as_str().unwrap(),
             value["output_file"].as_str().unwrap_or_default(),
             value["status"].as_str().unwrap(),

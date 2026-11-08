@@ -134,6 +134,29 @@ impl BackgroundTaskKind {
     }
 }
 
+/// How background work ended, or what it reported, when the agent woke for it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    /// A monitor reported new output and keeps running.
+    Updated,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// One piece of background work a notification names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundReport {
+    pub kind: BackgroundTaskKind,
+    pub label: Option<String>,
+    pub outcome: BackgroundOutcome,
+}
+
 /// Whether a roster keeps its conversation waiting rather than done.
 pub fn background_holds_completion(tasks: &[BackgroundTask]) -> bool {
     tasks.iter().any(|task| task.kind.holds_completion())

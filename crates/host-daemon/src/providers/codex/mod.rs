@@ -1,6 +1,7 @@
 //! Codex native protocol boundary: execution operations, one shared process,
 //! ordered request completion, native cursors and deferred item reads.
 pub(crate) mod accounts;
+mod background;
 mod cli;
 mod composer;
 mod fork;
@@ -84,6 +85,7 @@ pub struct Codex {
     stopped: tokio_util::sync::CancellationToken,
     processed: tokio::sync::watch::Sender<u64>,
     subscriptions: Arc<retention::Subscriptions>,
+    rosters: Arc<background::Rosters>,
 }
 pub use codex_app_server::AppServerConfig as Config;
 
@@ -139,6 +141,7 @@ impl Codex {
             stopped: Default::default(),
             processed: tokio::sync::watch::channel(0).0,
             subscriptions: Arc::default(),
+            rosters: Arc::default(),
         }
     }
     pub async fn enable_accounts(
@@ -1027,11 +1030,28 @@ impl Agent for Codex {
         id: &str,
         turn_id: &agent_protocol::ids::TurnId,
     ) -> Result<agent_protocol::models::Empty, Failure> {
-        self.request(
-            "turn/interrupt",
-            &serde_json::json!({"threadId":id,"turnId":turn_id}),
-        )
-        .await
+        // As T3 Code, Stop on a conversation that waits on its commands ends
+        // their background terminals.
+        let session = SessionRef::new(ProviderKind::Codex, id.into())
+            .map_err(|error| Failure::new("invalid_session", error))?;
+        let terminals = self.rosters.terminals(&session);
+        if terminals.is_empty() {
+            return self
+                .request(
+                    "turn/interrupt",
+                    &serde_json::json!({"threadId":id,"turnId":turn_id}),
+                )
+                .await;
+        }
+        for process in terminals {
+            let _: Value = self
+                .request(
+                    "thread/backgroundTerminals/terminate",
+                    &serde_json::json!({"threadId":id,"processId":process}),
+                )
+                .await?;
+        }
+        Ok(agent_protocol::models::Empty {})
     }
     async fn models(&self, params: &op::ListModels) -> Result<op::ModelPage, Failure> {
         let config: Result<Value, _> = self
@@ -1124,6 +1144,7 @@ impl Agent for Codex {
         let accounts = self.accounts.clone();
         let process = codex.clone();
         let subscriptions = self.subscriptions.clone();
+        let rosters = self.rosters.clone();
         subscriptions
             .clone()
             .spawn_releaser(codex.clone(), stopped.clone());
@@ -1174,10 +1195,14 @@ impl Agent for Codex {
                             let result = match event_change(instance, &request) {
                                 Ok(Some(change)) => {
                                     subscriptions.observe(&change);
+                                    let roster = rosters.observe(
+                                        &change,
+                                        &request.params::<Value>().unwrap_or_default(),
+                                    );
                                     if matches!(change, AgentChange::TaskParent { .. }) {
                                         Ok(())
                                     } else {
-                                        emit(&output, change).await
+                                        emit_all(&output, [Some(change), roster]).await
                                     }
                                 }
                                 Ok(None) => Ok(()),
@@ -1232,6 +1257,16 @@ impl Agent for Codex {
             let _ = process.shutdown().await;
         }
     }
+}
+
+async fn emit_all(
+    output: &tokio::sync::mpsc::Sender<AgentEvent>,
+    changes: impl IntoIterator<Item = Option<AgentChange>>,
+) -> Result<(), String> {
+    for change in changes.into_iter().flatten() {
+        emit(output, change).await?;
+    }
+    Ok(())
 }
 
 async fn refresh_auth_tokens(

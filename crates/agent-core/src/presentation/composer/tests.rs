@@ -287,14 +287,10 @@ fn an_answered_turn_offers_its_background_work_and_stop_while_the_composer_sends
             id: Some(session()),
             turns: Some(vec![Arc::new(Turn {
                 id: "turn".into(),
-                status: TurnStatus::Running,
+                status: TurnStatus::Completed,
                 ..Default::default()
             })]),
             background,
-            capabilities: Some(agent_protocol::session::Capabilities {
-                additional_input: true,
-                ..Default::default()
-            }),
             ..Default::default()
         })
     };
@@ -317,5 +313,6 @@ fn an_answered_turn_offers_its_background_work_and_stop_while_the_composer_sends
         "Waiting on monitor Watch the build"
     );
     assert!(composer.can_interrupt(), "Stop ends the work");
+    assert_eq!(composer.controls.running_turn, Some("turn".into()));
     assert!(composer.can_submit(false), "a message can follow the work");
 }

@@ -187,11 +187,14 @@ impl Thread {
                     .into(),
             );
         }
-        self.turns
-            .as_ref()?
+        let turns = self.turns.as_ref()?;
+        turns
             .iter()
             .rev()
             .find(|turn| turn.status == TurnStatus::Running)
+            // As T3 Code, Stop also ends the background work an answered
+            // turn left running.
+            .or_else(|| turns.last().filter(|_| !self.background.is_empty()))
             .map(|turn| turn.id.clone())
     }
 }

@@ -139,8 +139,16 @@ struct Running {
     input: mpsc::Sender<Command>,
     interrupt: watch::Receiver<Option<Result<(), String>>>,
     effort: Option<String>,
-    /// Whether Claude runs background work that a new process would end.
-    background: watch::Receiver<bool>,
+    work: watch::Receiver<Work>,
+}
+
+/// What the worker's process is doing beside its turns.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Work {
+    /// Claude runs background work that a new process would end.
+    background: bool,
+    /// Claude answered; no turn runs until it wakes or input arrives.
+    settled: bool,
 }
 
 /// T3 Code's ClaudeBackgroundWorkBlocksQueryReplacementError: Claude applies a
@@ -563,6 +571,22 @@ impl Claude {
         Ok(())
     }
 
+    /// Whether a worker still takes input. One that stopped taking it is
+    /// finishing; its record is released for the next turn shortly.
+    async fn takes_input(&self, id: &str) -> bool {
+        let Some(record) = self.records.lock().await.get(id).cloned() else {
+            return false;
+        };
+        loop {
+            match &record.lock().await.running {
+                None => return false,
+                Some(running) if !running.input.is_closed() => return true,
+                Some(_) => {}
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     async fn additional_input(
         &self,
         params: &op::Submission,
@@ -586,7 +610,7 @@ impl Claude {
                 .effort
                 .as_deref()
                 .is_some_and(|effort| Some(effort) != running.effort.as_deref());
-        if changes_process && *running.background.borrow() {
+        if changes_process && running.work.borrow().background {
             return Err(BACKGROUND_BLOCKS_CHANGE.into());
         }
         let sender = running.input.clone();
@@ -744,13 +768,13 @@ impl Claude {
         state.model = model.clone();
         let (input, receiver) = mpsc::channel(32);
         let (interrupt, interrupted) = watch::channel(None);
-        let (background, background_observed) = watch::channel(false);
+        let (work, work_observed) = watch::channel(Work::default());
         state.running = Some(Running {
             turn_id: turn_id.clone(),
             input: input.clone(),
             interrupt: interrupted,
             effort: effort.map(str::to_owned),
-            background: background_observed,
+            work: work_observed,
         });
         drop(state);
         let target = SessionRef {
@@ -771,8 +795,10 @@ impl Claude {
             stop: self.stop.child_token(),
             stream: None,
             interrupt,
-            background,
+            work,
             waiting: Vec::new(),
+            reports: Vec::new(),
+            wake_frame: None,
             model,
             effort: effort.map(str::to_owned),
             auth_revision,
@@ -799,23 +825,168 @@ struct Worker {
     stop: CancellationToken,
     stream: Option<String>,
     interrupt: watch::Sender<Option<Result<(), String>>>,
-    background: watch::Sender<bool>,
+    work: watch::Sender<Work>,
     /// The roster last published as the conversation's Waiting state.
     waiting: Vec<BackgroundTask>,
+    /// Background work that ended while Claude waited, keyed by its task, for
+    /// the notification that starts the turn Claude wakes for.
+    reports: Vec<(String, BackgroundReport)>,
+    /// The notification frame that started the current turn.
+    wake_frame: Option<String>,
     model: String,
     effort: Option<String>,
 }
 
 impl Worker {
+    fn settled(&self) -> bool {
+        self.work.borrow().settled
+    }
+
     /// Publishes what the answered response waits on, as T3 Code's Waiting roster.
     async fn publish_waiting(&mut self, response: &ResponseState) -> Result<(), String> {
-        self.background.send_replace(response.has_background());
+        self.work
+            .send_modify(|work| work.background = response.has_background());
         if response.waiting() == self.waiting.as_slice() {
             return Ok(());
         }
         self.waiting = response.waiting().to_vec();
         self.change(SessionChange::Background {
             tasks: self.waiting.clone(),
+        })
+        .await
+    }
+
+    /// As T3 Code, Claude's answer completes its turn while its background
+    /// work keeps running; the work's report starts another turn.
+    async fn settle(&mut self) -> Result<(), String> {
+        let mut turn = self
+            .current_turn()
+            .cloned()
+            .ok_or("Claude execution state is unavailable")?;
+        turn.status = TurnStatus::Completed;
+        turn.completed_at_ms = Some(now_ms());
+        self.work.send_modify(|work| work.settled = true);
+        self.change(SessionChange::Turn {
+            turn,
+            completed: true,
+        })
+        .await
+    }
+
+    /// Background work that ended while Claude waited. The roster names it
+    /// until the notification removes it; otherwise its call names it.
+    fn collect_report(&mut self, message: &Value, response: &ResponseState) {
+        let (key, report) = if message["type"] == "system"
+            && message["subtype"] == "task_notification"
+            && message["ambient"] != true
+            && message["skip_transcript"] != true
+        {
+            let task = response::task_key(message).and_then(|id| response.background_task(id));
+            let outcome = match message["status"].as_str() {
+                Some("completed") => BackgroundOutcome::Completed,
+                Some("failed") => BackgroundOutcome::Failed,
+                Some("stopped") => BackgroundOutcome::Cancelled,
+                _ if task.is_some_and(|task| task.kind == BackgroundTaskKind::Monitor) => {
+                    BackgroundOutcome::Updated
+                }
+                _ => BackgroundOutcome::Unknown,
+            };
+            let call = message["tool_use_id"].as_str();
+            let report = match (task, call.and_then(|id| self.item(id))) {
+                (Some(task), _) => BackgroundReport {
+                    kind: task.kind,
+                    label: task.description.clone(),
+                    outcome,
+                },
+                (None, Some(item)) => native::background_report(item.body(), outcome),
+                (None, None) => BackgroundReport {
+                    kind: BackgroundTaskKind::BackgroundTask,
+                    label: None,
+                    outcome,
+                },
+            };
+            let Some(key) = call.or(response::task_key(message)) else {
+                return;
+            };
+            (key.to_owned(), report)
+        } else if message["type"] == "user"
+            && let Some(outcome) = native::notification_outcome(
+                message["origin"]["kind"].as_str(),
+                &message["message"]["content"],
+            )
+            && let Some(item) = self.item(outcome.tool_id)
+        {
+            (outcome.tool_id.to_owned(), outcome.report(item.body()))
+        } else {
+            return;
+        };
+        if !self.reports.iter().any(|(known, _)| known == &key) {
+            self.reports.push((key, report));
+        }
+    }
+
+    fn item(&self, id: &str) -> Option<&Item> {
+        self.live
+            .turns
+            .iter()
+            .flatten()
+            .rev()
+            .flat_map(|turn| turn.items.iter().flatten())
+            .find(|item| item.id.as_str() == id)
+            .map(AsRef::as_ref)
+    }
+
+    /// Claude woke for background work after its answer: as T3 Code, the
+    /// report is a new turn that the work's notification starts.
+    async fn wake(&mut self, message: &Value) -> Result<(), String> {
+        let frame = (message["type"] == "user" && message["origin"]["kind"] == "task-notification")
+            .then(|| message["uuid"].as_str())
+            .flatten()
+            .map(str::to_owned);
+        // The transcript names the turn by the answer it follows, too.
+        let turn_id: agent_protocol::ids::TurnId = format!("{}-wake", self.turn_id).into();
+        let reports: Vec<_> = std::mem::take(&mut self.reports)
+            .into_iter()
+            .map(|(_, report)| report)
+            .collect();
+        let notification = (!reports.is_empty()).then(|| {
+            Arc::new(Item::new(
+                format!("{turn_id}:notification").into(),
+                ItemStatus::Completed,
+                ItemBody::Notification { reports },
+            ))
+        });
+        self.open_turn(turn_id, notification.into_iter().collect())
+            .await?;
+        self.wake_frame = frame;
+        Ok(())
+    }
+
+    async fn open_turn(
+        &mut self,
+        turn_id: agent_protocol::ids::TurnId,
+        items: Vec<Arc<Item>>,
+    ) -> Result<(), String> {
+        self.record
+            .lock()
+            .await
+            .running
+            .as_mut()
+            .ok_or("Claude execution state is unavailable")?
+            .turn_id = turn_id.clone();
+        self.turn_id = turn_id.clone();
+        self.reports.clear();
+        self.wake_frame = None;
+        self.work.send_modify(|work| work.settled = false);
+        self.change(SessionChange::Turn {
+            turn: Turn {
+                id: turn_id,
+                status: TurnStatus::Running,
+                items: Some(items),
+                started_at_ms: Some(now_ms()),
+                ..Default::default()
+            },
+            completed: false,
         })
         .await
     }
@@ -831,36 +1002,10 @@ impl Worker {
     /// Settles the answered turn and continues in `turn_id`. Its background
     /// items keep running; their notifications update this turn later.
     async fn next_turn(&mut self, turn_id: agent_protocol::ids::TurnId) -> Result<(), String> {
-        let mut settled = self
-            .current_turn()
-            .cloned()
-            .ok_or("Claude execution state is unavailable")?;
-        settled.status = TurnStatus::Completed;
-        settled.completed_at_ms = Some(now_ms());
-        self.change(SessionChange::Turn {
-            turn: settled,
-            completed: true,
-        })
-        .await?;
-        self.record
-            .lock()
-            .await
-            .running
-            .as_mut()
-            .ok_or("Claude execution state is unavailable")?
-            .turn_id = turn_id.clone();
-        self.turn_id = turn_id.clone();
-        self.change(SessionChange::Turn {
-            turn: Turn {
-                id: turn_id,
-                status: TurnStatus::Running,
-                items: Some(Vec::new()),
-                started_at_ms: Some(now_ms()),
-                ..Default::default()
-            },
-            completed: false,
-        })
-        .await
+        if !self.settled() {
+            self.settle().await?;
+        }
+        self.open_turn(turn_id, Vec::new()).await
     }
     /// The SDK echo can follow an earlier response's terminal frames. Move the
     /// accepted input to the turn it actually starts before applying its answer.
@@ -941,7 +1086,9 @@ impl Worker {
                     command = input.recv() => {
                         let command = command.ok_or("Claude input queue is closed")?;
                         let stops = matches!(command.value, SdkInput::Interrupt { .. });
-                        if let Some(id) = self.deliver_command(&mut process, command, response.delivery()).await? {
+                        // Input after a settled answer starts its own turn, as in T3 Code.
+                        let delivery = if self.settled() { InputDelivery::NewTurn } else { response.delivery() };
+                        if let Some(id) = self.deliver_command(&mut process, command, delivery).await? {
                             response.accept(id);
                         }
                         // A requested stop owns the response's terminal result,
@@ -981,9 +1128,18 @@ impl Worker {
                     SdkEvent::Usage { .. } => return Err("Unexpected Claude usage response".into()),                    SdkEvent::Forked { .. } => return Err("Unexpected Claude fork response".into()),
                     SdkEvent::Error { message } => return Err(message),
                 };
+                if self.settled() {
+                    self.collect_report(&message, &response);
+                }
                 let observation = response.observe(&message)?;
                 for (id, opens_turn) in &observation.echoes {
                     self.consume_input(id, *opens_turn).await?;
+                }
+                if observation.woke {
+                    if !self.settled() {
+                        self.settle().await?;
+                    }
+                    self.wake(&message).await?;
                 }
                 match observation.disposition {
                     MessageDisposition::Forward => self.message(message).await?,
@@ -993,6 +1149,9 @@ impl Worker {
                     MessageDisposition::Interrupted => return Ok(()),
                 }
                 self.publish_waiting(&response).await?;
+                if !self.settled() && response.settles() {
+                    self.settle().await?;
+                }
                 // A result ends a response. SDK idle covers background agents,
                 // but not background shells and monitors, which Claude answers
                 // after they finish; accepted input must be consumed before idle.
@@ -1097,14 +1256,17 @@ impl Worker {
                 .await;
             return;
         };
-        turn.status = if interrupted {
-            TurnStatus::Interrupted
-        } else if outcome.is_ok() {
-            TurnStatus::Completed
-        } else {
-            TurnStatus::Failed
-        };
-        turn.completed_at_ms = Some(now_ms());
+        // A settled answer keeps its outcome; Stop ends only its background work.
+        if !self.settled() {
+            turn.status = if interrupted {
+                TurnStatus::Interrupted
+            } else if outcome.is_ok() {
+                TurnStatus::Completed
+            } else {
+                TurnStatus::Failed
+            };
+            turn.completed_at_ms = Some(now_ms());
+        }
         let unfinished = if interrupted {
             ItemStatus::Interrupted
         } else {
@@ -1163,6 +1325,13 @@ impl Worker {
                 effort: self.effort.clone(),
                 released: released.clone(),
             });
+        }
+        // The background work ended with its process; input starts a new one.
+        if !self.waiting.is_empty() {
+            self.waiting.clear();
+            let _ = self
+                .change(SessionChange::Background { tasks: Vec::new() })
+                .await;
         }
         let _ = self
             .change(SessionChange::Turn {
@@ -1309,22 +1478,7 @@ impl Worker {
             return Ok(());
         }
         if kind == "user" && message["origin"]["kind"] == "task-notification" {
-            if let Some(item) = native::user_item(
-                message["uuid"]
-                    .as_str()
-                    .ok_or("Claude notification ID is missing")?,
-                &message["message"]["content"],
-                message["isMeta"] == true,
-                message["origin"]["kind"].as_str(),
-                message["promptSource"].as_str(),
-            ) {
-                self.change(SessionChange::Item {
-                    turn_id: self.turn_id.clone(),
-                    item: Arc::new(item),
-                })
-                .await?;
-            }
-            return Ok(());
+            return self.notification_frame(&message).await;
         }
         if kind == "attachment" {
             if let Some(item) = native::attachment_item(
@@ -1420,6 +1574,31 @@ impl Worker {
             self.change(SessionChange::Item {
                 turn_id: self.turn_id.clone(),
                 item: item.into(),
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// A notification Claude answers within its response is activity; one
+    /// that woke Claude starts its turn as reports instead.
+    async fn notification_frame(&mut self, message: &Value) -> Result<(), String> {
+        let id = message["uuid"]
+            .as_str()
+            .ok_or("Claude notification ID is missing")?;
+        if self.wake_frame.as_deref() == Some(id) {
+            return Ok(());
+        }
+        if let Some(item) = native::user_item(
+            id,
+            &message["message"]["content"],
+            message["isMeta"] == true,
+            message["origin"]["kind"].as_str(),
+            message["promptSource"].as_str(),
+        ) {
+            self.change(SessionChange::Item {
+                turn_id: self.turn_id.clone(),
+                item: Arc::new(item),
             })
             .await?;
         }
@@ -2011,7 +2190,12 @@ impl Agent for Claude {
         let record = self.records.lock().await.get(id).cloned();
         if let Some(record) = record {
             let record = record.lock().await;
-            if let Some(running) = &record.running {
+            // A settled answer waits on background work without a running turn.
+            if let Some(running) = record
+                .running
+                .as_ref()
+                .filter(|running| !running.work.borrow().settled)
+            {
                 response.thread.status = SessionStatus::Running;
                 response.thread.turns = Some(vec![Arc::new(Turn {
                     id: running.turn_id.clone(),
@@ -2041,6 +2225,10 @@ impl Agent for Claude {
                 ));
             }
             SubmissionTarget::Queue => self.additional_input(input).await?,
+            // Claude waiting on background work runs the input as its next turn.
+            SubmissionTarget::Start { .. } if self.takes_input(&input.thread_id.id).await => {
+                self.additional_input(input).await?
+            }
             SubmissionTarget::Start { .. } => Some(self.start_turn(input, browser).await?),
         };
         Ok(op::SubmissionReceipt { turn_id })
@@ -2301,7 +2489,7 @@ mod execution_tests {
                 input,
                 interrupt,
                 effort: None,
-                background: watch::channel(false).1,
+                work: watch::channel(Work::default()).1,
             });
         }
         let state = Agent::state(&claude, &session.id).await.unwrap();
@@ -2373,7 +2561,7 @@ mod execution_tests {
             input,
             interrupt,
             effort: None,
-            background: watch::channel(false).1,
+            work: watch::channel(Work::default()).1,
         });
         let mut cursor = None;
         let mut observed = Vec::new();
@@ -2458,7 +2646,7 @@ mod execution_tests {
                 input,
                 interrupt,
                 effort: None,
-                background: watch::channel(false).1,
+                work: watch::channel(Work::default()).1,
             });
             if !enqueued {
                 receiver.close();
@@ -2535,7 +2723,11 @@ mod execution_tests {
                 input,
                 interrupt,
                 effort: Some("high".into()),
-                background: watch::channel(background).1,
+                work: watch::channel(Work {
+                    background,
+                    settled: false,
+                })
+                .1,
             });
             // A forwarded input reaches the worker queue, which drops it unwritten.
             let worker = tokio::spawn(async move { receiver.recv().await.is_some() });
@@ -2657,7 +2849,7 @@ mod execution_tests {
                     input: input.clone(),
                     interrupt: interrupted,
                     effort: None,
-                    background: watch::channel(false).1,
+                    work: watch::channel(Work::default()).1,
                 }),
                 idle: None,
             })),
@@ -2675,8 +2867,10 @@ mod execution_tests {
             stop: CancellationToken::new(),
             stream: None,
             interrupt,
-            background: watch::channel(false).0,
+            work: watch::channel(Work::default()).0,
             waiting: Vec::new(),
+            reports: Vec::new(),
+            wake_frame: None,
             model: "default".into(),
             effort: None,
         };
@@ -2783,18 +2977,21 @@ for await (const line of createInterface({input: process.stdin})) {
             }
             let stop = worker.stop.clone();
             let run = tokio::spawn(worker.run(process, receiver));
-            for receipt in receipts {
+            for (index, receipt) in receipts.into_iter().enumerate() {
                 assert_eq!(
                     tokio::time::timeout(std::time::Duration::from_secs(5), receipt)
                         .await
                         .unwrap()
                         .unwrap()
                         .unwrap(),
-                    match mode {
-                        "settled" => Some("next".into()),
-                        "answering" => Some("turn".into()),
-                        _ => None,
-                    }
+                    // A settled answer gives new input its own turn at once;
+                    // input before the result waits for Claude's echo.
+                    match (mode, index) {
+                        ("answering", _) => Some("turn".into()),
+                        ("delayed" | "idle-first", _) | ("batched", 1) => None,
+                        _ => Some("next".into()),
+                    },
+                    "{mode}"
                 );
             }
             let assigned = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -2957,7 +3154,114 @@ for await (const line of createInterface({input: process.stdin})) {
     }
 
     #[tokio::test]
-    async fn an_answered_turn_waits_on_its_background_roster_until_stop_ends_it() {
+    async fn background_work_that_ends_after_the_answer_reports_in_a_new_turn() {
+        let path = std::env::var_os("PATH");
+        let node = process::executable(Path::new("node"), path.as_deref()).unwrap();
+        // The answer settles while a background command runs; Claude then
+        // wakes for its notification and reports without another input.
+        let script = r#"
+const event = message => ({ type: 'message', message });
+const idle = event({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+const session = process.argv[1];
+process.stdout.write([
+  { type: 'ready', initialized: {} },
+  event({ type: 'system', subtype: 'task_started', task_id: 'shell', task_type: 'local_bash', description: 'Start the dev server' }),
+  event({ type: 'assistant', message: { id: 'answer', stop_reason: 'end_turn', content: [{ type: 'text', text: 'started' }] } }),
+  event({ type: 'result', is_error: false }),
+  idle,
+  event({ type: 'system', subtype: 'task_notification', task_id: 'shell', status: 'completed', summary: 'done' }),
+  event({ type: 'system', subtype: 'init', session_id: session }),
+  event({ type: 'assistant', message: { id: 'report', stop_reason: 'end_turn', content: [{ type: 'text', text: 'reported' }] } }),
+  event({ type: 'result', is_error: false }),
+  idle,
+].map(message => JSON.stringify(message)).join('\n') + '\n');
+process.stdin.resume();
+"#;
+        let (_router, session, mut worker) = routed_worker();
+        let mut command = tokio::process::Command::new(&node);
+        command
+            .arg("--input-type=module")
+            .arg("-e")
+            .arg(script)
+            .arg(&session.id)
+            .kill_on_drop(true);
+        let mut process = Process::spawn_command(command).unwrap();
+        assert!(matches!(
+            process.read().await.unwrap(),
+            Some(SdkEvent::Ready { .. })
+        ));
+        let (events, mut changes) = mpsc::channel(256);
+        worker.events = events;
+        let (_input, receiver) = mpsc::channel(1);
+        let stop = worker.stop.clone();
+        let run = tokio::spawn(worker.run(process, receiver));
+        let mut thread = agent_protocol::models::Thread::default();
+        let mut waited = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(event) = changes.recv().await {
+                if let Some(applied) = event.applied {
+                    let _ = applied.send(Ok(()));
+                }
+                let AgentChange::Session { change, .. } = event.change else {
+                    continue;
+                };
+                if let SessionChange::Background { tasks } = &change {
+                    waited.push(tasks.len());
+                }
+                let reported = matches!(&change, SessionChange::Turn { turn, completed: true }
+                    if turn.id == "turn-wake".into());
+                thread = change.apply(&thread).unwrap();
+                if reported {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        // The idle process stays for the next input until the Host stops.
+        tokio::spawn(async move {
+            while let Some(event) = changes.recv().await {
+                if let Some(applied) = event.applied {
+                    let _ = applied.send(Ok(()));
+                }
+            }
+        });
+        stop.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(waited, [1, 0], "the roster shows while Claude waits");
+        let turns = thread.turns.unwrap();
+        assert_eq!(turns.len(), 2, "{turns:#?}");
+        assert_eq!(turns[0].id, "turn".into());
+        assert_eq!(turns[0].status, TurnStatus::Completed);
+        assert!(turns[0].completed_at_ms.is_some());
+        assert_eq!(
+            turns[1].id,
+            "turn-wake".into(),
+            "named by the answer it follows"
+        );
+        assert_eq!(turns[1].status, TurnStatus::Completed);
+        let items = turns[1].items.as_ref().unwrap();
+        assert_eq!(
+            items[0].body(),
+            &ItemBody::Notification {
+                reports: vec![BackgroundReport {
+                    kind: BackgroundTaskKind::Command,
+                    label: Some("Start the dev server".into()),
+                    outcome: BackgroundOutcome::Completed,
+                }],
+            }
+        );
+        assert!(items.iter().any(
+            |item| matches!(item.body(), ItemBody::AssistantText { text, .. } if text == "reported")
+        ));
+        assert!(thread.background.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_answered_turn_completes_and_waits_on_its_background_roster_until_stop() {
         let path = std::env::var_os("PATH");
         let node = process::executable(Path::new("node"), path.as_deref()).unwrap();
         // Claude answers while a background command, a Monitor and a subagent
@@ -2997,13 +3301,13 @@ for await (const line of createInterface({input: process.stdin})) {
         let (input, receiver) = mpsc::channel(2);
         worker.input = input.clone();
         let record = worker.record.clone();
-        let background = {
+        let work = {
             let mut record = record.lock().await;
             let running = record.running.as_mut().unwrap();
             running.input = input.clone();
-            let (sender, observed) = watch::channel(false);
-            running.background = observed.clone();
-            worker.background = sender;
+            let (sender, observed) = watch::channel(Work::default());
+            running.work = observed.clone();
+            worker.work = sender;
             observed
         };
         let run = tokio::spawn(worker.run(process, receiver));
@@ -3040,13 +3344,12 @@ for await (const line of createInterface({input: process.stdin})) {
             ]
         );
         assert_eq!(
-            router.current_turn(&session, "turn").unwrap().status,
-            TurnStatus::Running,
-            "Claude reports on its work in the turn that waits on it"
-        );
-        assert!(
-            *background.borrow(),
-            "a new process would end the work, so changes are refused"
+            *work.borrow(),
+            Work {
+                background: true,
+                settled: true,
+            },
+            "the answer completed its turn and a new process would end the work"
         );
         input
             .send(Command {
@@ -3062,12 +3365,6 @@ for await (const line of createInterface({input: process.stdin})) {
             .await
             .unwrap()
             .unwrap();
-        // The Host retains only live turns, so the stopped one may be gone.
-        assert!(
-            router
-                .current_turn(&session, "turn")
-                .is_none_or(|turn| turn.status == TurnStatus::Interrupted)
-        );
         assert!(roster(&router).is_empty(), "Stop ends the wait");
     }
 

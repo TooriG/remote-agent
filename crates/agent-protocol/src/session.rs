@@ -411,8 +411,6 @@ impl SessionChange {
                 next.status = if active {
                     SessionStatus::Running
                 } else {
-                    // Nothing waits on background work without a running turn.
-                    next.background.clear();
                     SessionStatus::Idle
                 };
                 return Ok(());
@@ -585,7 +583,7 @@ mod update_tests {
     use crate::execution::{ExecutionError, RetryEvidence};
 
     #[test]
-    fn a_waiting_roster_lasts_only_while_its_turn_runs() {
+    fn an_answered_turn_waits_on_its_roster_until_the_owner_clears_it() {
         let roster = vec![crate::execution::BackgroundTask {
             id: "shell".into(),
             kind: crate::execution::BackgroundTaskKind::Command,
@@ -603,29 +601,31 @@ mod update_tests {
             },
             completed,
         };
-        let thread = turn(false).apply(&Thread::default()).unwrap();
-        let waiting = SessionChange::Background {
-            tasks: roster.clone(),
-        }
-        .apply(&thread)
-        .unwrap();
-        assert_eq!(waiting.background, roster);
-        assert_eq!(waiting.status, SessionStatus::Running);
+        let running = turn(false).apply(&Thread::default()).unwrap();
+        let waiting = turn(true)
+            .apply(
+                &SessionChange::Background {
+                    tasks: roster.clone(),
+                }
+                .apply(&running)
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(waiting.background, roster, "the answered turn waits on it");
+        assert_eq!(waiting.status, SessionStatus::Idle);
+        assert_eq!(
+            waiting.active_turn_id(),
+            Some("turn".into()),
+            "Stop ends the work the answered turn left running"
+        );
         let roundtrip: Thread =
             serde_json::from_value(serde_json::to_value(&waiting).unwrap()).unwrap();
         assert_eq!(roundtrip.background, roster);
-        assert!(
-            SessionChange::Background { tasks: Vec::new() }
-                .apply(&waiting)
-                .unwrap()
-                .background
-                .is_empty()
-        );
-        let finished = turn(true).apply(&waiting).unwrap();
-        assert!(
-            finished.background.is_empty(),
-            "a finished turn waits on nothing"
-        );
+        let cleared = SessionChange::Background { tasks: Vec::new() }
+            .apply(&waiting)
+            .unwrap();
+        assert!(cleared.background.is_empty());
+        assert_eq!(cleared.active_turn_id(), None);
     }
 
     #[test]

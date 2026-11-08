@@ -30,6 +30,45 @@ async fn interrupted(stop: &CancellationToken, delay: Duration) -> bool {
     tokio::select! { biased; _ = stop.cancelled() => true, _ = tokio::time::sleep(delay) => false }
 }
 
+/// Ends the background work a `[background]` turn left running: all of it, or
+/// the command in one background terminal, which Stop terminates.
+pub(super) fn end_background(
+    context: &Context,
+    thread_id: &str,
+    turn: &Turn,
+    process: Option<&str>,
+    status: &str,
+) -> Result<()> {
+    let ended: Vec<Value> = turn.borrow_mut()["items"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .filter(|item| {
+            item["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("fixture-background-"))
+                && item["status"] == "inProgress"
+                && process.is_none_or(|process| item["processId"] == process)
+        })
+        .map(|item| {
+            item["status"] = status.into();
+            if item["type"] == "commandExecution" {
+                item["exitCode"] = if status == "completed" {
+                    0.into()
+                } else {
+                    Value::Null
+                };
+            }
+            item.clone()
+        })
+        .collect();
+    let turn_id = turn.borrow()["id"].as_str().unwrap().to_owned();
+    for item in ended {
+        context.item_event("item/completed", thread_id, &turn_id, &item)?;
+    }
+    Ok(())
+}
+
 fn complete(context: &Context, thread_id: &str, turn: &Turn, index: usize) -> Result<()> {
     let turn = turn.borrow();
     context.item_event(
@@ -208,6 +247,16 @@ impl ScenarioTurn {
             command["exitCode"] = 0.into();
         }
         complete(context, &thread_id, turn, command_index)?;
+        // A dev server and a subagent outlive the turn, as Codex's background
+        // terminals and agents do, until `codex-background-release` exists.
+        let background = prompt.contains("[background]");
+        if background {
+            context.stream_item(&thread_id, turn, json!({"id":format!("fixture-background-command-{suffix}"),"type":"commandExecution",
+                "command":"npm run dev","cwd":thread.borrow().metadata["cwd"],"processId":format!("fixture-process-{suffix}"),
+                "aggregatedOutput":"","status":"inProgress"}))?;
+            context.stream_item(&thread_id, turn, json!({"id":format!("fixture-background-agent-{suffix}"),"type":"collabAgentToolCall",
+                "tool":"spawnAgent","prompt":"Review the change","status":"inProgress"}))?;
+        }
         if prompt.contains("[workspace-edit]") {
             let cwd = thread
                 .borrow()
@@ -308,6 +357,12 @@ impl ScenarioTurn {
         }
         complete(context, &thread_id, turn, index)?;
         context.finish(thread, turn, "completed", None)?;
+        if background {
+            while !context.home.join("codex-background-release").exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            end_background(context, &thread_id, turn, None, "completed")?;
+        }
         if scenario == "duplicate" {
             thread.borrow_mut().turns.push(Rc::new(RefCell::new(json!({"id":turn_id,"status":"completed","items":[
             {"id":"duplicate-history-old","type":"agentMessage","phase":"final_answer","text":"Older AI response must remain visible."}]}))));

@@ -105,7 +105,7 @@ extension ThreadScreen {
         switch (row.content, item) {
         case let (.preparation(preparation), _):
             ThreadPreparationRow(preparation: preparation) { model.perform($0) }
-        case let (.providerHandoff(text), _):
+        case let (.providerHandoff(text), _), let (.notification(text), _):
             Text(text).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
         case let (.user, item?):
             userMessageRow(item, timestampMs: row.timestampMs)

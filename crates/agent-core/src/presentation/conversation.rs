@@ -86,6 +86,11 @@ pub enum ConversationRowContent {
     ProviderHandoff {
         text: String,
     },
+    /// What the background work its agent woke for did, starting the turn
+    /// without a user message, as T3 Code's notification row.
+    Notification {
+        text: String,
+    },
     User {
         item: Arc<RenderedItem>,
     },
@@ -371,16 +376,6 @@ impl RenderedItem {
     }
 }
 
-fn waiting_turn_settled(turn: &Arc<models::Turn>) -> Arc<models::Turn> {
-    if turn.status != models::TurnStatus::Running {
-        return turn.clone();
-    }
-    Arc::new(models::Turn {
-        status: models::TurnStatus::Completed,
-        ..turn.as_ref().clone()
-    })
-}
-
 /// Pass the previous projection to retain native render identities across deltas.
 pub fn project_conversation(
     draft_key: &crate::state::DraftKey,
@@ -442,16 +437,7 @@ pub fn project_conversation(
         .flat_map(|old| &old.turns)
         .map(|turn| ((turn.source.id.as_str(), turn.occurrence), turn))
         .collect();
-    let settled: Vec<_>;
-    let native = match source.turns.as_deref().unwrap_or_default() {
-        // As T3 Code's settled run, a turn that answered and waits on its
-        // background work reads as finished until the agent reports on it.
-        turns if !source.background.is_empty() => {
-            settled = turns.iter().map(waiting_turn_settled).collect();
-            &settled
-        }
-        turns => turns,
-    };
+    let native = source.turns.as_deref().unwrap_or_default();
     let preparation_echoed = preparation.is_some_and(|preparation| {
         native
             .iter()
@@ -1055,6 +1041,7 @@ fn render_turn(
     let mut push = |mut content: ConversationRowContent| {
         let id = match &content {
             ProviderHandoff { .. } => format!("history-handoff:{}", source.id),
+            Notification { .. } => format!("history-notification:{}", source.id),
             User { item } | Activity { item, .. } | Response { item, .. } => {
                 format!("history-item:{}:{}", source.id, item.data.id)
             }
@@ -1114,7 +1101,11 @@ fn render_turn(
         };
         let in_progress = segment.last && source.status == models::TurnStatus::Running;
         for item in group(Role::User) {
-            if item.data.deferred {
+            if item.data.kind == "notification" {
+                push(Notification {
+                    text: item.data.title.clone().unwrap_or_default(),
+                });
+            } else if item.data.deferred {
                 push(Activity {
                     item,
                     turn_id: source.id.clone(),
@@ -1484,74 +1475,64 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_waiting_on_background_work_reads_as_finished_until_its_report() {
-        let thread = |background| {
-            Arc::new(models::Thread {
-                turns: Some(vec![Arc::new(models::Turn {
-                    id: "work".into(),
-                    status: models::TurnStatus::Running,
-                    items: Some(vec![
-                        Arc::new(models::Item::new(
-                            "shell".into(),
-                            models::ItemStatus::Completed,
-                            models::ItemBody::CommandExecution {
-                                command: "npm run dev".into(),
-                                cwd: None,
-                                output: String::new(),
-                                exit_code: None,
-                            },
-                        )),
-                        Arc::new(models::Item::new(
-                            "answer".into(),
-                            models::ItemStatus::Completed,
-                            models::ItemBody::AssistantText {
-                                text: "The server is starting.".into(),
-                                phase: models::AssistantPhase::Final,
-                            },
-                        )),
-                    ]),
-                    ..Default::default()
-                })]),
-                background,
+    fn a_notification_starts_the_turn_its_agent_woke_for_as_its_own_row() {
+        use agent_protocol::execution::{BackgroundOutcome, BackgroundReport, BackgroundTaskKind};
+        let source = Arc::new(models::Thread {
+            turns: Some(vec![Arc::new(models::Turn {
+                id: "wake".into(),
+                status: models::TurnStatus::Completed,
+                items: Some(vec![
+                    Arc::new(models::Item::new(
+                        "wake:notification".into(),
+                        models::ItemStatus::Completed,
+                        models::ItemBody::Notification {
+                            reports: vec![BackgroundReport {
+                                kind: BackgroundTaskKind::Command,
+                                label: Some("Start the dev server".into()),
+                                outcome: BackgroundOutcome::Completed,
+                            }],
+                        },
+                    )),
+                    Arc::new(models::Item::new(
+                        "report".into(),
+                        models::ItemStatus::Completed,
+                        models::ItemBody::AssistantText {
+                            text: "The server is up.".into(),
+                            phase: models::AssistantPhase::Final,
+                        },
+                    )),
+                ]),
                 ..Default::default()
-            })
+            })]),
+            ..Default::default()
+        });
+        let snapshot = Snapshot::default();
+        let rows = project_conversation(
+            &snapshot.pane.navigation.draft_key,
+            &snapshot.sessions.pending_submissions,
+            source,
+            &None,
+        )
+        .turns[0]
+            .rows
+            .clone();
+        let ConversationRowContent::Notification { text } = &rows[0].content else {
+            panic!("the notification is the turn's first row");
         };
-        let rows = |background| {
-            let snapshot = Snapshot::default();
-            project_conversation(
-                &snapshot.pane.navigation.draft_key,
-                &snapshot.sessions.pending_submissions,
-                thread(background),
-                &None,
-            )
-            .turns[0]
-                .rows
-                .clone()
-        };
-        let in_progress = |rows: &[ConversationRow]| {
-            rows.iter()
-                .any(|row| matches!(row.content, ConversationRowContent::InProgress { .. }))
-        };
-        let actions = |rows: &[ConversationRow]| {
-            rows.iter().any(|row| {
-                matches!(
-                    row.content,
-                    ConversationRowContent::Response {
-                        show_actions: true,
-                        ..
-                    }
-                )
-            })
-        };
-        let working = rows(Vec::new());
-        assert!(in_progress(&working) && !actions(&working));
-        let waiting = rows(vec![agent_protocol::execution::BackgroundTask {
-            id: "shell".into(),
-            kind: agent_protocol::execution::BackgroundTaskKind::Command,
-            description: Some("npm run dev".into()),
-        }]);
-        assert!(!in_progress(&waiting), "the work's own strip names it");
-        assert!(actions(&waiting), "the answer is complete");
+        assert_eq!(text, "コマンド「Start the dev server」が完了しました");
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row.content, ConversationRowContent::User { .. })),
+            "the agent woke without a user message"
+        );
+        assert!(rows.iter().any(|row| matches!(
+            row.content,
+            ConversationRowContent::Response {
+                show_actions: true,
+                ..
+            }
+        )));
     }
 
     #[test]

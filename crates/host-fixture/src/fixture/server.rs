@@ -762,6 +762,27 @@ impl Threads {
         Ok(())
     }
 
+    /// Codex ends the command in a background terminal; nothing left to end
+    /// still counts as terminated.
+    fn terminate(&self, context: &Rc<Context>, id: &Value, params: &Value) -> Result<()> {
+        let thread_id = thread_id(params);
+        let turns = self
+            .by_id
+            .get(thread_id)
+            .map(|thread| thread.borrow().turns.clone())
+            .unwrap_or_default();
+        for turn in &turns {
+            scenario::end_background(
+                context,
+                thread_id,
+                turn,
+                params["processId"].as_str(),
+                "failed",
+            )?;
+        }
+        context.respond(id, &json!({"terminated":true}))
+    }
+
     fn control_turn(
         &self,
         context: &Rc<Context>,
@@ -1029,6 +1050,7 @@ pub(super) async fn run(home: PathBuf, config: Config) -> Result<()> {
                 TURN_START => threads.start_turn(&context, id, params).await?,
                 QUEUE_INPUT => threads.queue(&context, id, params)?,
                 "turn/interrupt" | "turn/steer" => threads.control_turn(&context, id, method, params)?,
+                "thread/backgroundTerminals/terminate" => threads.terminate(&context, id, params)?,
                 "thread/items/list" | "thread/turns/list" => threads.history_page(&context, id, method, params)?,
                 "thread/read" | "thread/resume" => threads.read(&context, id, method, params)?,
                 _ => context.error(id, -32601, "method not found")?,

@@ -580,6 +580,10 @@ impl SessionRouter {
                         delivery: agent_protocol::session::SubmissionDelivery::Unknown,
                     }),
             );
+            // The provider's background work ended with it.
+            if !owned.timeline.background.is_empty() {
+                changes.push(SessionChange::Background { tasks: Vec::new() });
+            }
             changes.push(SessionChange::Status {
                 status: agent_protocol::models::SessionStatus::Unavailable,
             });

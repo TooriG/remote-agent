@@ -16,7 +16,7 @@ pub(super) struct Roster {
 }
 
 /// Task runs are named by `run_id`, or `task_id` when the SDK has no run ID.
-pub(super) fn task_key(value: &Value) -> Option<&str> {
+pub(in crate::providers::claude) fn task_key(value: &Value) -> Option<&str> {
     value["run_id"].as_str().or(value["task_id"].as_str())
 }
 

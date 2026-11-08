@@ -176,6 +176,8 @@ fn route(
         | "/merge-worktree/dirty" | "/merge-worktree/clean" => {
             merge_worktree(root, path)?
         }
+        // The Codex fixture's background command and subagent finish.
+        "/codex-background/release" => fs::write(root.join("codex-background-release"), [])?,
         // The Claude fixture's background work finishes, and Claude reports on it.
         "/claude-background/release" => {
             fs::write(root.join("project/claude-background-release"), [])?;

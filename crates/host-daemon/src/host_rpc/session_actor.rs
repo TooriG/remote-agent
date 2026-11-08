@@ -86,6 +86,7 @@ impl SessionActor {
                 .is_some_and(Option::is_some)
             || !self.timeline.requests.is_empty()
             || self.timeline.turns.is_some()
+            || !self.timeline.background.is_empty()
     }
 
     pub(super) fn overlay(&self, mut thread: Thread) -> Thread {
