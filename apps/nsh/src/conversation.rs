@@ -429,6 +429,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             )
             .keys(move || rows.with(|rows| rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>()))
             .element_ref(&list)
+            .label(SharedString::from(tr("この会話")))
             .estimated_item_size(px(170.0))
             .follow_end(px(FOLLOW_END_THRESHOLD))
             .on_scroll_drag_start(move |_: &Point<Points>| { dragging.replace(true); })

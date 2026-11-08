@@ -18,14 +18,18 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
         .and_then(Value::as_str);
     let long_history = matches!(history_kind, Some("long" | "viewport"));
     let viewport = history_kind == Some("viewport");
+    let reading = history_kind == Some("reading");
     if !long_history
+        && !reading
         && !cwd.ends_with("large-history")
         && !cwd.ends_with("oversized-history")
         && !gallery
     {
         return None;
     }
-    let mut turns = if long_history {
+    let mut turns = if reading {
+        (0..READING_TURNS).map(reading_turn).collect()
+    } else if long_history {
         // More turns than one ten-turn window, so older history pages remain.
         let sizes = [
             286, 6, 325, 393, 859, 424, 21, 609, 641, 154, 212, 37, 488, 95, 154,
@@ -103,6 +107,8 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
             item["phase"] = "final_answer".into();
         }
         drop(last);
+    }
+    if long_history || reading {
         // Keep turns started through the fixture when the client reopens history.
         // Only the list's placeholder turn is replaced by the synthetic archive.
         turns.extend(
@@ -125,9 +131,89 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
     })
 }
 
+/// Turns of the reading history: several ten-turn windows, so older pages remain.
+const READING_TURNS: usize = 36;
+
+/// A turn as a long working session leaves it: a question, folded tool work and
+/// commentary, and a long Markdown answer with code, a table and lists. Lengths
+/// vary by turn so rows differ in height as real answers do.
+fn reading_turn(number: usize) -> super::server::Turn {
+    let id = |item: &str| format!("reading-{number}-{item}");
+    let mut items = vec![
+        json!({"id":id("user"),"type":"userMessage","content":[{"type":"text",
+            "text":format!("Reading question {number}: how does `module-{number}` retry failed requests, and what should change?")}]}),
+        json!({"id":id("reasoning"),"type":"reasoning","summary":["Tracing the retry path"]}),
+    ];
+    for (index, tool) in ["rg -n retry", "sed -n 1,80p", "cargo test -p"]
+        .iter()
+        .enumerate()
+    {
+        items.push(json!({"id":id(&format!("command-{index}")),"type":"commandExecution",
+            "command":format!("{tool} crates/module-{number}"),"status":"completed","exitCode":0,
+            "aggregatedOutput":(0..24).map(|line| format!("crates/module-{number}/src/retry.rs:{line}: let delay = backoff(attempt);\n")).collect::<String>()}));
+    }
+    items.push(json!({"id":id("commentary"),"type":"agentMessage","phase":"commentary",
+        "text":format!("Module {number}'s retries go through `backoff`; checking its tests next.")}));
+    items.push(json!({"id":id("answer"),"type":"agentMessage","phase":"final_answer","text":reading_answer(number)}));
+    Rc::new(RefCell::new(
+        json!({"id":format!("reading-turn-{number}"),"status":"completed","items":items}),
+    ))
+}
+
+fn reading_answer(number: usize) -> String {
+    let paragraph = format!(
+        "Module {number} retries **failed requests** through `backoff(attempt)`, which doubles the delay from 100 ms and stops after the fifth attempt. \
+         A request that fails with a *permanent* error is not retried, and the caller sees the first error rather than the last. \
+         The [retry policy](crates/module-{number}/src/retry.rs) keeps its state per request, so concurrent requests never share a delay.\n\n"
+    );
+    let code: String = (0..10 + number * 7 % 20)
+        .map(|line| {
+            format!(
+                "    let delay_{line} = backoff(attempt + {line}).min(Duration::from_secs(30));\n"
+            )
+        })
+        .collect();
+    let rows: String = (1..=5)
+        .map(|attempt| format!("| {attempt} | {} ms | retried |\n", 100 << (attempt - 1)))
+        .collect();
+    format!(
+        "## Module {number} retries\n\n{paragraphs}\
+         - The first attempt runs at once.\n- Later attempts wait for `backoff`.\n- A permanent error stops at once.\n\
+         - Each request keeps its own delay.\n- The limit is five attempts.\n- Cancellation stops the wait.\n\n\
+         ```rust title=crates/module-{number}/src/retry.rs\npub fn retry(attempt: u32) -> Duration {{\n{code}    backoff(attempt)\n}}\n```\n\n\
+         | Attempt | Delay | Outcome |\n|---|---:|---|\n{rows}\n\
+         1. Keep the five-attempt limit.\n2. Report the first permanent error.\n3. Add a test for cancellation.\n\n\
+         > The policy matches the other modules.\n\nAnswer {number} ends here.",
+        paragraphs = paragraph.repeat(1 + number % 3),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_history_pages_long_answers_and_keeps_the_scenarios_live_turns() {
+        let live = Rc::new(RefCell::new(
+            json!({"id":"live-turn", "status":"completed", "items":[]}),
+        ));
+        let thread = Thread {
+            metadata: serde_json::from_value(
+                json!({"id":"reading", "cwd":"/fixture", "fixtureHistory":"reading"}),
+            )
+            .unwrap(),
+            turns: vec![live],
+        };
+        let history = persisted(&thread).unwrap();
+        assert_eq!(history.turns.len(), READING_TURNS + 1);
+        assert_eq!(history.turns.last().unwrap().borrow()["id"], "live-turn");
+        let last = history.turns[READING_TURNS - 1].borrow();
+        let answer = last["items"].as_array().unwrap().last().unwrap();
+        assert_eq!(answer["phase"], "final_answer");
+        let text = answer["text"].as_str().unwrap();
+        assert!(text.contains("```rust") && text.contains("| Attempt |"));
+        assert!(text.ends_with(&format!("Answer {} ends here.", READING_TURNS - 1)));
+    }
 
     #[test]
     fn history_kind_is_explicit_and_reopening_retains_the_scenarios_live_turns() {

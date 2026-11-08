@@ -1,0 +1,25 @@
+# Reading up through a long conversation of Markdown answers with code, tables
+# and folded work: each wheel jumps past the rows already laid out, and the
+# screenshots taken right after show whether those rows have their content.
+# Earlier turns load on request; the minimap's first mark is the oldest loaded
+# question. A profile taken while this runs (`sample <pid>`) shows the cost of
+# binding rows as they come into view.
+fixture /reading-conversation/reading-history
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "Reading conversation" 20000
+expect "Answer 35 ends here." 20000
+screenshot latest
+scroll この会話 -120
+screenshot up-1
+scroll この会話 -120
+screenshot up-2
+scroll この会話 -120
+screenshot up-3
+scroll この会話 -300
+screenshot up-4
+scroll この会話 -600
+screenshot top
+press 以前のターンを読み込む
+expect "この発言へ移動: Reading question 24" 20000
+screenshot earlier
