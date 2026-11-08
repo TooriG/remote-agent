@@ -1,0 +1,14 @@
+# A command approval request shows its command and continues once approved.
+# iOS: testSimulatorKeepsInputRequestVisibleUntilResolved (approval)
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[approval] 承認を確認します"
+press 送信
+expect "コマンドの承認待ち" 20000
+expect "結合テストの承認確認"
+expect "echo fixture"
+screenshot requested
+press 承認
+expect_absent "コマンドの承認待ち" 20000
+expect "シミュレータで完了しました。" 30000
+screenshot approved

@@ -1,0 +1,14 @@
+# The display language switches the whole UI to English and back.
+expect "何に取り組みますか？" 30000
+press 設定を開く
+press "日本語 ▾"
+press English
+expect "What should we work on?" 10000
+expect "Display language"
+screenshot english
+press "English ▾"
+press 日本語
+expect "表示言語"
+expect_absent "Display language"
+press 閉じる
+expect "何に取り組みますか？"

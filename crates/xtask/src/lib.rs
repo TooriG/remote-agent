@@ -6,6 +6,8 @@ pub mod connection_diagnostics;
 pub mod ios_e2e;
 #[cfg(unix)]
 pub mod ios_markdown;
+#[cfg(unix)]
+pub mod nsh_acceptance;
 pub mod supervision;
 #[cfg(unix)]
 pub mod terminal_probe;

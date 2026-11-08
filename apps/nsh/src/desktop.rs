@@ -81,6 +81,15 @@ pub fn run() -> std::process::ExitCode {
         local_directory,
     );
     crate::native::browser_macos::register(&options.components, browser.clone());
+    let acceptance = match crate::acceptance::from_environment(
+        objc2::MainThreadMarker::new().expect("the app starts on the main thread"),
+    ) {
+        Ok(acceptance) => acceptance,
+        Err(reason) => {
+            eprintln!("{reason}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
     let result = run_app(
         AppSource::Rust(root(application.clone(), Area::Shell)),
         options,
@@ -88,6 +97,9 @@ pub fn run() -> std::process::ExitCode {
     runtime.block_on(browser.shutdown().wait());
     if let Err(reason) = runtime.block_on(application.shutdown()) {
         eprintln!("{reason}");
+        return std::process::ExitCode::FAILURE;
+    }
+    if acceptance.is_some_and(|passed| !passed.get()) {
         return std::process::ExitCode::FAILURE;
     }
     result

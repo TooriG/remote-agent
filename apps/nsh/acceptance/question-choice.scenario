@@ -1,0 +1,14 @@
+# A question from the agent offers its choices; choosing one answers it.
+# The fixture fails the turn unless the answer is exactly the "続ける" choice.
+# iOS: testSimulatorSendsQuestionChoiceOnTap
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[request] [choice] 質問に答えます"
+press 送信
+expect "このまま続けますか？" 20000
+expect "見直す"
+screenshot asked
+press 続ける
+expect_absent "このまま続けますか？" 20000
+expect "シミュレータで完了しました。" 30000
+screenshot answered

@@ -1,0 +1,22 @@
+# The settings overlay opens each section and closes.
+# iOS: testSimulatorOpensAccountManagementFromSettingsAndModelPicker (settings part)
+expect "何に取り組みますか？" 30000
+press 設定を開く
+expect "この端末で使用するアプリの設定です。"
+screenshot general
+press プロバイダー
+expect "選択した環境のプロバイダー・アカウント・更新を管理します。"
+expect "desktop@example.invalid"
+screenshot providers
+press 環境
+expect "作業する環境と、このPCへ接続する端末を管理します。"
+expect "検証 Host"
+screenshot environment
+press ワークツリー
+expect "新しい会話の作業場所と、作成済みのワークツリーを管理します。"
+screenshot worktrees
+press 一般
+expect "表示言語"
+press 閉じる
+expect_absent "この端末で使用するアプリの設定です。"
+expect "何に取り組みますか？"

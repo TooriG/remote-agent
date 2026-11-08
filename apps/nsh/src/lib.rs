@@ -1,4 +1,6 @@
 //! Native UI over the same ClientSession and presentation as the existing apps.
+#[cfg(any(target_os = "macos", test))]
+mod acceptance;
 mod accounts;
 mod activity;
 mod application;

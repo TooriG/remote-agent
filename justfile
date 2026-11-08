@@ -57,6 +57,15 @@ nsh-macos:
     bash apps/nsh/package.sh macos
     open "${CARGO_TARGET_DIR:-target}/nsh-preview/macos/Bex NSH Preview.app"
 
+# Drive the Mac NSH app through apps/nsh/acceptance scenarios, each against a fresh fixture Host.
+# Only on request: the app activates its window while it runs. Report: target/nsh-acceptance/.
+nsh-acceptance *scenarios:
+    bash apps/nsh/build-native.sh macos
+    cargo build --locked -p agent-nsh --target aarch64-apple-darwin
+    cargo build --locked -p host-fixture -p agent-process --bins --target aarch64-apple-darwin
+    bash apps/nsh/package.sh macos
+    cargo xtask nsh-acceptance "$@"
+
 # Build the separate NSH evaluation app for an iPhone simulator.
 nsh-ios-simulator:
     bash apps/nsh/build-native.sh ios-simulator

@@ -1,0 +1,14 @@
+# Work of a finished turn folds into one row and expands on press.
+# iOS: testSimulatorReopensCompletedHistoryCollapsed, testSimulatorGroupsLiveCommandsBetweenCommentaryAndExpandsOnTap
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "作業を折りたたみます"
+press 送信
+expect "シミュレータで完了しました。" 30000
+expect "作業しました"
+expect_absent "./gradlew test"
+screenshot folded
+press "*作業しました"
+expect "./gradlew test"
+expect "シミュレータで確認しています…"
+screenshot expanded

@@ -1,0 +1,10 @@
+# An existing conversation of a project is listed under it and opens with its history.
+# iOS: testSimulatorUsesNativeProjectDisclosureAndWorkspaceTree, testSimulatorStartsOnListAndPreservesDetailOnForeground
+fixture /external-conversation
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+expect "External conversation" 20000
+screenshot listed
+press "External conversation"
+expect "History for External conversation" 20000
+screenshot opened

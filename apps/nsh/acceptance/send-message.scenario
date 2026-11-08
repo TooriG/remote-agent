@@ -1,0 +1,10 @@
+# A new chat sends a message, shows the reply and lists the conversation.
+# iOS: testSimulatorCanStartAConversationInAProject, testSimulatorKeepsChatUnassignedAfterSendingAndReopening
+expect "何に取り組みますか？" 30000
+press 新しいチャット
+type "AI に依頼する" "Mac から送信します"
+screenshot draft
+press 送信
+expect "シミュレータで完了しました。" 30000
+expect_absent "何に取り組みますか？"
+screenshot replied
