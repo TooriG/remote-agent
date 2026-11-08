@@ -70,6 +70,9 @@ impl Row {
 /// A conversation's menu, as the desktop client's: a Copy submenu of its
 /// path, branch, title and ID, each item off when the conversation lacks it.
 fn copy_menu(items: &[ThreadCopyItem]) -> serde_json::Value {
+    if items.is_empty() {
+        return serde_json::Value::Null;
+    }
     json!([{
         "title": tr("コピー"),
         "children": items.iter().map(|item| json!({
@@ -1094,6 +1097,34 @@ mod tests {
                 .indicators
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_conversations_copy_menu_copies_what_it_has_and_disables_the_rest() {
+        let menu = copy_menu(&[
+            ThreadCopyItem {
+                label: "パス".into(),
+                value: Some("/work/日本語 👋".into()),
+            },
+            ThreadCopyItem {
+                label: "ブランチ".into(),
+                value: None,
+            },
+        ]);
+        let items = menu[0]["children"].as_array().unwrap();
+        assert_eq!(menu[0]["title"], "コピー");
+        assert_eq!(
+            copied(items[0]["id"].as_str().unwrap()).as_deref(),
+            Some("/work/日本語 👋")
+        );
+        assert_eq!(items[1]["enabled"], false);
+        assert_eq!(copied(items[1]["id"].as_str().unwrap()), None);
+        assert_eq!(
+            copied(r#"{"host":"h","action":"Hide"}"#),
+            None,
+            "project commands stay theirs"
+        );
+        assert!(copy_menu(&[]).is_null());
     }
 
     #[test]
