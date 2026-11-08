@@ -4833,6 +4833,22 @@
         }
       }
     },
+    "エクスプローラーで開く": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エクスプローラーで開く"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in File Explorer"
+          }
+        }
+      }
+    },
     "フォルダを開けません: {0}": {
       "localizations": {
         "ja": {

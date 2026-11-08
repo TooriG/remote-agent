@@ -26,13 +26,12 @@ pub(crate) fn menu(
     scope: &ListScope,
     local: bool,
 ) -> Value {
+    #[cfg(windows)]
+    let reveal = tr("エクスプローラーで開く");
+    #[cfg(not(windows))]
+    let reveal = tr("フォルダを開く");
     json!(encode(
-        agent_core::presentation::project_menu::project_menu(
-            project,
-            sections,
-            local,
-            tr("フォルダを開く"),
-        ),
+        agent_core::presentation::project_menu::project_menu(project, sections, local, reveal),
         scope,
     ))
 }

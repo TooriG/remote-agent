@@ -67,6 +67,8 @@ impl Icon {
     #[cfg(desktop)]
     pub(crate) const DETAILS: Self = icon!(SquareMenu, "list.bullet.rectangle");
     pub(crate) const DIFF: Self = icon!(Diff, "plusminus");
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub(crate) const DOWNLOAD: Self = icon!(Download);
     pub(crate) const ELLIPSIS: Self = icon!(Ellipsis, "ellipsis");
     pub(crate) const WRENCH: Self = icon!(Wrench, "wrench.adjustable");
     pub(crate) const TERMINAL: Self = icon!(SquareTerminal, "apple.terminal");

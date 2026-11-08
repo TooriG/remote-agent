@@ -139,25 +139,41 @@ fn drawn_preview(preview: Preview) -> View {
                 .p_8()
                 .bg(rgba(0x000000cc))
                 .on_press(move || preview.close())
+                // Pinches and Ctrl+wheel zoom it.
                 .child(
-                    nsh_core::element::image(path)
+                    scroll()
                         .w_full()
                         .h_full()
-                        .object_fit(ResizeMode::Contain)
-                        .label(tr("プレビュー"))
-                        .on_error(move |_: &str| {
-                            preview.close();
-                            native::message(
-                                tr("プレビュー"),
-                                tr("このファイルをプレビューできませんでした。"),
-                            );
-                        }),
+                        .zoomable(true)
+                        .zoom_range(1.0, 8.0)
+                        .center_content(true)
+                        .child(
+                            nsh_core::element::image(path)
+                                .w_full()
+                                .h_full()
+                                .object_fit(ResizeMode::Contain)
+                                .label(tr("プレビュー"))
+                                .on_error(move |_: &str| {
+                                    preview.close();
+                                    native::message(
+                                        tr("プレビュー"),
+                                        tr("このファイルをプレビューできませんでした。"),
+                                    );
+                                }),
+                        ),
                 )
                 .child(
                     view()
                         .absolute()
                         .top(px(16.0))
                         .right(px(16.0))
+                        .flex_row()
+                        .gap_2()
+                        .child(ui::icon_button(Icon::DOWNLOAD, tr("保存"), move || {
+                            if let Some(file) = file.get_untracked() {
+                                save_copy(file.path.clone());
+                            }
+                        }))
                         .child(ui::icon_button(Icon::CLOSE, tr("閉じる"), move || {
                             preview.close()
                         })),
@@ -194,6 +210,26 @@ fn drawn_preview(preview: Preview) -> View {
             move || matches!(preview.state.get(), PreviewState::Loading(_)),
             || text(tr("ファイルを読み込み中…")),
         ))
+}
+
+/// Copies the previewed `source` where the user saves it.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn save_copy(source: std::path::PathBuf) {
+    let dialog = nsh_core::file_dialog::SaveDialog::new();
+    let dialog = match source.file_name() {
+        Some(name) => dialog.file_name(name.to_string_lossy()),
+        None => dialog,
+    };
+    spawn(async move {
+        let failure = match pick_save_path(dialog).await {
+            Ok(Some(target)) => std::fs::copy(&source, &target).err().map(|e| e.to_string()),
+            Ok(None) => None,
+            Err(reason) => Some(reason),
+        };
+        if let Some(reason) = failure {
+            native::message(tr("保存"), reason);
+        }
+    });
 }
 
 pub(crate) async fn receive(
