@@ -23,6 +23,8 @@
 //! - `expect_enabled <label> [after <anchor>] [timeout-ms]` / `expect_disabled
 //!   ...`: waits until the element `press` would find takes presses, or until it
 //!   does not.
+//! - `expect_height <label> above|below <points> [after <anchor>] [timeout-ms]`:
+//!   waits until that element is taller, or shorter, than `<points>`.
 //! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
 //!   that element; positive lines move the content up, toward its end.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
@@ -74,6 +76,8 @@ pub(crate) enum Step {
     ExpectAbsent(Find),
     /// The element takes presses, or not.
     ExpectEnabled(Find, bool),
+    /// The element is taller than this many points, or shorter when `false`.
+    ExpectHeight(Find, f64, bool),
     /// A wheel of this many lines over the element.
     Scroll(Find, i32),
     Select(Find, String),
@@ -201,6 +205,15 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
         ("expect_enabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, true),
         ("expect_disabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, false),
+        ("expect_height", [target, side @ ("above" | "below"), points, rest @ ..]) => {
+            Step::ExpectHeight(
+                find(target, rest)?,
+                points
+                    .parse()
+                    .map_err(|_| format!("{points:?} is not a number of points"))?,
+                *side == "above",
+            )
+        }
         ("scroll", [target, lines, rest @ ..]) => Step::Scroll(
             find(target, rest)?,
             lines
@@ -347,7 +360,7 @@ mod tests {
     fn steps_take_quoted_labels_and_optional_timeouts() {
         let lines = parse(
             "# Comment\nfixture /external-conversation\nhost without-codex\n\npress \"新しい チャット\"\n\
-             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_disabled 送信 2000\n\
+             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
              scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\nexpect_file $AGENT_STATE_DIR/saved.png 500\nclipboard \"a\\nb\"\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
@@ -389,6 +402,15 @@ mod tests {
                         timeout: Duration::from_secs(2)
                     },
                     false
+                ),
+                Step::ExpectHeight(
+                    Find {
+                        text: "入力".into(),
+                        after: None,
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    60.0,
+                    true
                 ),
                 Step::Scroll(
                     Find {

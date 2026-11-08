@@ -21,7 +21,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | AccountUITests.testSimulatorAutomaticallyShowsModelControlsInExistingAndRunningConversations | covered | live-work (model in a running conversation), long-history (sends in an existing one) |
 | AccountUITests.testSimulatorComposerOffersFastModelAndEffortBeforeMicrophone | covered | model-effort (the Mac shows depth and speed in T3 Code's picker, not the composer's bar, so their order beside the microphone is n/a) |
 | ActivityUITests.testSimulatorSendsWithOneTapWhileReadingHistory | covered | long-history (sends after scrolling into earlier turns) |
-| ActivityUITests.testSimulatorComposerGrowsToFitWrappedDraft | partial | composer (screenshot evidence only; the driver reads no sizes) |
+| ActivityUITests.testSimulatorComposerGrowsToFitWrappedDraft | covered | composer (`expect_height`: one line keeps the field's least height, a wrapped draft grows it) |
 | ActivityUITests.testSimulatorCanStartAConversationInAProject | covered | folded-work, approval, tool-panel |
 | ActivityUITests.testSimulatorGroupsLiveCommandsBetweenCommentaryAndExpandsOnTap | covered | live-work |
 | ActivityUITests.testSimulatorShowsRetryingStreamErrorThenRecovers | covered | retry-stream |
@@ -108,6 +108,6 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Settings: accounts, updates, worktree editing | partial | accounts, account-sign-in, account-claude, account-switch, worktree-settings; updates not yet: アップデートを確認 opens the releases page in the default browser, outside the app |
 | Accessibility: the settings overlay is modal, message roles | covered | settings-modal, send-message |
 | Accessibility: VoiceOver reads in the visual order | blocked | on an NSH patch. NSH's virtual list keeps its cells by recycling slot (nsh-core `core/components.rs`, `VirtualListState::cells`), and nsh-platform-macos `src/view.rs` `accessibility_children` (the `accessibilityChildren` override) returns AppKit's subview order, so a recycled list reads in slot order: a conversation reads a turn's "3秒 作業しました" before the user's message above it. The fix: in that override, for a virtual list's cell container, return the cells sorted by row position (frame top first, in the flipped view's coordinates), the rest unchanged. The sidebar, main column, header, composer (left to right), right panel, settings and sheets already read in visual order |
-| Onboarding without a Host | not yet | the runner always starts a fixture Host |
-| Keyboard shortcuts | partial | composer (Return sends); the app binds no other shortcut (⌘, does nothing) |
+| Onboarding without a Host | n/a | the desktop app always lists this PC's Host and starts it when needed, so the Mac never lacks one; pairing another PC is in the environment settings (environment-settings) |
+| Keyboard shortcuts | partial | composer (Return sends), terminal-paste (⌘V), model-picker (Escape closes it); the desktop client's completion keys are missing: with the completion list open, Return sends the draft instead of choosing, and Escape leaves the list open (GPUI's composer `completion_key`); owned by nsh-parity-composer |
 | Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet |
