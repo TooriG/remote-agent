@@ -19,7 +19,8 @@ use tokio::{
 };
 
 const SCENARIOS: &str = "apps/nsh/acceptance";
-const APP: &str = "nsh-preview/macos/Bex NSH Preview.app/Contents/MacOS/agent-nsh";
+/// The dev bex.app `scripts/build-macos.sh desktop dev` packages.
+const APP: &str = "debug/bex.app/Contents/MacOS/bex";
 const FIXTURES: &str = "aarch64-apple-darwin/debug";
 const HOST_READY: Duration = Duration::from_secs(30);
 /// The app's whole run, startup and every step's own timeout included.
