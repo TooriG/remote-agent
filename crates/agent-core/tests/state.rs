@@ -174,6 +174,7 @@ fn snapshot_preserves_history_drafts_and_navigation() {
             after_item_id: None,
             accepted: true,
             delivery_unknown: false,
+            queued: false,
         }),
     )]));
     let restored: Snapshot =
@@ -253,6 +254,7 @@ fn pending_submission_reconciles_both_reply_and_echo_orders() {
                     id: "thread".into(),
                 }),
                 client_user_message_id: "client".into(),
+                alternate: false,
             }),
         );
         let mut finished = pending.clone();
@@ -267,6 +269,7 @@ fn pending_submission_reconciles_both_reply_and_echo_orders() {
                     },
                     client_user_message_id: "client".into(),
                     draft: Arc::default(),
+                    follow_up: Default::default(),
                 }
                 .apply(
                     &mut finished,
@@ -303,6 +306,7 @@ fn submission_acknowledgement_moves_to_the_returned_turn() {
                 id: "thread".into(),
             }),
             client_user_message_id: "client".into(),
+            alternate: false,
         }),
     );
     assert_eq!(
@@ -324,6 +328,7 @@ fn submission_acknowledgement_moves_to_the_returned_turn() {
         },
         client_user_message_id: "client".into(),
         draft: Arc::default(),
+        follow_up: Default::default(),
     }
     .apply(
         &mut pending,
@@ -1274,6 +1279,7 @@ fn failed_submission_restores_text_and_attachments_without_losing_new_input() {
                 id: "thread".into(),
             }),
             client_user_message_id: "pending".into(),
+            alternate: false,
         }),
     );
     assert!(
@@ -1353,6 +1359,7 @@ fn unknown_submission_can_be_restored_or_discarded() {
             after_item_id: None,
             accepted: false,
             delivery_unknown: true,
+            queued: false,
         })
     };
     let snapshot = Snapshot {
@@ -1465,6 +1472,7 @@ fn unresolved_submission_actions_ignore_known_delivery_states() {
                     after_item_id: None,
                     accepted: false,
                     delivery_unknown: false,
+                    queued: false,
                 }),
             )])),
             ..Default::default()
@@ -1608,6 +1616,7 @@ fn host_delivery_replay_resolves_unknown_input_without_overwriting_new_draft() {
                     id: "thread".into(),
                 }),
                 client_user_message_id: "input".into(),
+                alternate: false,
             }),
         );
         let (pending, _) = reduce(&pending, "", Event::SubmissionUnknown("input".into()));

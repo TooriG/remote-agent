@@ -34,6 +34,7 @@ mod onboarding;
 #[cfg(desktop)]
 mod permissions;
 mod projects;
+mod queue;
 mod requests;
 mod rich_text;
 #[cfg(desktop)]

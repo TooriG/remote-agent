@@ -73,6 +73,8 @@ pub struct ConversationRow {
     pub timestamp_ms: Option<u64>,
     /// A user message sent while its turn was working, which steered it.
     pub steer: bool,
+    /// A user message that waited in the queue and then started its turn.
+    pub queued: bool,
 }
 
 fn conversation_row_id(
@@ -490,6 +492,17 @@ pub fn project_conversation(
             preparation
                 .is_none_or(|preparation| &preparation.submission.client_user_message_id != *id)
         })
+        // The queue above the composer shows input that waits for a turn, and
+        // the turn it starts shows it as the Host has it, edits included. Only
+        // a send whose delivery is unknown stays here for its recovery.
+        .filter(|(id, pending)| {
+            (!pending.queued || pending.delivery_unknown)
+                && !source
+                    .queue
+                    .inputs
+                    .iter()
+                    .any(|input| &input.client_user_message_id == *id)
+        })
         .map(|(id, pending)| (id.clone(), pending.clone()))
         .collect();
     pending.sort_by_key(|(_, pending)| pending.sequence);
@@ -695,6 +708,7 @@ pub fn project_conversation(
             id: format!("request:{}", source.id),
             timestamp_ms: None,
             steer: false,
+            queued: false,
             content: ConversationRowContent::PendingRequest {
                 request: Box::new(request(language, source)),
             },
@@ -713,6 +727,7 @@ pub fn project_conversation(
             id: "preparation".into(),
             timestamp_ms: None,
             steer: false,
+            queued: false,
             content: ConversationRowContent::Preparation {
                 preparation: preparation_presentation(language, preparation),
             },
@@ -889,6 +904,7 @@ mod preparation_tests {
                 model: None,
                 effort: None,
                 service_tier: None,
+                follow_up: Default::default(),
             },
             status: PreparationStatus::Preparing,
             stage: PreparationStage::Workspace,
@@ -945,6 +961,7 @@ mod preparation_tests {
                     model: None,
                     effort: None,
                     service_tier: None,
+                    follow_up: Default::default(),
                 },
                 status: PreparationStatus::Preparing,
                 stage: PreparationStage::Workspace,
@@ -966,6 +983,7 @@ mod preparation_tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: false,
+                queued: false,
             }),
         );
         let prepared = project_conversation(
@@ -1171,6 +1189,7 @@ fn render_turn(
     };
     use ConversationRowContent::*;
     let steering = std::cell::Cell::new(false);
+    let queued_shown = std::cell::Cell::new(false);
     let mut rows = Vec::new();
     let mut occurrences = HashMap::new();
     let mut push = |mut content: ConversationRowContent| {
@@ -1213,12 +1232,16 @@ fn render_turn(
             }),
             _ => None,
         };
-        let steer = matches!(content, User { .. }) && steering.get();
+        let user = matches!(content, User { .. });
+        let steer = user && steering.get();
+        // The message that started a turn after waiting in the queue.
+        let queued = user && !steer && source.queued && !queued_shown.replace(true);
         rows.push(ConversationRow {
             id,
             content,
             timestamp_ms,
             steer,
+            queued,
         });
     };
     if let Some(text) = handoff {
@@ -1961,6 +1984,7 @@ mod tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: true,
+                queued: false,
             }),
         )]
         .into();
@@ -2202,6 +2226,41 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_queued_input_started_labels_its_message_and_not_its_steers() {
+        let user = |id: &str| {
+            json!({"id":id,"status":"completed","clientInputId":id,
+            "body":{"inline":{"body":{"userMessage":{"text":null,"content":[]}}}}})
+        };
+        let answer = |id: &str| {
+            json!({"id":id,"status":"completed","clientInputId":null,
+            "body":{"inline":{"body":{"assistantText":{"text":id,"phase":"final"}}}}})
+        };
+        for queued in [false, true] {
+            let mut snapshot = Snapshot::default();
+            Arc::make_mut(&mut snapshot.sessions.conversations).insert(
+                agent_protocol::session::SessionRef {
+                    provider: agent_protocol::session::ProviderKind::Codex,
+                    id: "thread".into(),
+                },
+                Arc::new(
+                    serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},
+                        "turns":[{"id":"turn","status":"completed","queued":queued,
+                            "items":[user("waited"),answer("first"),user("steered"),answer("second")]}]}))
+                    .unwrap(),
+                ),
+            );
+            let rendered = project_snapshot(snapshot, None);
+            let marks: Vec<_> = rendered.turns[0]
+                .rows
+                .iter()
+                .filter(|row| matches!(row.content, ConversationRowContent::User { .. }))
+                .map(|row| (row.queued, row.steer))
+                .collect();
+            assert_eq!(marks, [(queued, false), (false, true)]);
+        }
+    }
+
+    #[test]
     fn request_choices_rank_as_t3_ranks_approval_decisions() {
         use agent_protocol::requests::ChoiceEffect;
         for (effect, tone) in [
@@ -2331,6 +2390,7 @@ mod tests {
                     after_item_id: None,
                     accepted,
                     delivery_unknown: false,
+                    queued: false,
                 }),
             );
         }
@@ -2922,7 +2982,7 @@ mod tests {
                         [(
                             agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() },
                             Arc::new(
-                                serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"capabilities":{"additionalInput":true,"fork":false,"rename":false,"modelChange":false},"turns":[{"id":"before","status":status,"items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"before","phase":"unknown"}}}}}]}]}))
+                                serde_json::from_value(json!({"id":{"provider":"codex","id":"thread"},"capabilities":{"steer":true,"fork":false,"rename":false,"modelChange":false},"turns":[{"id":"before","status":status,"items":[{"id":"answer","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"before","phase":"unknown"}}}}}]}]}))
                                 .unwrap(),
                             ),
                         )]
@@ -2955,6 +3015,8 @@ mod tests {
                             id: "thread".into(),
                         }),
                         client_user_message_id: id.into(),
+                        // Input joins a running turn as a steer.
+                        alternate: status == "running",
                     }),
                 )
                 .0;
@@ -3048,6 +3110,7 @@ mod tests {
                         id: "thread".into(),
                     }),
                     client_user_message_id: id.into(),
+                    alternate: false,
                 }),
             )
             .0;
@@ -3107,6 +3170,7 @@ mod tests {
                     after_item_id: Some("echo".into()),
                     accepted: false,
                     delivery_unknown: true,
+                    queued: false,
                 }),
             );
         }
@@ -3171,6 +3235,7 @@ mod tests {
                 after_item_id: None,
                 accepted,
                 delivery_unknown,
+                queued: false,
             }),
         );
         let rendered = project_snapshot(snapshot, None);
@@ -3226,6 +3291,7 @@ mod tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: false,
+                queued: false,
             }),
         );
         let sending = project_snapshot(snapshot.clone(), None);
@@ -3381,6 +3447,7 @@ mod tests {
                 after_item_id: None,
                 accepted: true,
                 delivery_unknown: false,
+                queued: false,
             })
         };
         Arc::make_mut(&mut snapshot.sessions.pending_submissions)

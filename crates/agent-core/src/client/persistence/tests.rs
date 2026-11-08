@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 struct DeviceDisk {
     models: Mutex<Vec<u8>>,
     editor: Mutex<Vec<u8>>,
+    composer: Mutex<Vec<u8>>,
     writes: AtomicUsize,
     fail_models: AtomicBool,
 }
@@ -39,6 +40,7 @@ impl PreferenceStorage for DeviceDisk {
         Ok(match key {
             PreferenceKey::Models => self.models.lock().unwrap().clone(),
             PreferenceKey::Editor => self.editor.lock().unwrap().clone(),
+            PreferenceKey::Composer => self.composer.lock().unwrap().clone(),
             PreferenceKey::Language => Vec::new(),
         })
     }
@@ -51,6 +53,7 @@ impl PreferenceStorage for DeviceDisk {
                 *self.models.lock().unwrap() = bytes;
             }
             PreferenceKey::Editor => *self.editor.lock().unwrap() = bytes,
+            PreferenceKey::Composer => *self.composer.lock().unwrap() = bytes,
             PreferenceKey::Language => panic!("this fixture never edits language"),
         }
         self.writes.fetch_add(1, Ordering::SeqCst);
@@ -402,6 +405,7 @@ async fn corrupted_state_or_preferences_are_rejected_without_writing() {
         None,
         Some(PreferenceKey::Models),
         Some(PreferenceKey::Editor),
+        Some(PreferenceKey::Composer),
     ] {
         let storage = Arc::new(Storage::default());
         match key {
@@ -411,6 +415,9 @@ async fn corrupted_state_or_preferences_are_rejected_without_writing() {
             }
             Some(PreferenceKey::Editor) => {
                 *storage.device.editor.lock().unwrap() = b"invalid".to_vec()
+            }
+            Some(PreferenceKey::Composer) => {
+                *storage.device.composer.lock().unwrap() = b"invalid".to_vec()
             }
             Some(PreferenceKey::Language) => unreachable!(),
         }
@@ -857,6 +864,7 @@ async fn autosave_keeps_each_kind_of_host_owned_work() {
                     after_item_id: None,
                     accepted: false,
                     delivery_unknown: false,
+                    queued: false,
                 }),
             );
         },

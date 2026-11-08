@@ -2,9 +2,36 @@ use crate::l10n::{localized, tr, tr_format};
 use crate::{Connection, native};
 use agent_core::presentation::composer::footer;
 use agent_core::presentation::folder_menu::{FolderChoice, folder_choices};
-use agent_core::state::{Intent, operations as op};
+use agent_core::state::{Intent, follow_up::QueueAction, operations as op};
+use agent_protocol::operations::FollowUp;
 use nsh_core::{GlassEffect, element::input, prelude::*};
 use serde_json::json;
+
+/// A key bound while this view lives; it takes up no space.
+pub(crate) fn shortcut(
+    keystroke: &'static str,
+    when: nsh_core::keymap::When,
+    handler: impl Fn(&str) + 'static,
+) -> View {
+    on_key_with(
+        keystroke,
+        KeyOptions {
+            when,
+            repeat: false,
+        },
+        handler,
+    );
+    view()
+}
+
+/// The modifier the composer's shortcuts name, as T3 Code's copy does.
+pub(crate) fn modifier() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl"
+    }
+}
 
 pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
@@ -46,14 +73,38 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             && !connection.uploading()
             && answering.with(Option::is_none)
     };
-    let stopping = move || {
+    let follow_up = computed(move || controls.with(|c| c.follow_up.clone()));
+    // Ctrl/⌘ held over the send button shows what its click does (T3 Code's alternate).
+    let alternate_held = signal(false);
+    let empty =
+        move || composer.with(|c| c.draft.text.trim().is_empty() && c.draft.attachments.is_empty());
+    let idle_input = move || {
         !recording.get()
             && !requesting.get()
             && !controls.with(|c| c.transcribing)
-            && controls.with(|c| c.running_turn.is_some())
             && answering.with(Option::is_none)
             && !composed()
-            && composer.with(|c| c.draft.text.trim().is_empty() && c.draft.attachments.is_empty())
+            && follow_up.with(|f| f.editing.is_none())
+            && empty()
+    };
+    let stopping = move || idle_input() && controls.with(|c| c.running_turn.is_some());
+    // A stop or failure held the queue: the send button resumes it.
+    let resuming = move || {
+        idle_input()
+            && controls.with(|c| c.running_turn.is_none())
+            && follow_up.with(|f| f.held && !f.queue.is_empty())
+    };
+    // What a send does while a turn runs: queue or steer, as T3 Code labels it.
+    let action = move || {
+        follow_up.with(|f| {
+            (f.active && f.editing.is_none()).then(|| {
+                if alternate_held.get() {
+                    f.alternate_action
+                } else {
+                    f.default_action
+                }
+            })
+        })
     };
     let stop_label = move || {
         controls.with(|c| {
@@ -69,12 +120,43 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             question.action
         } else if stopping() {
             stop_label().into()
+        } else if resuming() {
+            tr("スレッドを再開").into()
         } else if recording.get() {
             tr("文字起こしして送信").into()
+        } else if follow_up.with(|f| f.editing.is_some()) {
+            tr("キューのメッセージを更新").into()
         } else {
-            tr("送信").into()
+            match action() {
+                Some(FollowUp::Queue) => tr("メッセージをキューに追加"),
+                Some(FollowUp::Steer) => tr("追加の指示を送信"),
+                None => tr("送信"),
+            }
+            .into()
         }
     });
+    // T3 Code's tooltip names the click and the alternate while a turn runs.
+    let primary_hint = move || -> SharedString {
+        let verb = |action| match action {
+            FollowUp::Queue => tr("キューに追加"),
+            FollowUp::Steer => tr("追加で指示"),
+        };
+        follow_up
+            .with(|f| {
+                (f.active && f.editing.is_none() && !stopping() && !resuming()).then(|| {
+                    tr_format(
+                        "クリックで{0}、Ctrl/⌘-クリックまたは {1} で{2}",
+                        [
+                            &verb(f.default_action),
+                            &format!("{} Enter", modifier()),
+                            &verb(f.alternate_action),
+                        ],
+                    )
+                })
+            })
+            .unwrap_or_else(|| primary_label.get().to_string())
+            .into()
+    };
     let enabled = move || {
         !requesting.get()
             && composer.with(|c| {
@@ -82,6 +164,8 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     c.can_advance_question()
                 } else if stopping() {
                     c.can_interrupt()
+                } else if resuming() {
+                    c.controls.connected && !c.controls.follow_up.busy
                 } else {
                     // Text being composed is content Core is yet to hear of,
                     // as a recording is.
@@ -117,7 +201,13 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             connection.dispatch(Intent::Interrupt(op::Interrupt { thread_id, turn_id }));
         }
     };
-    let submit = move || {
+    let queue = move |action| {
+        if let Some(thread_id) = controls.with_untracked(|c| c.navigation.thread_id.clone()) {
+            connection.dispatch(Intent::Queue { thread_id, action });
+        }
+    };
+    // `alternate` does the opposite of the follow-up behavior for this message.
+    let send = move |alternate: bool| {
         if !enabled() {
             return;
         }
@@ -135,6 +225,8 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             });
         } else if stopping() {
             interrupt();
+        } else if resuming() {
+            queue(QueueAction::Resume);
         } else if composition.with_untracked(Option::is_some) {
             // Japanese live conversion keeps a whole message marked until
             // return. Commit it, as a click outside a browser's field does,
@@ -147,8 +239,75 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             connection.dispatch(Intent::Submit {
                 thread_id: controls.with_untracked(|c| c.navigation.thread_id.clone()),
                 client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
+                alternate,
             });
         }
+    };
+    let submit = move || send(false);
+    // T3 Code's composer shortcuts, bound only while their `when` holds so the
+    // keys otherwise reach the text: Mod+Enter in the focused composer sends
+    // (the alternate while a turn runs); Mod+Shift+Enter steers the first
+    // queued message outside the terminal; Alt+Up with the caret at the start
+    // of the focused composer edits the latest queued message.
+    let caret_at_start = signal(true);
+    let steerable = move || {
+        follow_up.with(|f| {
+            f.can_steer
+                .then(|| f.queue.iter().find(|row| !row.pending))
+                .flatten()
+                .map(|row| row.id.clone())
+        })
+    };
+    let editable = move || {
+        follow_up.with(|f| {
+            (f.editing.is_none() && !f.busy)
+                .then(|| f.queue.iter().rev().find(|row| !row.pending))
+                .flatten()
+                .map(|row| row.id.clone())
+        })
+    };
+    let steer_first = move |_: &str| {
+        if let Some(id) = follow_up.with_untracked(|f| {
+            f.queue
+                .iter()
+                .find(|row| !row.pending)
+                .map(|row| row.id.clone())
+        }) {
+            queue(QueueAction::Steer {
+                client_user_message_id: id,
+            });
+        }
+    };
+    let shortcuts = move || {
+        use nsh_core::keymap::When;
+        view()
+            .absolute()
+            .child(when(focused, move || {
+                shortcut("mod+enter", When::Always, move |_| {
+                    send(follow_up.with_untracked(|f| f.active))
+                })
+            }))
+            .child(when(
+                move || focused.get() && caret_at_start.get() && editable().is_some(),
+                move || {
+                    shortcut("alt+up", When::Always, move |_| {
+                        if let Some(id) = editable() {
+                            queue(QueueAction::Edit {
+                                client_user_message_id: id,
+                            });
+                        }
+                    })
+                },
+            ))
+            // The composer, or no text or hosted view such as the terminal.
+            .child(when(
+                move || steerable().is_some() && focused.get(),
+                move || shortcut("mod+shift+enter", When::Always, steer_first),
+            ))
+            .child(when(
+                move || steerable().is_some() && !focused.get(),
+                move || shortcut("mod+shift+enter", When::NotEditing, steer_first),
+            ))
     };
     let prompt = move || -> String {
         answering.with(|question| {
@@ -195,10 +354,18 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             })
             .text_color(move || nsh_base::theme().foreground)
             .placeholder_color(move || color(nsh_base::theme().muted_foreground))
-            .submit_behavior(if is_desktop() {
-                SubmitBehavior::Submit
-            } else {
-                SubmitBehavior::Newline
+            // Enter sends as the send shortcut allows; Mod+Enter always sends.
+            .submit_behavior(move || {
+                if is_desktop()
+                    && follow_up.with(|f| f.preferences.send_shortcut.enter_sends(&draft.get()))
+                {
+                    SubmitBehavior::Submit
+                } else {
+                    SubmitBehavior::Newline
+                }
+            })
+            .on_selection_change(move |selection: &Selection| {
+                caret_at_start.set(selection.start == 0 && selection.end == 0)
             })
             .on_submit(move |_: &str| submit())
             .on_change(move |text: &str| {
@@ -399,7 +566,8 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let desktop_box = move || {
         use crate::ui::{self, Enabled, Icon, colors};
         let inactive = move || {
-            !enabled() || (composer.with(|c| c.draft.text.trim().is_empty()) && !stopping())
+            !enabled()
+                || (composer.with(|c| c.draft.text.trim().is_empty()) && !stopping() && !resuming())
         };
         // T3 Code's footer: the controls between attaching and sending fit the
         // room the row leaves them, as `footer::controls_layout` decides.
@@ -566,12 +734,44 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                         .style_when(inactive, |s| s.opacity(0.5))
                                         // VoiceOver says so when it cannot send or stop.
                                         .disabled(move || !enabled())
-                                        .on_press(submit)
-                                        .child(when(
-                                            move || !stopping(),
-                                            || ui::icon(Icon::ARROW_UP, 24.0),
-                                        ))
-                                        .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))
+                                        .tooltip(ui::tooltip(primary_hint))
+                                        .on_mouse_move(move |event: &MouseEvent| {
+                                            alternate_held
+                                                .set(event.modifiers.cmd || event.modifiers.ctrl)
+                                        })
+                                        .on_mouse_leave(move |_: &MouseEvent| {
+                                            alternate_held.set(false)
+                                        })
+                                        .on_press(move |event: &PressEvent| {
+                                            let alternate =
+                                                event.modifiers.cmd || event.modifiers.ctrl;
+                                            send(
+                                                alternate && follow_up.with_untracked(|f| f.active),
+                                            )
+                                        })
+                                        .child(dynamic(move || {
+                                            let glyph = if stopping() {
+                                                Icon::STOP
+                                            } else if resuming() {
+                                                Icon::RESUME
+                                            } else if follow_up.with(|f| f.editing.is_some()) {
+                                                Icon::CHECK
+                                            } else {
+                                                match action() {
+                                                    Some(FollowUp::Queue) => Icon::QUEUE,
+                                                    Some(FollowUp::Steer) => Icon::STEER_NOW,
+                                                    None => Icon::ARROW_UP,
+                                                }
+                                            };
+                                            ui::icon(
+                                                glyph,
+                                                if glyph == Icon::ARROW_UP || glyph == Icon::STOP {
+                                                    24.0
+                                                } else {
+                                                    18.0
+                                                },
+                                            )
+                                        }))
                                 },
                             )),
                     ),
@@ -771,6 +971,11 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             },
         ))
         .child(when(is_desktop, desktop_context))
+        .child(when(is_desktop, shortcuts))
+        .child(when(
+            move || follow_up.with(|f| !f.queue.is_empty()),
+            move || crate::queue::queued(connection),
+        ))
         .child(when(is_desktop, desktop_box))
         .child(when(
             move || !is_desktop(),

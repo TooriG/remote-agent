@@ -166,6 +166,21 @@ impl HostRpcService {
         target: &agent_protocol::session::SessionRef,
         params: &op::Interrupt,
     ) -> Result<agent_protocol::models::Empty, Failure> {
+        // A stop leaves what was queued behind the turn for the user to resume;
+        // the hold comes first because the stopped turn can end before the reply.
+        let held = self.hold_queue(target, true);
+        let result = self.stop_turn(target, params).await;
+        if result.is_err() && held {
+            self.hold_queue(target, false);
+        }
+        result
+    }
+
+    async fn stop_turn(
+        &self,
+        target: &agent_protocol::session::SessionRef,
+        params: &op::Interrupt,
+    ) -> Result<agent_protocol::models::Empty, Failure> {
         let (handled, turn_id) = self.capacity_interrupt(target, &params.turn_id);
         if handled {
             return Ok(agent_protocol::models::Empty {});
@@ -376,13 +391,31 @@ impl HostRpcService {
                     .map(|(_, id)| id)
                     .unwrap_or_else(|_| t.id.to_string())
             });
-        let route = crate::host_rpc::submission::submission_target(
-            response.thread.status,
-            running_turn.as_deref(),
-            agent.running_input(),
+        let queue = self.inner.router.queue(root);
+        let execution = crate::host_rpc::submission::Execution {
+            status: response.thread.status,
+            running_turn: running_turn.as_deref(),
+            steers: agent.capabilities().steer,
+            answered: response.thread.status == agent_protocol::models::SessionStatus::Running
+                && agent.answered(&target.id).await,
+            // A held queue waits for the user; new input starts as T3 Code's does.
+            ahead: !queue.held
+                && queue.inputs.first().is_some_and(|first| {
+                    first.client_user_message_id != input.client_user_message_id
+                }),
+        };
+        let route = crate::host_rpc::submission::submission_route(
+            execution,
+            input.follow_up,
             response.thread.cwd.as_deref(),
         )
         .map_err(|e| Failure::new("submission_unavailable", e))?;
+        let route = match route {
+            crate::host_rpc::submission::Route::Provider(route) => route,
+            crate::host_rpc::submission::Route::Queue => {
+                return self.enqueue(root, input, queue);
+            }
+        };
         let (reload, starts_turn) = match route {
             crate::providers::SubmissionTarget::Start { cwd } => (
                 self.restore_workspace(cwd).await? || state.needs_reload,

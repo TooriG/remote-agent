@@ -126,6 +126,10 @@ pub enum SessionChange {
         id: crate::ids::ClientInputId,
         delivery: SubmissionDelivery,
     },
+    /// The whole queue of input waiting for the running turn, in order.
+    Queue {
+        queue: crate::operations::InputQueue,
+    },
     Request {
         request: crate::requests::Request,
     },
@@ -180,9 +184,14 @@ pub enum SessionChange {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SubmissionDelivery {
     Sending,
-    Accepted { turn_id: Option<crate::ids::TurnId> },
+    /// Queued input has no turn until the Host starts it.
+    Accepted {
+        turn_id: Option<crate::ids::TurnId>,
+    },
     Unknown,
     Rejected,
+    /// Removed from the queue before it ran; nothing will run it.
+    Withdrawn,
 }
 
 /// Durable Host admission, independent of the provider acknowledging execution.
@@ -236,6 +245,8 @@ pub struct Timeline {
     pub turns: Option<Vec<Arc<Turn>>>,
     pub requests: std::collections::BTreeMap<crate::ids::RequestId, Arc<crate::requests::Request>>,
     pub submissions: std::collections::BTreeMap<crate::ids::ClientInputId, SubmissionDelivery>,
+    /// Input waiting for the running turn, in the order it will start.
+    pub queue: crate::operations::InputQueue,
     /// None means no observation; Some(None) explicitly clears preparation.
     pub preparation: Option<Option<SessionPreparation>>,
 }
@@ -309,6 +320,7 @@ impl SessionChange {
             | Self::Workspace { .. }
             | Self::Preparation { .. }
             | Self::Submission { .. }
+            | Self::Queue { .. }
             | Self::Request { .. }
             | Self::RequestDelivery { .. }
             | Self::ResolveRequest { .. }
@@ -323,6 +335,7 @@ impl SessionChange {
             turns: next.turns,
             requests: next.requests,
             submissions: next.submissions,
+            queue: next.queue,
             preparation: Some(next.preparation),
         });
         result?;
@@ -332,6 +345,7 @@ impl SessionChange {
             turns: timeline.turns,
             requests: timeline.requests,
             submissions: timeline.submissions,
+            queue: timeline.queue,
             preparation: timeline.preparation.flatten(),
             ..next
         })
@@ -354,6 +368,10 @@ impl SessionChange {
                 }
                 Self::Submission { id, delivery } => {
                     next.submissions.insert(id.clone(), delivery.clone());
+                    return Ok(());
+                }
+                Self::Queue { queue } => {
+                    next.queue = queue.clone();
                     return Ok(());
                 }
                 Self::Request { request } => {
@@ -499,6 +517,7 @@ impl SessionChange {
                 Self::Workspace { .. }
                 | Self::Preparation { .. }
                 | Self::Submission { .. }
+                | Self::Queue { .. }
                 | Self::Status { .. }
                 | Self::Turn { .. }
                 | Self::Request { .. }
@@ -522,6 +541,7 @@ fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Opti
         return None;
     }
     let mut merged = previous.unwrap_or(incoming).clone();
+    merged.queued |= incoming.queued;
     macro_rules! field { ($($field:ident),* $(,)?) => { $(if incoming.$field.is_some() { merged.$field = incoming.$field.clone(); })* }; }
     field!(
         provider,
@@ -1196,7 +1216,9 @@ pub struct SessionUpdate {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Capabilities {
-    pub additional_input: bool,
+    /// Input can join a running turn (T3 Code's active steering). Every
+    /// provider can queue input behind one; the Host owns that queue.
+    pub steer: bool,
     pub fork: bool,
     pub rename: bool,
     pub model_change: bool,
@@ -1204,12 +1226,6 @@ pub struct Capabilities {
 pub fn direct_input_unavailable_reason(can_accept_direct_input: Option<bool>) -> Option<String> {
     (can_accept_direct_input == Some(false))
         .then(|| "このサブエージェントの会話は閲覧専用です。親の会話から指示してください。".into())
-}
-pub fn input_unavailable_reason(thread: &Thread) -> Option<String> {
-    direct_input_unavailable_reason(thread.can_accept_direct_input).or_else(|| {
-        (!thread.capabilities.unwrap_or_default().additional_input && thread.turns.iter().flatten().any(|turn| turn.status == TurnStatus::Running))
-            .then(|| "このプロバイダは実行中の追加送信に対応していません。完了を待つか、停止してから送信してください。".into())
-    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

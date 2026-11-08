@@ -102,6 +102,7 @@ impl DeviceStorage {
         self.root.join(match key {
             PreferenceKey::Models => "model-preferences.json",
             PreferenceKey::Editor => "editor-preferences.json",
+            PreferenceKey::Composer => "composer-preferences.json",
             PreferenceKey::Language => "language.json",
         })
     }

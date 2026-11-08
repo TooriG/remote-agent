@@ -4,10 +4,11 @@ use crate::{
     models::{Model, ModelRef},
     session::ProviderKind,
     state::{
-        Draft, Navigation, Same, Snapshot,
+        ComposerPreferences, Draft, Navigation, Same, Snapshot, follow_up,
         operations::{OperationKey, OperationPhase},
     },
 };
+use agent_protocol::{ids::ClientInputId, operations::FollowUp};
 use std::sync::{Arc, OnceLock};
 
 pub mod footer;
@@ -35,6 +36,126 @@ pub struct ComposerControls {
     pub question: Option<crate::questions::QuestionPrompt>,
     /// Where the docked question's answer is in its delivery.
     pub question_phase: Option<OperationPhase>,
+    pub follow_up: FollowUpControls,
+}
+
+/// What sending does while a turn runs and the messages waiting behind it, as
+/// T3 Code's composer and the queue above it.
+#[derive(Clone, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct FollowUpControls {
+    pub preferences: ComposerPreferences,
+    /// A send now goes into or behind a running turn, or behind waiting messages.
+    pub active: bool,
+    /// What a plain send does, and what the alternate does, as the provider allows.
+    pub default_action: FollowUp,
+    pub alternate_action: FollowUp,
+    pub queue: Vec<QueuedMessage>,
+    /// A stop or failure holds the queue until it is resumed.
+    pub held: bool,
+    /// Waiting messages can steer the running turn instead.
+    pub can_steer: bool,
+    /// The waiting message the composer edits; sending saves it.
+    pub editing: Option<ClientInputId>,
+    /// A queue change is on its way to the Host.
+    pub busy: bool,
+}
+
+#[derive(Clone, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct QueuedMessage {
+    pub id: ClientInputId,
+    pub text: String,
+    /// Images and files sent with it.
+    pub attachments: u32,
+    /// Sent, and not yet in the Host's queue.
+    pub pending: bool,
+}
+
+fn follow_up_controls(
+    snapshot: &Snapshot,
+    thread: Option<&crate::models::Thread>,
+) -> FollowUpControls {
+    let preferences = snapshot.input.composer_preferences;
+    let action = |alternate| {
+        let requested = follow_up::requested(preferences.follow_up, alternate);
+        if thread.is_some_and(|thread| follow_up::waits(thread, requested)) {
+            FollowUp::Queue
+        } else {
+            FollowUp::Steer
+        }
+    };
+    let Some(thread) = thread else {
+        return FollowUpControls {
+            preferences,
+            active: false,
+            default_action: preferences.follow_up,
+            alternate_action: follow_up::requested(preferences.follow_up, true),
+            queue: Vec::new(),
+            held: false,
+            can_steer: false,
+            editing: None,
+            busy: false,
+        };
+    };
+    let session = thread.id.as_ref();
+    let waiting = thread.queue.inputs.iter().map(|input| QueuedMessage {
+        id: input.client_user_message_id.clone(),
+        text: follow_up::queued_text(input),
+        attachments: input
+            .input
+            .iter()
+            .filter(|part| !matches!(part, agent_protocol::operations::Input::Text { .. }))
+            .count() as u32,
+        pending: false,
+    });
+    let key = session.map(crate::state::DraftKey::from);
+    let mut sending: Vec<_> = snapshot
+        .sessions
+        .pending_submissions
+        .iter()
+        .filter(|(id, pending)| {
+            pending.queued
+                && !pending.accepted
+                && Some(&pending.draft_key) == key.as_ref()
+                && !thread
+                    .queue
+                    .inputs
+                    .iter()
+                    .any(|input| &input.client_user_message_id == *id)
+        })
+        .collect();
+    sending.sort_by_key(|(_, pending)| pending.sequence);
+    FollowUpControls {
+        preferences,
+        active: thread.active_turn_id().is_some()
+            || thread.status == crate::models::SessionStatus::Running
+            || (!thread.queue.held && !thread.queue.inputs.is_empty()),
+        default_action: action(false),
+        alternate_action: action(true),
+        queue: waiting
+            .chain(sending.into_iter().map(|(id, pending)| QueuedMessage {
+                id: id.clone(),
+                text: pending.draft.text.clone(),
+                attachments: pending.draft.attachments.len() as u32,
+                pending: true,
+            }))
+            .collect(),
+        held: thread.queue.held,
+        can_steer: thread.active_turn_id().is_some() && follow_up::steers(thread),
+        editing: session.and_then(|session| {
+            snapshot
+                .input
+                .queued_edits
+                .get(session)
+                .map(|edit| edit.client_user_message_id.clone())
+        }),
+        busy: session.is_some_and(|session| {
+            snapshot.operation_running(OperationKey::Queue {
+                session: session.clone(),
+            })
+        }),
+    }
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
@@ -107,6 +228,7 @@ impl ComposerPresentation {
                 })
             }),
             question,
+            follow_up: follow_up_controls(snapshot, thread.map(AsRef::as_ref)),
         };
         let catalog = snapshot
             .catalog
@@ -207,10 +329,6 @@ impl Snapshot {
         selected: Option<ProviderKind>,
     ) -> Option<String> {
         self.submission_unavailable_reason(&session, selected)
-            .or_else(|| {
-                self.thread_metadata(&session)
-                    .and_then(crate::session::input_unavailable_reason)
-            })
             .map(|reason| self.catalog.ui_language.text(&reason).to_owned())
     }
 }

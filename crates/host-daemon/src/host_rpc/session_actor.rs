@@ -8,6 +8,8 @@ pub(super) struct SessionActor {
     pub(super) request_origins:
         std::collections::BTreeMap<agent_protocol::ids::RequestId, crate::providers::RequestOrigin>,
     pub(super) leases: usize,
+    /// Turns queued input started; their later changes keep that mark.
+    pub(super) queued_turns: HashSet<agent_protocol::ids::TurnId>,
     pub(super) submission_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     pub(super) subscriptions: std::collections::HashMap<
         uuid::Uuid,
@@ -79,6 +81,7 @@ impl SessionActor {
             self.timeline.status = agent_protocol::models::SessionStatus::Unknown;
         }
         !self.timeline.submissions.is_empty()
+            || !self.timeline.queue.inputs.is_empty()
             || self
                 .timeline
                 .preparation
@@ -122,6 +125,7 @@ impl SessionActor {
         }
         thread.requests = self.timeline.requests.clone();
         thread.submissions = self.timeline.submissions.clone();
+        thread.queue = self.timeline.queue.clone();
         if let Some(preparation) = &self.timeline.preparation {
             thread.preparation = preparation.clone();
         }

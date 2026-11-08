@@ -6,6 +6,7 @@ use agent_protocol::{
     execution::TurnStatus,
     ids::{ItemId, TurnId},
     models::{Item, SessionStatus, ThreadResponse, Turn},
+    operations::InputQueue,
     protocol,
     session::SessionRef,
 };
@@ -82,7 +83,14 @@ impl Transcripts {
                          version INTEGER NOT NULL,
                          PRIMARY KEY (provider, id)
                      ) WITHOUT ROWID;
-                     CREATE INDEX IF NOT EXISTS version_order ON versions (version);",
+                     CREATE INDEX IF NOT EXISTS version_order ON versions (version);
+                     -- Input waiting for each conversation's running turn.
+                     CREATE TABLE IF NOT EXISTS queues (
+                         provider TEXT NOT NULL,
+                         id TEXT NOT NULL,
+                         body BLOB NOT NULL,
+                         PRIMARY KEY (provider, id)
+                     ) WITHOUT ROWID;",
                 )
                 .map_err(failure)?;
             Ok(connection)
@@ -391,6 +399,58 @@ impl Transcripts {
                 .map_err(failure)?
                 .map(|version| version as u64);
             Ok(Some(Window { response, start }))
+        })
+    }
+
+    /// Records the input a conversation's queue holds, as T3 Code keeps queued
+    /// runs; an empty queue leaves nothing behind.
+    pub(crate) fn save_queue(
+        &self,
+        conversation: &SessionRef,
+        queue: &InputQueue,
+    ) -> Result<(), String> {
+        let key = params![conversation.provider.key(), conversation.id];
+        self.write(|transaction| {
+            if queue.inputs.is_empty() {
+                transaction
+                    .execute("DELETE FROM queues WHERE provider = ?1 AND id = ?2", key)
+                    .map_err(failure)?;
+            } else {
+                transaction
+                    .execute(
+                        "INSERT INTO queues (provider, id, body) VALUES (?1, ?2, ?3)
+                         ON CONFLICT (provider, id) DO UPDATE SET body = excluded.body",
+                        params![
+                            conversation.provider.key(),
+                            conversation.id,
+                            protocol::encode(queue).map_err(failure)?
+                        ],
+                    )
+                    .map_err(failure)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Every conversation's saved queue.
+    pub(crate) fn queues(&self) -> Result<Vec<(SessionRef, InputQueue)>, String> {
+        self.with(|connection| {
+            let mut rows = connection
+                .prepare("SELECT provider, id, body FROM queues")
+                .map_err(failure)?;
+            let mut rows = rows.query([]).map_err(failure)?;
+            let mut queues = Vec::new();
+            while let Some(row) = rows.next().map_err(failure)? {
+                let provider =
+                    serde_json::from_value(serde_json::Value::String(row.get(0).map_err(failure)?))
+                        .map_err(failure)?;
+                queues.push((
+                    SessionRef::new(provider, row.get(1).map_err(failure)?).map_err(failure)?,
+                    protocol::decode(&row.get::<_, Vec<u8>>(2).map_err(failure)?)
+                        .map_err(failure)?,
+                ));
+            }
+            Ok(queues)
         })
     }
 

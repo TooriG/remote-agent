@@ -33,6 +33,11 @@ struct CodexCliStatus {
     pub error: Option<String>,
 }
 #[uniffi::remote(Enum)]
+enum FollowUp {
+    Queue,
+    Steer,
+}
+#[uniffi::remote(Enum)]
 enum EntryKind {
     Directory,
     File,

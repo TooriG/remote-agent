@@ -14,6 +14,7 @@ fn pending(draft_key: DraftKey) -> Arc<PendingSubmission> {
         after_item_id: None,
         accepted: false,
         delivery_unknown: true,
+        queued: false,
     })
 }
 

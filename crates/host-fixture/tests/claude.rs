@@ -107,6 +107,7 @@ async fn send(store: &Store, text: &str, client_id: &str) -> agent_protocol::ses
         .dispatch(Intent::Submit {
             thread_id: thread_id.clone(),
             client_user_message_id: client_id.into(),
+            alternate: false,
         })
         .await
         .unwrap();
@@ -439,6 +440,7 @@ async fn claude_execution_delegates_model_and_effort_to_cli_without_catalog_read
                     }),
                     effort: Some(effort.into()),
                     service_tier: None,
+                    follow_up: Default::default(),
                 })
                 .await
                 .unwrap();
@@ -755,8 +757,13 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
                 .text
                 .is_empty()
         );
+        // Input sent while the turn works waits in the Host's queue.
         until(&store, |snapshot| {
-            !snapshot.sessions.pending_submissions.contains_key("busy")
+            snapshot.sessions.conversations[&id]
+                .queue
+                .inputs
+                .iter()
+                .any(|input| input.client_user_message_id.as_str() == "busy")
         })
         .await;
         let local = fixture.local().await.unwrap();
@@ -800,6 +807,21 @@ async fn claude_approval_snapshot_after_disconnect_denial_is_effective_and_inter
             .last()
             .unwrap();
         assert!(turn.error.is_none(), "{:?}", turn.error);
+        // The stop holds what was queued; removing it withdraws the send.
+        assert!(snapshot.sessions.conversations[&id].queue.held);
+        store
+            .dispatch(Intent::Queue {
+                thread_id: id.clone(),
+                action: agent_core::state::follow_up::QueueAction::Remove {
+                    client_user_message_id: "busy".into(),
+                },
+            })
+            .await
+            .unwrap();
+        until(&store, |snapshot| {
+            !snapshot.sessions.pending_submissions.contains_key("busy")
+        })
+        .await;
         // Stopping while Claude awaits an answer withdraws the question.
         send(&store, "question", "stopped-question").await;
         let snapshot = until(&store, |snapshot| snapshot.requests().next().is_some()).await;
@@ -1360,6 +1382,7 @@ async fn claude_authentication_and_inference_failures_are_visible_and_retry_pres
         store.dispatch(Intent::Submit {
             thread_id: None,
             client_user_message_id: "auth-failure".into(),
+            alternate: false,
         }).await.unwrap();
         let id = store.snapshot().panes.primary().navigation.thread_id.clone().unwrap();
         let failed_preparation = |snapshot: &Snapshot| {
@@ -1454,8 +1477,8 @@ async fn live_claude_subscription_completes_and_resumes_through_store_and_host()
         assert!(snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[3].items.as_ref().unwrap().iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| text.contains("AGENT_CLAUDE_RECOVERED"))));
         send(&store, "Count from 1 to 100, one number per line. Do not use tools.", "live-before-additional").await;
         until(&store, |snapshot| snapshot.sessions.conversations[&id].turns.as_ref().is_some_and(|turns| turns.len() == 5 && turns[4].items.as_ref().is_some_and(|items| items.iter().any(|item| matches!(item.body(), agent_protocol::items::ItemBody::AssistantText { .. }) && item_text(item).is_some_and(|text| !text.is_empty()))))).await;
-        assert!(agent_protocol::session::input_unavailable_reason(&store.snapshot().sessions.conversations[&id]).is_none());
-        send(&store, "Reply with exactly AGENT_CLAUDE_ADDITIONAL_OK. Do not use tools.", "live-additional").await;
+        draft(&store, "Reply with exactly AGENT_CLAUDE_ADDITIONAL_OK. Do not use tools.").await;
+        store.dispatch(Intent::Submit { thread_id: Some(id.clone()), client_user_message_id: "live-additional".into(), alternate: true }).await.unwrap();
         let snapshot = completed(&store, &id, 5, "completed").await;
         assert!(snapshot.panes.primary().error.is_none(), "{:?}", snapshot.panes.primary().error);
         assert!(snapshot.sessions.pending_submissions.is_empty());
@@ -2523,21 +2546,30 @@ async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows()
     fixture.close().await.unwrap();
 }
 
-#[rstest::rstest]
-#[case::folded(false, 1, 2)]
-#[case::after_result(true, 2, 1)]
+/// The turn at `index` shows the fixture waiting for input or a stop.
+async fn waiting(store: &Store, id: &agent_protocol::session::SessionRef, index: usize) {
+    until(store, |snapshot| {
+        snapshot
+            .sessions
+            .conversations
+            .get(id)
+            .and_then(|thread| thread.turns.as_ref())
+            .and_then(|turns| turns.get(index))
+            .and_then(|turn| turn.items.as_ref())
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item_text(item) == Some("Waiting for interruption"))
+            })
+    })
+    .await;
+}
+
+/// A steer joins the running response, which Claude Code stops for it; queued
+/// input waits in the Host and runs as the next turn; a stop holds the queue.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn claude_accepts_running_input_and_reads_past_the_previous_result(
-    #[case] after_result: bool,
-    #[case] turns_per_wait: usize,
-    #[case] users_in_waiting_turn: usize,
-) {
+async fn claude_steers_a_running_turn_and_runs_queued_input_after_it() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(
-        root.path().join("claude-fixture.json"),
-        json!({"inputAfterResult":after_result}).to_string(),
-    )
-    .unwrap();
     let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
     let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
     store
@@ -2564,32 +2596,12 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
         .await
         .unwrap();
     let id = send(&store, "wait", "initial").await;
-    until(&store, |snapshot| {
-        snapshot
-            .sessions
-            .conversations
-            .get(&id)
-            .and_then(|thread| thread.turns.as_ref())
-            .and_then(|turns| turns.first())
-            .and_then(|turn| turn.items.as_ref())
-            .is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item_text(item) == Some("Waiting for interruption"))
-            })
-    })
-    .await;
+    waiting(&store, &id, 0).await;
     assert!(
         store.snapshot().sessions.conversations[&id]
             .capabilities
             .unwrap()
-            .additional_input
-    );
-    assert!(
-        agent_protocol::session::input_unavailable_reason(
-            &store.snapshot().sessions.conversations[&id]
-        )
-        .is_none()
+            .steer
     );
     let local = fixture.local().await.unwrap();
     assert!(
@@ -2602,8 +2614,17 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
             .await
             .is_err()
     );
-    send(&store, "follow-up", "steered").await;
-    let snapshot = completed(&store, &id, turns_per_wait, "completed").await;
+    // The follow-up behavior queues; the alternate steers this one message.
+    draft(&store, "follow-up").await;
+    store
+        .dispatch(Intent::Submit {
+            thread_id: Some(id.clone()),
+            client_user_message_id: "steered".into(),
+            alternate: true,
+        })
+        .await
+        .unwrap();
+    let snapshot = completed(&store, &id, 1, "completed").await;
     let items = snapshot.sessions.conversations[&id]
         .turns
         .as_ref()
@@ -2635,11 +2656,10 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
         .turns
         .as_ref()
         .unwrap();
-    assert_eq!(
-        turns.len(),
-        turns_per_wait,
-        "queued input must retain its live turn in history"
-    );
+    // The steer stays in the turn it joined, shown once, though Claude Code
+    // records it as the prompt after the response it stopped.
+    let read = turns.len();
+    assert_eq!(read, 1);
     assert_eq!(
         turns
             .iter()
@@ -2649,44 +2669,15 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
         1
     );
     send(&store, "wait", "wait-again").await;
+    waiting(&store, &id, read).await;
+    // The follow-up behavior queues it behind the waiting turn.
+    send(&store, "queued follow-up", "queued").await;
     until(&store, |snapshot| {
-        snapshot
-            .sessions
-            .conversations
-            .get(&id)
-            .and_then(|thread| thread.turns.as_ref())
-            .and_then(|turns| turns.get(turns_per_wait))
-            .and_then(|turn| turn.items.as_ref())
-            .is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item_text(item) == Some("Waiting for interruption"))
-            })
+        snapshot.sessions.conversations[&id].queue.inputs.len() == 1
     })
     .await;
-    let waiting_turn = store.snapshot().sessions.conversations[&id]
-        .turns
-        .as_ref()
-        .unwrap()
-        .last()
-        .unwrap()
-        .id
-        .clone();
-    let queued = local
-        .peer
-        .call(&rpc::Submission {
-            thread_id: id.clone(),
-            client_user_message_id: "queued".into(),
-            model: None,
-            effort: None,
-            service_tier: None,
-            input: vec![rpc::Input::Text {
-                text: "queued follow-up".into(),
-            }],
-        })
-        .await
-        .unwrap();
-    let snapshot = completed(&store, &id, 2 * turns_per_wait, "completed").await;
+    std::fs::write(root.path().join("release-inputs"), "").unwrap();
+    let snapshot = completed(&store, &id, read + 2, "completed").await;
     let items = snapshot.sessions.conversations[&id]
         .turns
         .as_ref()
@@ -2696,7 +2687,6 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
         .items
         .as_ref()
         .unwrap();
-    assert_eq!(queued.turn_id.as_ref(), Some(&waiting_turn));
     assert!(
         items
             .iter()
@@ -2708,7 +2698,7 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
             .any(|item| item_text(item) == Some("reply 4: queued follow-up"))
     );
     send(&store, "after completion", "last").await;
-    completed(&store, &id, 2 * turns_per_wait + 1, "completed").await;
+    completed(&store, &id, read + 3, "completed").await;
     let inputs = session_inputs(session_trace(Path::new(
         &snapshot.panes.primary().navigation.cwd,
     )));
@@ -2720,49 +2710,30 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
             .all(|input| input["process"] == inputs[0]["process"])
     );
     send(&store, "wait", "before-live-refresh").await;
-    until(&store, |snapshot| {
-        snapshot.sessions.conversations[&id]
-            .turns
-            .as_ref()
-            .unwrap()
-            .get(2 * turns_per_wait + 1)
-            .and_then(|turn| turn.items.as_ref())
-            .is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item_text(item) == Some("Waiting for interruption"))
-            })
-    })
-    .await;
+    waiting(&store, &id, read + 3).await;
     send(&store, "permission", "queued-before-refresh").await;
-    until(&store, |snapshot| snapshot.requests().next().is_some()).await;
     store
         .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
         .await
         .unwrap();
     let refreshed = store.snapshot();
-    let turns = refreshed.sessions.conversations[&id]
-        .turns
-        .as_ref()
-        .unwrap();
+    let thread = &refreshed.sessions.conversations[&id];
+    let turns = thread.turns.as_ref().unwrap();
     assert_eq!(
         turns.len(),
-        3 * turns_per_wait + 1,
-        "live overlay must not append a duplicate queued turn"
+        read + 4,
+        "live overlay must not append a duplicate turn"
     );
     let turn = turns.last().unwrap();
     assert_eq!(turn.status, agent_protocol::execution::TurnStatus::Running);
     assert_eq!(
-        turn.items
-            .as_ref()
-            .unwrap()
+        thread
+            .queue
+            .inputs
             .iter()
-            .filter(|item| matches!(
-                item.body(),
-                agent_protocol::items::ItemBody::UserMessage { .. }
-            ))
-            .count(),
-        users_in_waiting_turn
+            .map(|input| input.client_user_message_id.as_str())
+            .collect::<Vec<_>>(),
+        ["queued-before-refresh"]
     );
     store
         .dispatch(Intent::Interrupt(op::Interrupt {
@@ -2771,7 +2742,8 @@ async fn claude_accepts_running_input_and_reads_past_the_previous_result(
         }))
         .await
         .unwrap();
-    completed(&store, &id, 3 * turns_per_wait + 1, "interrupted").await;
+    let stopped = completed(&store, &id, read + 4, "interrupted").await;
+    assert!(stopped.sessions.conversations[&id].queue.held);
     local.close().await;
     store.close().await.unwrap();
     endpoint.close().await;

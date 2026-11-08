@@ -60,6 +60,7 @@ impl HostRpcService {
             model: params.model.clone(),
             effort: initial.effort.clone(),
             service_tier: initial.service_tier.clone(),
+            follow_up: Default::default(),
         };
         let row = Conversation {
             id: id.clone(),

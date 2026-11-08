@@ -159,12 +159,9 @@ impl Agent for NativeAgent {
     fn data_recipient(&self) -> &'static str {
         "fixture"
     }
-    fn running_input(&self) -> crate::providers::RunningInput {
-        crate::providers::RunningInput::SteerOrQueue
-    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            additional_input: true,
+            steer: true,
             model_change: true,
             rename: true,
             fork: self.provider == ProviderKind::Codex,
@@ -663,6 +660,7 @@ async fn app_update_does_not_repeat_uncertain_failed_or_finished_continuations()
                 model: None,
                 effort: None,
                 service_tier: None,
+                follow_up: Default::default(),
             },
             cwd: None,
             last_turn,
@@ -722,6 +720,7 @@ async fn send(
             }),
             effort: None,
             service_tier: None,
+            follow_up: op::FollowUp::Queue,
         }),
     )
     .await
@@ -922,14 +921,7 @@ async fn unavailable_current_provider_does_not_block_earlier_segments_or_local_r
     );
     assert_eq!(state.issues, ["claude: Claude failed to start"]);
     assert!(opened_session.response.thread.capabilities.unwrap().rename);
-    assert!(
-        !opened_session
-            .response
-            .thread
-            .capabilities
-            .unwrap()
-            .additional_input
-    );
+    assert!(!opened_session.response.thread.capabilities.unwrap().steer);
     assert!(
         !opened_session
             .response
@@ -1498,7 +1490,7 @@ async fn all_unavailable_providers_still_open_saved_metadata_and_report_each_fai
         opened.response.thread.capabilities.unwrap(),
         Capabilities {
             rename: true,
-            additional_input: false,
+            steer: false,
             model_change: false,
             fork: false
         }
@@ -1562,6 +1554,7 @@ async fn reopening_after_restart_restores_only_accepted_turn_settings() {
         }),
         effort: Some(effort.into()),
         service_tier: Some(tier.into()),
+        follow_up: Default::default(),
     };
     call::<op::SubmissionReceipt>(
         &host,

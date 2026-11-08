@@ -783,6 +783,7 @@ mod tests {
                                     model: None,
                                     effort: None,
                                     service_tier: None,
+                                    follow_up: Default::default(),
                                 },
                                 status: PreparationStatus::Preparing,
                                 stage: agent_protocol::session::PreparationStage::Workspace,

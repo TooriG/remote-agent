@@ -172,6 +172,7 @@ impl ConversationRows {
                 content: ConversationRowContent::User { item: item.clone() },
                 timestamp_ms: item.data.timestamp_ms,
                 steer: false,
+                queued: false,
             };
             let row = project_row(
                 &prefix,

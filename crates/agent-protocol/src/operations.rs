@@ -672,7 +672,8 @@ impl ReadItem {
     }
 }
 
-/// Input intent. The Host chooses start, steer or queue from its current execution.
+/// Input intent. The Host starts a turn or, while one runs, steers it or queues
+/// the input behind it, as `follow_up` asks and the provider allows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Submission {
@@ -683,6 +684,63 @@ pub struct Submission {
     pub effort: Option<String>,
     #[serde(rename = "serviceTierForTurn")]
     pub service_tier: Option<String>,
+    /// Only a running turn reads it, so input that starts one may omit it.
+    #[serde(default)]
+    pub follow_up: FollowUp,
+}
+
+/// What input sent while a turn runs does, as T3 Code's follow-up behavior:
+/// wait in the Host's queue until the turn ends, or steer the running turn.
+/// A provider that cannot steer queues it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FollowUp {
+    #[default]
+    Queue,
+    Steer,
+}
+
+/// Input waiting in the Host's queue, which starts it once the running turn and
+/// the input before it have finished. A stopped or failed turn holds the queue
+/// until it is resumed, as T3 Code holds queued runs.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputQueue {
+    pub inputs: Vec<Submission>,
+    #[serde(default)]
+    pub held: bool,
+}
+
+/// A change to a conversation's queue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeQueue {
+    pub thread_id: crate::session::SessionRef,
+    pub change: QueueChange,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum QueueChange {
+    /// Replaces waiting input; it keeps its place in the queue.
+    Edit {
+        client_user_message_id: crate::ids::ClientInputId,
+        input: Vec<Input>,
+    },
+    Remove {
+        client_user_message_id: crate::ids::ClientInputId,
+    },
+    /// Moves waiting input before `before`, or to the end without it.
+    Move {
+        client_user_message_id: crate::ids::ClientInputId,
+        before: Option<crate::ids::ClientInputId>,
+    },
+    /// Moves waiting input into the running turn now.
+    Steer {
+        client_user_message_id: crate::ids::ClientInputId,
+    },
+    /// Starts a held queue again.
+    Resume,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

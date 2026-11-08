@@ -511,6 +511,89 @@ fn transcript_chain<'a>(
     Ok((chain, warnings))
 }
 
+/// A transcript row's own item and its content blocks; None skips the row,
+/// noting why in `warnings` when that loses content.
+fn node_content<'a>(
+    kind: &str,
+    id: &str,
+    node: &'a Value,
+    warnings: &mut Vec<&str>,
+) -> Option<(
+    Option<agent_protocol::items::Item>,
+    std::borrow::Cow<'a, [Value]>,
+)> {
+    match kind {
+        "attachment" => match native::attachment_item(id, &node["attachment"]) {
+            Ok(Some(item)) => Some((Some(item), std::borrow::Cow::Borrowed(&[] as &[Value]))),
+            Ok(None) => None,
+            Err(_) => {
+                warnings.push("native attachment content is unavailable");
+                None
+            }
+        },
+        "user" | "assistant" => {
+            let Some(blocks) = native::message_blocks(&node["message"]["content"]) else {
+                warnings.push("message content is unavailable");
+                return None;
+            };
+            let input = (kind == "user")
+                .then(|| {
+                    native::user_item(
+                        id,
+                        &node["message"]["content"],
+                        node["isMeta"] == true,
+                        node["origin"]["kind"].as_str(),
+                        node["promptSource"].as_str(),
+                    )
+                })
+                .flatten();
+            Some((input, blocks))
+        }
+        "system" => {
+            if node["subtype"] == "compact_boundary" {
+                warnings.push("history includes a compaction boundary");
+            }
+            None
+        }
+        _ => {
+            warnings.push("unsupported transcript content");
+            None
+        }
+    }
+}
+
+fn is_prompt(item: &agent_protocol::items::Item) -> bool {
+    matches!(
+        item.body(),
+        agent_protocol::items::ItemBody::UserMessage { .. }
+    )
+}
+
+/// How a transcript row records Claude Code's send-now cut.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SendNowCut {
+    None,
+    /// The bare interruption marker, which only says the response was cut.
+    Marker,
+    /// Content the cut stopped, such as an interrupted tool's result.
+    Stamped,
+}
+
+impl SendNowCut {
+    fn of(node: &Value) -> Self {
+        if node["type"] != "user" || node["interruptedBySendNow"] != true {
+            return Self::None;
+        }
+        let text_only = native::message_blocks(&node["message"]["content"])
+            .is_some_and(|blocks| blocks.iter().all(|block| block["type"] == "text"));
+        if text_only {
+            Self::Marker
+        } else {
+            Self::Stamped
+        }
+    }
+}
+
 fn convert(
     mut thread: Thread,
     nodes: Vec<Value>,
@@ -531,9 +614,18 @@ fn convert(
     let mut model = None;
     let mut block_indices: HashMap<&str, usize> = HashMap::new();
     let mut item_positions = HashMap::new();
+    // Claude Code's send-now (a priority "now" message, T3 Code's steer) cuts
+    // the response, stamps the interruption `interruptedBySendNow`, and runs
+    // the message as the next prompt. That prompt continues the cut turn.
+    let mut steering = false;
     for node in chain {
         let kind = node["type"].as_str().unwrap_or_default();
         let id = node["uuid"].as_str().unwrap_or_default();
+        let cut = SendNowCut::of(node);
+        steering |= cut != SendNowCut::None;
+        if cut == SendNowCut::Marker {
+            continue;
+        }
         if let Some(cwd) = node["cwd"].as_str() {
             thread.cwd = Some(cwd.into());
         }
@@ -569,43 +661,8 @@ fn convert(
                 .unwrap()[item_index] = Arc::new(item);
             continue;
         }
-        let (initial_item, blocks) = match kind {
-            "attachment" => match native::attachment_item(id, &node["attachment"]) {
-                Ok(Some(item)) => (Some(item), std::borrow::Cow::Borrowed(&[] as &[Value])),
-                Ok(None) => continue,
-                Err(_) => {
-                    warnings.push("native attachment content is unavailable");
-                    continue;
-                }
-            },
-            "user" | "assistant" => {
-                let Some(blocks) = native::message_blocks(&node["message"]["content"]) else {
-                    warnings.push("message content is unavailable");
-                    continue;
-                };
-                let input = if kind == "user" {
-                    native::user_item(
-                        id,
-                        &node["message"]["content"],
-                        node["isMeta"] == true,
-                        node["origin"]["kind"].as_str(),
-                        node["promptSource"].as_str(),
-                    )
-                } else {
-                    None
-                };
-                (input, blocks)
-            }
-            "system" => {
-                if node["subtype"] == "compact_boundary" {
-                    warnings.push("history includes a compaction boundary");
-                }
-                continue;
-            }
-            _ => {
-                warnings.push("unsupported transcript content");
-                continue;
-            }
+        let Some((initial_item, blocks)) = node_content(kind, id, node, &mut warnings) else {
+            continue;
         };
         if let Some(name) = node["message"]["model"].as_str() {
             model = Some(agent_protocol::models::ModelRef {
@@ -613,17 +670,10 @@ fn convert(
                 id: name.into(),
             });
         }
-        // Queued human input and task activity stay in the running turn.
-        // Only a standalone user message starts another persisted turn.
-        if (kind == "user"
-            && initial_item.as_ref().is_some_and(|item| {
-                matches!(
-                    item.body(),
-                    agent_protocol::items::ItemBody::UserMessage { .. }
-                )
-            }))
-            || turns.is_empty()
-        {
+        // Queued human input, steers and task activity stay in the running
+        // turn. Only a standalone user message starts another persisted turn.
+        let prompt = kind == "user" && initial_item.as_ref().is_some_and(is_prompt);
+        if (prompt && !std::mem::take(&mut steering)) || turns.is_empty() {
             item_positions.clear();
             turns.push(Arc::new(Turn {
                 id: initial_item
@@ -914,6 +964,46 @@ mod tests {
         assert!(found.next_cursor.is_none());
         assert!(list_page(root.path(), vec![], "", Some("bad"), 3).is_err());
         assert!(list_page(root.path(), vec![], "", Some("9"), 3).is_err());
+    }
+    #[test]
+    fn a_send_now_prompt_continues_the_turn_it_cut() {
+        let rows = [
+            json!({"type":"user","uuid":"first","parentUuid":null,"message":{"content":"first question"}}),
+            json!({"type":"assistant","uuid":"tool-call","parentUuid":"first","message":{"id":"call","stop_reason":null,
+                "content":[{"type":"tool_use","id":"tool","name":"Bash","input":{"command":"sleep 60"}}]}}),
+            // Claude Code records the tool the steer stopped, then the cut.
+            json!({"type":"user","uuid":"tool-cut","parentUuid":"tool-call","interruptedBySendNow":true,
+                "message":{"content":[{"type":"tool_result","tool_use_id":"tool","is_error":true,
+                    "content":"[Tool call did not complete: the turn was ended to deliver the message that follows. Nothing refused it; re-run it if still needed.]"}]}}),
+            json!({"type":"user","uuid":"cut","parentUuid":"tool-cut","interruptedBySendNow":true,
+                "message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}),
+            json!({"type":"user","uuid":"steer","parentUuid":"cut","message":{"content":"change course"}}),
+            json!({"type":"assistant","uuid":"answer","parentUuid":"steer","message":{"id":"reply","stop_reason":"end_turn",
+                "content":[{"type":"text","text":"changed"}]}}),
+            json!({"type":"user","uuid":"next","parentUuid":"answer","message":{"content":"next question"}}),
+        ];
+        let source = rows
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let (_root, path) = fixture(&source);
+        let turns = read(&path, 100).unwrap().thread.turns.unwrap();
+        let ids: Vec<Vec<&str>> = turns
+            .iter()
+            .map(|turn| {
+                turn.items
+                    .iter()
+                    .flatten()
+                    .map(|item| item.id.as_str())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            [vec!["first", "tool", "steer", "reply:0"], vec!["next"],]
+        );
     }
     #[test]
     fn attachments_and_queued_prompts_are_preserved_in_the_active_history() {

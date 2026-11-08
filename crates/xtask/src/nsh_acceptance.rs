@@ -291,7 +291,7 @@ pub(crate) async fn scenario(
     let editors = fake_editor(&host)?;
     let port = temporary.path().join("pairing.port");
     let log = File::create(output.join("host.log"))?;
-    let mut command = Command::new(&tools.fixture);
+    let mut command = isolated(&tools.fixture, tools);
     command
         .arg(&host)
         .arg(if preparation.without_codex {
@@ -345,7 +345,7 @@ pub(crate) async fn scenario(
         // A `relaunch` step quits the app with its result unfinished; the next
         // process goes on after its steps.
         loop {
-            let mut command = Command::new(&tools.app);
+            let mut command = isolated(&tools.app, tools);
             command
                 .env("AGENT_STATE_DIR", &host)
                 .env("AGENT_ISOLATED_HOST", "1")
@@ -403,6 +403,32 @@ pub(crate) async fn scenario(
     let report = result?;
     stopped?;
     Ok(report)
+}
+
+/// A process of the scenario that sees none of the shell's `AGENT_*` or `BEX_*`
+/// settings, which can name an installed app's runtime, Host or state. Its
+/// runtime (the Claude SDK bridge, Node and the provider supervisor) is the
+/// freshly built app's.
+fn isolated(program: &Path, tools: &Tools) -> Command {
+    let mut command = Command::new(program);
+    for (name, _) in std::env::vars_os() {
+        if name
+            .to_str()
+            .is_some_and(|name| name.starts_with("AGENT_") || name.starts_with("BEX_"))
+        {
+            command.env_remove(name);
+        }
+    }
+    let runtime = tools
+        .app
+        .parent()
+        .expect("the app's executable has a directory");
+    // The runtime directory must be absolute; CARGO_TARGET_DIR may not be.
+    command.env(
+        "AGENT_RUNTIME_DIRECTORY",
+        std::path::absolute(runtime).unwrap_or_else(|_| runtime.to_path_buf()),
+    );
+    command
 }
 
 /// The first panic an app log reports.

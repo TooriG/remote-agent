@@ -4,7 +4,7 @@ use crate::{
     client::{AgentError, error},
     localization::UiLanguage,
     persistence::EditorPreferences,
-    state::{ModelPreferences, ModelSelection},
+    state::{ComposerPreferences, ModelPreferences, ModelSelection},
 };
 use agent_protocol::editors::EditorId;
 use serde::de::DeserializeOwned;
@@ -17,6 +17,7 @@ pub enum PreferenceKey {
     Models,
     Editor,
     Language,
+    Composer,
 }
 
 /// Device-wide locations, independent of a Host or window's state file.
@@ -31,6 +32,7 @@ pub(crate) struct Preferences {
     pub models: ModelPreferences,
     pub editor: EditorPreferences,
     pub language: UiLanguage,
+    pub composer: ComposerPreferences,
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +70,7 @@ struct DeviceState {
     restored: Result<(), AgentError>,
     saved_models: Option<ModelPreferences>,
     saved_editor: Option<EditorPreferences>,
+    saved_composer: Option<ComposerPreferences>,
 }
 
 struct Write {
@@ -104,6 +107,7 @@ impl DevicePreferences {
             restored: Ok(()),
             saved_models: None,
             saved_editor: None,
+            saved_composer: None,
         };
         state.restored = state.load(storage.as_ref());
         Self::from_state(Some(storage), state)
@@ -167,6 +171,7 @@ impl DevicePreferences {
             DeviceState {
                 saved_models: Some(preferences.models.clone()),
                 saved_editor: Some(preferences.editor.clone()),
+                saved_composer: Some(preferences.composer),
                 current: Arc::new(preferences),
                 restored: Ok(()),
             },
@@ -241,6 +246,18 @@ impl DevicePreferences {
         Ok(state.current.clone())
     }
 
+    pub(crate) fn apply_composer(
+        &self,
+        composer: ComposerPreferences,
+    ) -> Result<Arc<Preferences>, AgentError> {
+        let mut state = self.state.lock().unwrap();
+        state.restored.clone()?;
+        if state.current.composer != composer {
+            Arc::make_mut(&mut state.current).composer = composer;
+        }
+        Ok(state.current.clone())
+    }
+
     pub(crate) fn publish(&self) {
         self.notify();
         if self.storage.is_some()
@@ -293,13 +310,16 @@ impl DeviceState {
     fn load(&mut self, storage: &dyn PreferenceStorage) -> Result<(), AgentError> {
         let models: Option<ModelPreferences> = read(storage, PreferenceKey::Models)?;
         let editor: Option<EditorPreferences> = read(storage, PreferenceKey::Editor)?;
+        let composer: Option<ComposerPreferences> = read(storage, PreferenceKey::Composer)?;
         self.current = Arc::new(Preferences {
             models: models.clone().unwrap_or_default(),
             editor: editor.clone().unwrap_or_default(),
             language: self.current.language,
+            composer: composer.unwrap_or_default(),
         });
         self.saved_models = models;
         self.saved_editor = editor;
+        self.saved_composer = composer;
         Ok(())
     }
 }
@@ -317,13 +337,14 @@ fn read<T: DeserializeOwned>(
 }
 
 fn persist(state: &Mutex<DeviceState>, storage: &dyn PreferenceStorage) -> Result<(), AgentError> {
-    let (current, models, editor) = {
+    let (current, models, editor, composer) = {
         let state = state.lock().unwrap();
         state.restored.clone()?;
         (
             state.current.clone(),
             state.saved_models.as_ref() != Some(&state.current.models),
             state.saved_editor.as_ref() != Some(&state.current.editor),
+            state.saved_composer != Some(state.current.composer),
         )
     };
     if models {
@@ -339,6 +360,13 @@ fn persist(state: &Mutex<DeviceState>, storage: &dyn PreferenceStorage) -> Resul
             serde_json::to_vec(&current.editor).map_err(error)?,
         )?;
         state.lock().unwrap().saved_editor = Some(current.editor.clone());
+    }
+    if composer {
+        storage.save(
+            PreferenceKey::Composer,
+            serde_json::to_vec(&current.composer).map_err(error)?,
+        )?;
+        state.lock().unwrap().saved_composer = Some(current.composer);
     }
     Ok(())
 }

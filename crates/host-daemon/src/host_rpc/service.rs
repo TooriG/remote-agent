@@ -6,6 +6,7 @@ mod conversations;
 mod model_selections;
 mod preparation;
 mod project_import;
+mod queue;
 mod sessions;
 mod titles;
 mod transcripts;
@@ -262,6 +263,7 @@ impl HostRpcService {
                 matches!(
                     message,
                     Call::Submit(_)
+                        | Call::ChangeQueue(_)
                         | Call::RenameSession(_)
                         | Call::ForkSession(_)
                         | Call::RetryPreparation(_)
@@ -274,6 +276,7 @@ impl HostRpcService {
             let _workspace_read = if matches!(
                 message,
                 Call::Submit(_)
+                    | Call::ChangeQueue(_)
                     | Call::ForkSession(_)
                     | Call::AnswerSession(_)
                     | Call::StartTerminal(_)
@@ -525,6 +528,10 @@ impl HostRpcService {
                 let target = target_session.expect("session-scoped interrupt");
                 self.interrupt(target, params).await?.into()
             }
+            Call::ChangeQueue(params) => {
+                let target = target_session.expect("session-scoped queue");
+                self.change_queue(target, &params.change).await?.into()
+            }
             Call::RenameSession(params) => {
                 let target = target_session.expect("session-scoped rename");
                 self.rename_session(target, params).await?.into()
@@ -672,6 +679,7 @@ impl HostRpcService {
             if let Err(message) = self.inner.transcripts.interrupt_running() {
                 tracing::error!(target: "agent", operation = "host.transcript.write", message);
             }
+            self.restore_queues();
             if self.inner.router.apns().is_some() {
                 let owner = Arc::downgrade(&self.inner);
                 tokio::spawn(async move {
@@ -700,7 +708,6 @@ impl HostRpcService {
             for (_, agent) in self.inner.providers.all() {
                 if let Some(mut events) = agent.event_stream() {
                     let supports_fork = agent.capabilities().fork;
-                    let router = self.inner.router.clone();
                     let owner = Arc::downgrade(&self.inner);
                     tokio::spawn(async move {
                         while let Some(event) = events.recv().await {
@@ -729,7 +736,7 @@ impl HostRpcService {
                                             inner: inner.clone(),
                                         };
                                         service.capacity_event(&mut event);
-                                        router.apply(event, &bindings)
+                                        service.apply_change(event, &bindings)
                                     })
                                 });
                             if let Some(applied) = event.applied {
@@ -756,6 +763,7 @@ fn session_target(request: &Call) -> (Option<&agent_protocol::session::SessionRe
         Call::Submit(p) => (Some(&p.thread_id), Some(p.client_user_message_id.as_str())),
         Call::ForkSession(p) => (Some(&p.thread_id), None),
         Call::Interrupt(p) => (Some(&p.thread_id), None),
+        Call::ChangeQueue(p) => (Some(&p.thread_id), None),
         Call::RetryPreparation(p) => (Some(&p.thread_id), None),
         Call::ReadItem(p) => (Some(&p.thread_id), None),
         Call::ReadTurnItems(p) => (Some(&p.session), None),

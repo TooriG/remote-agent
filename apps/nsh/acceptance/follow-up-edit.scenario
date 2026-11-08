@@ -1,0 +1,28 @@
+# A queued message is edited in the composer and saved back to the queue, as
+# T3 Code's queue; the composer keeps its own text meanwhile. A removed one
+# leaves the queue, and the edited one runs after the turn.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[groups] キューを編集します"
+press 送信
+expect "./gradlew test" 20000
+type "AI に依頼する" "最初の文面"
+press メッセージをキューに追加
+type "AI に依頼する" "取り消す文面"
+press メッセージをキューに追加
+expect "取り消す文面" after "キューのメッセージ" 10000
+type "AI に依頼する" "書きかけ"
+press コンポーザーで編集
+expect "キューのメッセージを更新"
+expect キャンセル
+type "AI に依頼する" "と追記"
+screenshot editing
+press キューのメッセージを更新
+expect "最初の文面と追記" after "キューのメッセージ" 10000
+expect "書きかけ"
+press "キューから削除" after "取り消す文面"
+expect_absent "取り消す文面" 10000
+screenshot edited
+fixture /release-inputs
+expect "この発言へ移動: 最初の文面と追記" 30000
+expect_absent "この発言へ移動: 取り消す文面"

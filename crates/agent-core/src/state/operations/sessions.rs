@@ -709,6 +709,17 @@ impl Operation for Interrupt {
     rpc_operation!();
 }
 
+pub use agent_protocol::operations::ChangeQueue;
+
+impl Operation for ChangeQueue {
+    fn key(&self) -> Option<OperationKey> {
+        Some(OperationKey::Queue {
+            session: self.thread_id.clone(),
+        })
+    }
+    rpc_operation!();
+}
+
 pub use agent_protocol::operations::OpenRequest;
 
 impl Operation for OpenRequest {
@@ -1005,6 +1016,7 @@ mod tests {
             Intent::Submit {
                 thread_id: Some(id.clone()),
                 client_user_message_id: "input".into(),
+                alternate: false,
             },
         );
         if edited_during_send {
@@ -1023,6 +1035,7 @@ mod tests {
                 thread_id: id.clone(),
                 client_user_message_id: "input".into(),
                 draft: snapshot.sessions.pending_submissions["input"].draft.clone(),
+                follow_up: Default::default(),
             }
             .apply(
                 &mut snapshot,
@@ -1162,6 +1175,7 @@ mod tests {
             Intent::Submit {
                 thread_id: Some(id),
                 client_user_message_id: "next".into(),
+                alternate: false,
             },
         );
         assert_eq!(effects.len(), 1);
@@ -1412,6 +1426,7 @@ mod tests {
             Intent::Submit {
                 thread_id: Some(session),
                 client_user_message_id: "gateway-input".into(),
+                alternate: false,
             },
         );
         assert_eq!(effects.len(), 1);
@@ -1533,6 +1548,7 @@ mod tests {
             Intent::Submit {
                 thread_id: None,
                 client_user_message_id: "next-input".into(),
+                alternate: false,
             },
         );
         assert_eq!(effects.len(), 1);

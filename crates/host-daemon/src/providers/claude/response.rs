@@ -30,6 +30,9 @@ pub(super) struct Observation<'a> {
 #[derive(Default)]
 pub(super) struct ResponseState {
     interrupted: bool,
+    /// Input that joins the response at once ends what it was doing; that
+    /// stop is not the response's outcome.
+    steered: bool,
     pending_inputs: HashSet<ItemId>,
     result_received: bool,
     idle: bool,
@@ -71,6 +74,10 @@ impl ResponseState {
 
     pub(super) fn accept(&mut self, id: ItemId) {
         self.pending_inputs.insert(id);
+    }
+
+    pub(super) fn steer(&mut self) {
+        self.steered = true;
     }
 
     pub(super) fn observe<'a>(&mut self, message: &'a Value) -> Result<Observation<'a>, String> {
@@ -185,6 +192,16 @@ impl ResponseState {
                 self.idle = message["state"] == "idle";
             }
             "result" => {
+                // A steer aborts the streaming or tools it interrupts and the
+                // response continues with it, as T3 Code steers Claude.
+                let aborted = matches!(
+                    message["terminal_reason"].as_str(),
+                    Some("aborted_streaming" | "aborted_tools")
+                );
+                if self.steered && aborted && !self.interrupted {
+                    return MessageDisposition::Applied;
+                }
+                self.steered = false;
                 // Claude Code ends a stopped response, including one awaiting
                 // an answer, with an execution error. The stop is its outcome,
                 // as in T3 Code.
@@ -577,5 +594,48 @@ mod tests {
         observe(&mut response, json!({"type":"system","subtype":"init"}));
         let echo = json!({"type":"user","uuid":"queued"});
         assert_eq!(response.observe(&echo).unwrap().echoes, [("queued", true)]);
+    }
+
+    #[test]
+    fn a_steer_continues_the_response_its_abort_stopped() {
+        for (reason, continues) in [
+            ("aborted_tools", true),
+            ("aborted_streaming", true),
+            ("completed", false),
+        ] {
+            let mut response = ResponseState::default();
+            observe(&mut response, json!({"type":"assistant"}));
+            response.accept("steer".into());
+            response.steer();
+            let aborted = json!({"type":"result","is_error":true,"terminal_reason":reason});
+            let disposition = observe(&mut response, aborted);
+            if !continues {
+                assert_eq!(disposition, MessageDisposition::Failed);
+                continue;
+            }
+            assert_eq!(disposition, MessageDisposition::Applied);
+            // The steer joins the response it stopped instead of opening a turn.
+            let echo = json!({"type":"user","uuid":"steer"});
+            assert_eq!(response.observe(&echo).unwrap().echoes, [("steer", false)]);
+            settle(&mut response);
+            assert!(response.finished());
+            // Only the first abort after a steer belongs to it.
+            observe(&mut response, json!({"type":"assistant"}));
+            let again = json!({"type":"result","is_error":true,"terminal_reason":reason});
+            assert_eq!(observe(&mut response, again), MessageDisposition::Failed);
+        }
+    }
+
+    #[test]
+    fn a_stop_after_a_steer_still_ends_the_response() {
+        let mut response = ResponseState::default();
+        observe(&mut response, json!({"type":"assistant"}));
+        response.steer();
+        response.interrupt();
+        let aborted = json!({"type":"result","is_error":true,"terminal_reason":"aborted_tools"});
+        assert_eq!(
+            observe(&mut response, aborted),
+            MessageDisposition::Interrupted
+        );
     }
 }

@@ -660,6 +660,7 @@ mod tests {
                 PreferenceKey::Models => self.model_preferences.lock().unwrap().clone(),
                 PreferenceKey::Editor => self.editor_preferences.lock().unwrap().clone(),
                 PreferenceKey::Language => self.language.lock().unwrap().clone(),
+                PreferenceKey::Composer => Vec::new(),
             })
         }
         fn save(&self, key: PreferenceKey, bytes: Vec<u8>) -> Result<(), AgentError> {
@@ -672,6 +673,9 @@ mod tests {
                     serde_json::from_slice::<crate::persistence::EditorPreferences>(&bytes)
                         .unwrap();
                     *self.editor_preferences.lock().unwrap() = bytes;
+                }
+                PreferenceKey::Composer => {
+                    serde_json::from_slice::<crate::state::ComposerPreferences>(&bytes).unwrap();
                 }
                 PreferenceKey::Language => {
                     serde_json::from_slice::<crate::localization::UiLanguage>(&bytes).unwrap();

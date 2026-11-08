@@ -55,21 +55,21 @@ impl Operation for Dictate {
         let (mut draft, output) = output;
         let clear_draft = draft.clone();
         append_transcript(&mut Arc::make_mut(&mut draft).text, &output.text);
-        let (next, effects) = submission(
-            snapshot,
-            snapshot
-                .panes
-                .get(pane_id)
-                .and_then(|pane| pane.navigation.thread_id.clone()),
-            snapshot
-                .panes
-                .get(pane_id)
+        let pane = snapshot.panes.get(pane_id);
+        let destination = Destination {
+            thread_id: pane.and_then(|pane| pane.navigation.thread_id.clone()),
+            cwd: pane
                 .map(|pane| pane.navigation.cwd.clone())
                 .filter(|cwd| !cwd.trim().is_empty()),
-            self.draft_key.clone(),
+            draft_key: self.draft_key.clone(),
+        };
+        let (next, effects) = submission(
+            snapshot,
+            destination,
             draft,
             self.client_user_message_id.clone(),
             Some(clear_draft.clone()),
+            snapshot.input.composer_preferences.follow_up,
         );
         *snapshot = next;
         if effects.is_empty() {
@@ -266,6 +266,7 @@ pub struct SendSubmission {
     pub thread_id: crate::session::SessionRef,
     pub client_user_message_id: agent_protocol::ids::ClientInputId,
     pub draft: Arc<Draft>,
+    pub follow_up: agent_protocol::operations::FollowUp,
 }
 #[derive(Debug)]
 pub enum SubmissionProgress {
@@ -330,6 +331,7 @@ impl Operation for SendSubmission {
                 model: self.draft.model.clone(),
                 effort: self.draft.effort.clone(),
                 service_tier: self.draft.service_tier.clone(),
+                follow_up: self.follow_up,
             })
             .await?;
         Ok(SubmissionProgress::Sent(reply.turn_id))

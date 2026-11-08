@@ -1,14 +1,16 @@
-# A message sent while a turn works steers it and is marked as added
-# instructions; the minimap lists both messages and jumps to one.
+# A message sent with ⌘ while a turn works steers it, as T3 Code's alternate
+# follow-up, and is marked as added instructions; the minimap lists both
+# messages and jumps to one.
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
 type "AI に依頼する" "[groups] 作業中に指示します"
 press 送信
 expect "./gradlew test" 20000
 type "AI に依頼する" "追加の指示です"
-press 送信
+key cmd+return
 expect "実行中の作業に追加で指示しました" 10000
 expect "追加の指示です"
+expect_absent "キューのメッセージ"
 screenshot steered
 fixture /release-inputs
 expect "シミュレータで完了しました。" 30000

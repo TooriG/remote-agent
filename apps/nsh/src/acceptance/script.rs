@@ -61,6 +61,9 @@
 //!   element is labelled `<label>` and every one lies whole inside its window.
 //! - `window <width> <height>`: resizes the main window's content to that many
 //!   points.
+//! - `drag_by <label> <points> [after <anchor>] [timeout-ms]`: drags that
+//!   element with the left button by `points` down (negative: up), in steps,
+//!   as a pointer would, and releases it.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
@@ -148,6 +151,8 @@ pub(crate) enum Step {
     ExpectInside(Find),
     /// The main window's content size in points.
     Window(f64, f64),
+    /// A left-button drag of the element by this many points down.
+    DragBy(Find, i32),
     Select(Find, String),
     Menu(Find),
     Hover(Find),
@@ -332,6 +337,12 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("unmark", [target, rest @ ..]) => Step::Compose(find(target, rest)?, Composition::Unmark),
         ("window", [width, height]) => Step::Window(points(width)?, points(height)?),
         ("scroll", [target, lines, rest @ ..]) => wheel(target, lines, rest)?,
+        ("drag_by", [target, points, rest @ ..]) => Step::DragBy(
+            find(target, rest)?,
+            points
+                .parse()
+                .map_err(|_| format!("{points:?} is not a distance in points"))?,
+        ),
         ("select", [target, text, rest @ ..]) => {
             Step::Select(find(target, rest)?, (*text).to_owned())
         }

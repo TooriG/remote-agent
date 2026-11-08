@@ -147,6 +147,7 @@ impl Pane {
                 pane.dispatch(Intent::Submit {
                     thread_id: Some(id),
                     client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
+                    alternate: false,
                 })
                 .await
                 .map_err(error)?;

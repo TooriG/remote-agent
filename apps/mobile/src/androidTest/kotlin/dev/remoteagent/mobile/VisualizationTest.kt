@@ -79,7 +79,7 @@ class VisualizationTest {
             perform(Intent.NewChat(requireNotNull(InstrumentationRegistry.getArguments().getString("cwd"))))
             val draft = withContext(Dispatchers.Main) { model.draftKey }
             perform(Intent.SetDraftText(draft, "[success] [visualize] Compare twelve icons"))
-            perform(Intent.Submit(null, token))
+            perform(Intent.Submit(null, token, false))
             val id =
                 withContext(Dispatchers.Main) {
                     requireNotNull(

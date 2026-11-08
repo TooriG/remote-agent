@@ -108,6 +108,12 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
             },
             "作業を停止できませんでした",
         ),
+        Queue { session } => (
+            Conversation {
+                draft_key: session.into(),
+            },
+            "キューのメッセージを変更できませんでした",
+        ),
         Agents { session } => (
             Conversation {
                 draft_key: session.into(),

@@ -190,6 +190,10 @@ pub struct PendingSubmission {
     pub after_item_id: Option<agent_protocol::ids::ItemId>,
     pub accepted: bool,
     pub delivery_unknown: bool,
+    /// Sent to wait behind a running turn: the queue above the composer shows
+    /// it until the turn it starts shows it.
+    #[serde(default)]
+    pub queued: bool,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
@@ -271,6 +275,7 @@ same_by_eq!(
     String,
     ModelPreferences,
     crate::localization::UiLanguage,
+    follow_up::ComposerPreferences,
     agent_protocol::editors::EditorId,
     crate::session::SessionRef,
 );
@@ -399,6 +404,12 @@ group! {
         #[serde(skip)]
         pub question_drafts:
             Arc<BTreeMap<agent_protocol::ids::RequestId, crate::questions::QuestionDraft>>,
+        /// This device's composer behavior; device preferences restore it.
+        #[serde(skip)]
+        pub composer_preferences: follow_up::ComposerPreferences,
+        /// Queued messages being edited in their conversation's composer.
+        #[serde(skip)]
+        pub queued_edits: Arc<BTreeMap<crate::session::SessionRef, follow_up::QueuedEdit>>,
     }
 }
 
@@ -581,6 +592,8 @@ mod notifications;
 use notifications::notification;
 pub mod projects;
 pub use projects::ProjectPreferences;
+pub mod follow_up;
+pub use follow_up::{ComposerPreferences, SendShortcut};
 pub mod operations;
 pub use operations::Intent;
 
@@ -806,8 +819,15 @@ fn reduce_intent(previous: &Snapshot, pane_id: &str, intent: Intent) -> (Snapsho
         Intent::Submit {
             thread_id,
             client_user_message_id,
+            alternate,
         } => {
             let thread_id = thread_id.or_else(|| pane.navigation.thread_id.clone());
+            if let Some(effects) = thread_id
+                .as_ref()
+                .and_then(|id| follow_up::save_edit(&mut next, id))
+            {
+                return (next, effects);
+            }
             let draft_key = thread_id
                 .clone()
                 .map(DraftKey::from)
@@ -815,13 +835,23 @@ fn reduce_intent(previous: &Snapshot, pane_id: &str, intent: Intent) -> (Snapsho
             let draft = previous.input.drafts.get(&draft_key).cloned().unwrap_or_default();
             return submission(
                 previous,
-                thread_id,
-                (!pane.navigation.cwd.trim().is_empty()).then(|| pane.navigation.cwd.clone()),
-                draft_key,
+                Destination {
+                    thread_id,
+                    cwd: (!pane.navigation.cwd.trim().is_empty())
+                        .then(|| pane.navigation.cwd.clone()),
+                    draft_key,
+                },
                 draft,
                 client_user_message_id,
                 None,
+                follow_up::requested(previous.input.composer_preferences.follow_up, alternate),
             );
+        }
+        // Store commits this device-owned value after admitting the action.
+        Intent::SetComposerPreferences { .. } => (),
+        Intent::Queue { thread_id, action } => {
+            let effects = follow_up::reduce(&mut next, thread_id, action);
+            return (next, effects);
         }
         Intent::RestoreUnknownSubmission { client_user_message_id } => {
             if previous
@@ -1782,14 +1812,25 @@ fn shared_mut<'a, K: Ord + Clone + std::borrow::Borrow<Q>, Q: Ord + ?Sized, T: C
 // Publish sent content immediately as pending input. Later receipts and echoes
 // must not clear newer draft edits. Restore definite failures alongside newer
 // input; keep unknown delivery visible and ordered without automatic resubmission.
-fn submission(
-    previous: &Snapshot,
+/// Where a submission goes: its conversation, or a new one in `cwd`, and the
+/// draft it is sent from.
+struct Destination {
     thread_id: Option<crate::session::SessionRef>,
     cwd: Option<String>,
     draft_key: DraftKey,
+}
+
+fn submission(
+    previous: &Snapshot,
+    Destination {
+        thread_id,
+        cwd,
+        draft_key,
+    }: Destination,
     draft: Arc<Draft>,
     client_user_message_id: agent_protocol::ids::ClientInputId,
     clear_draft: Option<Arc<Draft>>,
+    requested: agent_protocol::operations::FollowUp,
 ) -> (Snapshot, Vec<Effect>) {
     let provider = previous
         .draft_provider(&draft_key, draft.model.as_ref())
@@ -1856,6 +1897,10 @@ fn submission(
                 .map(|item| item.id.clone()),
             accepted: false,
             delivery_unknown: false,
+            queued: thread_id
+                .as_ref()
+                .and_then(|id| previous.sessions.conversations.get(id))
+                .is_some_and(|thread| follow_up::waits(thread, requested)),
         }),
     );
     let effect = match thread_id {
@@ -1863,6 +1908,7 @@ fn submission(
             thread_id,
             client_user_message_id,
             draft,
+            follow_up: requested,
         }),
         None => Effect::execute(op::StartSubmission {
             provider: provider.expect("new submission has a provider"),
@@ -1963,10 +2009,6 @@ mod submission_tests {
                 } else {
                     crate::models::SessionStatus::Idle
                 },
-                capabilities: Some(crate::session::Capabilities {
-                    additional_input: true,
-                    ..Default::default()
-                }),
                 ..Default::default()
             }),
         );
@@ -1974,12 +2016,15 @@ mod submission_tests {
         let reason = snapshot.input_unavailable_reason(session.clone(), Some(selected));
         let (next, effects) = submission(
             &snapshot,
-            Some(session),
-            None,
-            key.clone(),
+            Destination {
+                thread_id: Some(session),
+                cwd: None,
+                draft_key: key.clone(),
+            },
             draft.clone(),
             "send".into(),
             None,
+            agent_protocol::operations::FollowUp::Queue,
         );
         if busy && switching {
             assert!(reason.unwrap().contains("新しいチャット"));
@@ -2054,6 +2099,7 @@ mod submission_tests {
             Intent::Submit {
                 thread_id: Some(id),
                 client_user_message_id: "input".into(),
+                alternate: false,
             },
         );
         if can_accept_direct_input == Some(false) {
@@ -2086,6 +2132,7 @@ fn append_transcript(text: &mut String, transcript: &str) {
 }
 
 fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::SessionRef) {
+    follow_up::reconcile_edit(snapshot, thread_id);
     if snapshot.sessions.pending_submissions.is_empty() {
         return;
     }
@@ -2111,6 +2158,11 @@ fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::Sessio
             *snapshot = reduce_event(snapshot, Event::SubmissionFailed(id)).0;
             continue;
         }
+        // Someone removed it from the queue: it is gone, not returned to the composer.
+        if delivery == SubmissionDelivery::Withdrawn {
+            Arc::make_mut(&mut snapshot.sessions.pending_submissions).remove(&id);
+            continue;
+        }
         let mut pending = (*snapshot.sessions.pending_submissions[&id]).clone();
         match delivery {
             SubmissionDelivery::Sending => pending.delivery_unknown = false,
@@ -2130,7 +2182,7 @@ fn reconcile_pending(snapshot: &mut Snapshot, thread_id: &crate::session::Sessio
                 }
             }
             SubmissionDelivery::Unknown => pending.delivery_unknown = true,
-            SubmissionDelivery::Rejected => unreachable!(),
+            SubmissionDelivery::Rejected | SubmissionDelivery::Withdrawn => unreachable!(),
         }
         if pending != *snapshot.sessions.pending_submissions[&id] {
             Arc::make_mut(&mut snapshot.sessions.pending_submissions).insert(id, Arc::new(pending));

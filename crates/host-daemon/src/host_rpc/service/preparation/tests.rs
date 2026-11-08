@@ -363,6 +363,7 @@ async fn admitted_public_identity_keeps_native_history_through_provider_switchin
             }),
             effort: None,
             service_tier: None,
+            follow_up: Default::default(),
         }),
     )
     .await

@@ -55,7 +55,6 @@ impl Icon {
     pub(crate) const CHECK: Self = icon!(Check);
     pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown);
     pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight);
-    #[cfg(desktop)]
     pub(crate) const CHEVRON_UP: Self = icon!(ChevronUp);
     pub(crate) const CLOSE: Self = icon!(X);
     pub(crate) const COPY: Self = icon!(Copy);
@@ -119,6 +118,13 @@ impl Icon {
     pub(crate) const ZOOM_IN: Self = icon!(ZoomIn);
     #[cfg(desktop)]
     pub(crate) const ZOOM_OUT: Self = icon!(ZoomOut);
+    /// T3 Code's follow-up actions and the queue above its composer.
+    pub(crate) const QUEUE: Self = icon!(ListPlus);
+    pub(crate) const STEER_NOW: Self = icon!(CornerUpRight);
+    pub(crate) const QUEUED: Self = icon!(ListOrdered);
+    pub(crate) const GRIP: Self = icon!(GripVertical);
+    pub(crate) const SAVING: Self = icon!(Clock3);
+    pub(crate) const RESUME: Self = icon!(Play);
     /// A filled square, which Lucide's outlined `square` is not.
     pub(crate) const STOP: Self = Self {
         markup: include_str!("../assets/stop.svg"),
@@ -381,6 +387,26 @@ fn ghost_text(
     ghost(
         label,
         view().child(text(title).text_size(px(14.0)).number_of_lines(1)),
+    )
+    .h(px(24.0))
+    .px_2()
+    .on_press(press)
+}
+
+/// A small ghost button with an icon and a label drawn by NSH, as a queued
+/// message's Steer above T3 Code's composer.
+pub(crate) fn row_labeled_button(
+    glyph: Icon,
+    title: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
+    let title = title.into_reactive();
+    ghost(
+        title.clone(),
+        view()
+            .gap_1()
+            .child(icon(glyph, 14.0))
+            .child(text(title).text_size(px(12.0)).number_of_lines(1)),
     )
     .h(px(24.0))
     .px_2()

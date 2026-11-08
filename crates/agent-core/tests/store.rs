@@ -1288,6 +1288,7 @@ async fn new_conversation_moves_draft_to_pending_before_creation_reply() {
     let sending = store.dispatch(Intent::Submit {
         thread_id: None,
         client_user_message_id: "client".into(),
+        alternate: false,
     });
     let request = read_after_reviews(&mut reader, &mut writer).await;
     assert_eq!(request["method"], "host/session/create");
@@ -1391,6 +1392,7 @@ async fn successful_submission_does_not_erase_a_newer_draft() {
                 id: "thread".into(),
             }),
             client_user_message_id: "fixture-message".into(),
+            alternate: false,
         });
         let request = read_after_reviews(&mut reader, &mut writer).await;
         assert_eq!(request["method"], "host/session/submit");
@@ -1485,6 +1487,7 @@ async fn new_submission_keeps_edits_and_navigation_while_creation_is_pending() {
                     .dispatch(Intent::Submit {
                         thread_id: None,
                         client_user_message_id: "client".into(),
+                        alternate: false,
                     })
                     .await
             }
@@ -1580,6 +1583,7 @@ async fn failed_new_task_admission_keeps_retryable_input() {
     let sending = store.dispatch(Intent::Submit {
         thread_id: None,
         client_user_message_id: "client".into(),
+        alternate: false,
     });
     let create = read_after_reviews(&mut reader, &mut writer).await;
     assert_eq!(create["method"], "host/session/create");
@@ -1594,6 +1598,7 @@ async fn failed_new_task_admission_keeps_retryable_input() {
     let retry = store.dispatch(Intent::Submit {
         thread_id: None,
         client_user_message_id: "retry".into(),
+        alternate: false,
     });
     let request = read_after_reviews(&mut reader, &mut writer).await;
     assert!(
@@ -1799,6 +1804,7 @@ async fn new_chat_dictation_preserves_text_and_images_for_draft_and_direct_send(
             store.dispatch(Intent::Submit {
                 thread_id: None,
                 client_user_message_id: "dictation".into(),
+                alternate: false,
             })
         };
         let start = read(&mut reader).await;
@@ -2409,6 +2415,7 @@ async fn a_stale_catalogue_does_not_queue_a_completed_thread() {
                         id: "thread".into(),
                     }),
                     client_user_message_id: "next-message".into(),
+                    alternate: false,
                 })
                 .await
         }
@@ -2725,6 +2732,7 @@ async fn creating_a_chat_updates_matching_search_results_without_reading_the_lis
         .dispatch(Intent::Submit {
             thread_id: None,
             client_user_message_id: "client".into(),
+            alternate: false,
         })
         .await
         .unwrap();
@@ -3355,7 +3363,8 @@ async fn disconnected_store_keeps_editing_and_persisting_drafts() {
         store
             .dispatch(Intent::Submit {
                 thread_id: None,
-                client_user_message_id: "offline".into()
+                client_user_message_id: "offline".into(),
+                alternate: false,
             })
             .await
             .is_err()
@@ -3771,6 +3780,7 @@ async fn restored_snapshot_discards_session_authority_and_preserves_unknown_dict
             after_item_id: None,
             accepted: false,
             delivery_unknown: false,
+            queued: false,
         }),
     )]));
     Arc::make_mut(
@@ -3829,6 +3839,7 @@ async fn close_keeps_the_last_enqueued_draft_and_unconfirmed_send() {
             id: "thread".into(),
         }),
         client_user_message_id: "unsent".into(),
+        alternate: false,
     }));
     read(&mut reader).await;
     assert!(!store.snapshot().sessions.pending_submissions.is_empty());
@@ -4973,6 +4984,7 @@ async fn selected_invocations_reach_submission_and_return_after_failure() {
     let sending = store.dispatch(Intent::Submit {
         thread_id: None,
         client_user_message_id: "invocation".into(),
+        alternate: false,
     });
     let request = read_after_reviews(&mut reader, &mut writer).await;
     assert_eq!(request["method"], "host/session/create");

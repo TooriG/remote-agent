@@ -97,6 +97,8 @@ async fn execute(client: &Client, command: &Value) -> Result<Value, PeerError> {
                     model: serde_json::from_value(command["model"].clone()).unwrap(),
                     effort: optional(command, "effort").map(str::to_owned),
                     service_tier: optional(command, "serviceTierForTurn").map(str::to_owned),
+                    follow_up: serde_json::from_value(command["followUp"].clone())
+                        .unwrap_or_default(),
                 })
                 .await?
                 .turn_id;

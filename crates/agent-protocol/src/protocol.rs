@@ -366,7 +366,7 @@ mod tests {
         };
         assert_eq!(thread.status, crate::execution::SessionStatus::Unknown);
         assert!(thread.capabilities.unwrap().fork);
-        assert!(!thread.capabilities.unwrap().additional_input);
+        assert!(!thread.capabilities.unwrap().steer);
         let turn = &thread.turns.unwrap()[0];
         assert_eq!(turn.status, crate::execution::TurnStatus::Unknown);
         let item = &turn.items.as_ref().unwrap()[0];

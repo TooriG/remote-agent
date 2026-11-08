@@ -498,6 +498,7 @@ fn queued_inputs_keep_their_footer_between_turns_and_session_rows_without_inflat
             after_item_id: None,
             accepted: false,
             delivery_unknown: true,
+            queued: false,
         }),
     )]
     .into_iter()

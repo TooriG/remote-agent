@@ -736,7 +736,8 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             store
                 .dispatch(Intent::Submit {
                     thread_id: None,
-                    client_user_message_id: "offline".into()
+                    client_user_message_id: "offline".into(),
+                    alternate: false,
                 })
                 .await
                 .is_err()
@@ -763,6 +764,7 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             .dispatch(Intent::Submit {
                 thread_id: None,
                 client_user_message_id: "sent".into(),
+                alternate: false,
             })
             .await
             .unwrap();
@@ -972,7 +974,7 @@ async fn chat_preparation_recovers_in_the_same_conversation_after_reconnecting()
         std::fs::write(&blocked, "not a directory").unwrap();
         store.dispatch(Intent::NewChat { cwd: String::new() }).await.unwrap();
         store.dispatch(Intent::SetDraftText { thread_id: store.snapshot().panes.primary().navigation.draft_key.clone(), text: "[success] recover preparation".into() }).await.unwrap();
-        assert!(matches!(store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "recover-chat".into() }).await.unwrap(), Outcome::StartedThread { .. }));
+        assert!(matches!(store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "recover-chat".into(), alternate: false }).await.unwrap(), Outcome::StartedThread { .. }));
         let id = store.snapshot().panes.primary().navigation.thread_id.clone().unwrap();
         let mut updates = store.subscribe();
         loop {
@@ -1064,7 +1066,7 @@ async fn submissions_complete_across_saved_worktree_settings_and_chat_scopes(
                 let current = store.snapshot();
                 Some(current.input.drafts[&current.panes.primary().navigation.draft_key].attachments[0].path.clone())
             } else { None };
-            let sent = store.dispatch(Intent::Submit { thread_id: thread_id.clone(), client_user_message_id: format!("client-{number}").into() }).await.unwrap_or_else(|error| panic!("{prompt}: {error}"));
+            let sent = store.dispatch(Intent::Submit { thread_id: thread_id.clone(), client_user_message_id: format!("client-{number}").into(), alternate: false }).await.unwrap_or_else(|error| panic!("{prompt}: {error}"));
             assert!(if number == 0 { matches!(sent, Outcome::StartedThread { .. }) } else { matches!(sent, Outcome::Submitted { .. }) });
             let id = store.snapshot().panes.primary().navigation.thread_id.clone().unwrap();
             if let Some(previous) = &thread_id { assert_eq!(&id, previous); }
@@ -1380,6 +1382,7 @@ async fn repeated_turn_history_preserves_both_responses_after_reopening_and_rest
             .dispatch(Intent::Submit {
                 thread_id: None,
                 client_user_message_id: "duplicate-message".into(),
+                alternate: false,
             })
             .await
             .unwrap();
@@ -2633,6 +2636,7 @@ async fn discovered_host_keeps_mobile_and_desktop_turns_in_sync_across_reconnect
                 .dispatch(Intent::Submit {
                     thread_id: previous_id,
                     client_user_message_id: format!("shared-{index}").into(),
+                    alternate: false,
                 })
                 .await
                 .unwrap();
@@ -2831,7 +2835,7 @@ async fn completed_conversations_refresh_the_sidebar_without_manual_reload() {
                 }
                 let key = store.snapshot().panes.primary().navigation.draft_key.clone();
                 store.dispatch(Intent::SetDraftText { thread_id: key, text: "[success] list automatically".into() }).await.unwrap();
-                store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "sidebar-message".into() }).await.unwrap();
+                store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "sidebar-message".into(), alternate: false }).await.unwrap();
                 let id = store.snapshot().panes.primary().navigation.thread_id.clone().unwrap();
                 let mut updates = store.subscribe();
                 let reflected = tokio::time::timeout(Duration::from_secs(3), async {
@@ -2896,7 +2900,7 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
         store.dispatch(Intent::NewChat { cwd: project.to_str().unwrap().into() }).await.unwrap();
         let key = store.snapshot().panes.primary().navigation.draft_key.clone();
         store.dispatch(Intent::SetDraftText { thread_id: key, text: "[success] [delayed-input] keep running".into() }).await.unwrap();
-        store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "managed".into() }).await.unwrap();
+        store.dispatch(Intent::Submit { thread_id: None, client_user_message_id: "managed".into(), alternate: false }).await.unwrap();
         let id = store.snapshot().panes.primary().navigation.thread_id.clone().unwrap();
         let mut updates = store.subscribe();
         let turn_id = loop {
@@ -2966,6 +2970,7 @@ async fn worktree_management_preserves_conversations_and_recreates_deleted_check
             model: None,
             effort: None,
             service_tier: None,
+            follow_up: Default::default(),
         }).await.unwrap();
         assert!(receipt.turn_id.is_some());
         assert!(Path::new(&path).is_dir(), "sending must recreate the checkout");
@@ -3083,6 +3088,7 @@ async fn unchanged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() 
                 model: None,
                 effort: None,
                 service_tier: None,
+                follow_up: Default::default(),
             })
             .await
             .unwrap();
@@ -3258,6 +3264,7 @@ async fn visualization_reaches_store_and_reopens_after_source_removal() {
             .dispatch(Intent::Submit {
                 thread_id: None,
                 client_user_message_id: "visualize".into(),
+                alternate: false,
             })
             .await
             .unwrap();
@@ -4000,6 +4007,7 @@ async fn host_routes_client_intents_and_replays_delivery_before_native_echo() {
             model: None,
             effort: None,
             service_tier: None,
+            follow_up: rpc::FollowUp::Queue,
         };
         let (started, duplicate) = tokio::join!(first.peer.call(&input), first.peer.call(&input));
         let started = started.unwrap();
@@ -4023,6 +4031,7 @@ async fn host_routes_client_intents_and_replays_delivery_before_native_echo() {
                 input: vec![rpc::Input::Text {
                     text: "additional input".into(),
                 }],
+                follow_up: rpc::FollowUp::Steer,
                 ..input
             })
             .await

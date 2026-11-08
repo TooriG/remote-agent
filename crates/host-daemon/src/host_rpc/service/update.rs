@@ -74,6 +74,7 @@ impl HostRpcService {
                     model: options.model,
                     effort: options.effort,
                     service_tier: options.service_tier,
+                    follow_up: Default::default(),
                 },
                 delivery: ContinuationDelivery::Pending,
             });

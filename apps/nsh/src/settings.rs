@@ -10,9 +10,10 @@ use crate::{
 use agent_core::{
     localization::UiLanguage,
     presentation::connections::ConnectionAgent,
+    state::{ComposerPreferences, Intent, SendShortcut},
     updates::{Channel, UpdatePhase},
 };
-use agent_protocol::session::ProviderKind;
+use agent_protocol::{operations::FollowUp, session::ProviderKind};
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::json;
 
@@ -248,7 +249,115 @@ fn general(connection: Connection) -> View {
             || tr("アプリで使用する言語を選択します。").to_owned(),
             language(connection),
         ),
+        ui::setting(
+            tr("送信ショートカット"),
+            || tr("Enter でプロンプトを送信するか改行するかを選択します。").to_owned(),
+            send_shortcut(connection),
+        ),
+        ui::setting(
+            tr("フォローアップの動作"),
+            move || follow_up_description(preferences(connection).send_shortcut),
+            follow_up(connection),
+        ),
     ])
+}
+
+fn preferences(connection: Connection) -> ComposerPreferences {
+    connection
+        .composer
+        .with(|c| c.controls.follow_up.preferences)
+}
+
+fn set_preferences(connection: Connection, change: impl FnOnce(&mut ComposerPreferences)) {
+    let mut preferences = connection
+        .composer
+        .with_untracked(|c| c.controls.follow_up.preferences);
+    change(&mut preferences);
+    connection.dispatch(Intent::SetComposerPreferences { preferences });
+}
+
+/// What Enter does in the composer (T3 Code's send shortcut).
+fn send_shortcut(connection: Connection) -> ui::Control {
+    const SHORTCUTS: [SendShortcut; 3] = [
+        SendShortcut::Enter,
+        SendShortcut::ModEnterMultiline,
+        SendShortcut::ModEnter,
+    ];
+    let name = |shortcut| match shortcut {
+        SendShortcut::Enter => "Enter".to_owned(),
+        SendShortcut::ModEnterMultiline => tr_format(
+            "{0} + Enter（複数行のとき）",
+            [&crate::composer::modifier()],
+        ),
+        SendShortcut::ModEnter => tr_format("常に {0} + Enter", [&crate::composer::modifier()]),
+    };
+    let current = move || preferences(connection).send_shortcut;
+    choice(
+        move || name(current()),
+        move || {
+            json!(SHORTCUTS.map(|shortcut| json!({
+                "id": name(shortcut),
+                "title": name(shortcut),
+                "selected": shortcut == current(),
+            })))
+        },
+        move |id: &str| {
+            if let Some(shortcut) = SHORTCUTS.into_iter().find(|shortcut| name(*shortcut) == id) {
+                set_preferences(connection, |preferences| {
+                    preferences.send_shortcut = shortcut
+                });
+            }
+        },
+    )
+}
+
+fn follow_up_description(shortcut: SendShortcut) -> String {
+    let modifier = crate::composer::modifier();
+    let opposite = match shortcut {
+        SendShortcut::ModEnterMultiline => tr_format(
+            "1行のプロンプトは {0} + Enter、複数行のプロンプトは {0} + Shift + Enter で、そのメッセージだけ逆の動作になります。",
+            [&modifier],
+        ),
+        SendShortcut::ModEnter => tr_format(
+            "{0} + Shift + Enter で、そのメッセージだけ逆の動作になります。",
+            [&modifier],
+        ),
+        SendShortcut::Enter => tr_format(
+            "{0} + Enter で、そのメッセージだけ逆の動作になります。",
+            [&modifier],
+        ),
+    };
+    format!(
+        "{}{opposite}",
+        tr(
+            "エージェントの実行中に送るメッセージを、キューに追加するか実行中の作業に追加で指示するかを選択します。"
+        )
+    )
+}
+
+/// What a message sent while the agent works does (T3 Code's follow-up behavior).
+fn follow_up(connection: Connection) -> ui::Control {
+    const BEHAVIORS: [FollowUp; 2] = [FollowUp::Queue, FollowUp::Steer];
+    let name = |behavior| match behavior {
+        FollowUp::Queue => tr("キュー"),
+        FollowUp::Steer => tr("追加の指示"),
+    };
+    let current = move || preferences(connection).follow_up;
+    choice(
+        move || name(current()).to_owned(),
+        move || {
+            json!(BEHAVIORS.map(|behavior| json!({
+                "id": name(behavior),
+                "title": name(behavior),
+                "selected": behavior == current(),
+            })))
+        },
+        move |id: &str| {
+            if let Some(behavior) = BEHAVIORS.into_iter().find(|behavior| name(*behavior) == id) {
+                set_preferences(connection, |preferences| preferences.follow_up = behavior);
+            }
+        },
+    )
 }
 
 fn update_phase(connection: Connection) -> Memo<UpdatePhase> {

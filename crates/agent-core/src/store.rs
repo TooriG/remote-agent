@@ -424,6 +424,7 @@ impl Store {
                     preferred: snapshot.files.preferred_editor,
                 },
                 language: snapshot.catalog.ui_language,
+                composer: snapshot.input.composer_preferences,
             })
         });
         let mut device_updates = preferences.subscribe();
@@ -848,6 +849,10 @@ impl Store {
             Intent::SetPreferredEditor { editor } => Some(*editor),
             _ => None,
         };
+        let composer = match &intent {
+            Intent::SetComposerPreferences { preferences } => Some(*preferences),
+            _ => None,
+        };
         let mut preferences_changed = false;
         let pause = matches!(intent, Intent::SetConnectionEnabled { enabled: false });
         let attempt = pause.then(|| self.connection_attempt.lock().unwrap());
@@ -902,8 +907,10 @@ impl Store {
                             )
                         })
                     })
+                } else if let Some(editor) = editor {
+                    Some(self.preferences.apply_editor(editor))
                 } else {
-                    editor.map(|editor| self.preferences.apply_editor(editor))
+                    composer.map(|composer| self.preferences.apply_composer(composer))
                 };
                 if let Some(update) = update {
                     match update {
@@ -1051,6 +1058,7 @@ fn adopt_preferences(snapshot: &mut Arc<Snapshot>, preferences: &Preferences) ->
     if snapshot.catalog.model_preferences == preferences.models
         && snapshot.files.preferred_editor == preferences.editor.preferred
         && snapshot.catalog.ui_language == preferences.language
+        && snapshot.input.composer_preferences == preferences.composer
     {
         return false;
     }
@@ -1058,6 +1066,7 @@ fn adopt_preferences(snapshot: &mut Arc<Snapshot>, preferences: &Preferences) ->
     snapshot.catalog.model_preferences = preferences.models.clone();
     snapshot.files.preferred_editor = preferences.editor.preferred;
     snapshot.catalog.ui_language = preferences.language;
+    snapshot.input.composer_preferences = preferences.composer;
     true
 }
 
@@ -2420,6 +2429,7 @@ mod tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: false,
+                queued: false,
             }),
         );
         let effects = operation.apply(&mut snapshot, "", opened.unwrap());
@@ -2801,6 +2811,7 @@ mod tests {
             .dispatch(Intent::Submit {
                 thread_id: None,
                 client_user_message_id: "input".into(),
+                alternate: false,
             })
             .await;
         assert!(matches!(result, Err(PeerError::InvalidMessage(_))));
@@ -2823,6 +2834,7 @@ mod tests {
                 after_item_id: None,
                 accepted: false,
                 delivery_unknown: false,
+                queued: false,
             })
         };
         let mut current = Snapshot {

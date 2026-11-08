@@ -106,6 +106,7 @@ internal class AndroidPreferenceStorage(context: Context) : PreferenceStorage {
         when (key) {
             PreferenceKey.MODELS -> AtomicFile(File(directory, "model-preferences.json"))
             PreferenceKey.EDITOR -> AtomicFile(File(directory, "editor-preferences.json"))
+            PreferenceKey.COMPOSER -> AtomicFile(File(directory, "composer-preferences.json"))
             PreferenceKey.LANGUAGE -> null
         }
 

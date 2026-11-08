@@ -135,7 +135,7 @@ impl SessionRouter {
         bindings: &[(SessionRef, ProviderKind)],
     ) -> Result<(), String> {
         match change {
-            AgentChange::TaskParent { .. } => {}
+            AgentChange::TaskParent { .. } | AgentChange::Answered { .. } => {}
             AgentChange::Session { session, change } => self.session_change(&session, change),
             AgentChange::Request {
                 session,
@@ -258,6 +258,75 @@ impl SessionRouter {
         self.prune(target, &actor);
         receipt
     }
+    /// The conversation's input waiting for its running turn.
+    pub(super) fn queue(&self, target: &SessionRef) -> agent_protocol::operations::InputQueue {
+        let Some(actor) = self.existing(target) else {
+            return Default::default();
+        };
+        let queue = lock_state(&actor).timeline.queue.clone();
+        self.prune(target, &actor);
+        queue
+    }
+    /// Input waits and nothing holds the queue.
+    pub(super) fn queue_ready(&self, target: &SessionRef) -> bool {
+        self.existing(target).is_some_and(|actor| {
+            let owned = lock_state(&actor);
+            !owned.timeline.queue.held && !owned.timeline.queue.inputs.is_empty()
+        })
+    }
+    /// The turn that runs now, if the Host observed one.
+    pub(super) fn running_turn(&self, target: &SessionRef) -> Option<agent_protocol::ids::TurnId> {
+        let actor = self.existing(target)?;
+        let turn = lock_state(&actor)
+            .timeline
+            .turns
+            .iter()
+            .flatten()
+            .rfind(|turn| turn.status == agent_protocol::execution::TurnStatus::Running)
+            .map(|turn| turn.id.clone());
+        self.prune(target, &actor);
+        turn
+    }
+    /// Marks the turn that queued input started, now and when it changes later,
+    /// as T3 Code labels a message that waited in its queue.
+    pub(super) fn mark_queued_turn(
+        &self,
+        target: &SessionRef,
+        turn_id: agent_protocol::ids::TurnId,
+    ) {
+        let actor = self.actor(target);
+        let mut owned = lock_state(&actor);
+        let current = owned
+            .timeline
+            .turns
+            .iter()
+            .flatten()
+            .rfind(|turn| turn.id == turn_id)
+            .cloned();
+        owned.queued_turns.insert(turn_id);
+        let mut failed = Vec::new();
+        if let Some(turn) = current.filter(|turn| !turn.queued) {
+            let completed = turn.status != agent_protocol::execution::TurnStatus::Running;
+            let turn = agent_protocol::models::Turn {
+                items: None,
+                ..turn.as_ref().clone()
+            };
+            self.change_locked(
+                &mut owned,
+                target,
+                &SessionChange::Turn { turn, completed },
+                &mut failed,
+            );
+        }
+        drop(owned);
+        self.close_failed(failed);
+        self.prune(target, &actor);
+    }
+    pub(super) fn running(&self, target: &SessionRef) -> bool {
+        self.existing(target).is_some_and(|actor| {
+            lock_state(&actor).timeline.status == agent_protocol::models::SessionStatus::Running
+        })
+    }
 
     pub(super) fn begin_submission(&self, target: &SessionRef, id: &str) -> Result<(), Failure> {
         if id.is_empty() || id.len() > 256 {
@@ -278,7 +347,11 @@ impl SessionRouter {
         }
         if owned.timeline.submissions.len() >= 128 {
             owned.timeline.submissions.retain(|_, delivery| {
-                *delivery != agent_protocol::session::SubmissionDelivery::Rejected
+                !matches!(
+                    delivery,
+                    agent_protocol::session::SubmissionDelivery::Rejected
+                        | agent_protocol::session::SubmissionDelivery::Withdrawn
+                )
             });
         }
         if owned.timeline.submissions.len() >= 128 {
@@ -599,6 +672,22 @@ impl SessionRouter {
         change: &SessionChange,
         failed: &mut Vec<SessionId>,
     ) {
+        let stamped;
+        let change = match change {
+            SessionChange::Turn { turn, completed }
+                if !turn.queued && actor.queued_turns.contains(&turn.id) =>
+            {
+                stamped = SessionChange::Turn {
+                    turn: agent_protocol::models::Turn {
+                        queued: true,
+                        ..turn.clone()
+                    },
+                    completed: *completed,
+                };
+                &stamped
+            }
+            change => change,
+        };
         let expired: Vec<_> = actor.timeline.requests.values().filter(|request| match change {
             SessionChange::Turn { turn, completed: true } => matches!(&request.target, agent_protocol::requests::RequestTarget::Turn { turn_id, .. } if turn_id == &turn.id),
             SessionChange::Item { turn_id, item } => {
@@ -708,6 +797,10 @@ impl SessionRouter {
             change,
         ));
         drop(state);
+        // The queue survives a Host restart, as T3 Code's queued runs do.
+        if let (Some(transcripts), SessionChange::Queue { queue }) = (&transcripts, change) {
+            record_failure(transcripts.save_queue(target, queue));
+        }
         if let (Some(transcripts), Some(turn)) = (&transcripts, finished) {
             let removed_item = match change {
                 SessionChange::RemoveItem { item_id, .. } => Some(item_id),

@@ -244,6 +244,7 @@ fn limit(step: &Step) -> Duration {
         | Step::Select(find, _)
         | Step::Menu(find)
         | Step::Drag(find, _)
+        | Step::DragBy(find, _)
         | Step::Click(_, find)
         | Step::Hover(find)
         | Step::Expect(find)
@@ -360,6 +361,14 @@ fn attempt(
                 })
             })
         }
+        Step::DragBy(find, points) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
+            drag_by(tree, index, *points).map(|()| {
+                format!(
+                    "dragged {} by {points} points",
+                    tree.nodes[index].describe()
+                )
+            })
+        }),
         Step::Select(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             select(tree, index, text)
                 .map(|()| format!("selected {text:?} in {}", tree.nodes[index].describe()))
@@ -1306,6 +1315,37 @@ fn hover(tree: &Tree, index: usize) -> Result<(), String> {
         .hitTest(content.convertPoint_fromView(point, None))
         .ok_or_else(|| format!("no view is under {}", node.describe()))?;
     view.mouseMoved(&event);
+    Ok(())
+}
+
+/// A left-button drag from the element's center by `points` down, handed to
+/// its window in steps as a pointer's would be, without moving the pointer.
+fn drag_by(tree: &Tree, index: usize, points: i32) -> Result<(), String> {
+    let node = &tree.nodes[index];
+    let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
+        return Err(format!("{} cannot be dragged", node.describe()));
+    };
+    let frame = window.convertRectFromScreen(unsafe { msg_send![&**object, accessibilityFrame] });
+    let start = objc2_foundation::NSPoint::new(
+        frame.origin.x + frame.size.width / 2.0,
+        frame.origin.y + frame.size.height / 2.0,
+    );
+    const STEPS: i32 = 8;
+    let events = std::iter::once((NSEventType::LeftMouseDown, 0))
+        .chain((1..=STEPS).map(|step| (NSEventType::LeftMouseDragged, step)))
+        .chain(std::iter::once((NSEventType::LeftMouseUp, STEPS)));
+    for (kind, step) in events {
+        // Window coordinates grow upward; a drag down lowers y.
+        let point = objc2_foundation::NSPoint::new(
+            start.x,
+            start.y - f64::from(points) * f64::from(step) / f64::from(STEPS),
+        );
+        let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            kind, point, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 1, 1.0,
+        )
+        .ok_or("AppKit made no mouse event")?;
+        window.sendEvent(&event);
+    }
     Ok(())
 }
 

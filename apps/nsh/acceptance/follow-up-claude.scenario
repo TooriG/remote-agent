@@ -1,0 +1,26 @@
+# Claude as T3 Code drives it: ⌘Enter steers the working response, which takes
+# the message at once, and a plain send waits in the queue and runs after it.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+press "Fixture Model" 20000
+press "Claude Code"
+press "Default (recommended)" 10000
+type "AI に依頼する" "wait"
+press 送信
+expect "Waiting for interruption" 30000
+type "AI に依頼する" "steer now"
+key cmd+return
+expect "reply 2: steer now" 30000
+expect "実行中の作業に追加で指示しました"
+screenshot steered
+type "AI に依頼する" "wait"
+press 送信
+expect "Waiting for interruption" after "reply 2: steer now" 30000
+type "AI に依頼する" "after the turn"
+press メッセージをキューに追加
+expect "after the turn" after "キューのメッセージ" 10000
+screenshot queued
+fixture /release-inputs
+expect "reply 4: after the turn" 30000
+expect "実行中の作業の後に送信しました"
+expect_absent "キューのメッセージ"

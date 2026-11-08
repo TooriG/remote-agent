@@ -229,7 +229,8 @@ extension ConversationModel {
     func send() {
         perform(.submit(
             threadId: navigation.threadId,
-            clientUserMessageId: UUID().uuidString
+            clientUserMessageId: UUID().uuidString,
+            alternate: false
         )) { [weak self] _ in
             self?.persist()
         }
@@ -251,7 +252,8 @@ extension ConversationModel {
             preparation: preparation?.id(),
             audio: audio,
             send: sendImmediately,
-            clientUserMessageId: UUID().uuidString
+            clientUserMessageId: UUID().uuidString,
+            alternate: false
         ))) { [weak self] _ in
             withExtendedLifetime(preparation) {
                 self?.persist()

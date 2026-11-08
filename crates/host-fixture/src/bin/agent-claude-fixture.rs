@@ -271,12 +271,72 @@ struct Fixture {
     history: std::path::PathBuf,
     trace: String,
     waiting: Option<Waiting>,
+    /// The current wait ended: by input, a stop, or the release of inputs.
+    wait_settled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Fixture {
+    /// Ends the current wait; true when the release of inputs already ended it.
+    fn settle_wait(&self) -> bool {
+        self.wait_settled
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A wait's response finishes by itself once the test releases inputs
+    /// (`/release-inputs` beside the Host's state), unless input or a stop
+    /// settles it first.
+    fn release_wait(&mut self, message: String) {
+        let settled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.wait_settled = settled.clone();
+        let release = Path::new(&std::env::var_os("CLAUDE_CONFIG_DIR").unwrap())
+            .parent()
+            .unwrap()
+            .join("release-inputs");
+        let _ = fs::remove_file(&release);
+        let session = self.session.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                if settled.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                if !release.exists() {
+                    continue;
+                }
+                let _response = ROOT_RESPONSE.lock().unwrap();
+                if settled.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                block(
+                    &session,
+                    &message,
+                    1,
+                    "text",
+                    "待機を終えました",
+                    Some("end_turn"),
+                );
+                end_turn(&session);
+                emit(
+                    &session,
+                    json!({"type":"result","subtype":"success","session_id":session,"is_error":false,"result":"待機を終えました"}),
+                );
+                return;
+            }
+        });
+    }
+
     /// Claude Code withdraws an open prompt, rejects its tool and ends the
     /// stopped response with an execution error.
     fn interrupt(&mut self, value: &Value) {
+        if self.waiting == Some(Waiting::Wait) && self.settle_wait() {
+            // The released wait already ended its response.
+            self.waiting = None;
+            emit(
+                &self.session,
+                json!({"type":"control_response","response":{"subtype":"success","request_id":value["request_id"],"response":{}}}),
+            );
+            return;
+        }
         let prompted = matches!(
             self.waiting,
             Some(
@@ -388,32 +448,32 @@ impl Fixture {
             self.model.as_deref(),
             Some(self.config["expectedModel"].as_str().unwrap_or("default"))
         );
-        let waiting = self.waiting.take() == Some(Waiting::Wait);
-        if waiting && self.config["inputAfterResult"] != true {
-            // Input folded into the answering response is saved as a queued
-            // command and consumed before that response's terminal result.
+        let waiting = self.waiting.take() == Some(Waiting::Wait) && !self.settle_wait();
+        let steer = value["priority"] == "now";
+        assert!(
+            !waiting || steer,
+            "the Host gives a working response input only as a steer"
+        );
+        if waiting {
+            // A priority "now" message cuts the streaming response as Claude
+            // Code's send-now does: it saves the interruption marker stamped
+            // `interruptedBySendNow`, ends the response as aborted, and runs the
+            // message as the next prompt.
             native(
                 &self.session,
-                json!({"type":"attachment","attachment":{
-                    "type":"queued_command","commandMode":"prompt","origin":{"kind":"human"},"source_uuid":value["uuid"],
-                    "prompt":value["message"]["content"]
-                }}),
+                json!({"type":"user","interruptedBySendNow":true,
+                    "message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}),
             );
-            output(value.clone());
-        } else {
-            if waiting {
-                // A separately run prompt follows the result without idle and
-                // is saved as a standalone user message, as Claude Code does.
-                output(
-                    json!({"type":"result","session_id":self.session,"is_error":false,"result":"finished waiting"}),
-                );
-            }
-            emit(
-                &self.session,
-                json!({"type":"system","subtype":"init","session_id":self.session,"user_message_uuids":[value["uuid"]]}),
+            output(
+                json!({"type":"result","subtype":"error_during_execution","session_id":self.session,
+                    "is_error":true,"terminal_reason":"aborted_streaming","errors":[]}),
             );
-            emit(&self.session, value.clone());
         }
+        emit(
+            &self.session,
+            json!({"type":"system","subtype":"init","session_id":self.session,"user_message_uuids":[value["uuid"]]}),
+        );
+        emit(&self.session, value.clone());
         let content = value["message"]["content"].clone();
         self.inputs.push(
             json!({"content":content,"model":self.model,"effort":self.effort,"process":self.process}),
@@ -499,7 +559,7 @@ impl Fixture {
         self.waiting = None;
     }
 
-    fn respond_to_input(&self, text: &str) -> Option<Waiting> {
+    fn respond_to_input(&mut self, text: &str) -> Option<Waiting> {
         match InputScenario::parse(text, self.config["resultError"] == true) {
             InputScenario::Crash => {
                 std::process::exit(17);
@@ -567,6 +627,7 @@ impl Fixture {
                     "Waiting for interruption",
                     None,
                 );
+                self.release_wait(message);
                 Some(Waiting::Wait)
             }
             InputScenario::Control(control) => {
@@ -748,6 +809,7 @@ fn main() {
         history,
         trace: path,
         waiting: None,
+        wait_settled: Default::default(),
     };
 
     for line in io::stdin().lock().lines() {

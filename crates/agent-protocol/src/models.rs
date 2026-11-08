@@ -100,6 +100,9 @@ pub struct Thread {
     pub requests: BTreeMap<crate::ids::RequestId, Arc<crate::requests::Request>>,
     #[serde(default)]
     pub submissions: BTreeMap<crate::ids::ClientInputId, crate::session::SubmissionDelivery>,
+    /// Input waiting in the Host's queue for the running turn, in order.
+    #[serde(default)]
+    pub queue: crate::operations::InputQueue,
     pub preparation: Option<crate::session::SessionPreparation>,
     pub id: Option<crate::session::SessionRef>,
     /// The public identity remains stable across provider handoffs.
@@ -141,6 +144,9 @@ pub struct Turn {
     pub error: Option<ExecutionError>,
     pub started_at_ms: Option<u64>,
     pub completed_at_ms: Option<u64>,
+    /// Started by input that waited in the Host's queue behind another turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
 }
 impl Turn {
     /// Reused turn IDs describe the same occurrence only when their items overlap.
@@ -751,6 +757,7 @@ mod tests {
                     model: None,
                     effort: None,
                     service_tier: None,
+                    follow_up: Default::default(),
                 },
                 status: PreparationStatus::Preparing,
                 stage: crate::session::PreparationStage::Workspace,

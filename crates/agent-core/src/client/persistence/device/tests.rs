@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Default)]
 struct Disk {
-    bytes: Mutex<[Vec<u8>; 3]>,
+    bytes: Mutex<[Vec<u8>; 4]>,
     fail: AtomicUsize,
     writes: Mutex<Vec<usize>>,
 }
@@ -17,6 +17,7 @@ fn index(key: PreferenceKey) -> usize {
         PreferenceKey::Models => 0,
         PreferenceKey::Editor => 1,
         PreferenceKey::Language => 2,
+        PreferenceKey::Composer => 3,
     }
 }
 impl PreferenceStorage for Disk {
