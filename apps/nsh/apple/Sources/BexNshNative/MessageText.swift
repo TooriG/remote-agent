@@ -59,8 +59,15 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             var ancestor = superview
             while let current = ancestor {
                 if let layer = current.layer {
-                    // NSView frame/bounds changes invalidate native views themselves.
-                    // NSH's layer-only scroll is the path that bypasses AppKit.
+                    // A prepend moves rows and then compensates the scroll offset.
+                    // Track both halves, including the deferred bounds commit: a
+                    // transiently clipped text view cannot retain its old pixels.
+                    geometryObservers.append(layer.observe(\.position, options: [.old, .new]) { _, change in
+                        if change.oldValue != change.newValue { redraw() }
+                    })
+                    geometryObservers.append(layer.observe(\.bounds, options: [.old, .new]) { _, change in
+                        if change.oldValue != change.newValue { redraw() }
+                    })
                     geometryObservers.append(layer.observe(\.sublayerTransform, options: [.old, .new]) { _, change in
                         if let old = change.oldValue, let new = change.newValue,
                            !CATransform3DEqualToTransform(old, new) { redraw() }
@@ -128,13 +135,15 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         // published to accessibility (which includes offscreen list cells).
         private var paints = RenderProbe.Paints()
 
-        @objc func bexPaintedAtForText(_ expected: String) -> Double {
+        @objc func bexPaintedAtForText(_ expected: String, since: TimeInterval, visiblePrefix: Bool) -> Double {
             guard let manager = layoutManager, let container = textContainer,
                   !visibleRect.isEmpty else { return 0 }
             let glyphs = manager.glyphRange(forBoundingRect: visibleRect, in: container)
             let range = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-            guard (string as NSString).substring(with: range).contains(expected) else { return 0 }
-            return paints.first(for: expected) ?? 0
+            let visible = (string as NSString).substring(with: range)
+            if visiblePrefix { return paints.firstVisible(prefix: expected, in: visible) ?? 0 }
+            guard visible.contains(expected) else { return 0 }
+            return paints.first(for: expected, since: since) ?? 0
         }
 
         func resetPaints() { paints.clear() }

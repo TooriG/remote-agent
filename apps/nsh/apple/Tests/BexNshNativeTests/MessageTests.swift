@@ -41,6 +41,45 @@ final class MessageTests: XCTestCase {
             XCTAssertEqual(text.layer?.needsDisplay(), false, "an offscreen cell must not be invalidated")
         }
 
+        @MainActor func testPrependingRowsAndCommittingBoundsRedrawRetainedText() {
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 200),
+                                  styleMask: [], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let clip = NSView(frame: CGRect(x: 0, y: 0, width: 400, height: 200))
+            clip.wantsLayer = true
+            clip.layer?.masksToBounds = true
+            window.contentView = clip
+            let content = NSView(frame: CGRect(x: 0, y: 0, width: 400, height: 2000))
+            content.wantsLayer = true
+            clip.addSubview(content)
+            let row = NSView(frame: CGRect(x: 0, y: 0, width: 400, height: 100))
+            row.wantsLayer = true
+            content.addSubview(row)
+            let text = MessageTextView()
+            text.frame = CGRect(x: 0, y: 0, width: 400, height: 40)
+            row.addSubview(text)
+            window.orderFront(nil)
+            window.displayIfNeeded()
+            text.watchScrollingGeometry()
+            text.layer?.displayIfNeeded()
+            let visible = text.visibleRect
+            XCTAssertFalse(visible.isEmpty)
+
+            // The list prepends rows, then keeps this row at its screen position.
+            row.frame.origin.y += 1000
+            content.layer?.sublayerTransform = CATransform3DMakeTranslation(0, -1000, 0)
+            XCTAssertEqual(text.visibleRect, visible)
+            XCTAssertEqual(text.layer?.needsDisplay(), true, "the row must regain its glyph pixels")
+            text.layer?.displayIfNeeded()
+
+            // AppKit catches up later without moving any pixels on screen.
+            content.setBoundsOrigin(CGPoint(x: 0, y: 1000))
+            content.layer?.sublayerTransform = CATransform3DIdentity
+            XCTAssertEqual(text.visibleRect, visible)
+            XCTAssertEqual(text.layer?.needsDisplay(), true, "the bounds rebase must not leave text blank")
+        }
+
         @MainActor func testExposureKeepsOverlappingPixelsForBothScrollDirectionsAndResize() {
             let before = NSRect(x: 0, y: 0, width: 400, height: 200)
             let after = NSRect(x: 0, y: 60, width: 400, height: 200)
@@ -63,6 +102,15 @@ final class MessageTests: XCTestCase {
         }
 
         #if DEBUG
+            @MainActor func testVisiblePaintMatchesTheActualParagraphInsteadOfAnotherPrefix() {
+                var paints = RenderProbe.Paints()
+                paints.record("Render turn 49, paragraph 2. Older content.", at: 10)
+                paints.record("Render turn 51, paragraph 2. Newly visible content.", at: 20)
+                XCTAssertEqual(paints.firstVisible(prefix: "Render turn", in: "clipped line\nRender turn 51, paragraph 2. Newly visible"), 20)
+                XCTAssertNil(paints.firstVisible(prefix: "Render turn", in: "Render turn 50, paragraph 2. Not painted"))
+                XCTAssertNil(paints.firstVisible(prefix: "Render turn", in: "unrelated content"))
+            }
+
             @MainActor func testStreamProbeRetainsFirstPaintAcrossAppendsAndClearsReplacedContent() {
                 var paints = RenderProbe.Paints()
                 paints.record("update 0", at: 10)
@@ -74,6 +122,8 @@ final class MessageTests: XCTestCase {
                 paints.update(previous: "update 0\nupdate 1", current: "update 0\nupdate 1")
                 paints.record("update 0\nupdate 1", at: 30)
                 XCTAssertEqual(paints.first(for: "update 1"), 20)
+                XCTAssertEqual(paints.first(for: "update 0", since: 25), 30)
+                XCTAssertEqual(paints.first(for: "update 1", since: 25), 30)
                 paints.update(previous: "update 0\nupdate 1", current: "replacement")
                 XCTAssertNil(paints.first(for: "update 0"))
                 paints.record("replacement", at: 40)
