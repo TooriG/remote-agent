@@ -56,12 +56,16 @@ pub(super) fn root(application: Arc<Application>, area: Area) -> Root {
 }
 
 pub fn run() -> std::process::ExitCode {
+    // The app's data follows its Host's scope, so a source build keeps apart
+    // from the installed app as their Hosts do.
     let (runtime, application, local_directory) =
-        match crate::storage::directory().and_then(|root| {
-            let local = crate::storage::local_host()?;
-            let directory = local.as_ref().and_then(|host| host.local_directory.clone());
-            Application::new(root, local).map(|(runtime, app)| (runtime, app, directory))
-        }) {
+        match agent_local_host::launch::HostScope::from_environment(cfg!(debug_assertions))
+            .and_then(|scope| Ok((scope.resolve()?.directory, scope)))
+            .map_err(crate::storage::error)
+            .and_then(|(directory, scope)| {
+                Application::new(scope.directory.join("nsh-client"), Some(scope))
+                    .map(|(runtime, app)| (runtime, app, Some(directory)))
+            }) {
             Ok(service) => service,
             Err(reason) => {
                 eprintln!("{reason}");
@@ -70,9 +74,11 @@ pub fn run() -> std::process::ExitCode {
         };
     nsh_platform_macos::set_components(crate::register_macos);
     let options = AppOptions {
-        app_id: "com.bex.nsh-preview".into(),
-        title: "Bex · NSH Preview".into(),
+        app_id: "app.bex.desktop".into(),
+        title: "Bex".into(),
         size: (1360, 900),
+        // Closing hides the window; the Dock reopens it, and Quit stops the app.
+        keep_alive_on_close: true,
         ..Default::default()
     };
     let browser = crate::native::browser_macos::Service::new(

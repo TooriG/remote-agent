@@ -1,9 +1,11 @@
 //! Files the Host and its local clients share on one machine: private state
 //! files, the local client identity, discovery of the running Host and the
-//! application bundle layout.
+//! application bundle layout, and starting and updating the bundled Host.
 #[cfg(unix)]
 pub mod browser;
 mod files;
+pub mod install;
+pub mod launch;
 mod registry;
 pub mod update;
 pub mod wsl;

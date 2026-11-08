@@ -105,6 +105,7 @@ fn identity(_: &str) -> Result<Vec<u8>, AgentError> {
     Err(error("This client requires Apple Keychain."))
 }
 
+/// The iPhone app's data. The desktop keeps its data in its local Host's scope.
 pub(crate) fn directory() -> Result<PathBuf, AgentError> {
     if let Some(directory) = std::env::var_os("AGENT_STATE_DIR") {
         return Ok(PathBuf::from(directory).join("nsh-client"));
@@ -130,31 +131,4 @@ pub(crate) fn directory() -> Result<PathBuf, AgentError> {
             "This client requires an Apple application data directory.",
         ))
     }
-}
-
-pub(crate) fn local_host() -> Result<Option<Host>, AgentError> {
-    #[cfg(target_os = "macos")]
-    {
-        use agent_local_host::{LocalHostRegistry, LocalHostState};
-        let registry = if std::env::var_os("AGENT_ISOLATED_HOST").as_deref()
-            == Some(std::ffi::OsStr::new("1"))
-        {
-            LocalHostRegistry::new(PathBuf::from(
-                std::env::var_os("AGENT_STATE_DIR")
-                    .ok_or_else(|| error("AGENT_STATE_DIR is required for an isolated Host"))?,
-            ))
-        } else {
-            LocalHostRegistry::for_user().map_err(error)?
-        };
-        let local = registry.resolve(registry.directory()).map_err(error)?;
-        if let LocalHostState::Ready(ticket) = local.state {
-            return Ok(Some(Host {
-                id: "local".into(),
-                name: "This PC".into(),
-                ticket: ticket.to_string(),
-                local_directory: Some(local.directory),
-            }));
-        }
-    }
-    Ok(None)
 }

@@ -1,5 +1,9 @@
 #[cfg(target_os = "macos")]
 fn main() -> std::process::ExitCode {
+    // The updater's commands run before any window or Host connection.
+    if agent_local_host::install::run_command(agent_core::updates::build_number()) {
+        return std::process::ExitCode::SUCCESS;
+    }
     agent_nsh::run_macos()
 }
 

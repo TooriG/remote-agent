@@ -9,6 +9,7 @@ use agent_core::{
     presentation::view::Presentation,
     state::Intent,
 };
+use agent_local_host::{LocalHostState, launch::HostScope};
 use std::{
     path::PathBuf,
     sync::{
@@ -47,14 +48,19 @@ pub(crate) struct Client {
     sessions: Arc<ClientSessions>,
     root: PathBuf,
     hosts: tokio::sync::Mutex<Vec<Host>>,
+    /// This machine's Host, started from the app bundle when it is stopped.
+    local: Option<HostScope>,
+    local_startup: tokio::sync::Mutex<()>,
     updates: async_channel::Sender<Update>,
     panes: std::sync::Mutex<std::collections::BTreeMap<u64, Arc<panes::Pane>>>,
 }
 
+const LOCAL: &str = "local";
+
 impl Client {
     pub fn new(
         root: PathBuf,
-        local: Option<Host>,
+        local: Option<HostScope>,
     ) -> Result<
         (
             tokio::runtime::Runtime,
@@ -73,7 +79,7 @@ impl Client {
             sessions: ClientSessions::new(
                 false,
                 ClientBuild {
-                    number: 0,
+                    number: agent_core::updates::build_number(),
                     revision: option_env!("AGENT_BUILD_REVISION")
                         .unwrap_or("development")
                         .into(),
@@ -82,12 +88,14 @@ impl Client {
             ),
             root,
             hosts: Default::default(),
+            local,
+            local_startup: Default::default(),
             updates,
             panes: Default::default(),
         });
         let owner = client.clone();
         client.spawn(async move {
-            if let Err(reason) = owner.restore(local).await {
+            if let Err(reason) = owner.restore().await {
                 owner.report(reason);
             }
         });
@@ -102,7 +110,7 @@ impl Client {
         let _ = self.updates.try_send(Update::Error(reason.to_string()));
     }
 
-    async fn restore(self: &Arc<Self>, local: Option<Host>) -> Result<(), AgentError> {
+    async fn restore(self: &Arc<Self>) -> Result<(), AgentError> {
         let path = self.root.join("hosts.json");
         let bytes = tokio::task::spawn_blocking(move || storage::read(&path))
             .await
@@ -112,9 +120,9 @@ impl Client {
         } else {
             serde_json::from_slice(&bytes).map_err(error)?
         };
-        hosts.retain(|host| host.id != "local");
-        if let Some(local) = local {
-            hosts.insert(0, local);
+        hosts.retain(|host| host.id != LOCAL);
+        if let Some(scope) = &self.local {
+            hosts.insert(0, local_profile(scope).await?);
         }
         let mut registry = self.hosts.lock().await;
         if self.closing.load(Ordering::SeqCst) {
@@ -144,14 +152,22 @@ impl Client {
             match session.clone().ready().await {
                 Ok(_) => {
                     owner.observe(host.id.clone(), session.clone());
-                    owner.resume(session, host.ticket).await;
+                    owner.resume(session, host).await;
                 }
                 Err(reason) => owner.report(reason),
             }
         });
     }
 
-    async fn resume(&self, session: Arc<ClientSession>, ticket: String) {
+    async fn resume(&self, session: Arc<ClientSession>, host: Host) {
+        // A disconnected Host is neither started nor reached.
+        if !session.snapshot().connection_enabled() {
+            return;
+        }
+        let ticket = match self.ticket(host).await {
+            Ok(ticket) => ticket,
+            Err(reason) => return self.report(reason),
+        };
         if let Err(reason) = session.clone().resume(ticket).await {
             let message = reason.to_string();
             if !session.store().is_some_and(|store| {
@@ -161,6 +177,30 @@ impl Client {
                 self.report(message);
             }
         }
+    }
+
+    /// A paired Host's saved ticket, or this machine's Host's current one,
+    /// starting it when it is stopped.
+    async fn ticket(&self, host: Host) -> Result<String, AgentError> {
+        let Some(scope) = self.local.as_ref().filter(|_| host.id == LOCAL) else {
+            return Ok(host.ticket);
+        };
+        let _startup = self.local_startup.lock().await;
+        let executable = agent_local_host::launch::host_executable().map_err(error)?;
+        let (directory, ticket) =
+            agent_local_host::launch::connect(scope, &executable, |directory, ticket| async {
+                Ok((directory, ticket))
+            })
+            .await
+            .map_err(error)?;
+        // The session reads its identity from the directory it was opened with.
+        let same = |path: &std::path::Path| std::fs::canonicalize(path).ok();
+        if host.local_directory.as_deref().and_then(same) != same(&directory) {
+            return Err(error(tr(
+                "このPCのホストが変わりました。Bexを再起動してください。",
+            )));
+        }
+        Ok(ticket.to_string())
     }
 
     fn observe(self: &Arc<Self>, host: String, session: Arc<ClientSession>) {
@@ -261,7 +301,7 @@ impl Client {
             if let Some(profile) = profile
                 && let Some(session) = owner.sessions.session(host)
             {
-                owner.resume(session, profile.ticket).await;
+                owner.resume(session, profile).await;
             }
         });
     }
@@ -337,7 +377,7 @@ impl Client {
         let path = self.root.join("hosts.json");
         let saved = next
             .iter()
-            .filter(|host| host.id != "local")
+            .filter(|host| host.id != LOCAL)
             .cloned()
             .collect::<Vec<_>>();
         if let Err(reason) = tokio::task::spawn_blocking(move || {
@@ -428,6 +468,20 @@ impl Client {
     }
 }
 
+/// This machine's Host where it runs or will start, before it is ready.
+async fn local_profile(scope: &HostScope) -> Result<Host, AgentError> {
+    let local = scope.discover().await.map_err(error)?;
+    Ok(Host {
+        id: LOCAL.into(),
+        name: "This PC".into(),
+        ticket: match local.state {
+            LocalHostState::Ready(ticket) => ticket.to_string(),
+            LocalHostState::Starting | LocalHostState::Stopped => String::new(),
+        },
+        local_directory: Some(local.directory),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,11 +535,15 @@ mod tests {
     fn local_host_facts_are_explicit_and_saved_profiles_cannot_replace_them() {
         let directory = tempfile::tempdir().unwrap();
         let remote = saved_host(directory.path());
+        let scope = HostScope {
+            directory: directory.path().join("host"),
+            isolated: true,
+        };
         let local = Host {
-            id: "local".into(),
-            name: "Current local fixture".into(),
-            ticket: "offline".into(),
-            local_directory: None,
+            id: LOCAL.into(),
+            name: "This PC".into(),
+            ticket: String::new(),
+            local_directory: Some(scope.directory.clone()),
         };
         let mut snapshot = Snapshot::default();
         snapshot.connection.connection_disabled = true;
@@ -506,7 +564,7 @@ mod tests {
         )
         .unwrap();
         let (runtime, client, incoming) =
-            Client::new(directory.path().into(), Some(local.clone())).unwrap();
+            Client::new(directory.path().into(), Some(scope)).unwrap();
         runtime.block_on(async {
             let Update::Hosts(hosts) = incoming.recv().await.unwrap() else {
                 panic!("profiles must be published first");

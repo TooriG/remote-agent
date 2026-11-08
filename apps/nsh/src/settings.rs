@@ -5,9 +5,13 @@ use crate::{
     Connection, Navigation,
     application::Host,
     environment,
-    l10n::{self, localized, tr},
+    l10n::{self, localized, tr, tr_format},
 };
-use agent_core::{localization::UiLanguage, presentation::connections::ConnectionAgent};
+use agent_core::{
+    localization::UiLanguage,
+    presentation::connections::ConnectionAgent,
+    updates::{Channel, UpdatePhase},
+};
 use agent_protocol::session::ProviderKind;
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::json;
@@ -237,17 +241,105 @@ fn general(connection: Connection) -> View {
             })
             .enabled(connected),
         ),
-        ui::setting(
-            tr("アップデート"),
-            || environment::update_note().to_owned(),
-            ui::text_button(tr("アップデートを確認"), environment::check_updates),
-        ),
+        update(connection),
+        update_channel(connection),
         ui::setting(
             tr("表示言語"),
             || tr("アプリで使用する言語を選択します。").to_owned(),
             language(connection),
         ),
     ])
+}
+
+fn update_phase(connection: Connection) -> Memo<UpdatePhase> {
+    computed(move || {
+        connection.state.with(|state| {
+            state
+                .update
+                .as_ref()
+                .map_or(UpdatePhase::Development, |update| update.phase.clone())
+        })
+    })
+}
+
+/// This app's update: where it is, beside the one action it allows next.
+fn update(connection: Connection) -> View {
+    let phase = update_phase(connection);
+    let status = move || {
+        phase.with(|phase| match phase {
+            UpdatePhase::Development => tr("開発ビルドでは更新を確認しません。").to_owned(),
+            UpdatePhase::Checking => tr("更新を確認中…").to_owned(),
+            UpdatePhase::Current => tr("最新のバージョンです。").to_owned(),
+            UpdatePhase::Available(download) => {
+                tr_format("Bex {0}をダウンロードします。", [&download.build])
+            }
+            UpdatePhase::Downloading(percent) => tr_format("ダウンロード中 {0}%", [percent]),
+            UpdatePhase::Ready(build) => tr_format(
+                "再起動してBex {0}に更新します。中断した会話は同じ会話で再開します。",
+                [build],
+            ),
+            UpdatePhase::Installing => tr("再起動の準備中…").to_owned(),
+            UpdatePhase::Failed(reason) => localized(reason.clone()),
+        })
+    };
+    let action = move || {
+        SharedString::from(phase.with(|phase| match phase {
+            UpdatePhase::Available(_) | UpdatePhase::Downloading(_) => tr("ダウンロード"),
+            UpdatePhase::Ready(_) | UpdatePhase::Installing => tr("再起動して更新"),
+            _ => tr("アップデートを確認"),
+        }))
+    };
+    ui::setting(
+        tr("アップデート"),
+        status,
+        ui::text_button(action, move || {
+            connection.application.with(|app| app.advance_update())
+        })
+        .enabled(move || phase.with(|phase| !phase.busy() && *phase != UpdatePhase::Development)),
+    )
+}
+
+/// The releases this app receives. A staged build belongs to its channel.
+fn update_channel(connection: Connection) -> View {
+    const CHANNELS: [Channel; 2] = [Channel::Production, Channel::Nightly];
+    let name = |channel| match channel {
+        Channel::Production => tr("安定版"),
+        Channel::Nightly => "Nightly",
+    };
+    let channel = computed(move || {
+        connection
+            .state
+            .with(|state| state.update.as_ref().map(|update| update.channel))
+            .unwrap_or_default()
+    });
+    let phase = update_phase(connection);
+    let items = move || {
+        json!(CHANNELS.map(|value| json!({
+            "id": name(value),
+            "title": name(value),
+            "selected": value == channel.get(),
+        })))
+    };
+    ui::setting(
+        tr("更新チャンネル"),
+        || tr("このPCのBexが受け取るリリースを選択します。").to_owned(),
+        choice(
+            move || name(channel.get()).to_owned(),
+            items,
+            move |id: &str| {
+                if let Some(value) = CHANNELS.into_iter().find(|value| name(*value) == id) {
+                    connection
+                        .application
+                        .with(|app| app.select_update_channel(value));
+                }
+            },
+        )
+        .enabled(move || {
+            phase.with(|phase| {
+                !phase.busy() && !matches!(phase, UpdatePhase::Development | UpdatePhase::Ready(_))
+            })
+        }),
+    )
 }
 
 /// The UI language. Choosing one makes the whole window again in it.

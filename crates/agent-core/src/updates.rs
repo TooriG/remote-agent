@@ -1,5 +1,17 @@
-//! Desktop release selection. Downloads and installation belong to the OS client.
+//! Desktop release selection, and with `app-updates` the desktop update flow.
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "app-updates")]
+mod updater;
+#[cfg(feature = "app-updates")]
+pub use updater::{UpdatePhase, UpdateState, Updater};
+
+/// The build number release packaging compiles in; 0 for source builds.
+pub fn build_number() -> u64 {
+    option_env!("AGENT_BUILD_NUMBER")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Channel {

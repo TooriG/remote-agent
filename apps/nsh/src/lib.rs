@@ -154,8 +154,7 @@ impl Connection {
 
 #[component]
 pub fn App() -> impl IntoElement {
-    let service = storage::directory()
-        .and_then(|root| application::Application::new(root, storage::local_host()?));
+    let service = storage::directory().and_then(|root| application::Application::new(root, None));
     let (runtime, service) = match service {
         Ok(service) => service,
         Err(reason) => {

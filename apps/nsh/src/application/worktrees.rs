@@ -292,6 +292,8 @@ mod tests {
             jobs: Default::default(),
             selection_path,
             language_path,
+            #[cfg(target_os = "macos")]
+            updater: None,
         });
         (runtime, app)
     }

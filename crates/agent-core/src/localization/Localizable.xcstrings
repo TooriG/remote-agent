@@ -18544,6 +18544,86 @@
           }
         }
       }
+    },
+    "最新のバージョンです。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新のバージョンです。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bex is up to date."
+          }
+        }
+      }
+    },
+    "開発ビルドでは更新を確認しません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開発ビルドでは更新を確認しません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Development builds do not check for updates."
+          }
+        }
+      }
+    },
+    "再起動して更新": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再起動して更新"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restart to update"
+          }
+        }
+      }
+    },
+    "このPCのBexが受け取るリリースを選択します。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このPCのBexが受け取るリリースを選択します。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose which releases Bex on this computer receives."
+          }
+        }
+      }
+    },
+    "このPCのホストが変わりました。Bexを再起動してください。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このPCのホストが変わりました。Bexを再起動してください。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This computer's Host changed. Restart Bex."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

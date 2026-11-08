@@ -48,3 +48,7 @@ security-framework = "=3.7.0"
 block2 = "=0.6.2"
 objc2-uniform-type-identifiers = "=0.3.2"
 objc2-avf-audio = { version = "=0.3.2", default-features = false, features = ["std", "block2", "AVAudioApplication", "AVAudioRecorder", "AVAudioFormat", "AVAudioTypes", "AVAudioFile", "AVAudioBuffer", "AVAudioSession", "AVAudioSessionTypes"] }
+
+# Desktop update flow; the iPhone app is updated by its store.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+agent-core = { path = "../../crates/agent-core", features = ["app-updates"] }

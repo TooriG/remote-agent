@@ -96,7 +96,7 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>) -> impl IntoElement {
     )
 }
 
-pub(crate) fn update_note() -> &'static str {
+fn update_note() -> &'static str {
     tr("更新はこのPCでBexを開いて適用できます。")
 }
 
@@ -162,7 +162,7 @@ pub(crate) fn reload_host_software(connection: Connection) {
     connection.dispatch(Intent::ReadHostSoftware(op::ReadHostSoftware {}));
 }
 
-pub(crate) fn check_updates() {
+fn check_updates() {
     native::open_link("https://github.com/ttizze/remote-agent/releases");
 }
 
