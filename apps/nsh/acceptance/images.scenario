@@ -1,5 +1,8 @@
 # A message's image and Markdown images (a Host file and an inline one) show,
-# and a generated answer's file link opens the file in the tool panel.
+# also once the conversation is opened again, and a generated answer's file
+# link opens the file in the tool panel. The fixture's Codex names every
+# conversation "Simulator conversation", so the images one is reopened while it
+# is the only one.
 # iOS: testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening, testSimulatorShowsGeneratedImagesAndOpensFileLinksAfterReopening
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
@@ -13,14 +16,9 @@ expect_absent "画像を読み取れませんでした"
 expect_absent "見つかりません"
 screenshot images
 press このプロジェクトで新しいチャット
-type "AI に依頼する" "[generated-images] [immediate] 生成画像を表示します"
-press 送信
-expect "生成画像を表示しました。" 30000
-press ファイルを開く
-expect "編集を確認します。" after ツールを閉じる 20000
-screenshot file-link
+expect_absent "インライン画像です。" 10000
 press 検証プロジェクト
-press "[images] [immediate] 画像を表示します"
+press "Simulator conversation" 10000
 expect "インライン画像です。" 20000
 expect 画像を拡大
 # Quick Look takes its controller from the active app's key window: a preview
@@ -34,3 +32,10 @@ expect "Open with Preview" 10000
 wait 500
 key escape
 expect_absent "Open with Preview" 10000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[generated-images] [immediate] 生成画像を表示します"
+press 送信
+expect "生成画像を表示しました。" 30000
+press ファイルを開く
+expect "編集を確認します。" after ツールを閉じる 20000
+screenshot file-link

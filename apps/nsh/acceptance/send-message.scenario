@@ -13,6 +13,8 @@ screenshot replied
 # It stays a chat without a project and opens again from the chats.
 press 新しいチャット
 expect "何に取り組みますか？"
-press "Mac から送信します" after チャット
+press "Simulator conversation" after チャット 10000
 expect "シミュレータで完了しました。" 20000
-expect "チャット" after "Mac から送信します"
+expect "Mac から送信します"
+expect チャット after 右パネルを切り替え
+expect_absent 検証プロジェクト after 右パネルを切り替え
