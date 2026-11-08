@@ -130,6 +130,44 @@ pub struct ActivityPresentation {
     pub is_in_progress: bool,
     pub load_items: Option<crate::state::operations::LoadTurnItems>,
 }
+/// A mark on T3 Code's timeline minimap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MinimapMarker {
+    /// The timeline row of the user message it jumps to.
+    pub row: usize,
+    /// Whether the scroll top lies between this mark and the next.
+    pub current: bool,
+}
+
+/// The minimap marks at most eight user messages, spaced evenly from the
+/// first to the last, and the one the scroll top has reached is current.
+pub fn minimap_markers(user_rows: &[usize], top_row: usize) -> Vec<MinimapMarker> {
+    const MAX: usize = 8;
+    let count = user_rows.len().min(MAX);
+    let sample = |position: usize| position * (user_rows.len() - 1) / (count - 1).max(1);
+    (0..count)
+        .map(|position| {
+            let row = user_rows[sample(position)];
+            let next = (position + 1 < count).then(|| user_rows[sample(position + 1)]);
+            MinimapMarker {
+                row,
+                current: top_row >= row && next.is_none_or(|next| top_row < next),
+            }
+        })
+        .collect()
+}
+
+/// A mark's line widens toward the hovered one.
+pub fn minimap_marker_width(distance_from_hover: Option<usize>) -> f32 {
+    match distance_from_hover {
+        Some(0) => 28.,
+        Some(1) => 20.,
+        Some(2) => 14.,
+        Some(3) => 10.,
+        _ => 7.,
+    }
+}
+
 /// Work starts collapsed. A manual choice belongs to the current status;
 /// a transition closes it again, including after deferred-detail hydration.
 #[cfg_attr(feature = "bindings", uniffi::export)]
@@ -3068,6 +3106,47 @@ mod tests {
             ..Default::default()
         });
         assert!(!error.is_usage_limit);
+    }
+}
+
+#[cfg(test)]
+mod minimap_tests {
+    use super::*;
+
+    #[test]
+    fn short_histories_mark_every_message() {
+        let markers = minimap_markers(&[0, 4, 9], 5);
+        assert_eq!(markers.iter().map(|m| m.row).collect::<Vec<_>>(), [0, 4, 9]);
+        assert_eq!(
+            markers.iter().map(|m| m.current).collect::<Vec<_>>(),
+            [false, true, false]
+        );
+    }
+
+    #[test]
+    fn long_histories_keep_eight_marks_from_first_to_last() {
+        let rows = (0..39).map(|index| index * 2).collect::<Vec<_>>();
+        let markers = minimap_markers(&rows, 0);
+        assert_eq!(markers.len(), 8);
+        assert_eq!(markers.first().unwrap().row, 0);
+        assert_eq!(markers.last().unwrap().row, 76);
+        assert!(markers[0].current);
+        assert!(markers[1..].iter().all(|m| !m.current));
+    }
+
+    #[test]
+    fn the_last_mark_stays_current_past_it_and_none_before_the_first() {
+        assert!(minimap_markers(&[3, 6], 40)[1].current);
+        assert!(minimap_markers(&[3, 6], 1).iter().all(|m| !m.current));
+        assert!(minimap_markers(&[], 0).is_empty());
+        assert!(minimap_markers(&[2], 2)[0].current);
+    }
+
+    #[test]
+    fn marks_widen_toward_the_hovered_one() {
+        assert_eq!(minimap_marker_width(Some(0)), 28.);
+        assert!(minimap_marker_width(Some(1)) > minimap_marker_width(Some(2)));
+        assert_eq!(minimap_marker_width(Some(9)), minimap_marker_width(None));
     }
 }
 

@@ -337,7 +337,8 @@ impl ConversationView {
                 }
             })
             .collect();
-        let count = entries.len().min(8);
+        let rows: Vec<_> = entries.iter().map(|(index, ..)| *index).collect();
+        let current = self.timeline.list.logical_scroll_top().item_ix;
         let mut markers = v_flex()
             .absolute()
             .left_0()
@@ -345,25 +346,20 @@ impl ConversationView {
             .h_full()
             .w(px(56.))
             .justify_center();
-        let current = self.timeline.list.logical_scroll_top().item_ix;
-        for position in 0..count {
-            let sample = position * (entries.len() - 1) / count.saturating_sub(1).max(1);
-            let (index, user, turn) = entries[sample];
-            let active = current >= index
-                && (position + 1 == count
-                    || current < entries[(position + 1) * (entries.len() - 1) / (count - 1)].0);
+        for (position, marker) in
+            agent_core::presentation::conversation::minimap_markers(&rows, current)
+                .into_iter()
+                .enumerate()
+        {
+            let index = marker.row;
+            let active = marker.current;
+            let (_, user, turn) = entries[rows.binary_search(&index).unwrap_or_default()];
             let user: String = user.chars().take(160).collect();
             let distance = self
                 .timeline
                 .hovered_marker
                 .map(|hovered| position.abs_diff(hovered));
-            let width = match distance {
-                Some(0) => 28.,
-                Some(1) => 20.,
-                Some(2) => 14.,
-                Some(3) => 10.,
-                _ => 7.,
-            };
+            let width = agent_core::presentation::conversation::minimap_marker_width(distance);
             let marker_id = SharedString::from(format!("conversation-marker-{index}"));
             let preview = (distance == Some(0)).then(|| {
                 let answer = turn.rows.iter().find_map(|row| match &row.content {

@@ -159,6 +159,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     let dragging = stored(false);
     let scroll_pending = stored(false);
     let clock = signal(std::time::SystemTime::now());
+    let top_row = signal(0_usize);
     spawn(async move {
         loop {
             timer(std::time::Duration::from_secs(1)).await;
@@ -410,9 +411,15 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             })
             .on_scroll_end(move |_: &Point<Points>| { dragging.replace(false); })
             .on_momentum_end(move |_: &Point<Points>| { dragging.replace(false); })
+            .on_viewable_items_change(move |items: &ViewableItems| {
+                if let Some((first, _)) = items.viewable {
+                    top_row.set(first);
+                }
+            })
             .flex_1()
             .min_h_0(),
         )
+        .child(when(is_desktop, move || minimap(rows, top_row, list, following)))
         .child(when(move || !following.get(), move || {
             crate::ui::icon_button_sized(crate::ui::Icon::ARROW_DOWN, "最新のメッセージへ", 32.0, 16.0, move || following.set(true))
                 .bg(crate::ui::colors::RAISED)
@@ -421,6 +428,127 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 .rounded_full()
                 .absolute().self_center().bottom(px(6.0))
         }))
+}
+
+/// T3 Code's timeline minimap: marks for user messages at the left edge that
+/// widen toward the pointer, preview the exchange and jump to it.
+fn minimap(
+    rows: Memo<Vec<Row>>,
+    top_row: Signal<usize>,
+    list: ElementRef,
+    following: Signal<bool>,
+) -> View {
+    use crate::ui::colors;
+    use agent_core::presentation::conversation::{minimap_marker_width, minimap_markers};
+    let hovered = signal(None::<usize>);
+    let user_rows = computed(move || {
+        rows.with(|rows| {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, row)| row.kind == Kind::User)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>()
+        })
+    });
+    let markers = computed(move || user_rows.with(|rows| minimap_markers(rows, top_row.get())));
+    let exchange = move |row: usize| {
+        rows.with(|rows| {
+            let user = rows
+                .get(row)
+                .map(|r| r.body.to_string())
+                .unwrap_or_default();
+            let answer = rows
+                .iter()
+                .skip(row + 1)
+                .take_while(|r| r.kind != Kind::User)
+                .filter(|r| r.kind == Kind::Response)
+                .last()
+                .map(|r| r.body.to_string());
+            (user, answer)
+        })
+    };
+    view()
+        .absolute()
+        .left(px(0.0))
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .w(px(56.0))
+        .justify_center()
+        .child(each(
+            move || markers.get(),
+            |marker: &agent_core::presentation::conversation::MinimapMarker| marker.row,
+            move |marker, position| {
+                let distance = move || hovered.get().map(|h| h.abs_diff(position.get()));
+                let lit = move || marker.with(|m| m.current) || distance() == Some(0);
+                view()
+                    .on_mouse_enter(move |_: &MouseEvent| {
+                        hovered.set(Some(position.get_untracked()))
+                    })
+                    .on_mouse_leave(move |_: &MouseEvent| {
+                        if hovered.get_untracked() == Some(position.get_untracked()) {
+                            hovered.set(None);
+                        }
+                    })
+                    .child(
+                        nsh_base::button()
+                            .accessibility_label(Some(SharedString::from(format!(
+                                "この発言へ移動: {}",
+                                exchange(marker.with_untracked(|m| m.row)).0
+                            ))))
+                            .w(px(56.0))
+                            .h(px(10.0))
+                            .pl(px(16.5))
+                            .pr(px(11.5))
+                            .justify_center()
+                            .on_press(move || {
+                                following.set(false);
+                                let row = marker.with_untracked(|m| m.row) as u32;
+                                list.scroll_to_index(
+                                    row,
+                                    nsh_core::geometry::Percentage(0.0),
+                                    px(0.0),
+                                    true,
+                                );
+                            })
+                            .child(
+                                view()
+                                    .h(move || px(if distance() == Some(0) { 2.0 } else { 1.0 }))
+                                    .w(move || px(minimap_marker_width(distance())))
+                                    .bg(move || {
+                                        if lit() {
+                                            colors::FOREGROUND
+                                        } else {
+                                            colors::MUTED
+                                        }
+                                    }),
+                            ),
+                    )
+                    .child(when(
+                        move || distance() == Some(0),
+                        move || {
+                            let (user, answer) = exchange(marker.with_untracked(|m| m.row));
+                            view()
+                                .absolute()
+                                .left(px(56.0))
+                                .top(px(-24.0))
+                                .w(px(300.0))
+                                .p_3()
+                                .gap_2()
+                                .rounded(px(8.0))
+                                .bg(colors::RAISED)
+                                .border_1()
+                                .border_color(colors::BORDER)
+                                .child(text(user).text_size(px(13.0)).number_of_lines(2))
+                                .child(
+                                    text(answer.unwrap_or_default())
+                                        .text_size(px(13.0))
+                                        .text_color(colors::MUTED)
+                                        .number_of_lines(3),
+                                )
+                        },
+                    ))
+            },
+        ))
 }
 
 /// A turn's folded work, as T3 Code's: its label and disclosure, ruled below.
