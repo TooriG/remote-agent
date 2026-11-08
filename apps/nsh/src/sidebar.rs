@@ -189,7 +189,7 @@ fn connection_menu(hosts: Memo<Vec<Host>>) -> impl IntoElement {
             hosts
                 .iter()
                 .find(|host| host.id == selected)
-                .map(|host| host.name.clone())
+                .map(|host| host.label())
                 .unwrap_or_else(|| tr("このPC").into())
         })
     };

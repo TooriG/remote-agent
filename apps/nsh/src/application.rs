@@ -25,6 +25,17 @@ pub(crate) struct Host {
     pub name: String,
 }
 
+impl Host {
+    /// How the UI names the Host: this machine's own in the UI's language.
+    pub(crate) fn label(&self) -> String {
+        if self.id == crate::client::LOCAL {
+            crate::l10n::tr("このPC").into()
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
 pub(crate) enum Navigation {
     Settings(bool),
     Provider(Option<agent_protocol::session::ProviderKind>),

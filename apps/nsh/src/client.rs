@@ -57,7 +57,7 @@ pub(crate) struct Client {
     panes: std::sync::Mutex<std::collections::BTreeMap<u64, Arc<panes::Pane>>>,
 }
 
-const LOCAL: &str = "local";
+pub(crate) const LOCAL: &str = "local";
 
 impl Client {
     pub fn new(

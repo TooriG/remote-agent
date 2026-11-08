@@ -19,7 +19,7 @@ pub(crate) fn selector(
                 entries.push(json!({"id":"", "title":tr("すべての接続先"), "symbol":"square.stack", "selected":all}));
                 entries.push(json!({"separator":true}));
             }
-            entries.extend(hosts.with(|hosts| hosts.iter().map(|host| json!({"id":host.id,"title":host.name,"selected":!all && host.id == selected.get()})).collect::<Vec<_>>()));
+            entries.extend(hosts.with(|hosts| hosts.iter().map(|host| json!({"id":host.id,"title":host.label(),"selected":!all && host.id == selected.get()})).collect::<Vec<_>>()));
             json!(entries)
         },
         move |name| {
@@ -72,7 +72,7 @@ pub(crate) fn destination(hosts: Memo<Vec<Host>>, selected: Memo<String>) -> imp
     let items = move || {
         json!(hosts.with(|hosts| hosts
             .iter()
-            .map(|host| json!({"id": host.id, "title": host.name, "selected": host.id == selected.get()}))
+            .map(|host| json!({"id": host.id, "title": host.label(), "selected": host.id == selected.get()}))
             .collect::<Vec<_>>()))
     };
     let select = move |id: &str| {
@@ -116,7 +116,7 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                         let host = host.get_untracked();
                         let id = host.id.clone();
                         ui::setting(
-                            host.name,
+                            host.label(),
                             String::new,
                             ui::text_button(tr("接続"), move || {
                                 connection

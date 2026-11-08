@@ -122,6 +122,9 @@ pub(crate) fn read_settings(connection: Connection) {
 }
 
 pub(crate) fn host_name(connection: Connection) -> String {
+    if connection.host.with(|host| host == crate::client::LOCAL) {
+        return tr("このPC").into();
+    }
     connection
         .settings
         .with(|p| p.host_name().unwrap_or_else(|| tr("接続先").into()))

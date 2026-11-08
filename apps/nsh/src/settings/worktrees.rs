@@ -155,7 +155,7 @@ fn scope(
             hosts
                 .iter()
                 .find(|h| h.id == host)
-                .map(|h| h.name.clone())
+                .map(|h| h.label())
                 .unwrap_or_else(|| tr("環境を選択").into())
         })
     };
@@ -178,7 +178,7 @@ fn scope(
         json!(hosts.with_untracked(|hosts| {
             hosts
                 .iter()
-                .map(|h| json!({"id": h.id, "title": h.name, "selected": h.id == host}))
+                .map(|h| json!({"id": h.id, "title": h.label(), "selected": h.id == host}))
                 .collect::<Vec<_>>()
         }))
     };
