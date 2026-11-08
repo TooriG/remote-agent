@@ -19,7 +19,7 @@
 // Usage: node scripts/nsh-parity-t3.ts <plan.json> <output-directory>
 //        node scripts/nsh-parity-t3.ts codex-shim <fixture> <traffic.log> <args...>
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -257,6 +257,8 @@ async function renderState(plan: Plan, state: Plan['states'][number], browser: B
   } finally {
     try { process.kill(-server.pid!, 'SIGTERM'); } catch { /* already gone */ }
     await exited(server);
+    // The state's logs and captures are in `directory`; the environment is scratch.
+    rmSync(env.root, { recursive: true, force: true });
   }
 }
 

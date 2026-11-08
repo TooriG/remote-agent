@@ -71,7 +71,7 @@ name = "turn-finished"
 screen = "Conversation"
 description = "A finished turn: the user's message, the folded work row, the answer and its actions."
 nsh = ["send [groups] 完了した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000"]
-t3 = [{ send = "[groups] 完了した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }]
+t3 = [{ send = "[groups] 完了した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }, { waitMs = 1500 }]
 column = "composer"
 elements = ["composer", "composer-send", "header-title", "header-details-toggle", "header-panel-toggle", "user-bubble", "user-text", "user-copy", "user-edit", "user-time", "work-toggle", "assistant-text", "assistant-copy", "assistant-fork", "assistant-time", "changed-files-card"]
 
@@ -80,7 +80,7 @@ name = "turn-hover"
 screen = "Conversation"
 description = "The pointer over the user's message: its hover-only actions."
 nsh = ["send [immediate] ホバーを確認します", "expect \"シミュレータで完了しました。\" 30000", "hover \"message.user-text\""]
-t3 = [{ send = "[immediate] ホバーを確認します" }, { waitText = "シミュレータで完了しました。" }, { hover = "[data-message-role=user] [data-user-message-body]" }]
+t3 = [{ send = "[immediate] ホバーを確認します" }, { waitText = "シミュレータで完了しました。" }, { waitMs = 1500 }, { hover = "[data-message-role=user] [data-user-message-body]" }]
 column = "composer"
 elements = ["composer", "user-bubble", "user-copy", "user-edit", "user-time"]
 
@@ -200,7 +200,7 @@ screen = "Sidebar"
 description = "The sidebar beside a chat: its search field, actions and project row, against the GPUI client's layout."
 reference = "gpui"
 nsh = ["send [immediate] サイドバーを確認します", "expect \"シミュレータで完了しました。\" 30000"]
-elements = ["sidebar", "sidebar-search-field", "sidebar-search-icon", "sidebar-new-chat", "sidebar-project-row", "sidebar-project-icon", "sidebar-settings"]
+elements = ["sidebar", "sidebar-search-field", "sidebar-search-text", "sidebar-search-icon", "sidebar-new-chat", "sidebar-project-row", "sidebar-project-icon", "sidebar-settings"]
 
 # ── Elements ────────────────────────────────────────────────────────────────
 # `nsh = {}`: NSH draws no counterpart, so the element is reported missing.
@@ -540,14 +540,14 @@ id = "interrupted-row"
 what = "Interrupted turn notice"
 kind = "text"
 t3 = "[data-timeline-row-kind=event] .font-medium"
-nsh = { contains = "nterrupt" }
+nsh = { contains = "Run interrupted" }
 
 [[element]]
 id = "retry-notice"
 what = "Retrying stream notice"
 kind = "text"
 t3 = "[data-timeline-row-kind=work-live] .truncate"
-nsh = { contains = "etry" }
+nsh = { contains = "Retrying" }
 
 [[element]]
 id = "approval-panel"
@@ -638,14 +638,14 @@ nsh = { contains = "見出し", role = "AXTextArea" }
 id = "markdown-code"
 what = "Markdown code block"
 kind = "box"
-t3 = "[data-message-role=assistant] .chat-markdown div:has(> [role=toolbar])"
+t3 = "[data-message-role=assistant] .chat-markdown-codeblock"
 nsh = { contains = "stays code", up = "background" }
 
 [[element]]
 id = "markdown-code-language"
 what = "Markdown code block: language"
 kind = "text"
-t3 = "[data-message-role=assistant] .chat-markdown span.truncate"
+t3 = "[data-message-role=assistant] .chat-markdown-codeblock-header .truncate"
 nsh = { text = "text", role = "AXStaticText" }
 
 [[element]]
@@ -659,7 +659,7 @@ nsh = { text = "Copy code" }
 id = "markdown-image-error"
 what = "Markdown image that cannot load"
 kind = "text"
-t3 = "[data-message-role=assistant] .chat-markdown span.inline-flex.items-center"
+t3 = "[data-message-role=assistant] .chat-markdown span.inline-flex.items-center:not(.chat-markdown-codeblock *)"
 nsh = { text = "The file or folder could not be found." }
 
 [[element]]
@@ -736,12 +736,24 @@ nsh = { text = "Search", class = "NSButton", up = 1 }
 gpui = { x = 12, height = 24, source = "sidebar.rs:741 Input::small(): h_6 (sizing.rs:285); Sidebar header px_3 (sidebar/mod.rs:441)" }
 
 [[element]]
+id = "sidebar-search-text"
+what = "Search field placeholder"
+kind = "text"
+# The label AppKit's search field draws its placeholder with; the sidebar's
+# field is the window's first.
+nsh = { class = "_TtC6AppKitP33_72EBFCF981BE77E1C6F26FD717D0893922NSTextFieldSimpleLabel" }
+gpui = { source = "sidebar.rs:741 Input::small(), input_text_size text_sm (sizing.rs:248)" }
+
+[[element]]
 id = "sidebar-search-icon"
 what = "Search icon in the search field"
 kind = "icon"
 nsh = { text = "Search", class = "NSButton" }
-centred_in = "sidebar-search-field"
-gpui = { glyph_dy = 0, source = "sidebar.rs:744 prefix(IconName::Search), input.rs:794 items_center: the glyph on the field's centre line" }
+centred_in = "sidebar-search-text"
+# Icon and text are both items_center in the field's row: their drawn centres
+# meet within a point (a line's ink sits a little above its box's centre).
+tolerance = { text = 1.5 }
+gpui = { glyph_dy = 0, source = "sidebar.rs:744 prefix(IconName::Search), input.rs:794 items_center: the glyph on the text's centre line" }
 
 [[element]]
 id = "sidebar-new-chat"

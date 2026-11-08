@@ -283,6 +283,7 @@ pub fn differences(
             continue;
         };
         let frames = Frames {
+            map,
             state,
             element,
             reference,
@@ -305,6 +306,7 @@ pub fn differences(
 
 /// The frames of a state's elements on both sides, for anchors.
 struct Frames<'a> {
+    map: &'a Map,
     state: &'a State,
     element: &'a Element,
     reference: &'a BTreeMap<String, Measure>,
@@ -332,10 +334,21 @@ impl Frames<'_> {
         })
     }
 
+    /// What the glyph is centred in: a box's frame, or a text's drawn line
+    /// (a field's icon sits on its text's centre line).
     fn container(&self) -> [Option<Rect>; 2] {
         let id = self.element.centred_in.as_ref();
-        [self.reference, self.nsh]
-            .map(|side| id.and_then(|id| side.get(id)).map(|measure| measure.frame))
+        let text = id
+            .and_then(|id| self.map.element(id))
+            .is_some_and(|container| container.kind == Kind::Text);
+        [self.reference, self.nsh].map(|side| {
+            let measure = side.get(id?)?;
+            Some(if text {
+                drawn_bounds(measure).unwrap_or(measure.frame)
+            } else {
+                measure.frame
+            })
+        })
     }
 }
 
@@ -999,5 +1012,45 @@ gpui = { x = 14, y = 14, width = 16, height = 16, glyph_dx = -20, glyph_dy = 0, 
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_glyph_in_text_is_centred_on_the_text_as_drawn() {
+        let text_field = MAP.replace(
+            "id = \"field\"\nwhat = \"Search field\"\nkind = \"box\"",
+            "id = \"field\"\nwhat = \"Search field\"\nkind = \"text\"",
+        );
+        let map = Map::parse(&text_field).unwrap();
+        let state = &map.states[1];
+        let ink = |bounds: Rect| Ink {
+            background: [0; 3],
+            bounds: Some(bounds),
+            color: Some([200; 3]),
+            first_line: Some(10.0),
+        };
+        // The text's glyphs sit high in its frame (centre 17); the icon's
+        // centre is 4 points below them, though on the frame's centre (22).
+        let nsh = BTreeMap::from([
+            (
+                "field".to_owned(),
+                Measure {
+                    ink: Some(ink([20.0, 12.0, 40.0, 10.0])),
+                    ..measure([12.0, 10.0, 60.0, 24.0])
+                },
+            ),
+            (
+                "search".to_owned(),
+                Measure {
+                    ink: Some(ink([14.0, 15.0, 14.0, 14.0])),
+                    ..measure([14.0, 14.0, 16.0, 16.0])
+                },
+            ),
+        ]);
+        let found = differences(&map, state, &reference_measures(&map, state, None), &nsh);
+        let offset = found
+            .iter()
+            .find(|difference| difference.metric == "glyph centre from its container's centre")
+            .unwrap();
+        assert_eq!(offset.nsh, "-19.0, 5.0");
     }
 }

@@ -75,9 +75,11 @@ reason). Reasons recur:
 | `work-live` row with its shimmer (running tool, input requested) | `LiveWorkEntryTimelineRow`, `LiveActivityRow` | covered: `turn-live`, `approval`, `question` |
 | `turn-fold` (Worked for …) folded and expanded | `TurnFoldTimelineRow` | covered: `turn-finished`, `turn-expanded` |
 | `work-toggle` group (Ran N commands) folded and expanded | `WorkGroupToggleTimelineRow`, `WorkGroupHeader` | covered: `turn-expanded`, `turn-live` |
-| `work` rows: command, file change, MCP, dynamic tool, web search, image view, plan, review mode, compaction | `SimpleWorkEntryRow`, `WorkLog.tsx`, `ToolActivityIcon` | covered: `turn-expanded` (command), `turn-items` (the rest) |
+| `work` rows: command | `SimpleWorkEntryRow`, `WorkLog.tsx`, `ToolActivityIcon` | covered: `turn-expanded`, `turn-failed` |
+| `work` rows: file change, MCP, dynamic tool, agent tool, web search, image view, plan, review mode, compaction | `SimpleWorkEntryRow`, `WorkLog.tsx`, `ToolActivityIcon` | not yet: `turn-items` is mapped, but T3 fails the fixture's `[items]` turn ("Provider turn failed."): the fixture sends item kinds T3's Codex adapter rejects (`sleep`, `subAgentActivity`) |
 | `work` row expanded output (shell command block, fetched output, file diff) | `ShellCommandBlock.tsx`, `FetchedToolOutput`, `FileDiff` | not yet: not mapped |
-| `event` rows: provider error, interrupt, handoff, fork, compaction, todo list | `V2EventTimelineRow`, `TimelineSystemDivider.tsx` | covered: `turn-failed` (error), `turn-interrupted`, `turn-retry`; handoff and fork not yet: fixture |
+| `event` rows: provider error, run interrupted, retrying | `V2EventTimelineRow`, `TimelineSystemDivider.tsx` | covered: `turn-failed`, `turn-interrupted`, `turn-retry` |
+| `event` rows: handoff, fork, compaction, todo list | `V2EventTimelineRow` | not yet: fixture |
 | `attempt-fold` (superseded attempts) | `AttemptFoldTimelineRow` | not yet: fixture |
 | `context-compaction` row (live compacting label) | `ContextCompactionTimelineRow` | not yet: fixture (`[items]` sends a completed compaction only) |
 | `proposed-plan` card | `ProposedPlanCard.tsx` | not yet: fixture (plan mode) |
