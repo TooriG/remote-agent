@@ -6,6 +6,8 @@
 //!   (`crates/host-fixture/src/pairing.rs`). The runner posts leading ones before
 //!   the app starts; the driver posts later ones when it reaches them
 //!   (`/release-inputs` while a turn waits).
+//! - `host without-codex`: a leading line; the runner starts the fixture Host
+//!   without Codex, as on a PC where only Claude is installed.
 //! - `press <label> [after <anchor>] [timeout-ms]`: presses the first element
 //!   whose label, title, value, identifier or placeholder is `<label>`, or an item
 //!   of an open menu; a link in text is clicked. A `*` at either end of `<label>` matches any text there
@@ -13,7 +15,8 @@
 //!   `<anchor>` in reading order count (a file row below a panel's header, not the
 //!   same name in the conversation).
 //! - `type <label> <text> [after <anchor>] [timeout-ms]`: focuses that element
-//!   and inserts `<text>`.
+//!   and inserts `<text>`, where `$AGENT_FIXTURE_ORIGIN` is the fixture Host's
+//!   loopback server (its `/browser-page` is a page for the browser).
 //! - `key <name>`: a key with optional modifiers, as `return`, `escape` or `cmd+,`.
 //! - `expect <text> [after <anchor>] [timeout-ms]` / `expect_absent ...`: waits
 //!   until some element's text contains `<text>`, or none does.
@@ -35,6 +38,10 @@
 //! - `activate`: brings the app to the front through Launch Services, as the
 //!   user clicking it in the Dock: AppKit lets an app activate itself only
 //!   while the user is in it. It takes the focus from the user briefly.
+//! - `microphone deny`: answers the app's microphone permission requests from
+//!   then on as the user declining the system's prompt.
+//! - `relaunch`: quits the app as the user would; the runner starts it again on
+//!   the same Host and state, and the next steps run in the new process.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -42,6 +49,9 @@ use std::time::Duration;
 
 /// What a `choose` path may begin with: the fixture Host's directory.
 pub(crate) const STATE_DIRECTORY: &str = "$AGENT_STATE_DIR";
+/// What `type` replaces with the fixture Host's loopback server, as
+/// `http://127.0.0.1:<port>`: it serves `/browser-page` to the browser.
+pub(crate) const FIXTURE_ORIGIN: &str = "$AGENT_FIXTURE_ORIGIN";
 
 /// How long a step waits for its element or text unless the line says otherwise.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,6 +62,8 @@ pub(crate) enum Step {
     Fixture(String),
     /// A control path the driver posts when it reaches the step.
     Control(String),
+    /// The runner started the fixture Host without Codex.
+    WithoutCodex,
     Press(Find),
     Type(Find, String),
     Key(Key),
@@ -66,6 +78,8 @@ pub(crate) enum Step {
     Clipboard(String),
     ExpectClipboard(String, Duration),
     Activate,
+    DenyMicrophone,
+    Relaunch,
     Wait(Duration),
     Screenshot(String),
     Dump(String),
@@ -109,12 +123,18 @@ pub(crate) fn parse(script: &str) -> Result<Vec<Line>, String> {
         let mut step = words(source)
             .and_then(|words| step(&words))
             .map_err(|reason| format!("line {number}: {reason}"))?;
-        if let Step::Fixture(path) = &step
-            && lines
-                .iter()
-                .any(|line: &Line| !matches!(line.step, Step::Fixture(_)))
-        {
-            step = Step::Control(path.clone());
+        // Leading lines prepare the fixture Host before the app starts.
+        let leading = lines
+            .iter()
+            .all(|line: &Line| matches!(line.step, Step::Fixture(_) | Step::WithoutCodex));
+        match &step {
+            Step::Fixture(path) if !leading => step = Step::Control(path.clone()),
+            Step::WithoutCodex if !leading => {
+                return Err(format!(
+                    "line {number}: the Host is prepared only by leading lines"
+                ));
+            }
+            _ => {}
         }
         lines.push(Line {
             number,
@@ -168,6 +188,7 @@ fn step(words: &[String]) -> Result<Step, String> {
     let arguments: Vec<&str> = words[1..].iter().map(String::as_str).collect();
     Ok(match (words[0].as_str(), arguments.as_slice()) {
         ("fixture", [path]) if path.starts_with('/') => Step::Fixture((*path).to_owned()),
+        ("host", ["without-codex"]) => Step::WithoutCodex,
         ("press", [target, rest @ ..]) => Step::Press(find(target, rest)?),
         ("type", [target, text, rest @ ..]) => Step::Type(find(target, rest)?, (*text).to_owned()),
         ("key", [name]) => Step::Key(key(name)?),
@@ -197,6 +218,8 @@ fn step(words: &[String]) -> Result<Step, String> {
             Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
         }
         ("activate", []) => Step::Activate,
+        ("microphone", ["deny"]) => Step::DenyMicrophone,
+        ("relaunch", []) => Step::Relaunch,
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
@@ -316,10 +339,10 @@ mod tests {
     #[test]
     fn steps_take_quoted_labels_and_optional_timeouts() {
         let lines = parse(
-            "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
+            "# Comment\nfixture /external-conversation\nhost without-codex\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
              scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\nexpect_file $AGENT_STATE_DIR/saved.png 500\nclipboard \"a\\nb\"\n\
-             expect_clipboard \"a b\" 500\nfixture /release-inputs\nactivate\nwait 250\nscreenshot after-send\n\
+             expect_clipboard \"a b\" 500\nfixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
         )
         .unwrap();
@@ -328,6 +351,7 @@ mod tests {
             steps,
             [
                 Step::Fixture("/external-conversation".into()),
+                Step::WithoutCodex,
                 Step::Press(Find {
                     text: "新しい チャット".into(),
                     after: None,
@@ -382,13 +406,15 @@ mod tests {
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
                 Step::Control("/release-inputs".into()),
                 Step::Activate,
+                Step::DenyMicrophone,
+                Step::Relaunch,
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
                 Step::Dump("tree_1".into()),
             ]
         );
         assert_eq!(lines[0].number, 2);
-        assert_eq!(lines[1].source, "press \"新しい チャット\"");
+        assert_eq!(lines[2].source, "press \"新しい チャット\"");
     }
 
     #[test]
@@ -461,6 +487,14 @@ mod tests {
             (
                 "fixture release-inputs",
                 "line 1: unknown step or wrong arguments: fixture",
+            ),
+            (
+                "wait 1\nhost without-codex",
+                "line 2: the Host is prepared only by leading lines",
+            ),
+            (
+                "host with-codex",
+                "line 1: unknown step or wrong arguments: host",
             ),
         ] {
             assert_eq!(parse(script).unwrap_err(), reason, "{script}");

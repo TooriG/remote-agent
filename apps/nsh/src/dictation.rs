@@ -4,7 +4,7 @@ use crate::ui::Enabled;
 use crate::{Connection, native};
 use agent_core::{client::DictationPreparation, state::DraftKey};
 use block2::RcBlock;
-use nsh_core::{platform::Lifecycle, prelude::*};
+use nsh_core::prelude::*;
 use objc2::{AnyThread, rc::Retained, runtime::Bool};
 use objc2_avf_audio::*;
 use objc2_foundation::{NSString, NSURL};
@@ -206,10 +206,10 @@ impl Dictation {
             this.target.get();
             this.cancel();
         });
+        // The iPhone stops recording when it leaves the foreground; the Mac goes
+        // on while the user is in another app, as its desktop client did.
         effect(move || {
-            if lifecycle() != Lifecycle::Active
-                || !connection.composer.with(|p| p.controls.connected)
-            {
+            if !native::in_use() || !connection.composer.with(|p| p.controls.connected) {
                 this.cancel();
             }
         });

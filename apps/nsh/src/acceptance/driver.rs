@@ -16,7 +16,10 @@
 //! The runner reads `result.json` from the output directory: `passed` (null while
 //! running) and one entry per step with `line`, `source`, `status` (`passed`,
 //! `failed` or `skipped`), `message`, `elapsedMs` and the step's `artifact` file;
-//! `evidence` names the screenshot and tree written when a step fails.
+//! `evidence` names the screenshot and tree written when a step fails. A
+//! `relaunch` step quits with `relaunch` set; the runner starts the app again
+//! with `BEX_ACCEPTANCE_RESUME`, and the driver goes on after the steps the file
+//! already records.
 use super::script::{Find, Key, Line, Step};
 use objc2::{
     MainThreadMarker, Message, msg_send,
@@ -48,9 +51,11 @@ const TICK: f64 = 0.2;
 
 /// Schedules `lines` on the main run loop. The returned flag says whether every
 /// step passed once the app returns from its event loop.
+/// `taken` are the steps an earlier process of the scenario recorded.
 pub(crate) fn start(
     scenario: PathBuf,
     lines: Vec<Line>,
+    taken: Vec<Value>,
     output: PathBuf,
     fixture: Option<u16>,
     mtm: MainThreadMarker,
@@ -62,11 +67,11 @@ pub(crate) fn start(
         fixture,
         clipboard: Clipboard::save(),
         lines,
-        index: 0,
+        index: taken.len(),
         since: Instant::now(),
         ready: false,
         finished: false,
-        steps: Vec::new(),
+        steps: taken,
         evidence: Vec::new(),
         menus: Vec::new(),
         passed: passed.clone(),
@@ -135,13 +140,14 @@ impl Driver {
         self.index += 1;
         self.since = Instant::now();
         ACTIVATING.set(false);
-        self.write(None);
+        self.write(None, false);
     }
 
-    fn write(&self, passed: Option<bool>) {
+    fn write(&self, passed: Option<bool>, relaunch: bool) {
         let report = json!({
             "scenario": self.scenario,
             "passed": passed,
+            "relaunch": relaunch,
             "steps": self.steps,
             "evidence": self.evidence,
         });
@@ -160,6 +166,8 @@ enum Attempt {
     Passed(String, Option<String>),
     Press(String, Target),
     Failed(String),
+    /// Quit for the runner to start the app again.
+    Relaunch,
 }
 
 fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
@@ -204,13 +212,21 @@ fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
         Attempt::Pending(reason) if elapsed >= timeout => return fail(driver, &reason, mtm),
         Attempt::Pending(_) => {}
         Attempt::Failed(reason) => return fail(driver, &reason, mtm),
+        Attempt::Relaunch => {
+            driver.borrow_mut().record(
+                "passed",
+                "quit for the runner to start the app again",
+                None,
+            );
+            return finish(driver, None);
+        }
     }
     let done = {
         let driver = driver.borrow();
         !driver.finished && driver.index == driver.lines.len()
     };
     if done {
-        finish(driver, true);
+        finish(driver, Some(true));
     }
 }
 
@@ -241,7 +257,9 @@ fn attempt(
     mtm: MainThreadMarker,
 ) -> Attempt {
     match step {
-        Step::Fixture(_) => Attempt::Passed("prepared by the runner".into(), None),
+        Step::Fixture(_) | Step::WithoutCodex => {
+            Attempt::Passed("prepared by the runner".into(), None)
+        }
         Step::Control(path) => done(
             fixture
                 .ok_or_else(|| "the runner gave no fixture control port".to_owned())
@@ -258,7 +276,13 @@ fn attempt(
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
         Step::Press(find) => press(&Tree::read(mtm, menus), find),
         Step::Type(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
-            insert(tree, index, text)
+            let origin = fixture.map(|port| format!("http://127.0.0.1:{port}"));
+            let text = match (text.contains(super::script::FIXTURE_ORIGIN), origin) {
+                (false, _) => text.clone(),
+                (true, Some(origin)) => text.replace(super::script::FIXTURE_ORIGIN, &origin),
+                (true, None) => return Err("the runner gave no fixture control port".into()),
+            };
+            insert(tree, index, &text)
                 .map(|()| format!("typed into {}", tree.nodes[index].describe()))
         }),
         Step::Scroll(find, lines) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
@@ -292,6 +316,8 @@ fn attempt(
             done(post_key(key, mtm).map(|()| format!("posted key code {}", key.code)))
         }
         Step::Activate => activate(mtm),
+        Step::DenyMicrophone => done(deny_microphone()),
+        Step::Relaunch => Attempt::Relaunch,
     }
 }
 
@@ -438,15 +464,17 @@ fn fail(driver: &Rc<RefCell<Driver>>, reason: &str, mtm: MainThreadMarker) {
             driver.record("skipped", "", None);
         }
     }
-    finish(driver, false);
+    finish(driver, Some(false));
 }
 
-fn finish(driver: &Rc<RefCell<Driver>>, passed: bool) {
+/// Ends the driver's process with the scenario's result, or with none for the
+/// runner to start the app again.
+fn finish(driver: &Rc<RefCell<Driver>>, passed: Option<bool>) {
     let menus = {
         let mut driver = driver.borrow_mut();
         driver.finished = true;
-        driver.passed.set(passed);
-        driver.write(Some(passed));
+        driver.passed.set(passed.unwrap_or(true));
+        driver.write(passed, passed.is_none());
         driver.clipboard.restore();
         std::mem::take(&mut driver.menus)
     };
@@ -1108,6 +1136,37 @@ fn choose(path: &str, mtm: MainThreadMarker) -> Attempt {
     unsafe { method.set_implementation(answer) };
     parent.endSheet_returnCode(&panel, NSModalResponseOK);
     Attempt::Passed(format!("chose {path}"), None)
+}
+
+/// AVAudioApplication's permission request, answered as the user declining.
+unsafe extern "C-unwind" fn microphone_denied(
+    _: *mut AnyObject,
+    _: Sel,
+    answer: &block2::DynBlock<dyn Fn(objc2::runtime::Bool)>,
+) {
+    answer.call((objc2::runtime::Bool::NO,));
+}
+
+/// Makes the app's microphone permission requests answer as the user declining
+/// the system's prompt, which a scenario cannot reach, from now on.
+fn deny_microphone() -> Result<String, String> {
+    let class = objc2::runtime::AnyClass::get(c"AVAudioApplication")
+        .ok_or("AVAudioApplication is not loaded")?;
+    let method = class
+        .class_method(sel!(requestRecordPermissionWithCompletionHandler:))
+        .ok_or("AVAudioApplication has no record permission request")?;
+    // SAFETY: the replacement takes what the class method does and returns nothing.
+    unsafe {
+        method.set_implementation(std::mem::transmute::<
+            unsafe extern "C-unwind" fn(
+                *mut AnyObject,
+                Sel,
+                &block2::DynBlock<dyn Fn(objc2::runtime::Bool)>,
+            ),
+            objc2::runtime::Imp,
+        >(microphone_denied));
+    }
+    Ok("the microphone is denied".into())
 }
 
 /// Whether the file at `path` exists and has content yet.

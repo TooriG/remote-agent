@@ -33,15 +33,15 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | AttachmentsUITests.testSimulatorRetriesPhotoUploadAfterStorageRecovery | covered | upload-failure (a file; the Mac attaches again rather than retrying in place) |
 | AttachmentsUITests.testSimulatorCanAttachDownloadAndPrepareAIEdit | partial | attachments (attach, remove, send); the file viewer's download and AI edit not yet |
 | DeviceNavigationUITests.testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs | covered | tool-panel, tools |
-| DeviceNavigationUITests.testSimulatorBrowserUsesOneSharedImportMenu | not yet | the browser's menu is disabled until a page loads, and loading one needs the network |
+| DeviceNavigationUITests.testSimulatorBrowserUsesOneSharedImportMenu | covered | browser (a page from the fixture Host, typing into it, tabs and the data import from one menu); the Mac page takes typing itself, so the iPhone's input row is n/a |
 | DeviceNavigationUITests.testSimulatorNativeTerminalCopiesTextOnLongPress | n/a | long press |
 | DeviceNavigationUITests.testSimulatorNativeTerminalPastesMultilineText | covered | terminal-paste |
 | DeviceNavigationUITests.testSimulatorNativeTerminalDoesNotDuplicateQueryResponses | covered | terminal-query |
 | DeviceNavigationUITests.testSimulatorNativeTerminalRetainsShellAfterReopening | covered | terminal-reopen (the shell keeps its variable while another tool is in front and the panel closes and opens; the draft stays), tools |
 | DeviceNavigationUITests.testSimulatorUsesNativeProjectDisclosureAndWorkspaceTree | covered | open-conversation (project disclosure), tool-panel (file tree) |
 | DeviceNavigationUITests.testPhysicalDeviceCanPairWithManualPayload | n/a | physical device |
-| DictationUITests.testSimulatorDictationContinuesPastThirtySecondsAndReachesHost | not yet | needs microphone permission |
-| DictationUITests.testSimulatorDictationPermissionDenialPreservesDraftAndSend | not yet | needs microphone permission |
+| DictationUITests.testSimulatorDictationContinuesPastThirtySecondsAndReachesHost | not yet | recording needs the system's microphone permission, whose prompt reaches the user running the scenarios; the driver can only decline it |
+| DictationUITests.testSimulatorDictationPermissionDenialPreservesDraftAndSend | covered | dictation-denied (`microphone deny`) |
 | HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | not yet | needs a long conversation that is still running |
 | HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | not yet | `scroll` works; the reading position is screenshot evidence only |
 | HistoryUITests.testSimulatorRendersVisualizationAndReopensIt | partial | visualization (the Mac offers the file and opens it in the tool panel; it does not render it inline) |
@@ -52,12 +52,12 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | ImagesUITests.testSimulatorOpensOnlyTheTappedImageAndSavesIt | partial | images (a tapped image opens in Quick Look, also when asked while the app is in the background); which image of several opens, and saving, not yet: the image menu that saves is not on the Mac yet |
 | ImagesUITests.testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening | covered | images |
 | ModelSelectionUITests.testSimulatorModelPickerUsesNativeFormAndAgentPicker | covered | model-picker |
-| NavigationUITests.testSimulatorRemovesHostAndRequiresPairingAfterRelaunch | not yet | each scenario runs one app process; removing the only Host ends the scenario's connection |
+| NavigationUITests.testSimulatorRemovesHostAndRequiresPairingAfterRelaunch | not yet | owned by nsh-parity-host-onboarding: NSH has no way to remove a paired Host yet (GPUI's 接続を解除); the runner's `relaunch` is ready for it |
 | NavigationUITests.testSimulatorStartsOnListAndPreservesDetailOnForeground | partial | open-conversation; iOS list/detail navigation and foregrounding are n/a |
-| NavigationUITests.testSimulatorOpensQrScannerWhileAddingHost | n/a | camera QR scanner; the Mac pastes the connection info |
+| NavigationUITests.testSimulatorOpensQrScannerWhileAddingHost | not yet | owned by nsh-parity-host-onboarding, which builds QR pairing; until then the Mac pastes the connection info, and core's pairing errors already ask the PC for a new QR code |
 | NavigationUITests.testSimulatorUsesNativeHostNavigationAndPairingDismissal | covered | environment-settings |
 | NavigationUITests.testSimulatorSearchesFromBottomBarAndCreatesInCollapsedProject | covered | sidebar-search; new chats start in the collapsed project in most scenarios |
-| NavigationUITests.testSimulatorUsesClaudeWithoutCodexAndRestoresConversation | not yet | the runner has no `--without-codex` Host |
+| NavigationUITests.testSimulatorUsesClaudeWithoutCodexAndRestoresConversation | covered | claude-only (`host without-codex`, `relaunch`) |
 | NavigationUITests.testSimulatorRepeatedlyReopensTasksAndNewDraftsAfterBackNavigation | partial | markdown-table, send-message, images (reopen once each); repeated switching not yet |
 | PaginationUITests.testSimulatorOpensLongInterruptedHistoryAtLatestMessage | covered | long-history |
 | PaginationUITests.testSimulatorLoadsEarlierHistoryOnTapAtTheReadingPosition | covered | long-history (position by screenshot) |
@@ -65,10 +65,10 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | PaginationUITests.testSimulatorPaginatesRecentProjectsAndUnassignedChats | covered | list-pagination |
 | SynchronizationUITests.testSimulatorShowsHistoryLoadingBeforeHostReplies | covered | history-loading |
 | SynchronizationUITests.testSimulatorRetriesAFailedTaskOpenWithoutLosingItsDraft | covered | history-retry |
-| SynchronizationUITests.testSimulatorReconnectClearsHistoryFailureAndPreservesDraft | not yet | needs the app to leave and regain the foreground |
+| SynchronizationUITests.testSimulatorReconnectClearsHistoryFailureAndPreservesDraft | covered | reconnect (the environment's connection switch reconnects; the failed read shows its error until the next reconnect clears it) |
 | SynchronizationUITests.testSimulatorUpdatesAnOpenConversationFromAnotherClient | covered | other-client |
-| SynchronizationUITests.testSimulatorKeepsOpenTaskAndFetchesLatestReplyAfterForeground | not yet | needs the app to leave and regain the foreground, which would take focus from the user |
-| SynchronizationUITests.testSimulatorFetchesNewTaskAfterForeground | not yet | as above |
+| SynchronizationUITests.testSimulatorKeepsOpenTaskAndFetchesLatestReplyAfterForeground | covered | reconnect (the reply another client added arrives with the reconnect, the draft stays) |
+| SynchronizationUITests.testSimulatorFetchesNewTaskAfterForeground | covered | other-client-new (the Mac stays connected behind other apps, so the new conversation arrives without a return) |
 | SynchronizationUITests.testSimulatorFetchesNewTaskWhenReturningToList | n/a | the Mac sidebar is always shown |
 | SynchronizationUITests.testSimulatorMarksUnseenCompletionUntilOpened | covered | unseen-completion |
 | SynchronizationUITests.testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt | covered | queued-input |
@@ -78,7 +78,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | TurnUITests.testSimulatorOpensSideChatWithoutLosingOriginalDraft | covered | side-chat |
 | TurnUITests.testSimulatorCopiesSelectedOrWholeUserMessageText | partial | message-actions (whole messages); copying a selection uses the system menu, whose titles follow the system language |
 | TurnUITests.testSimulatorKeepsChatUnassignedAfterSendingAndReopening | covered | send-message |
-| TurnUITests.testSimulatorApprovalEditorAndDraftSurviveReconnect | not yet | needs a reconnect |
+| TurnUITests.testSimulatorApprovalEditorAndDraftSurviveReconnect | covered | relaunch-draft (approval, a saved edit in the diff, and the draft after `relaunch`) |
 | WorktreeUITests.testSimulatorMarksMergedWorktreesToTheRightOfRunningStatus | covered | merged-worktrees |
 | WorktreeUITests.testSimulatorEditsHostWorktreeSettingsFromTaskMenu | covered | worktree-settings (from the settings; the Mac has no task menu) |
 | WorktreeUITests.testSimulatorReviewsTheOpenSessionsWorktree | covered | worktree-review, review-panel |
@@ -97,11 +97,11 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Conversation: steering a running turn, minimap | covered | steering, queued-input |
 | Composer: model picker | covered | model-picker |
 | Composer: approval mode menu | covered | permission-mode |
-| Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
+| Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer, dictation-denied; recording needs the system's microphone permission |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
 | Changed-files bar and review | covered | review-panel, worktree-review |
 | Tool panel: files, file preview, diff, close | covered | tool-panel |
-| Tool panel: layout, browser, terminal, agents, side chat | partial | review-panel (layout), tools, side-chat; the terminal's screen and a loaded page are not observable |
+| Tool panel: layout, browser, terminal, agents, side chat | covered | review-panel (layout), tools, browser, terminal-paste, terminal-query, terminal-reopen, side-chat |
 | Settings: general, providers, environment, worktrees | covered | settings, environment-settings |
 | Settings: display language | covered | display-language |
 | Settings: accounts, updates, worktree editing | partial | accounts (sign-in starts and stops), worktree-settings; completing a sign-in and updates not yet |

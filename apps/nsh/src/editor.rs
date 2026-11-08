@@ -190,6 +190,13 @@ pub(crate) fn screen(target: ReadSignal<TextFile>) -> impl Element {
                 .on_composition_change(move |event: &Composition| composing.set(event.composing))
                 .auto_correct(false)
                 .auto_capitalize(AutoCapitalize::None)
+                // VoiceOver names the text by its file, as the header shows it.
+                .label({
+                    let path = path.get();
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned())
+                })
                 .font_family(SharedString::from("monospace"))
                 .text_size(if is_desktop() { px(14.0) } else { px(17.0) })
                 .text_color(move || nsh_base::theme().foreground)

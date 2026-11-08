@@ -1,0 +1,29 @@
+host without-codex
+# On a Host without Codex, Claude works alone: the picker offers Claude's models
+# and no Codex account, a conversation answers, and once the app starts again
+# the conversation reopens and continues.
+# iOS: testSimulatorUsesClaudeWithoutCodexAndRestoresConversation
+expect "何に取り組みますか？" 30000
+press モデル
+expect "Claude Code" 20000
+press "Claude Code"
+press アカウントと週間残量
+press アカウントを追加
+type 認証コード "fixture-code" 15000
+press サインインを完了
+expect "claude@example.invalidを選択中" 20000
+expect_absent "desktop@example.invalid"
+press 閉じる
+press "Default (recommended)"
+screenshot claude-models
+type "AI に依頼する" "Claude standalone"
+press 送信
+expect "reply 1: Claude standalone" 30000
+expect_absent "Claude standalone" after "AI に依頼する"
+relaunch
+press "Claude standalone" 30000
+expect "reply 1: Claude standalone" 20000
+type "AI に依頼する" "Follow up"
+press 送信
+expect "reply 2: Follow up" 30000
+screenshot continued
