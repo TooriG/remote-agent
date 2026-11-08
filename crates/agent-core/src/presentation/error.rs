@@ -1089,7 +1089,7 @@ mod notice_tests {
             3,
             "invalid response: unknown variant `true`",
         );
-        let notices = snapshot.error_notices(ErrorScope::Projects);
+        let notices = snapshot.error_notices("", ErrorScope::Projects);
         assert_eq!(notices.len(), 1);
         assert_eq!(
             notices[0].title,
@@ -1099,7 +1099,7 @@ mod notice_tests {
             notices[0].recovery_label.as_deref(),
             Some("会話一覧を再読み込み")
         );
-        assert!(snapshot.error_notices(ErrorScope::Application).is_empty());
+        assert!(snapshot.error_notices("", ErrorScope::Application).is_empty());
         let recovery = snapshot
             .error_recovery(ErrorId::Operation { key, generation: 3 })
             .unwrap();
