@@ -1,0 +1,31 @@
+# The model picker's account row leads to Claude's accounts, where a sign-in
+# asks for the browser's code: one stopped with an unfinished code leaves the
+# accounts as they were, and the right code adds the account, selected with its
+# limits, while Codex keeps its own selection. The picker then offers Claude's
+# models with the new account's limits.
+# iOS: testSimulatorAddsClaudeAccountAndKeepsCodexSelected, testSimulatorGoesBackFromAccountLoginAndCanStartAgain (Claude), testSimulatorSignsInDirectlyFromModelSettings
+expect "何に取り組みますか？" 30000
+press モデル
+expect "Fixture Model" 20000
+press "Claude Code"
+press アカウントと週間残量
+expect "未ログイン" 10000
+press アカウントを追加
+expect "2. 認証コードを貼り付け" 15000
+type 認証コード "unfinished-code"
+press サインインを中止
+expect_absent "2. 認証コードを貼り付け" 10000
+expect_absent "claude@example.invalid"
+press アカウントを追加
+type 認証コード "fixture-code" 15000
+press サインインを完了
+expect "claude@example.invalidを選択中" 20000
+expect "Fable · 週間枠 残り 66%" 10000
+screenshot claude-added
+press Codex
+expect "desktop@example.invalidを選択中" 10000
+press 閉じる
+# The new draft takes Claude's default model, whose picker shows the limits.
+press "Default (recommended)"
+expect "Fable · 週間枠" 10000
+expect Fable

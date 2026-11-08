@@ -16,7 +16,10 @@
 //! The runner reads `result.json` from the output directory: `passed` (null while
 //! running) and one entry per step with `line`, `source`, `status` (`passed`,
 //! `failed` or `skipped`), `message`, `elapsedMs` and the step's `artifact` file;
-//! `evidence` names the screenshot and tree written when a step fails.
+//! `evidence` names the screenshot and tree written when a step fails. A
+//! `relaunch` step quits with `relaunch` set; the runner starts the app again
+//! with `BEX_ACCEPTANCE_RESUME`, and the driver goes on after the steps the file
+//! already records.
 use super::script::{Find, Key, Line, Modifiers, Step};
 use objc2::{
     MainThreadMarker, Message, msg_send,
@@ -48,9 +51,11 @@ const TICK: f64 = 0.2;
 
 /// Schedules `lines` on the main run loop. The returned flag says whether every
 /// step passed once the app returns from its event loop.
+/// `taken` are the steps an earlier process of the scenario recorded.
 pub(crate) fn start(
     scenario: PathBuf,
     lines: Vec<Line>,
+    taken: Vec<Value>,
     output: PathBuf,
     fixture: Option<u16>,
     mtm: MainThreadMarker,
@@ -62,11 +67,11 @@ pub(crate) fn start(
         fixture,
         clipboard: Clipboard::save(),
         lines,
-        index: 0,
+        index: taken.len(),
         since: Instant::now(),
         ready: false,
         finished: false,
-        steps: Vec::new(),
+        steps: taken,
         evidence: Vec::new(),
         menus: Vec::new(),
         passed: passed.clone(),
@@ -134,13 +139,15 @@ impl Driver {
         }));
         self.index += 1;
         self.since = Instant::now();
-        self.write(None);
+        ACTIVATING.set(false);
+        self.write(None, false);
     }
 
-    fn write(&self, passed: Option<bool>) {
+    fn write(&self, passed: Option<bool>, relaunch: bool) {
         let report = json!({
             "scenario": self.scenario,
             "passed": passed,
+            "relaunch": relaunch,
             "steps": self.steps,
             "evidence": self.evidence,
         });
@@ -159,6 +166,8 @@ enum Attempt {
     Passed(String, Option<String>),
     Press(String, Target),
     Failed(String),
+    /// Quit for the runner to start the app again.
+    Relaunch,
 }
 
 fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
@@ -203,13 +212,21 @@ fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
         Attempt::Pending(reason) if elapsed >= timeout => return fail(driver, &reason, mtm),
         Attempt::Pending(_) => {}
         Attempt::Failed(reason) => return fail(driver, &reason, mtm),
+        Attempt::Relaunch => {
+            driver.borrow_mut().record(
+                "passed",
+                "quit for the runner to start the app again",
+                None,
+            );
+            return finish(driver, None);
+        }
     }
     let done = {
         let driver = driver.borrow();
         !driver.finished && driver.index == driver.lines.len()
     };
     if done {
-        finish(driver, true);
+        finish(driver, Some(true));
     }
 }
 
@@ -226,7 +243,10 @@ fn limit(step: &Step) -> Duration {
         | Step::Drag(find, _)
         | Step::Click(_, find)
         | Step::Expect(find)
-        | Step::ExpectAbsent(find) => find.timeout,
+        | Step::ExpectAbsent(find)
+        | Step::ExpectCount(find, _)
+        | Step::ExpectEnabled(find, _)
+        | Step::ExpectHeight(find, ..) => find.timeout,
         Step::Wait(duration)
         | Step::ExpectClipboard(_, duration)
         | Step::ExpectFile(_, duration) => *duration,
@@ -244,7 +264,7 @@ fn attempt(
     mtm: MainThreadMarker,
 ) -> Attempt {
     match step {
-        Step::Fixture(_) | Step::FirstLaunch => {
+        Step::Fixture(_) | Step::FirstLaunch | Step::WithoutCodex => {
             Attempt::Passed("prepared by the runner".into(), None)
         }
         Step::Control(path) => done(
@@ -261,9 +281,34 @@ fn attempt(
         Step::Dump(name) => artifact(dump(&Tree::read(mtm, menus), output, name)),
         Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
+        Step::ExpectCount(find, count) => counted(&Tree::read(mtm, menus), find, *count),
+        Step::ExpectEnabled(find, enabled) => element_is(&Tree::read(mtm, menus), find, |object| {
+            let actual = !responds(object, sel!(isAccessibilityEnabled))
+                || unsafe { msg_send![object, isAccessibilityEnabled] };
+            (
+                actual == *enabled,
+                if actual { "enabled" } else { "disabled" }.into(),
+            )
+        }),
+        Step::ExpectHeight(find, points, above) => {
+            element_is(&Tree::read(mtm, menus), find, |object| {
+                let frame: NSRect = unsafe { msg_send![object, accessibilityFrame] };
+                let height = frame.size.height;
+                (
+                    (height > *points) == *above,
+                    format!("{height} points tall"),
+                )
+            })
+        }
         Step::Press(find) => press(&Tree::read(mtm, menus), find),
         Step::Type(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
-            insert(tree, index, text)
+            let origin = fixture.map(|port| format!("http://127.0.0.1:{port}"));
+            let text = match (text.contains(super::script::FIXTURE_ORIGIN), origin) {
+                (false, _) => text.clone(),
+                (true, Some(origin)) => text.replace(super::script::FIXTURE_ORIGIN, &origin),
+                (true, None) => return Err("the runner gave no fixture control port".into()),
+            };
+            insert(tree, index, &text)
                 .map(|()| format!("typed into {}", tree.nodes[index].describe()))
         }),
         Step::Paste(find) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
@@ -309,6 +354,69 @@ fn attempt(
         Step::Key(key) => {
             done(post_key(key, mtm).map(|()| format!("posted key code {}", key.code)))
         }
+        Step::Activate => activate(mtm),
+        Step::DenyMicrophone => done(deny_microphone()),
+        Step::Relaunch => Attempt::Relaunch,
+    }
+}
+
+thread_local! {
+    /// Whether the current `activate` step has asked Launch Services.
+    static ACTIVATING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Asks Launch Services to bring the app forward, once per step: it reaches
+/// this running app by its bundle, as a click in the Dock does.
+fn activate(mtm: MainThreadMarker) -> Attempt {
+    let app = NSApplication::sharedApplication(mtm);
+    if app.isActive() {
+        return Attempt::Passed("the app is active".into(), None);
+    }
+    if !ACTIVATING.replace(true) {
+        let bundle = objc2_foundation::NSBundle::mainBundle()
+            .bundlePath()
+            .to_string();
+        if !bundle.ends_with(".app") {
+            return Attempt::Failed(format!("{bundle} is not an app bundle to activate"));
+        }
+        // Should Launch Services start another copy instead, it gets this
+        // one's isolated Host rather than the user's.
+        let mut open = std::process::Command::new("/usr/bin/open");
+        open.args(["-a", &bundle]);
+        for name in ["AGENT_STATE_DIR", "AGENT_ISOLATED_HOST"] {
+            match std::env::var(name) {
+                Ok(value) => open.args(["--env", &format!("{name}={value}")]),
+                Err(_) => return Attempt::Failed(format!("{name} is not set")),
+            };
+        }
+        if let Err(reason) = open.stdin(std::process::Stdio::null()).spawn() {
+            return Attempt::Failed(format!("open -a {bundle}: {reason}"));
+        }
+    }
+    Attempt::Pending("the app is not active yet".into())
+}
+
+/// Whether the element `press` would find is as `state` wants: it answers
+/// whether it is, and how it is (`enabled`, `64 points tall`).
+fn element_is(
+    tree: &Tree,
+    find: &Find,
+    state: impl FnOnce(&AnyObject) -> (bool, String),
+) -> Attempt {
+    let index = match tree.labelled(find) {
+        Ok(matches) => matches[0],
+        Err(reason) => return Attempt::Pending(reason),
+    };
+    let node = &tree.nodes[index];
+    let Target::Element(object) = &node.target else {
+        return Attempt::Failed(format!("{} is no element", node.describe()));
+    };
+    let (wanted, actual) = state(object);
+    let message = format!("{} is {actual}", node.describe());
+    if wanted {
+        Attempt::Passed(message, None)
+    } else {
+        Attempt::Pending(message)
     }
 }
 
@@ -337,6 +445,28 @@ fn shown(tree: &Tree, find: &Find, present: bool) -> Attempt {
         // Without its anchor, nothing after it is shown.
         (Err(reason), true) => Attempt::Pending(reason),
         (Err(reason), false) => Attempt::Passed(reason, None),
+    }
+}
+
+/// Whether exactly `count` elements after `find`'s anchor show its text.
+fn counted(tree: &Tree, find: &Find, count: usize) -> Attempt {
+    let start = match tree.start(find) {
+        Ok(start) => start,
+        Err(reason) => return Attempt::Pending(reason),
+    };
+    let shown = (start..tree.nodes.len())
+        .filter(|&index| {
+            tree.nodes[index]
+                .texts
+                .iter()
+                .any(|(_, text)| text.contains(find.text.as_str()))
+        })
+        .count();
+    let message = format!("{shown} elements show {:?}", find.text);
+    if shown == count {
+        Attempt::Passed(message, None)
+    } else {
+        Attempt::Pending(message)
     }
 }
 
@@ -375,8 +505,15 @@ fn on_element(
     find: &Find,
     act: impl FnOnce(&Tree, usize) -> Result<String, String>,
 ) -> Attempt {
-    match tree.labelled(find) {
-        Ok(matches) => done(act(tree, matches[0])),
+    // A menu item takes no text, wheel or selection: the element of the same
+    // name is meant while the menu that offered it closes.
+    match tree.labelled(find).map(|matches| {
+        matches
+            .into_iter()
+            .find(|&index| !matches!(tree.nodes[index].target, Target::MenuItem { .. }))
+    }) {
+        Ok(Some(index)) => done(act(tree, index)),
+        Ok(None) => Attempt::Pending(format!("only a menu item is labelled {:?}", find.text)),
         Err(reason) => Attempt::Pending(reason),
     }
 }
@@ -412,15 +549,17 @@ fn fail(driver: &Rc<RefCell<Driver>>, reason: &str, mtm: MainThreadMarker) {
             driver.record("skipped", "", None);
         }
     }
-    finish(driver, false);
+    finish(driver, Some(false));
 }
 
-fn finish(driver: &Rc<RefCell<Driver>>, passed: bool) {
+/// Ends the driver's process with the scenario's result, or with none for the
+/// runner to start the app again.
+fn finish(driver: &Rc<RefCell<Driver>>, passed: Option<bool>) {
     let menus = {
         let mut driver = driver.borrow_mut();
         driver.finished = true;
-        driver.passed.set(passed);
-        driver.write(Some(passed));
+        driver.passed.set(passed.unwrap_or(true));
+        driver.write(passed, passed.is_none());
         driver.clipboard.restore();
         std::mem::take(&mut driver.menus)
     };
@@ -569,7 +708,15 @@ const MAX_NODES: usize = 50_000;
 impl Tree {
     fn read(mtm: MainThreadMarker, menus: &[Retained<NSMenu>]) -> Self {
         let mut tree = Self { nodes: Vec::new() };
-        for window in NSApplication::sharedApplication(mtm).orderedWindows() {
+        let app = NSApplication::sharedApplication(mtm);
+        // Ordered windows leave out panels (Quick Look's), which follow them.
+        let ordered = app.orderedWindows();
+        let panels: Vec<_> = app
+            .windows()
+            .into_iter()
+            .filter(|window| !ordered.containsObject(window))
+            .collect();
+        for window in ordered.into_iter().chain(panels) {
             if window.isVisible() {
                 let object = unsafe { Retained::cast_unchecked::<AnyObject>(window.clone()) };
                 tree.walk(object, None, 0, &window);
@@ -796,7 +943,15 @@ fn text(object: &AnyObject, selector: Sel) -> Option<String> {
 fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
     let responder = editor(tree, index)?;
     let text = NSString::from_str(text);
-    let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
+    // As the keyboard's input context commits text, where the view takes it so
+    // (a text view, SwiftTerm's terminal).
+    if responds(&responder, sel!(insertText:replacementRange:)) {
+        let nowhere = NSRange::new(objc2_foundation::NSNotFound as usize, 0);
+        let _: () =
+            unsafe { msg_send![&*responder, insertText: &*text, replacementRange: nowhere] };
+    } else {
+        let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
+    }
     Ok(())
 }
 
@@ -844,7 +999,9 @@ fn editor(tree: &Tree, index: usize) -> Result<Retained<objc2_app_kit::NSRespond
     let responder = window
         .firstResponder()
         .ok_or("the window has no first responder")?;
-    if !responds(&responder, sel!(insertText:)) {
+    if !responds(&responder, sel!(insertText:replacementRange:))
+        && !responds(&responder, sel!(insertText:))
+    {
         return Err(format!("{} does not edit text", node.describe()));
     }
     Ok(responder)
@@ -993,6 +1150,13 @@ fn select(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
         value[..start].encode_utf16().count(),
         text.encode_utf16().count(),
     );
+    // A drag takes the keyboard focus to the text it selects, where the Edit
+    // menu's Copy then acts.
+    if let (Some(view), Some(window)) = (object.downcast_ref::<NSView>(), &node.window)
+        && view.acceptsFirstResponder()
+    {
+        window.makeFirstResponder(Some(view));
+    }
     let _: () = unsafe { msg_send![&**object, setAccessibilitySelectedTextRange: range] };
     Ok(())
 }
@@ -1305,6 +1469,37 @@ fn choose(path: &str, mtm: MainThreadMarker) -> Attempt {
     unsafe { method.set_implementation(answer) };
     parent.endSheet_returnCode(&panel, NSModalResponseOK);
     Attempt::Passed(format!("chose {path}"), None)
+}
+
+/// AVAudioApplication's permission request, answered as the user declining.
+unsafe extern "C-unwind" fn microphone_denied(
+    _: *mut AnyObject,
+    _: Sel,
+    answer: &block2::DynBlock<dyn Fn(objc2::runtime::Bool)>,
+) {
+    answer.call((objc2::runtime::Bool::NO,));
+}
+
+/// Makes the app's microphone permission requests answer as the user declining
+/// the system's prompt, which a scenario cannot reach, from now on.
+fn deny_microphone() -> Result<String, String> {
+    let class = objc2::runtime::AnyClass::get(c"AVAudioApplication")
+        .ok_or("AVAudioApplication is not loaded")?;
+    let method = class
+        .class_method(sel!(requestRecordPermissionWithCompletionHandler:))
+        .ok_or("AVAudioApplication has no record permission request")?;
+    // SAFETY: the replacement takes what the class method does and returns nothing.
+    unsafe {
+        method.set_implementation(std::mem::transmute::<
+            unsafe extern "C-unwind" fn(
+                *mut AnyObject,
+                Sel,
+                &block2::DynBlock<dyn Fn(objc2::runtime::Bool)>,
+            ),
+            objc2::runtime::Imp,
+        >(microphone_denied));
+    }
+    Ok("the microphone is denied".into())
 }
 
 /// Whether the file at `path` exists and has content yet.

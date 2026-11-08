@@ -30,6 +30,36 @@ private final class HostTerminalView: SwiftTerm.TerminalView {
         guard HostPaste.active else { return }
         super.send(source: source, data: data)
     }
+
+    #if os(macOS)
+        // SwiftTerm's iOS view reads its screen to VoiceOver; its Mac view has no
+        // accessibility text. The visible rows are this text area's value, which
+        // SwiftTerm already announces as changed after each frame it draws.
+        override func isAccessibilityElement() -> Bool { true }
+        override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
+        override func accessibilityValue() -> Any? { screenText() }
+
+        private var drawn: SwiftTerm.Terminal?
+
+        /// The Mac view keeps the `Terminal` it draws internal; reflection
+        /// reaches it once SwiftTerm has created it.
+        private func drawnTerminal() -> SwiftTerm.Terminal? {
+            var mirror: Mirror? = Mirror(reflecting: self)
+            while drawn == nil, let current = mirror {
+                drawn = current.children.first { $0.label == "terminal" }?.value as? SwiftTerm.Terminal
+                mirror = current.superclassMirror
+            }
+            return drawn
+        }
+
+        func screenText() -> String {
+            guard let terminal = drawnTerminal() else { return "" }
+            let rows = terminal.terminalLock.withLock {
+                (0 ..< terminal.rows).map { terminal.getLine(row: $0)?.translateToString(trimRight: true, skipNullCellsFollowingWide: true) ?? "" }
+            }
+            return rows.reversed().drop(while: \.isEmpty).reversed().joined(separator: "\n")
+        }
+    #endif
 }
 
 @MainActor private final class TerminalOwner: NSObject, TerminalViewDelegate {

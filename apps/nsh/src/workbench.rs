@@ -1,4 +1,4 @@
-use crate::l10n::{localized, tr};
+use crate::l10n::{localized, tr, tr_format};
 use crate::{Connection, application::Application, shared::Shared, ui};
 use agent_core::panels::{PanelKind, PanelLayout, PanelScope, PanelState, PanelSurface, PanelTool};
 use nsh_core::prelude::*;
@@ -408,7 +408,7 @@ fn tab(workspace: Workbench, surface: ReadSignal<PanelSurface>) -> View {
                 .style_when(active, |s| s.opacity(1.0))
                 .child(ui::small_icon_button(
                     Icon::CLOSE,
-                    tr("タブを閉じる"),
+                    move || SharedString::from(tr_format("{0}を閉じる", [&title()])),
                     move || workspace.close(id),
                 )),
         )

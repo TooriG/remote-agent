@@ -1,0 +1,43 @@
+# Going back and forth between a conversation and new chats, twice over, keeps
+# each one's draft: the project's new chat, the conversation's, and a chat's
+# outside any project.
+# iOS: testSimulatorRepeatedlyReopensTasksAndNewDraftsAfterBackNavigation
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] Retain this project draft"
+press プロジェクトなしで始める
+expect プロジェクトなし
+expect_absent "Retain this project draft" after "AI に依頼する"
+press このプロジェクトで新しいチャット
+expect "[immediate] Retain this project draft" after "AI に依頼する" 10000
+press 送信
+expect "シミュレータで完了しました。" 30000
+type "AI に依頼する" "Keep this conversation draft"
+# New chats start in the folded project; its conversations show once unfolded.
+press 検証プロジェクト
+expect "[immediate] Retain this project draft" 10000
+# First round: a new chat in the project.
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "New draft 0"
+press "[immediate] Retain this project draft"
+expect "シミュレータで完了しました。" 15000
+expect "Keep this conversation draft" after "AI に依頼する"
+press このプロジェクトで新しいチャット
+expect "New draft 0" after "AI に依頼する" 10000
+press "[immediate] Retain this project draft"
+expect "Keep this conversation draft" after "AI に依頼する" 15000
+# Second round: a chat outside any project.
+press このプロジェクトで新しいチャット
+press プロジェクトなしで始める
+expect プロジェクトなし
+type "AI に依頼する" "New draft 1"
+press "[immediate] Retain this project draft"
+expect "シミュレータで完了しました。" 15000
+expect "Keep this conversation draft" after "AI に依頼する"
+press このプロジェクトで新しいチャット
+expect "New draft 0" after "AI に依頼する" 10000
+press プロジェクトなしで始める
+expect "New draft 1" after "AI に依頼する" 10000
+press "[immediate] Retain this project draft"
+expect "Keep this conversation draft" after "AI に依頼する" 15000
+screenshot reopened

@@ -239,9 +239,13 @@ impl NativeComponent for Button {
             ),
             "label" => {
                 self.label = value.and_then(JsonValue::as_str).map(str::to_owned);
-                self.view.setAccessibilityLabel(
-                    self.label.as_deref().map(NSString::from_str).as_deref(),
-                );
+                // The button's cell is its accessibility element, which reads
+                // its own label rather than the view's.
+                if let Some(cell) = self.view.cell() {
+                    cell.setAccessibilityLabel(
+                        self.label.as_deref().map(NSString::from_str).as_deref(),
+                    );
+                }
                 self.apply_symbol();
             }
             "identifier" => self.view.setAccessibilityIdentifier(
@@ -405,9 +409,13 @@ impl NativeComponent for Menu {
                 .setBordered(value.and_then(JsonValue::as_str) != Some("plain")),
             "label" => {
                 self.label = value.and_then(JsonValue::as_str).map(str::to_owned);
-                self.view.setAccessibilityLabel(
-                    self.label.as_deref().map(NSString::from_str).as_deref(),
-                );
+                // The button's cell is its accessibility element, which reads
+                // its own label rather than the view's.
+                if let Some(cell) = self.view.cell() {
+                    cell.setAccessibilityLabel(
+                        self.label.as_deref().map(NSString::from_str).as_deref(),
+                    );
+                }
                 self.apply_symbol();
             }
             "title" => {

@@ -8,8 +8,12 @@ expect "Review fixture changes" 10000
 press fixture-review
 expect_absent "Review fixture changes"
 dump inserted
-type "AI に依頼する" " 一行目の説明です。この下書きは入力欄の幅を超えて折り返し、入力欄が下書きに合わせて高くなることを確かめます。さらに続けて、二行目以降まで届くように長く書いています。三行目にも届くように、同じ説明をもう一度繰り返します。この下書きは入力欄の幅を超えて折り返し、入力欄が下書きに合わせて高くなることを確かめます。四行目まで届けば、入力欄が伸びたことが画面で分かります。"
+# One line takes the field's least height.
+expect_height "$fixture-review*" below 65
+type "AI に依頼する" " 一行目の説明です。この下書きは入力欄の幅を超えて折り返し、入力欄が下書きに合わせて高くなることを確かめます。さらに続けて、二行目以降まで届くように長く書いています。三行目にも届くように、同じ説明をもう一度繰り返します。この下書きは入力欄の幅を超えて折り返し、入力欄が下書きに合わせて高くなることを確かめます。四行目まで届けば、入力欄が伸びたことが画面で分かります。五行目と六行目にも届くように、もう少しだけ説明を足しておきます。入力欄の最小の高さを超えて、はっきりと伸びたことが分かります。"
 screenshot grown
+# The draft grows from one line to wrap over several.
+expect_height "*分かります。" above 80
 key return
 expect "シミュレータで完了しました。" 30000
 expect "fixture-review" after 右パネルを切り替え

@@ -4,8 +4,8 @@ use native_browser::{Browser, Startup};
 use nsh_core::JsonValue;
 use nsh_platform_macos::{ComponentContext, Components, NativeComponent};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained};
-use objc2_app_kit::NSView;
-use objc2_foundation::NSObjectProtocol;
+use objc2_app_kit::{NSAccessibility, NSAccessibilityGroupRole, NSView};
+use objc2_foundation::{NSObjectProtocol, NSString};
 use std::{
     cell::{Cell, RefCell},
     path::PathBuf,
@@ -175,7 +175,13 @@ impl NativeSurface {
                 tab: String::new(),
             }),
         });
-        Self(unsafe { msg_send![super(view), init] })
+        let view: Retained<Surface> = unsafe { msg_send![super(view), init] };
+        // The page WebKit shows inside it is the browser, as Windows labels
+        // the page it draws.
+        view.setAccessibilityElement(true);
+        view.setAccessibilityRole(Some(unsafe { NSAccessibilityGroupRole }));
+        view.setAccessibilityLabel(Some(&NSString::from_str(crate::l10n::tr("ブラウザ"))));
+        Self(view)
     }
 }
 impl Drop for NativeSurface {

@@ -65,7 +65,7 @@ use agent_core::{
 };
 use application::Navigation;
 use l10n::tr;
-use nsh_core::{HeaderSystemItem, platform::Lifecycle, prelude::*};
+use nsh_core::{HeaderSystemItem, prelude::*};
 use serde_json::json;
 use shared::Shared;
 use std::sync::Arc;
@@ -252,7 +252,7 @@ fn app_content(
     #[cfg(desktop)]
     let primary = primary || area == Area::Shell;
     if primary {
-        effect(move || client.with(|client| client.scene(lifecycle() == Lifecycle::Active)));
+        effect(move || client.with(|client| client.scene(native::in_use())));
     }
     let title = computed(move || {
         connection

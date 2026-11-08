@@ -1,7 +1,8 @@
 //! Runs the Mac NSH app through `apps/nsh/acceptance/*.scenario`: each scenario
-//! gets a fresh fixture Host in a temporary directory and a fresh app process
-//! whose driver (`apps/nsh/src/acceptance`) takes the steps, so the user's own
-//! Host and app state are never touched. The report and every scenario's
+//! gets a fresh fixture Host in a temporary directory (without Codex when its
+//! leading lines say `host without-codex`) and a fresh app process whose driver
+//! (`apps/nsh/src/acceptance`) takes the steps, started again after each
+//! `relaunch`, so the user's own Host and app state are never touched. The report and every scenario's
 //! screenshots, trees and logs go to `target/nsh-acceptance/run-<time>/`.
 use crate::{
     Result,
@@ -136,6 +137,9 @@ struct Tools {
 #[derive(Default, Deserialize)]
 struct Report {
     passed: Option<bool>,
+    /// The app quit for the runner to start it again.
+    #[serde(default)]
+    relaunch: bool,
     steps: Vec<StepResult>,
     evidence: Vec<String>,
 }
@@ -187,27 +191,40 @@ fn select(mut scenarios: Vec<PathBuf>, filters: &[String]) -> Result<Vec<PathBuf
     Ok(scenarios)
 }
 
-/// A scenario's leading lines, which prepare the run before the app starts.
-fn preparation(script: &str) -> impl Iterator<Item = &str> {
-    script
+/// What a scenario's leading lines ask of the run before the app starts:
+/// `first-launch`, `host without-codex`, and the control paths of `fixture`
+/// lines, which are posted in order. The app's driver posts the later ones.
+#[derive(Debug, Default, PartialEq)]
+struct Preparation {
+    /// The app keeps its first-run setup; otherwise it starts as a returning
+    /// user's, whose setup ended.
+    first_launch: bool,
+    without_codex: bool,
+    fixture_paths: Vec<String>,
+}
+
+fn preparation(script: &str) -> Preparation {
+    let mut preparation = Preparation::default();
+    for line in script
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .take_while(|line| line.starts_with("fixture ") || *line == FIRST_LAUNCH)
+    {
+        if line == "first-launch" {
+            preparation.first_launch = true;
+        } else if line == "host without-codex" {
+            preparation.without_codex = true;
+        } else if let Some(path) = line.strip_prefix("fixture ") {
+            preparation
+                .fixture_paths
+                .push(path.trim().trim_matches('"').to_owned());
+        } else {
+            break;
+        }
+    }
+    preparation
 }
 
-/// The control paths a scenario's leading `fixture` lines post before the app
-/// starts; the app's driver posts the later ones.
-fn fixture_paths(script: &str) -> Vec<String> {
-    preparation(script)
-        .filter_map(|line| line.strip_prefix("fixture "))
-        .map(|path| path.trim().trim_matches('"').to_owned())
-        .collect()
-}
-
-/// The step that keeps the app's first-run setup; without it the app starts
-/// as a returning user's, whose setup ended.
-const FIRST_LAUNCH: &str = "first-launch";
 /// What the app saves in its data once its setup ends
 /// (`apps/nsh/src/application/onboarding.rs`).
 const SETUP_COMPLETED: &str = "nsh-client/onboarding.completed";
@@ -218,7 +235,7 @@ async fn scenario(
     tools: &Tools,
     cancel: &tokio::sync::watch::Receiver<bool>,
 ) -> Result<Report> {
-    let script = fs::read_to_string(path)?;
+    let preparation = preparation(&fs::read_to_string(path)?);
     let temporary = tempfile::Builder::new().prefix("bex-nsh-").tempdir()?;
     let host = temporary.path().join("host");
     let port = temporary.path().join("pairing.port");
@@ -226,7 +243,11 @@ async fn scenario(
     let mut command = Command::new(&tools.fixture);
     command
         .arg(&host)
-        .arg(&tools.codex)
+        .arg(if preparation.without_codex {
+            "--without-codex".as_ref()
+        } else {
+            tools.codex.as_os_str()
+        })
         .arg(&port)
         .arg(STREAM_DELAY_MS)
         .arg(&tools.claude)
@@ -238,6 +259,9 @@ async fn scenario(
         // the user's own stay out of the fixture's.
         .env("DSH_HOME", temporary.path().join("dsh"))
         .env_remove("DEEPSEEK_API_KEY")
+        // The Host's terminals inherit it: this runner checks how many answers a
+        // terminal query gets (`cargo xtask terminal-query-probe`).
+        .env("AGENT_TERMINAL_QUERY_PROBE", std::env::current_exe()?)
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
@@ -254,49 +278,67 @@ async fn scenario(
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         let port: u16 = fs::read_to_string(&port)?.trim().parse()?;
-        for path in fixture_paths(&script) {
-            post(port, &path).await?;
+        for path in &preparation.fixture_paths {
+            post(port, path).await?;
         }
-        if !preparation(&script).any(|line| line == FIRST_LAUNCH) {
+        if !preparation.first_launch {
             let completed = host.join(SETUP_COMPLETED);
             fs::create_dir_all(completed.parent().expect("the marker has a directory"))?;
             fs::write(completed, "completed\n")?;
         }
         let log = File::create(output.join("app.log"))?;
-        let mut command = Command::new(&tools.app);
-        command
-            .env("AGENT_STATE_DIR", &host)
-            .env("AGENT_ISOLATED_HOST", "1")
-            .env("BEX_ACCEPTANCE", path)
-            .env("BEX_ACCEPTANCE_OUTPUT", output)
-            .env("BEX_ACCEPTANCE_FIXTURE", port.to_string())
-            .stdin(std::process::Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log);
-        let ended = Child::spawn(command)?
-            .output(cancel, SCENARIO_LIMIT, Duration::from_secs(10))
-            .await;
-        match fs::read(output.join("result.json")) {
-            Ok(bytes) => {
-                let report: Report = serde_json::from_slice(&bytes)?;
-                match (report.passed, ended) {
-                    (Some(_), _) => Ok(report),
-                    (None, Err(error)) => {
-                        Err(format!("the app stopped mid-scenario: {error}").into())
+        let deadline = Instant::now() + SCENARIO_LIMIT;
+        let mut resume = false;
+        // A `relaunch` step quits the app with its result unfinished; the next
+        // process goes on after its steps.
+        loop {
+            let mut command = Command::new(&tools.app);
+            command
+                .env("AGENT_STATE_DIR", &host)
+                .env("AGENT_ISOLATED_HOST", "1")
+                .env("BEX_ACCEPTANCE", path)
+                .env("BEX_ACCEPTANCE_OUTPUT", output)
+                .env("BEX_ACCEPTANCE_FIXTURE", port.to_string())
+                .stdin(std::process::Stdio::null())
+                .stdout(log.try_clone()?)
+                .stderr(log.try_clone()?);
+            if resume {
+                command.env("BEX_ACCEPTANCE_RESUME", "1");
+            }
+            let ended = Child::spawn(command)?
+                .output(
+                    cancel,
+                    deadline.saturating_duration_since(Instant::now()),
+                    Duration::from_secs(10),
+                )
+                .await;
+            let report = match fs::read(output.join("result.json")) {
+                Ok(bytes) => serde_json::from_slice::<Report>(&bytes)?,
+                Err(_) => {
+                    return Err(match ended {
+                        Ok(output) => format!(
+                            "the app exited with {} before any step; see app.log",
+                            output.status
+                        ),
+                        Err(error) => format!("the app wrote no result: {error}"),
                     }
-                    (None, Ok(output)) => {
-                        Err(format!("the app exited mid-scenario with {}", output.status).into())
-                    }
+                    .into());
+                }
+            };
+            match (report.passed, ended) {
+                (Some(_), _) => return Ok(report),
+                (None, Ok(output)) if report.relaunch && output.status.success() => {
+                    resume = true;
+                }
+                (None, Err(error)) => {
+                    return Err(format!("the app stopped mid-scenario: {error}").into());
+                }
+                (None, Ok(output)) => {
+                    return Err(
+                        format!("the app exited mid-scenario with {}", output.status).into(),
+                    );
                 }
             }
-            Err(_) => Err(match ended {
-                Ok(output) => format!(
-                    "the app exited with {} before any step; see app.log",
-                    output.status
-                ),
-                Err(error) => format!("the app wrote no result: {error}"),
-            }
-            .into()),
         }
     }
     .await;
@@ -435,21 +477,21 @@ mod tests {
     }
 
     #[test]
-    fn only_leading_fixture_lines_are_posted_before_the_app_starts() {
+    fn only_leading_lines_prepare_the_host_before_the_app_starts() {
         assert_eq!(
-            fixture_paths(
-                "# fixture /comment\nfixture /external-conversation\nfirst-launch\n\n  fixture \"/list-fixture\"\nexpect fixture\nfixture /release-inputs\n"
+            preparation(
+                "# fixture /comment\nfixture /external-conversation\nfirst-launch\nhost without-codex\n\n  fixture \"/list-fixture\"\nexpect fixture\nfixture /release-inputs\nhost without-codex\nfirst-launch\n"
             ),
-            ["/external-conversation", "/list-fixture"]
+            Preparation {
+                first_launch: true,
+                without_codex: true,
+                fixture_paths: vec!["/external-conversation".into(), "/list-fixture".into()],
+            }
         );
-    }
-
-    #[test]
-    fn only_a_leading_first_launch_keeps_the_setup() {
-        let first = |script| preparation(script).any(|line| line == FIRST_LAUNCH);
-        assert!(first("fixture /list-fixture\nfirst-launch\nexpect x\n"));
-        assert!(!first("fixture /list-fixture\nexpect x\n"));
-        assert!(!first("expect x\nfirst-launch\n"));
+        assert_eq!(
+            preparation("expect x\nhost without-codex\nfirst-launch\n"),
+            Preparation::default()
+        );
     }
 
     #[test]

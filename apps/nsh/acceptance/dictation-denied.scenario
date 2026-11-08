@@ -1,0 +1,17 @@
+# Declining the microphone keeps the draft and sending: the app says where to
+# allow it, nothing records, and the draft sends. The driver declines for the
+# user, whose system prompt a scenario cannot reach.
+# iOS: testSimulatorDictationPermissionDenialPreservesDraftAndSend
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] Keep this draft after microphone denial"
+microphone deny
+press 音声をCodexで文字起こし
+expect "マイクへのアクセスを許可してください" 10000
+screenshot denied
+press 閉じる
+expect_absent "マイクへのアクセスを許可してください" 10000
+expect_absent 録音を取り消す
+expect "Keep this draft after microphone denial"
+press 送信
+expect "シミュレータで完了しました。" 30000

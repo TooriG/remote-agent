@@ -1,0 +1,13 @@
+# A conversation another client starts while this app is behind other apps
+# appears in its project without a refresh, and the project hides and shows it
+# as it collapses and expands. The Mac stays connected in the background.
+# iOS: testSimulatorFetchesNewTaskAfterForeground
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+fixture /background-task
+expect "Simulator conversation" 20000
+screenshot appeared
+press 検証プロジェクト
+expect_absent "Simulator conversation" 10000
+press 検証プロジェクト
+expect "Simulator conversation" 10000

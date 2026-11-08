@@ -133,6 +133,12 @@ impl Terminal {
                 let view =
                     unsafe { Retained::retain((native.bridge.view)(native.handle.as_ptr())) }
                         .expect("the Swift terminal owner always has a native view");
+                // Its value is the screen's text (Terminal.swift).
+                #[cfg(target_os = "macos")]
+                objc2_app_kit::NSAccessibility::setAccessibilityLabel(
+                    &*view,
+                    Some(&objc2_foundation::NSString::from_str(tr("ターミナル"))),
+                );
                 Self {
                     view,
                     native: Some(native),

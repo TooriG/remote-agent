@@ -2,23 +2,35 @@
 use nsh_core::JsonValue;
 use nsh_platform_macos::{ComponentContext, NativeComponent};
 use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
-    runtime::ProtocolObject, sel,
+    DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
+    rc::{Retained, Weak},
+    runtime::ProtocolObject,
+    sel,
 };
-use objc2_app_kit::{NSResponder, NSView, NSWindowDelegate};
+use objc2_app_kit::{
+    NSApplication, NSApplicationDidBecomeActiveNotification, NSResponder, NSView, NSWindowDelegate,
+};
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{
-    NSInteger, NSObject, NSObjectNSThreadPerformAdditions, NSObjectProtocol, NSString, NSURL,
+    NSInteger, NSNotification, NSNotificationCenter, NSObject, NSObjectNSThreadPerformAdditions,
+    NSObjectProtocol, NSString, NSURL,
 };
 use objc2_quick_look_ui::{
     QLPreviewItem, QLPreviewPanel, QLPreviewPanelDataSource, QLPreviewPanelDelegate,
 };
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    ptr::NonNull,
+};
 
 struct State {
     context: ComponentContext,
     path: RefCell<String>,
     live: Cell<bool>,
+    /// Waits for the app to become active, whose key window Quick Look takes
+    /// its controller from: a file that arrives while the user is in another
+    /// app shows when they come back.
+    activation: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
 }
 define_class!(
     #[unsafe(super(NSView, NSResponder, NSObject))]
@@ -52,6 +64,10 @@ define_class!(
                 return;
             }
             if !self.ivars().live.get() { return; }
+            if !NSApplication::sharedApplication(self.mtm()).isActive() {
+                self.present_on_activation();
+                return;
+            }
             let Some(window) = self.window() else { return; };
             if !window.makeFirstResponder(Some(self)) {
                 self.ivars().context.emit("error", JsonValue::Null);
@@ -102,6 +118,33 @@ impl PreviewView {
             panel.close();
         }
     }
+    fn present_on_activation(&self) {
+        if self.ivars().activation.borrow().is_some() {
+            return;
+        }
+        let this = Weak::from_retained(&self.retain());
+        let block = block2::RcBlock::new(move |_: NonNull<NSNotification>| {
+            if let Some(this) = this.load() {
+                this.stop_waiting_for_activation();
+                let path = this.ivars().path.borrow().clone();
+                this.request(&path);
+            }
+        });
+        let observer = unsafe {
+            NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+                Some(NSApplicationDidBecomeActiveNotification),
+                None,
+                None,
+                &block,
+            )
+        };
+        self.ivars().activation.replace(Some(observer));
+    }
+    fn stop_waiting_for_activation(&self) {
+        if let Some(observer) = self.ivars().activation.take() {
+            unsafe { NSNotificationCenter::defaultCenter().removeObserver(observer.as_ref()) };
+        }
+    }
     fn request(&self, path: &str) {
         *self.ivars().path.borrow_mut() = path.into();
         // Quick Look can run a nested AppKit loop (notably its text viewer).
@@ -123,6 +166,7 @@ impl Preview {
             context,
             path: RefCell::default(),
             live: Cell::new(true),
+            activation: RefCell::default(),
         });
         Self(unsafe { msg_send![super(this), initWithFrame: CGRect::ZERO] })
     }
@@ -141,6 +185,7 @@ impl NativeComponent for Preview {
 impl Drop for Preview {
     fn drop(&mut self) {
         self.0.ivars().live.set(false);
+        self.0.stop_waiting_for_activation();
         self.0.request("");
     }
 }

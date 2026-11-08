@@ -32,7 +32,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     });
     // A question's answer has no attachments; the draft keeps them.
     let can_attach = move || {
-        controls.with(|c| c.connected && !c.sending && !c.transcribing && !c.transferring)
+        composer.with(|c| c.ready_for_input())
             && !recording.get()
             && !requesting.get()
             && !connection.uploading()
@@ -444,6 +444,8 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                     }
                                 })
                                 .style_when(inactive, |s| s.opacity(0.5))
+                                // VoiceOver says so when it cannot send or stop.
+                                .disabled(move || !enabled())
                                 .on_press(submit)
                                 .child(when(move || !stopping(), || ui::icon(Icon::ARROW_UP, 24.0)))
                                 .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))

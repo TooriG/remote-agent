@@ -19,6 +19,15 @@ use std::{
 };
 use tiny_http::{Header, Method, Response, Server};
 
+/// A page the clients' browsers load without the network. Its title, which a
+/// browser's tab list shows, repeats what is typed into its focused field.
+const BROWSER_PAGE: &str = "/browser-page";
+const BROWSER_PAGE_HTML: &str = r#"<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<title>検証ページ</title></head><body><h1>検証ページ</h1>
+<label>入力欄 <input id="field" autofocus></label>
+<script>field.oninput = () => document.title = "入力 " + field.value;</script>
+</body></html>"#;
+
 pub struct PairingServer {
     pub port: u16,
     stop: Arc<AtomicBool>,
@@ -44,24 +53,28 @@ impl PairingServer {
                 let Some(request) = server.recv_timeout(Duration::from_millis(100))? else {
                     continue;
                 };
-                let result = route(
-                    &root,
-                    &runtime,
-                    &ticket,
-                    &identity,
-                    request.method(),
-                    request.url(),
-                );
-                let (status, body) = match result {
-                    Ok(response) => response,
-                    Err(_) => (503, b"Isolated Host is unavailable".to_vec()),
+                let page = request.method() == &Method::Get && request.url() == BROWSER_PAGE;
+                let (status, body) = if page {
+                    (200, BROWSER_PAGE_HTML.as_bytes().to_vec())
+                } else {
+                    route(
+                        &root,
+                        &runtime,
+                        &ticket,
+                        &identity,
+                        request.method(),
+                        request.url(),
+                    )
+                    .unwrap_or_else(|_| (503, b"Isolated Host is unavailable".to_vec()))
+                };
+                let kind = if page {
+                    "text/html; charset=utf-8"
+                } else {
+                    "application/json; charset=utf-8"
                 };
                 let response = Response::from_data(body)
                     .with_status_code(status)
-                    .with_header(
-                        Header::from_bytes("Content-Type", "application/json; charset=utf-8")
-                            .unwrap(),
-                    )
+                    .with_header(Header::from_bytes("Content-Type", kind).unwrap())
                     .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap());
                 // A disconnected Simulator request must not stop the fixture.
                 let _ = request.respond(response);

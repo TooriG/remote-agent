@@ -1,13 +1,17 @@
 //! The step language of an acceptance scenario: one step per line, `#` starts a
-//! comment, and an argument with spaces is quoted (`"..."`, with `\"` and `\\`).
+//! comment, and an argument with spaces is quoted (`"..."`, with `\"`, `\\` and
+//! `\n` for a line break).
 //!
 //! - `fixture <path>`: posts `<path>` to the fixture Host's control server
 //!   (`crates/host-fixture/src/pairing.rs`). The runner posts leading ones before
 //!   the app starts; the driver posts later ones when it reaches them
 //!   (`/release-inputs` while a turn waits).
 //! - `first-launch`: the app starts as on its first launch, showing its setup.
-//!   Without it the runner marks the setup done, as a returning user's. It
-//!   comes before the other steps, beside the leading `fixture` lines.
+//!   Without it the runner marks the setup done, as a returning user's.
+//! - `host without-codex`: the runner starts the fixture Host without Codex, as
+//!   on a PC where only Claude is installed.
+//!
+//!   Both come before the other steps, beside the leading `fixture` lines.
 //! - `press <label> [after <anchor>] [timeout-ms]`: presses the first element
 //!   whose label, title, value, identifier or placeholder is `<label>`, or an item
 //!   of an open menu; a link in text is clicked. A `*` at either end of `<label>` matches any text there
@@ -15,7 +19,8 @@
 //!   `<anchor>` in reading order count (a file row below a panel's header, not the
 //!   same name in the conversation).
 //! - `type <label> <text> [after <anchor>] [timeout-ms]`: focuses that element
-//!   and inserts `<text>`.
+//!   and inserts `<text>`, where `$AGENT_FIXTURE_ORIGIN` is the fixture Host's
+//!   loopback server (its `/browser-page` is a page for the browser).
 //! - `key <name>`: a key with optional modifiers, as `return`, `escape`, `cmd+,`
 //!   or `shift+f10`.
 //! - `click <modifiers> <label> [after <anchor>] [timeout-ms]`: a mouse click
@@ -24,6 +29,14 @@
 //!   and `ctrl` joined by `+`.
 //! - `expect <text> [after <anchor>] [timeout-ms]` / `expect_absent ...`: waits
 //!   until some element's text contains `<text>`, or none does.
+//! - `expect_count <text> <n> [after <anchor>] [timeout-ms]`: waits until
+//!   exactly `<n>` elements' text contains `<text>`, whatever their order (a
+//!   conversation's rows read in their list's order, not the screen's).
+//! - `expect_enabled <label> [after <anchor>] [timeout-ms]` / `expect_disabled
+//!   ...`: waits until the element `press` would find takes presses, or until it
+//!   does not.
+//! - `expect_height <label> above|below <points> [after <anchor>] [timeout-ms]`:
+//!   waits until that element is taller, or shorter, than `<points>`.
 //! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
 //!   that element; positive lines move the content up, toward its end.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
@@ -48,6 +61,13 @@
 //!   no field while the app is in the background).
 //! - `undo <label> [after <anchor>] [timeout-ms]`: focuses that element and
 //!   undoes its last edit, as Edit > Undo does.
+//! - `activate`: brings the app to the front through Launch Services, as the
+//!   user clicking it in the Dock: AppKit lets an app activate itself only
+//!   while the user is in it. It takes the focus from the user briefly.
+//! - `microphone deny`: answers the app's microphone permission requests from
+//!   then on as the user declining the system's prompt.
+//! - `relaunch`: quits the app as the user would; the runner starts it again on
+//!   the same Host and state, and the next steps run in the new process.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -55,6 +75,9 @@ use std::time::Duration;
 
 /// What a `choose` path may begin with: the fixture Host's directory.
 pub(crate) const STATE_DIRECTORY: &str = "$AGENT_STATE_DIR";
+/// What `type` replaces with the fixture Host's loopback server, as
+/// `http://127.0.0.1:<port>`: it serves `/browser-page` to the browser.
+pub(crate) const FIXTURE_ORIGIN: &str = "$AGENT_FIXTURE_ORIGIN";
 
 /// How long a step waits for its element or text unless the line says otherwise.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -67,12 +90,20 @@ pub(crate) enum Step {
     FirstLaunch,
     /// A control path the driver posts when it reaches the step.
     Control(String),
+    /// The runner started the fixture Host without Codex.
+    WithoutCodex,
     Press(Find),
     Type(Find, String),
     Key(Key),
     Click(Modifiers, Find),
     Expect(Find),
     ExpectAbsent(Find),
+    /// This many elements show the text.
+    ExpectCount(Find, usize),
+    /// The element takes presses, or not.
+    ExpectEnabled(Find, bool),
+    /// The element is taller than this many points, or shorter when `false`.
+    ExpectHeight(Find, f64, bool),
     /// A wheel of this many lines over the element.
     Scroll(Find, i32),
     Select(Find, String),
@@ -92,12 +123,23 @@ pub(crate) enum Step {
     },
     Paste(Find),
     Undo(Find),
+    Activate,
+    DenyMicrophone,
+    Relaunch,
     Wait(Duration),
     Screenshot(String),
     Dump(String),
 }
 
 /// What a step looks for, and how long it waits for it.
+impl Step {
+    /// Whether the runner takes the step before the app starts, as a scenario's
+    /// leading lines.
+    pub(crate) fn prepares(&self) -> bool {
+        matches!(self, Self::Fixture(_) | Self::FirstLaunch | Self::WithoutCodex)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Find {
     pub text: String,
@@ -141,14 +183,13 @@ pub(crate) fn parse(script: &str) -> Result<Vec<Line>, String> {
         let mut step = words(source)
             .and_then(|words| step(&words))
             .map_err(|reason| format!("line {number}: {reason}"))?;
-        let started = lines
-            .iter()
-            .any(|line: &Line| !matches!(line.step, Step::Fixture(_) | Step::FirstLaunch));
+        // Leading lines prepare the run before the app starts.
+        let leading = lines.iter().all(|line: &Line| line.step.prepares());
         match &step {
-            Step::Fixture(path) if started => step = Step::Control(path.clone()),
-            Step::FirstLaunch if started => {
+            Step::Fixture(path) if !leading => step = Step::Control(path.clone()),
+            Step::FirstLaunch | Step::WithoutCodex if !leading => {
                 return Err(format!(
-                    "line {number}: first-launch comes before the other steps"
+                    "line {number}: the run is prepared only by leading lines"
                 ));
             }
             _ => {}
@@ -179,7 +220,10 @@ fn words(line: &str) -> Result<Vec<String>, String> {
             loop {
                 match characters.next() {
                     Some('"') => break,
-                    Some('\\') => word.push(characters.next().ok_or("unfinished escape")?),
+                    Some('\\') => match characters.next().ok_or("unfinished escape")? {
+                        'n' => word.push('\n'),
+                        escaped => word.push(escaped),
+                    },
                     Some(character) => word.push(character),
                     None => return Err("unclosed quote".into()),
                 }
@@ -203,6 +247,7 @@ fn step(words: &[String]) -> Result<Step, String> {
     Ok(match (words[0].as_str(), arguments.as_slice()) {
         ("fixture", [path]) if path.starts_with('/') => Step::Fixture((*path).to_owned()),
         ("first-launch", []) => Step::FirstLaunch,
+        ("host", ["without-codex"]) => Step::WithoutCodex,
         ("press", [target, rest @ ..]) => Step::Press(find(target, rest)?),
         ("type", [target, text, rest @ ..]) => Step::Type(find(target, rest)?, (*text).to_owned()),
         ("key", [name]) => Step::Key(key(name)?),
@@ -216,6 +261,23 @@ fn step(words: &[String]) -> Result<Step, String> {
         ),
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
+        ("expect_count", [text, count, rest @ ..]) => Step::ExpectCount(
+            find(text, rest)?,
+            count
+                .parse()
+                .map_err(|_| format!("{count:?} is not a count"))?,
+        ),
+        ("expect_enabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, true),
+        ("expect_disabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, false),
+        ("expect_height", [target, side @ ("above" | "below"), points, rest @ ..]) => {
+            Step::ExpectHeight(
+                find(target, rest)?,
+                points
+                    .parse()
+                    .map_err(|_| format!("{points:?} is not a number of points"))?,
+                *side == "above",
+            )
+        }
         ("scroll", [target, lines, rest @ ..]) => Step::Scroll(
             find(target, rest)?,
             lines
@@ -254,6 +316,9 @@ fn step(words: &[String]) -> Result<Step, String> {
         },
         ("paste", [target, rest @ ..]) => Step::Paste(find(target, rest)?),
         ("undo", [target, rest @ ..]) => Step::Undo(find(target, rest)?),
+        ("activate", []) => Step::Activate,
+        ("microphone", ["deny"]) => Step::DenyMicrophone,
+        ("relaunch", []) => Step::Relaunch,
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
@@ -382,12 +447,12 @@ mod tests {
     #[test]
     fn steps_take_quoted_labels_and_optional_timeouts() {
         let lines = parse(
-            "# Comment\nfixture /external-conversation\nfirst-launch\n\npress \"新しい チャット\"\n\
-             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
+            "# Comment\nfixture /external-conversation\nfirst-launch\nhost without-codex\n\npress \"新しい チャット\"\n\
+             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
              scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png\n\
-             expect_clipboard \"a b\" 500\ncopy \"a b\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
-             fixture /release-inputs\nwait 250\nscreenshot after-send\ndump tree_1\n",
+             expect_clipboard \"a b\" 500\ncopy \"a\\nb\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
+             fixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\ndump tree_1\n",
         )
         .unwrap();
         let steps: Vec<_> = lines.iter().map(|line| line.step.clone()).collect();
@@ -396,6 +461,7 @@ mod tests {
             [
                 Step::Fixture("/external-conversation".into()),
                 Step::FirstLaunch,
+                Step::WithoutCodex,
                 Step::Press(Find {
                     text: "新しい チャット".into(),
                     after: None,
@@ -419,6 +485,31 @@ mod tests {
                     after: None,
                     timeout: DEFAULT_TIMEOUT
                 }),
+                Step::ExpectCount(
+                    Find {
+                        text: "回答".into(),
+                        after: None,
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    2
+                ),
+                Step::ExpectEnabled(
+                    Find {
+                        text: "送信".into(),
+                        after: None,
+                        timeout: Duration::from_secs(2)
+                    },
+                    false
+                ),
+                Step::ExpectHeight(
+                    Find {
+                        text: "入力".into(),
+                        after: None,
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    60.0,
+                    true
+                ),
                 Step::Scroll(
                     Find {
                         text: "会話".into(),
@@ -462,7 +553,7 @@ mod tests {
                 Step::ExpectFile("/tmp/b.png".into(), DEFAULT_TIMEOUT),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
                 Step::Copy {
-                    text: "a b".into(),
+                    text: "a\nb".into(),
                     image: false
                 },
                 Step::Copy {
@@ -484,6 +575,9 @@ mod tests {
                     timeout: Duration::from_millis(500)
                 }),
                 Step::Control("/release-inputs".into()),
+                Step::Activate,
+                Step::DenyMicrophone,
+                Step::Relaunch,
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
                 Step::Dump("tree_1".into()),
@@ -609,7 +703,15 @@ mod tests {
             ),
             (
                 "expect x\nfirst-launch",
-                "line 2: first-launch comes before the other steps",
+                "line 2: the run is prepared only by leading lines",
+            ),
+            (
+                "wait 1\nhost without-codex",
+                "line 2: the run is prepared only by leading lines",
+            ),
+            (
+                "host with-codex",
+                "line 1: unknown step or wrong arguments: host",
             ),
         ] {
             assert_eq!(parse(script).unwrap_err(), reason, "{script}");

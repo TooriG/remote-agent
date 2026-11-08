@@ -352,6 +352,17 @@ pub(crate) fn text_button(
     row_text_button(title, press)
 }
 
+/// A text button whose label for assistive technologies says what its short
+/// title leaves to its row (the account a row's "サインアウト" signs out of).
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn labelled_text_button(
+    title: impl IntoReactive<SharedString>,
+    label: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> Control {
+    ghost_text(title, label, press)
+}
+
 /// A small ghost icon button (24 pt, a 14 pt icon) drawn by NSH on every
 /// platform, for controls repeated on each row of a list: AppKit's buttons
 /// measure themselves through SwiftUI, which scrolling cannot afford.
@@ -376,8 +387,17 @@ pub(crate) fn row_text_button(
     press: impl Fn() + 'static,
 ) -> nsh_base::ButtonElement {
     let title = title.into_reactive();
+    ghost_text(title.clone(), title, press)
+}
+
+/// A ghost text button that assistive technologies name by `label`.
+fn ghost_text(
+    title: impl IntoReactive<SharedString>,
+    label: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
     ghost(
-        title.clone(),
+        label,
         view().child(text(title).text_size(px(14.0)).number_of_lines(1)),
     )
     .h(px(24.0))
@@ -485,9 +505,20 @@ pub(crate) fn text_button(
     press: impl Fn() + 'static,
 ) -> Control {
     let title = title.into_reactive();
-    appkit_button(title.clone(), press).prop(
+    labelled_text_button(title.clone(), title, press)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn labelled_text_button(
+    title: impl IntoReactive<SharedString>,
+    label: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> Control {
+    appkit_button(label, press).prop(
         "title",
-        title.map(|title| serde_json::json!(title.to_string())),
+        title
+            .into_reactive()
+            .map(|title| serde_json::json!(title.to_string())),
     )
 }
 

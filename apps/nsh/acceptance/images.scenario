@@ -24,3 +24,8 @@ press 検証プロジェクト
 press "[images] [immediate] 画像を表示します"
 expect "インライン画像です。" 20000
 expect 画像を拡大
+# The reopened conversation's image opens in the app's viewer (image-viewer).
+press 画像を拡大
+expect 倍率をリセット 20000
+press 閉じる after 保存
+expect_absent 倍率をリセット

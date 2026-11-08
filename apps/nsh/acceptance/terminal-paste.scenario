@@ -1,0 +1,21 @@
+# Pasting Unicode and several lines into the terminal reaches its shell as typed.
+# iOS: testSimulatorNativeTerminalPastesMultilineText
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] ターミナルを開きます"
+press 送信
+expect "シミュレータで完了しました。" 30000
+press 右パネルを切り替え
+press ツールを追加
+press ターミナル
+expect "/project" after ツールを閉じる 10000
+copy "AGENT_PASTE='日本語\nsecond line'"
+type ターミナル "" after "*/project"
+# The Edit menu's Paste answers ⌘V while the app is frontmost.
+activate
+key cmd+v
+key return
+type ターミナル "[ \"$AGENT_PASTE\" = \"$(printf '\\346\\227\\245\\346\\234\\254\\350\\252\\236\\nsecond line')\" ]; exit $?" after "*/project"
+key return
+expect "終了 · 0" 15000
+screenshot pasted

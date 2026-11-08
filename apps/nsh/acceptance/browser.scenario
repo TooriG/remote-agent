@@ -1,0 +1,47 @@
+# The browser opens a page from the fixture Host's loopback server, takes typing
+# into the page, switches and closes tabs from its menu, and opens the import of
+# the connected browser's data from the same menu. The page's title repeats what
+# is typed into it, and the menu lists the tabs by title.
+# iOS: testSimulatorBrowserUsesOneSharedImportMenu
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] ブラウザを開きます"
+press 送信
+expect "シミュレータで完了しました。" 30000
+press 右パネルを切り替え
+press ツールを追加
+press ブラウザ
+expect "ブラウザの URL" after ツールを閉じる 10000
+type "ブラウザの URL" "$AGENT_FIXTURE_ORIGIN/browser-page"
+key return
+# The address field shows what was typed at once; the page's own address comes
+# with the Host's frame, as does its button for the default browser.
+expect 既定のブラウザで開く 10000
+expect ブラウザ after ブラウザのメニュー 10000
+# The menu lists the tabs as they were when it opened, and a page's title
+# reaches it through the Host's next read.
+wait 1500
+press ブラウザのメニュー
+expect 検証ページ 10000
+key escape
+type ブラウザ "日本語 input" after ブラウザのメニュー
+wait 1500
+press ブラウザのメニュー
+expect "入力 日本語 input"
+press 新しいタブ
+expect_absent "/browser-page" after "ブラウザの URL" 10000
+press ブラウザのメニュー
+press "入力 日本語 input"
+expect "/browser-page" after "ブラウザの URL" 10000
+screenshot page
+press ブラウザのメニュー
+press タブを閉じる
+expect_absent "/browser-page" after "ブラウザの URL" 10000
+press ブラウザのメニュー
+expect_absent "入力 日本語 input"
+press "ログイン状態・保存パスワード"
+expect "ブラウザデータ" 20000
+expect "接続先のブラウザから取り込む"
+screenshot import
+press 閉じる
+expect_absent "接続先のブラウザから取り込む" 10000

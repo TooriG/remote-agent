@@ -1,0 +1,28 @@
+# Switching the Codex account keeps the open conversation, which goes on with a
+# later question; forking its earlier answer then opens a conversation without
+# that later turn, which takes a question of its own.
+# iOS: testSimulatorSwitchesCodexAccountsAndForksConversation
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] 切り替え前の質問です"
+press 送信
+expect "シミュレータで完了しました。" 30000
+press 設定を開く
+press プロバイダー
+press アカウントを追加
+expect "second@example.invalidを選択中" 20000
+press 閉じる
+expect "[immediate] 切り替え前の質問です"
+type "AI に依頼する" "[immediate] 切り替え後の質問です"
+press 送信
+# The rows read in their list's order, so answers are counted rather than placed.
+expect_count "シミュレータで完了しました。" 2 30000
+press ここから会話を分岐
+expect "Simulator conversation" 20000
+expect "切り替え前の質問です" after "Simulator conversation"
+expect_absent "切り替え後の質問です" 10000
+type "AI に依頼する" "[immediate] 分岐先の質問です"
+press 送信
+expect "分岐先の質問です" 10000
+expect_count "シミュレータで完了しました。" 2 30000
+screenshot fork-continues

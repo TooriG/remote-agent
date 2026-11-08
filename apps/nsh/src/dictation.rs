@@ -4,7 +4,7 @@ use crate::l10n::tr;
 use crate::ui::Enabled;
 use crate::{Connection, native};
 use agent_core::{client::DictationPreparation, state::DraftKey};
-use nsh_core::{platform::Lifecycle, prelude::*};
+use nsh_core::prelude::*;
 use std::sync::Arc;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -54,10 +54,10 @@ impl Dictation {
             this.target.get();
             this.cancel();
         });
+        // The iPhone stops recording when it leaves the foreground; the Mac goes
+        // on while the user is in another app, as its desktop client did.
         effect(move || {
-            if lifecycle() != Lifecycle::Active
-                || !connection.composer.with(|p| p.controls.connected)
-            {
+            if !native::in_use() || !connection.composer.with(|p| p.controls.connected) {
                 this.cancel();
             }
         });
@@ -145,12 +145,7 @@ impl Dictation {
                 .enabled(move || {
                     !self.requesting.get()
                         && !connection.uploading()
-                        && connection.composer.with(|p| {
-                            p.controls.connected
-                                && !p.controls.sending
-                                && !p.controls.transferring
-                                && !p.controls.transcribing
-                        })
+                        && connection.composer.with(|p| p.ready_for_input())
                 })
                 .style_when(
                     move || self.active.get(),
