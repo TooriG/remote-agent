@@ -64,6 +64,43 @@ fn submission_needs_content_or_recording_and_an_available_provider() {
 }
 
 #[test]
+fn another_agent_waits_for_the_working_conversation_and_says_why() {
+    let mut snapshot = snapshot();
+    crate::state::set_draft_text(&mut snapshot, session().into(), "切り替えて送ります".into());
+    Arc::make_mut(
+        Arc::make_mut(&mut snapshot.input.drafts)
+            .get_mut(&session().into())
+            .unwrap(),
+    )
+    .model = Some(ModelRef {
+        provider: ProviderKind::Claude,
+        id: "sonnet".into(),
+    });
+    let status = |snapshot: &mut Snapshot, status| {
+        Arc::make_mut(
+            Arc::make_mut(&mut snapshot.sessions.conversations)
+                .get_mut(&session())
+                .unwrap(),
+        )
+        .status = status;
+    };
+    status(&mut snapshot, crate::models::SessionStatus::Running);
+    let held = presentation(&snapshot);
+    assert!(!held.can_submit(false));
+    assert!(
+        held.controls
+            .unavailable
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("AIを切り替えて送信するには")),
+        "a held send names its reason"
+    );
+    status(&mut snapshot, crate::models::SessionStatus::Idle);
+    let ready = presentation(&snapshot);
+    assert!(ready.can_submit(false));
+    assert_eq!(ready.controls.unavailable, None);
+}
+
+#[test]
 fn active_draft_operations_block_submission_until_completion_or_retry() {
     let mut snapshot = snapshot();
     crate::state::set_draft_text(&mut snapshot, session().into(), "送信".into());

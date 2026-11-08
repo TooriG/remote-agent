@@ -95,7 +95,9 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Conversation: errors, reconnecting, opening and its failure | covered | failed-turn, retry-stream, history-loading, history-retry |
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork |
 | Conversation: steering a running turn, minimap | covered | steering, queued-input |
+| Conversation: one without a message yet (a side chat's) opens empty and sends its first message | covered | empty-conversation |
 | Composer: model picker | covered | model-picker |
+| Composer: why a send waits (another agent chosen while the conversation works) | covered | provider-switch |
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |

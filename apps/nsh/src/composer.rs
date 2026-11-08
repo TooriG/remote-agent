@@ -496,6 +496,22 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             move || connection.uploading() || controls.with(|c| c.transferring),
             || text(tr("添付ファイルを転送中…")),
         ))
+        // Why Core holds the send back, as the other clients say it: a
+        // disabled send button alone leaves the typed message unexplained.
+        .child(when(
+            move || controls.with(|c| c.unavailable.is_some()),
+            move || {
+                text(move || {
+                    controls
+                        .with(|c| c.unavailable.clone())
+                        .map(localized)
+                        .unwrap_or_default()
+                })
+                .selectable(true)
+                .text_size(px(12.0))
+                .text_color(move || nsh_base::theme().muted_foreground)
+            },
+        ))
         .child(when(
             move || !is_desktop(),
             move || {
