@@ -35,7 +35,9 @@ pub(crate) fn tr_format<const N: usize>(
     )
 }
 
-/// Copy Core composed (labels, statuses, summaries and errors).
+/// Copy that arrives untranslated: a source string Core gives without a
+/// language (a panel's or project menu's titles), or the reason an operation
+/// failed with. Core's presentations are in the UI language already.
 pub(crate) fn localized(source: String) -> String {
     localized_ui_text(language(), source)
 }

@@ -1,4 +1,4 @@
-use crate::l10n::{localized, tr};
+use crate::l10n::tr;
 use crate::ui::{self, colors};
 use crate::{Connection, shared::Shared};
 use agent_core::presentation::view::Presentation;
@@ -67,7 +67,7 @@ pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
                         text(move || {
                             failure
                                 .get()
-                                .map(|error| localized(error.to_string()))
+                                .map(|error| error.to_string())
                                 .unwrap_or_default()
                         })
                         .selectable(true)

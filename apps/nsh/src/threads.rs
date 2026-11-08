@@ -1,5 +1,5 @@
 use crate::application::{ListRequest, ListScope, ListSource};
-use crate::l10n::{localized, tr, tr_format};
+use crate::l10n::{tr, tr_format};
 use crate::shared::Shared;
 use crate::{Connection, native};
 use agent_core::{
@@ -74,7 +74,7 @@ fn copy_menu(items: &[ThreadCopyItem]) -> serde_json::Value {
     json!([{
         "title": tr("コピー"),
         "children": items.iter().map(|item| json!({
-            "title": localized(item.label.clone()),
+            "title": item.label.clone(),
             "id": item.value.as_ref().map(|value| json!({"copy": value}).to_string()).unwrap_or_default(),
             "enabled": item.value.is_some(),
         })).collect::<Vec<_>>(),
@@ -143,7 +143,7 @@ fn rows(
     };
     if let Some(notice) = &list.notice {
         rows.push(Row::new(
-            localized(notice.clone()),
+            notice.clone(),
             Action::Notice("list".into()),
             None,
         ));
@@ -280,7 +280,7 @@ fn project_children(
     }
     if let Some(error) = &project.error {
         rows.push(Row::new(
-            localized(error.to_string()),
+            error.to_string(),
             Action::Notice(project.id.clone()),
             Some(scope.clone()),
         ));

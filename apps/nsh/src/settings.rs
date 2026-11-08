@@ -488,12 +488,10 @@ fn provider_row(
                         .child(
                             text(move || {
                                 agent.with(|a| {
-                                    localized(
-                                        a.error
-                                            .as_ref()
-                                            .map(ToString::to_string)
-                                            .unwrap_or_else(|| a.label.clone()),
-                                    )
+                                    a.error
+                                        .as_ref()
+                                        .map(ToString::to_string)
+                                        .unwrap_or_else(|| a.label.clone())
                                 })
                             })
                             .text_size(px(12.0))

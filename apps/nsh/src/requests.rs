@@ -61,7 +61,7 @@ fn request_error(connection: Connection, id: impl Fn() -> RequestId + 'static) -
     text(move || {
         connection.context.with(|p| {
             p.request_error(id())
-                .map(|error| localized(error.to_string()))
+                .map(|error| error.to_string())
                 .unwrap_or_default()
         })
     })
@@ -121,10 +121,7 @@ fn request_card(
                     .gap_2()
                     .text_color(colors::MUTED)
                     .child(ui::icon(Icon::SHIELD, 14.0))
-                    .child(
-                        text(move || request.with(|r| localized(r.title.clone())))
-                            .text_size(px(13.0)),
-                    ),
+                    .child(text(move || request.with(|r| r.title.clone())).text_size(px(13.0))),
             )
             .child(
                 text(move || request.with(|r| r.body.clone()))

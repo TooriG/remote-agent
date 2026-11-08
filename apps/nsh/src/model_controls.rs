@@ -676,10 +676,10 @@ fn picker_data(p: &Presentation, picker: &Picker) -> Value {
         "models": settings.models_matching(picker.provider, picker.query.clone()).iter().map(|model| json!({"id": model.id, "title": model.display_name})).collect::<Vec<_>>(),
         "selectedModel": settings.current_model().map(|model| model.id),
         "loading": settings.models_loading(picker.provider),
-        "errors": settings.model_error_messages(picker.provider).into_iter().map(localized).collect::<Vec<_>>(),
+        "errors": settings.model_error_messages(picker.provider),
         "notices": settings.notices().iter().map(|notice| json!({
             "id": serde_json::to_string(&notice.id).expect("Core error IDs are serializable"),
-            "title": localized(notice.title.clone()), "text": localized(notice.text.to_string()), "recovery": notice.recovery_label.clone().map(localized),
+            "title": notice.title, "text": notice.text.to_string(), "recovery": notice.recovery_label,
         })).collect::<Vec<_>>(),
         "customModel": settings.custom_model_choice(picker.provider, &picker.query).map(|model| model.id),
         "openrouter": settings.openrouter_picks(picker.provider).map(|picks| json!({
@@ -688,7 +688,7 @@ fn picker_data(p: &Presentation, picker: &Picker) -> Value {
         })),
         "quick": (selected.as_ref().map(|model| model.provider) == picker.provider).then(|| json!({
             "efforts": controls.efforts, "effort": controls.effort,
-            "speeds": controls.speed_choices.iter().map(|choice| json!({"id": choice.id, "title": localized(choice.label.clone())})).collect::<Vec<_>>(),
+            "speeds": controls.speed_choices.iter().map(|choice| json!({"id": choice.id, "title": choice.label})).collect::<Vec<_>>(),
             "speed": controls.speed_choices.iter().find(|choice| choice.selected).map(|choice| &choice.id),
         })),
         "permissions": (permissions.provider == picker.provider && permissions.version.is_some()).then(|| json!({

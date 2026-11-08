@@ -154,7 +154,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         answering.with(|question| {
             question
                 .as_ref()
-                .map(|question| localized(question.placeholder.clone()))
+                .map(|question| question.placeholder.clone())
                 .unwrap_or_else(|| {
                     if is_desktop() {
                         tr("AI に依頼する")

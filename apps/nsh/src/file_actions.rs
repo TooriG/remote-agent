@@ -1,7 +1,7 @@
 //! The desktop's file chips and file menus, as the desktop client's file links and
 //! fileContextMenu: Core decides a chip's glyph, accent and tooltip and the
 //! menus' items; the Host opens editors and file managers.
-use crate::l10n::{localized, tr};
+use crate::l10n::tr;
 use crate::{
     Connection,
     files::{Browser, Reference},
@@ -107,7 +107,7 @@ pub(crate) fn menu(items: Vec<FileMenuItem>) -> Value {
         items
             .into_iter()
             .map(|item| {
-                let title = localized(item.label);
+                let title = item.label;
                 match item.action {
                     Some(action) => json!({"id": id(action), "title": title}),
                     None => json!({"title": title, "children": menu(item.children)}),

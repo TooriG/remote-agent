@@ -1,4 +1,4 @@
-use crate::l10n::{localized, tr, tr_format};
+use crate::l10n::{tr, tr_format};
 use crate::ui::Enabled;
 use crate::{Connection, shared::Shared};
 use agent_core::{
@@ -138,13 +138,13 @@ fn project(
                     (Kind::Activity, item.data.body.clone().or_else(|| item.data.title.clone()).unwrap_or_default())
                 }
                 ConversationRowContent::ActivityHeader { activity } => {
-                    (Kind::Activity, localized(activity.activity_summary))
+                    (Kind::Activity, activity.activity_summary)
                 }
                 ConversationRowContent::Preparation { preparation } => {
-                    (Kind::Activity, localized(preparation.text))
+                    (Kind::Activity, preparation.text)
                 }
-                ConversationRowContent::ProviderHandoff { text } => (Kind::Activity, localized(text)),
-                ConversationRowContent::Error { error } => (Kind::Activity, localized(error.message)),
+                ConversationRowContent::ProviderHandoff { text } => (Kind::Activity, text),
+                ConversationRowContent::Error { error } => (Kind::Activity, error.message),
                 ConversationRowContent::InProgress { .. } => (Kind::Activity, tr("作業中…").into()),
                 ConversationRowContent::PendingRequest { .. } => return None,
             };
@@ -268,7 +268,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                 SharedString::from(history.with(|history| {
                                     history
                                         .as_ref()
-                                        .map(|history| localized(history.load_label.clone()))
+                                        .map(|history| history.load_label.clone())
                                         .unwrap_or_default()
                                 }))
                             },
@@ -293,7 +293,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                             history
                                 .as_ref()
                                 .and_then(|history| history.error.as_ref())
-                                .map(|error| localized(error.to_string()))
+                                .map(|error| error.to_string())
                                 .unwrap_or_default()
                         })
                     }))
@@ -331,17 +331,16 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                 row.progress
                                     .as_ref()
                                     .map(|progress| {
-                                        localized(
-                                            progress.label(
+                                        progress
+                                            .label(
                                                 crate::l10n::language(),
                                                 clock
                                                     .get()
                                                     .duration_since(std::time::UNIX_EPOCH)
                                                     .unwrap_or_default()
                                                     .as_secs_f64(),
-                                            ),
-                                        )
-                                        .into()
+                                            )
+                                            .into()
                                     })
                                     .unwrap_or_else(|| row.body.clone())
                             })
@@ -797,7 +796,7 @@ fn work_load_failure(
                     .context
                     .with(|context| context.turn_items_error(load.turn_id))
             })
-            .map(|error| localized(error.to_string()))
+            .map(|error| error.to_string())
     };
     view().child(when(
         move || open() && failure().is_some(),
@@ -856,12 +855,8 @@ fn opening(connection: Connection) -> View {
                     .py_8()
                     .px_6()
                     .child(
-                        text(move || {
-                            failure()
-                                .map(|error| localized(error.to_string()))
-                                .unwrap_or_default()
-                        })
-                        .selectable(true),
+                        text(move || failure().map(|error| error.to_string()).unwrap_or_default())
+                            .selectable(true),
                     )
                     .child(ui::text_button(tr("再試行"), move || {
                         if let Some(thread) = connection
@@ -907,7 +902,7 @@ fn error_card(error: Memo<Option<TurnErrorPresentation>>) -> View {
                 .gap_2()
                 .child(when(reconnecting, ui::spinner))
                 .child(
-                    text(read(|error| localized(error.title.clone())))
+                    text(read(|error| error.title.clone()))
                         .flex_1()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(move || {
@@ -934,7 +929,7 @@ fn error_card(error: Memo<Option<TurnErrorPresentation>>) -> View {
                 )),
         )
         .child(
-            text(read(|error| localized(error.message.clone())))
+            text(read(|error| error.message.clone()))
                 .selectable(true)
                 .text_size(px(14.0)),
         )
@@ -983,7 +978,7 @@ fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
     let failure = move || {
         fork()
             .and_then(|turn| connection.context.with(|context| context.fork_error(turn)))
-            .map(|error| localized(error.to_string()))
+            .map(|error| error.to_string())
     };
     let actions = view()
         .flex_row()

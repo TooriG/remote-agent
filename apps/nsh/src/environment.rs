@@ -1,4 +1,4 @@
-use crate::l10n::{localized, tr, tr_format};
+use crate::l10n::{tr, tr_format};
 use crate::ui::{self, Enabled};
 use crate::{Connection, application::Host, connections, native};
 use agent_core::presentation::connections::ConnectionAgent;
@@ -86,7 +86,7 @@ pub(crate) fn overview(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                                         json!(crate::accounts::icon(agent.with(|a| a.provider)))
                                     }),
                                 )
-                                .child(text(move || agent.with(|a| localized(a.label.clone()))))
+                                .child(text(move || agent.with(|a| a.label.clone())))
                                 .child(text(move || agent.with(agent_error))),
                         )
                         .child(provider_switch(connection, agent))
@@ -128,9 +128,7 @@ pub(crate) fn host_name(connection: Connection) -> String {
 }
 
 pub(crate) fn connection_status(connection: Connection) -> String {
-    connection
-        .settings
-        .with(|p| localized(p.connection_status_label()))
+    connection.settings.with(|p| p.connection_status_label())
 }
 
 /// Whether this PC accepts connections from the selected Host's devices.
@@ -175,7 +173,7 @@ pub(crate) fn agent_error(agent: &ConnectionAgent) -> String {
     agent
         .error
         .as_ref()
-        .map(|error| localized(error.to_string()))
+        .map(|error| error.to_string())
         .unwrap_or_default()
 }
 

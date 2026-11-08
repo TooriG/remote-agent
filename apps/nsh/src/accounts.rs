@@ -71,7 +71,7 @@ pub(crate) fn screen(provider: ProviderKind) -> impl IntoElement {
                 publication.with(|p| {
                     p.settings
                         .account_login_error(provider)
-                        .map(|error| localized(error.to_string()))
+                        .map(|error| error.to_string())
                         .unwrap_or_default()
                 })
             })
@@ -92,12 +92,10 @@ pub(crate) fn screen(provider: ProviderKind) -> impl IntoElement {
                                 agent
                                     .as_ref()
                                     .map(|a| {
-                                        localized(
-                                            a.error
-                                                .as_ref()
-                                                .map(ToString::to_string)
-                                                .unwrap_or_else(|| a.label.clone()),
-                                        )
+                                        a.error
+                                            .as_ref()
+                                            .map(ToString::to_string)
+                                            .unwrap_or_else(|| a.label.clone())
                                     })
                                     .unwrap_or_default()
                             })
@@ -461,7 +459,7 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
         .child(ui::choice_menu("key", tr("接続先"), move || selected.get().label().into(), || native::items(KeyProvider::ALL.into_iter().map(|provider| (provider.reference(), provider.label()))), move |id: &str| {
             if let Some(provider) = KeyProvider::ALL.into_iter().find(|p| p.reference() == id) { selected.set(provider); key.set(String::new()); }
         }).enabled(enabled))
-        .child(text(move || control.with(|c| c.as_ref().map(|c| localized(c.status.clone())).unwrap_or_default())))
+        .child(text(move || control.with(|c| c.as_ref().map(|c| c.status.clone()).unwrap_or_default())))
         .child(ui::text_button(tr("キーの発行ページ"), move || { native::open_link(selected.get_untracked().key_url()); }))
         .child(input().masked(true).auto_correct(false).auto_capitalize(AutoCapitalize::None)
             .placeholder(tr("APIキー")).value(move || key.get()).on_change(move |value: &str| key.set(value.into()))
@@ -493,7 +491,7 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
         }))
         .child(ui::text_button(tr("設定状態を取得"), move || perform(Intent::ReadDshCredentials(op::ReadDshCredentials {})))
             .enabled(enabled))
-        .child(text(move || connection.settings.with(|p| p.credential_error().map(|error| localized(error.to_string())).unwrap_or_default())).selectable(true))
+        .child(text(move || connection.settings.with(|p| p.credential_error().map(|error| error.to_string()).unwrap_or_default())).selectable(true))
         .child(text(tr("APIキーは選択したPCに保存されます。保存済みのキーは表示されません。")))
 }
 

@@ -1,4 +1,4 @@
-use crate::l10n::{localized, tr};
+use crate::l10n::tr;
 use crate::shared::Shared;
 use crate::ui::Enabled;
 use agent_core::{
@@ -95,7 +95,7 @@ pub(crate) fn details(
         label.with(|label| {
             label
                 .as_ref()
-                .map(|label| localized(label.heading.clone()))
+                .map(|label| label.heading.clone())
                 .unwrap_or_default()
         })
     };
@@ -169,9 +169,7 @@ pub(crate) fn details(
                         view()
                             .gap_2()
                             .child(text(move || {
-                                error()
-                                    .map(|error| localized(error.to_string()))
-                                    .unwrap_or_default()
+                                error().map(|error| error.to_string()).unwrap_or_default()
                             }))
                             .child(
                                 crate::ui::row_text_button(

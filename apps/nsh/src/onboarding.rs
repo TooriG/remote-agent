@@ -277,7 +277,7 @@ fn agents(connection: Connection) -> View {
                             .gap_3()
                             .child(text(move || agent.with(|a| a.name.clone())).flex_1())
                             .child(
-                                text(move || agent.with(|a| localized(a.label.clone())))
+                                text(move || agent.with(|a| a.label.clone()))
                                     .text_size(px(13.0))
                                     .text_color(colors::MUTED),
                             )

@@ -629,7 +629,7 @@ fn agent_row(agent: ReadSignal<AgentSummary>) -> impl IntoElement {
                     },
                 ))
                 .child(
-                    text(move || agent.with(|a| localized(a.status.clone())))
+                    text(move || agent.with(|a| a.status.clone()))
                         .text_size(px(12.0))
                         .text_color(colors::MUTED),
                 ),

@@ -1,5 +1,5 @@
 use crate::Connection;
-use crate::l10n::{localized, tr};
+use crate::l10n::tr;
 use crate::ui::{self, Icon, colors};
 use agent_core::{
     presentation::error::{ErrorNotice, ErrorScope},
@@ -63,7 +63,7 @@ pub(crate) fn notices(
                         .items_center()
                         .gap_2()
                         .child(
-                            text(move || notice.with(|notice| localized(notice.title.clone())))
+                            text(move || notice.with(|notice| notice.title.clone()))
                                 .text_size(px(13.0))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .flex_1()
@@ -80,7 +80,7 @@ pub(crate) fn notices(
                         )),
                 )
                 .child(
-                    text(move || notice.with(|notice| localized(notice.text.to_string())))
+                    text(move || notice.with(|notice| notice.text.to_string()))
                         .selectable(true)
                         .text_size(px(13.0))
                         .text_color(colors::MUTED),
@@ -91,7 +91,7 @@ pub(crate) fn notices(
                         view().flex_row().child(ui::text_button(
                             move || {
                                 SharedString::from(notice.with(|notice| {
-                                    localized(notice.recovery_label.clone().unwrap_or_default())
+                                    notice.recovery_label.clone().unwrap_or_default()
                                 }))
                             },
                             move || {
