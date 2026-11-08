@@ -16,8 +16,14 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
         .metadata
         .get("fixtureHistory")
         .and_then(Value::as_str);
-    let long_history = matches!(history_kind, Some("long" | "viewport" | "render"));
+    let long_history = matches!(
+        history_kind,
+        Some("long" | "viewport" | "render" | "running")
+    );
     let viewport = history_kind == Some("viewport");
+    // The long history with its latest turn still working, as a conversation
+    // reopened while its agent runs.
+    let running = history_kind == Some("running");
     let reading = history_kind == Some("reading");
     if !long_history
         && !reading
@@ -101,6 +107,9 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
         let mut last = turns.last().unwrap().borrow_mut();
         if viewport {
             last["status"] = "completed".into();
+        }
+        if running {
+            last["status"] = "inProgress".into();
         }
         let item = last["items"].as_array_mut().unwrap().last_mut().unwrap();
         item["id"] = "long-latest-message".into();

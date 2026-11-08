@@ -122,6 +122,30 @@ fn rpc<O: agent_protocol::operations::RpcMethod>(
     })
 }
 
+/// `/<kind>-conversation/<id>`: lists one conversation whose history is the
+/// fixture's long history of that kind. False for other paths.
+fn history_conversation(root: &Path, path: &str) -> Result<bool> {
+    let Some((kind, id)) = path.rsplit_once('/') else {
+        return Ok(false);
+    };
+    let (history, name) = match kind {
+        "/long-conversation" => ("long", "Long conversation"),
+        "/viewport-conversation" => ("viewport", "Long conversation"),
+        "/reading-conversation" => ("reading", "Reading conversation"),
+        "/render-conversation" => ("render", "Long conversation"),
+        // The long history with its latest turn still working.
+        "/running-conversation" => ("running", "Long conversation"),
+        _ => return Ok(false),
+    };
+    write_json(
+        root.join("list-fixture.json"),
+        &json!([{"id":id,"fixtureHistory":history,
+            "cwd":root.join("project"),"name":name,
+            "createdAt":10000,"updatedAt":10000,"status":{"type":"notLoaded"},"historyMode":"paginated"}]),
+    )?;
+    Ok(true)
+}
+
 fn route(
     root: &Path,
     runtime: &tokio::runtime::Runtime,
@@ -164,26 +188,7 @@ fn route(
         set_worktree_access(&root.join(format!("{name}-worktree")), readable)?;
         return Ok((204, Vec::new()));
     }
-    if let Some((
-        kind @ ("/long-conversation"
-        | "/viewport-conversation"
-        | "/reading-conversation"
-        | "/render-conversation"),
-        id,
-    )) = path.rsplit_once('/')
-    {
-        let (history, name) = match kind {
-            "/viewport-conversation" => ("viewport", "Long conversation"),
-            "/reading-conversation" => ("reading", "Reading conversation"),
-            "/render-conversation" => ("render", "Long conversation"),
-            _ => ("long", "Long conversation"),
-        };
-        write_json(
-            root.join("list-fixture.json"),
-            &json!([{"id":id,"fixtureHistory":history,
-                "cwd":root.join("project"),"name":name,
-                "createdAt":10000,"updatedAt":10000,"status":{"type":"notLoaded"},"historyMode":"paginated"}]),
-        )?;
+    if history_conversation(root, path)? {
         return Ok((204, Vec::new()));
     }
     match path {

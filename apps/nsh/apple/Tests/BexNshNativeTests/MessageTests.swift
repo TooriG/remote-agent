@@ -105,7 +105,7 @@ final class MessageTests: XCTestCase {
             // frame can belong to a different row while a cell is recycled.
             view.update(MessageDocument(blocks: document.blocks, secondary: document.secondary,
                                         role: document.role, target: document.target,
-                                        sideChat: document.sideChat, maxWidth: 70))
+                                        sideChat: document.sideChat, maxWidth: 70, menu: document.menu))
             view.layout()
             XCTAssertGreaterThan(try XCTUnwrap(heights.last), wide)
         }
@@ -138,7 +138,8 @@ final class MessageTests: XCTestCase {
             var actions: [[String: Any]] = []
             view.text.action = { actions.append($0) }
             view.update(MessageDocument(blocks: [paragraph], secondary: false, role: "assistant", target: "t",
-                                        sideChat: false, maxWidth: 400))
+                                        sideChat: false, maxWidth: 400,
+                                        menu: MessageMenuTitles(quote: "Add to chat", sideChat: "Ask in side chat")))
             _ = view.text.textView(view.text, clickedOnLink: "src/main.rs:4", at: label)
             XCTAssertEqual(actions.last?["text"] as? String, "src/main.rs:4")
             XCTAssertEqual(actions.last?["command"] as? Bool, false)
@@ -158,7 +159,8 @@ final class MessageTests: XCTestCase {
             let block = MessageParagraph(header: nil, marker: nil, code: false, quoted: false,
                                          depth: 0, alignment: "left", runs: [run])
             let document = MessageDocument(blocks: [block], secondary: false, role: "assistant",
-                                           target: "fixture", sideChat: false, maxWidth: 740)
+                                           target: "fixture", sideChat: false, maxWidth: 740,
+                                           menu: MessageMenuTitles(quote: "", sideChat: ""))
             let view = MessageTextContainer()
             // A short user bubble occupied the same recycled native view.
             view.frame = CGRect(x: 0, y: 0, width: 167, height: 17)

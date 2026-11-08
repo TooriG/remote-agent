@@ -284,6 +284,7 @@ fn limit(step: &Step) -> Duration {
         | Step::Expect(find)
         | Step::ExpectAbsent(find)
         | Step::ExpectMenuBar(find)
+        | Step::ExpectReadingOrder(find)
         | Step::ExpectScrolled(find, ..)
         | Step::ExpectCount(find, _)
         | Step::ExpectEnabled(find, _)
@@ -306,6 +307,9 @@ fn attempt(
     fixture: Option<u16>,
     mtm: MainThreadMarker,
 ) -> Attempt {
+    if let Some(result) = expectation(step, menus, mtm) {
+        return result;
+    }
     match step {
         Step::Fixture(_) | Step::FirstLaunch | Step::WithoutCodex => {
             Attempt::Passed("prepared by the runner".into(), None)
@@ -324,48 +328,10 @@ fn attempt(
         Step::Window(width, height) => done(resize(mtm, *width, *height)),
         Step::Capture(name) => artifact(capture(mtm, output, name)),
         Step::Dump(name) => artifact(dump(&Tree::read(mtm, menus), output, name)),
-        Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
-        Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
-        Step::ExpectMenuBar(find) => shown(&Tree::menu_bar(mtm), find, true),
-        Step::ExpectScrolled(find, from, to) => {
-            element_is(&Tree::read(mtm, menus), find, |object| {
-                match (text(object, sel!(accessibilityRole)), scrolled(object)) {
-                    (Some(role), Some(at)) if role == "AXScrollArea" => (
-                        (*from..=*to).contains(&at),
-                        format!("a scroll area scrolled to {at:.3}"),
-                    ),
-                    (role, _) => (
-                        false,
-                        format!("{} with no vertical scroll bar", role.unwrap_or_default()),
-                    ),
-                }
-            })
-        }
-        Step::ExpectApart(find, other) => apart(&Tree::read(mtm, menus), find, other),
-        Step::ExpectInside(find) => inside(&Tree::read(mtm, menus), find),
-        Step::ExpectCount(find, count) => counted(&Tree::read(mtm, menus), find, *count),
-        Step::ExpectEnabled(find, enabled) => element_is(&Tree::read(mtm, menus), find, |object| {
-            let actual = !responds(object, sel!(isAccessibilityEnabled))
-                || unsafe { msg_send![object, isAccessibilityEnabled] };
-            (
-                actual == *enabled,
-                if actual { "enabled" } else { "disabled" }.into(),
-            )
-        }),
         Step::Compose(find, composition) => {
             on_element(&Tree::read(mtm, menus), find, |tree, index| {
                 compose(tree, index, composition)
                     .map(|()| format!("{composition:?} in {}", tree.nodes[index].describe()))
-            })
-        }
-        Step::ExpectHeight(find, points, above) => {
-            element_is(&Tree::read(mtm, menus), find, |object| {
-                let frame: NSRect = unsafe { msg_send![object, accessibilityFrame] };
-                let height = frame.size.height;
-                (
-                    (height > *points) == *above,
-                    format!("{height} points tall"),
-                )
             })
         }
         Step::Press(find) => press(&Tree::read(mtm, menus), find),
@@ -441,7 +407,63 @@ fn attempt(
         Step::Paint(..) | Step::PaintStream(..) => {
             unreachable!("paint uses the driver's last action time")
         }
+        Step::Expect(_)
+        | Step::ExpectAbsent(_)
+        | Step::ExpectMenuBar(_)
+        | Step::ExpectReadingOrder(_)
+        | Step::ExpectScrolled(..)
+        | Step::ExpectApart(..)
+        | Step::ExpectInside(_)
+        | Step::ExpectCount(..)
+        | Step::ExpectEnabled(..)
+        | Step::ExpectHeight(..) => unreachable!("expectations are attempted first"),
     }
+}
+
+/// A step that waits until something is so, or none for a step that acts.
+fn expectation(step: &Step, menus: &[Retained<NSMenu>], mtm: MainThreadMarker) -> Option<Attempt> {
+    Some(match step {
+        Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
+        Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
+        Step::ExpectMenuBar(find) => shown(&Tree::menu_bar(mtm), find, true),
+        Step::ExpectReadingOrder(find) => reading_order(&Tree::read(mtm, menus), find),
+        Step::ExpectScrolled(find, from, to) => {
+            element_is(&Tree::read(mtm, menus), find, |object| {
+                match (text(object, sel!(accessibilityRole)), scrolled(object)) {
+                    (Some(role), Some(at)) if role == "AXScrollArea" => (
+                        (*from..=*to).contains(&at),
+                        format!("a scroll area scrolled to {at:.3}"),
+                    ),
+                    (role, _) => (
+                        false,
+                        format!("{} with no vertical scroll bar", role.unwrap_or_default()),
+                    ),
+                }
+            })
+        }
+        Step::ExpectApart(find, other) => apart(&Tree::read(mtm, menus), find, other),
+        Step::ExpectInside(find) => inside(&Tree::read(mtm, menus), find),
+        Step::ExpectCount(find, count) => counted(&Tree::read(mtm, menus), find, *count),
+        Step::ExpectEnabled(find, enabled) => element_is(&Tree::read(mtm, menus), find, |object| {
+            let actual = !responds(object, sel!(isAccessibilityEnabled))
+                || unsafe { msg_send![object, isAccessibilityEnabled] };
+            (
+                actual == *enabled,
+                if actual { "enabled" } else { "disabled" }.into(),
+            )
+        }),
+        Step::ExpectHeight(find, points, above) => {
+            element_is(&Tree::read(mtm, menus), find, |object| {
+                let frame: NSRect = unsafe { msg_send![object, accessibilityFrame] };
+                let height = frame.size.height;
+                (
+                    (height > *points) == *above,
+                    format!("{height} points tall"),
+                )
+            })
+        }
+        _ => return None,
+    })
 }
 
 fn painted(tree: &Tree, expected: &str, budget: Duration, action_at: Option<f64>) -> Attempt {
@@ -553,6 +575,45 @@ fn element_is(
     } else {
         Attempt::Pending(message)
     }
+}
+
+/// Whether the rows inside the element `find` names (their texts, folds and
+/// buttons) read from the top of the screen down, in accessibility's order.
+fn reading_order(tree: &Tree, find: &Find) -> Attempt {
+    let index = match tree.labelled(find) {
+        Ok(found) => found[0],
+        Err(reason) => return Attempt::Pending(reason),
+    };
+    let depth = tree.nodes[index].depth;
+    let texts: Vec<usize> = (index + 1..tree.nodes.len())
+        .take_while(|&node| tree.nodes[node].depth > depth)
+        .filter(|&node| {
+            matches!(
+                tree.nodes[node].role.as_str(),
+                "AXTextArea" | "AXStaticText" | "AXButton"
+            )
+        })
+        .filter(|&node| tree.frame(node).size.height > 0.0)
+        .collect();
+    if texts.len() < 2 {
+        return Attempt::Pending(format!("{} elements to order", texts.len()));
+    }
+    // Screen coordinates grow upward: what is below reads after what is
+    // above. Elements side by side on a line share its middle.
+    let middle = |node: usize| {
+        let frame = tree.frame(node);
+        frame.origin.y + frame.size.height / 2.0
+    };
+    for pair in texts.windows(2) {
+        if middle(pair[1]) > middle(pair[0]) + 2.0 {
+            return Attempt::Pending(format!(
+                "{} reads before {}, which is above it",
+                tree.nodes[pair[0]].describe(),
+                tree.nodes[pair[1]].describe()
+            ));
+        }
+    }
+    Attempt::Passed(format!("{} elements read top to bottom", texts.len()), None)
 }
 
 /// Where a scroll area's vertical scroll bar says it is scrolled to.

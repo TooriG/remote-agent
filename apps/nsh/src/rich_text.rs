@@ -409,7 +409,9 @@ fn view_parts(
                                 json!({"blocks": blocks, "secondary": kind() == Kind::Activity,
                         "role": if kind() == Kind::User { "user" } else { "assistant" },
                         "target": target.get(), "sideChat": connection.pane.is_none(),
-                        "maxWidth": if is_code() && !wrap.get() { 1_000_000.0 } else { (max_width.get() - if is_code() { 34.0 } else { 0.0 }).max(0.0) }})
+                        "maxWidth": if is_code() && !wrap.get() { 1_000_000.0 } else { (max_width.get() - if is_code() { 34.0 } else { 0.0 }).max(0.0) },
+                        // The selection menu's items, which TextKit shows.
+                        "menu": {"quote": tr("チャットに追加"), "sideChat": tr("サイドチャットで質問")}})
                             })
                         })
                         .on_native_event(move |event: &NativeEvent| {
@@ -1161,7 +1163,8 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true, "maxWidth": 400}),
+            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true, "maxWidth": 400,
+                "menu": {"quote": "チャットに追加", "sideChat": "サイドチャットで質問"}}),
             expected
         );
     }

@@ -11,6 +11,8 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+mod follow;
+pub use follow::{FOLLOW_REARM_DISTANCE, ScrollPosition, follows_end};
 mod images;
 pub mod rows;
 mod work;

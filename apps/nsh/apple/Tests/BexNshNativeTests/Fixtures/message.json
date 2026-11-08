@@ -35,5 +35,6 @@
   "role": "user",
   "target": "opaque-native-menu-target",
   "sideChat": true,
-  "maxWidth": 400
+  "maxWidth": 400,
+  "menu": {"quote": "チャットに追加", "sideChat": "サイドチャットで質問"}
 }

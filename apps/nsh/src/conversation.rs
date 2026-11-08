@@ -10,11 +10,9 @@ use agent_core::{
     state::{Intent, operations as op},
 };
 use nsh_base::theme;
-use nsh_core::geometry::{Point, Points};
+use nsh_core::geometry::Points;
 use nsh_core::prelude::*;
 use std::collections::{HashMap, HashSet};
-
-const FOLLOW_END_THRESHOLD: f32 = 60.0;
 
 pub(crate) fn reveal_row(list: ElementRef, index: u32) {
     after_answer(move || {
@@ -214,7 +212,8 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     let list = element_ref();
     let expanded = signal(HashMap::<String, String>::new());
     let expanded_items = signal(HashSet::<String>::new());
-    let dragging = stored(false);
+    // Where the list was last scrolled to, for Core's follow rule.
+    let scrolled = stored(None::<agent_core::presentation::conversation::ScrollPosition>);
     let scroll_pending = stored(false);
     let clock = signal(std::time::SystemTime::now());
     let top_row = signal(0_usize);
@@ -265,14 +264,13 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
         if column_width.get() > 0.0
             && rows.with(|rows| !rows.is_empty())
             && following.get()
-            && !dragging.get()
             && !scroll_pending.get()
         {
             scroll_pending.replace(true);
             // Row keys must reach the list before its end can be targeted.
             after_answer(move || {
                 scroll_pending.replace(false);
-                if following.get_untracked() && !dragging.get() {
+                if following.get_untracked() {
                     list.scroll_to_end(false);
                 }
             });
@@ -657,26 +655,24 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 .element_ref(&list)
                 .label(SharedString::from(tr("この会話")))
                 .estimated_item_size(px(170.0))
-                .follow_end(px(FOLLOW_END_THRESHOLD))
-                .on_scroll_drag_start(move |_: &Point<Points>| {
-                    dragging.replace(true);
-                })
+                // While it follows, the list keeps its end as rows grow; a
+                // reader who scrolled away keeps their place.
+                .follow_end(move || px(if following.get() { f32::MAX } else { 0.0 }))
                 .on_scroll(move |event: &ScrollEvent| {
+                    use agent_core::presentation::conversation::{ScrollPosition, follows_end};
                     // As T3 Code's, the selection's actions go while it scrolls.
                     #[cfg(desktop)]
                     surroundings.selection.dismiss();
-                    if dragging.get() {
-                        following.set(
-                            event.offset.y + event.size.height
-                                >= event.content_size.height - px(FOLLOW_END_THRESHOLD),
-                        );
+                    let now = ScrollPosition {
+                        offset: event.offset.y.0,
+                        viewport: event.size.height.0,
+                        content: event.content_size.height.0,
+                    };
+                    let next =
+                        follows_end(following.get_untracked(), scrolled.replace(Some(now)), now);
+                    if next != following.get_untracked() {
+                        following.set(next);
                     }
-                })
-                .on_scroll_end(move |_: &Point<Points>| {
-                    dragging.replace(false);
-                })
-                .on_momentum_end(move |_: &Point<Points>| {
-                    dragging.replace(false);
                 })
                 .on_viewable_items_change(move |items: &ViewableItems| {
                     if let Some((first, _)) = items.viewable {

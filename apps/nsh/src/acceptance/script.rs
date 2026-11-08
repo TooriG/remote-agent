@@ -39,6 +39,9 @@
 //!   until that element is a scroll area whose vertical scroll bar says it is
 //!   scrolled between `<from>` and `<to>` (0 at the content's start, 1 at its
 //!   end), as VoiceOver reads its position.
+//! - `expect_reading_order <label> [after <anchor>] [timeout-ms]`: waits until
+//!   the texts, folds and buttons inside that element read, in accessibility
+//!   order, from the top of the screen down, as VoiceOver reads them.
 //! - `expect_menu_bar <text> [after <anchor>] [timeout-ms]`: waits until an
 //!   item of the app's menu bar, or of one of its menus, is titled `<text>`;
 //!   `after` names the menu it is in (`expect_menu_bar 取り消す after 編集`).
@@ -137,6 +140,8 @@ pub(crate) enum Step {
     Click(Modifiers, Find),
     Expect(Find),
     ExpectAbsent(Find),
+    /// The element's texts and buttons read in their order on the screen.
+    ExpectReadingOrder(Find),
     /// The element is a scroll area scrolled between the two fractions.
     ExpectScrolled(Find, f64, f64),
     /// An item of the menu bar shows the text.
@@ -395,6 +400,9 @@ fn expectation(name: &str, arguments: &[&str]) -> Result<Step, String> {
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
         ("expect_menu_bar", [text, rest @ ..]) => Step::ExpectMenuBar(find(text, rest)?),
+        ("expect_reading_order", [label, rest @ ..]) => {
+            Step::ExpectReadingOrder(find(label, rest)?)
+        }
         ("expect_scrolled", [label, from, to, rest @ ..]) => {
             Step::ExpectScrolled(find(label, rest)?, fraction(from)?, fraction(to)?)
         }
@@ -592,7 +600,7 @@ mod tests {
     fn steps_take_quoted_labels_and_optional_timeouts() {
         let lines = parse(
             "# Comment\nfixture /external-conversation\nfirst-launch\nhost without-codex\n\npress \"新しい チャット\"\n\
-             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_menu_bar 取り消す after 編集\nexpect_scrolled この会話 0.5 1 after 見出し\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
+             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_menu_bar 取り消す after 編集\nexpect_reading_order この会話\nexpect_scrolled この会話 0.5 1 after 見出し\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
              scroll 会話 -3\nscroll 画像 2 held cmd after 見出し\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nexpect_inside 送信 1000\nselect 回答 Needle\nmenu 回答 after 見出し\nhover 回答\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png contains \"a.txt:2\"\n\
              expect_clipboard \"a b\" 500\ncopy \"a\\nb\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
@@ -632,6 +640,11 @@ mod tests {
                 Step::ExpectMenuBar(Find {
                     text: "取り消す".into(),
                     after: Some("編集".into()),
+                    timeout: DEFAULT_TIMEOUT
+                }),
+                Step::ExpectReadingOrder(Find {
+                    text: "この会話".into(),
+                    after: None,
                     timeout: DEFAULT_TIMEOUT
                 }),
                 Step::ExpectScrolled(

@@ -1,0 +1,11 @@
+# A long conversation reopened while its latest turn still works opens at its
+# end, the working turn in view rather than a blank viewport.
+# iOS: HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport
+fixture /running-conversation/running-history
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "Long conversation" 20000
+expect "Review section 14, input 0." 20000
+expect "作業中" 10000
+expect_scrolled この会話 0.99 1 10000
+screenshot reopened

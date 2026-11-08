@@ -76,9 +76,18 @@ struct MessageDocument: Decodable, Equatable {
     let target: String
     let sideChat: Bool
     let maxWidth: Double
+    /// The selection menu's items in the app's language.
+    let menu: MessageMenuTitles
 
     static let empty = MessageDocument(blocks: [], secondary: false, role: "assistant", target: "", sideChat: false,
-                                       maxWidth: 0)
+                                       maxWidth: 0, menu: MessageMenuTitles(quote: "", sideChat: ""))
+}
+
+/// What a selection's menu calls adding it to the chat and asking about it in
+/// a side chat, as Bex's localization names them.
+struct MessageMenuTitles: Decodable, Equatable {
+    let quote: String
+    let sideChat: String
 }
 
 @MainActor enum MessageAttributes {

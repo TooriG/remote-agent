@@ -43,8 +43,8 @@ first; the note says which), **n/a** (no Mac equivalent).
 | DeviceNavigationUITests.testPhysicalDeviceCanPairWithManualPayload | n/a | physical device |
 | DictationUITests.testSimulatorDictationContinuesPastThirtySecondsAndReachesHost | not yet | recording needs the system's microphone permission, whose prompt reaches the user running the scenarios; the driver can only decline it |
 | DictationUITests.testSimulatorDictationPermissionDenialPreservesDraftAndSend | covered | dictation-denied (`microphone deny`) |
-| HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | partial | history-position (opens at the end, `expect_scrolled`); the fixture's long history ends interrupted, not running |
-| HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | not yet | the list now says where it is, and a wheel scroll up while a turn streams is pulled back to the end: only a drag stops the conversation following its end (`conversation::list`, `following`) |
+| HistoryUITests.testSimulatorReopensRunningLongHistoryWithoutBlankViewport | covered | history-running (the long history with its latest turn still working opens at its end) |
+| HistoryUITests.testSimulatorKeepsSmallOlderScrollDuringLiveUpdate | covered | history-live-scroll (a four-line wheel up while a turn streams stops following, as Core's `follows_end` decides; back at the end it follows again) |
 | HistoryUITests.testSimulatorRendersVisualizationAndReopensIt | partial | visualization (the Mac offers the file and opens it in the tool panel, as the desktop client did; only the iPhone renders it inline) |
 | HistoryUITests.testSimulatorRendersMarkdownTableAndReopensIt | covered | markdown-table |
 | HistoryUITests.testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText | covered | long-markdown |
@@ -96,7 +96,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Conversation: messages, folded work, approvals, questions | covered | send-message, folded-work, live-work, approval, question-choice, question-skip, question-back |
 | Conversation: errors, reconnecting, opening and its failure | covered | failed-turn, retry-stream, history-loading, history-retry |
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork, claude-fork-while-running, fork-failure |
-| Conversation: a selection's bar of actions (add to chat, explain in a side chat, ask in one), gone on scroll or deselect; the right-click menu | covered | selection-bar, selection-bar-scroll |
+| Conversation: a selection's bar of actions (add to chat, explain in a side chat, ask in one), gone on scroll or deselect; the right-click menu in the UI language | covered | selection-bar, selection-bar-scroll |
 | Conversation: a message the Host may not have received goes back to the composer or is discarded | covered | unresolved-submission |
 | Conversation: a turn's work that fails to load shows why under the opened row, with a retry | not yet | the Host reads turn details from its transcript database, which it holds open in one SQLite connection for its lifetime; making the file unreadable from outside (chmod, swapping it) does not fail the read, and the provider is asked only for conversations never saved. The core context test covers the state; the view was checked by hand with a temporary Host failure |
 | Conversation: steering a running turn, minimap beside the lane | covered | steering, queued-input, minimap |
@@ -126,11 +126,11 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Tool panel: layout, browser, terminal, agents, side chat | covered | review-panel (layout), tools, browser, terminal-paste, terminal-query, terminal-reopen, side-chat |
 | Settings: general, providers, environment, worktrees | covered | settings, environment-settings |
 | Settings: display language | covered | display-language |
-| The menus NSH makes (app, Edit, Window) in the UI language | covered | menu-labels (Japanese, and English from the launch after English is chosen) |
+| The menus NSH makes (app, Edit, Window) in the UI language | covered | menu-labels (Japanese, then English as soon as English is chosen, without a relaunch) |
 | Settings: accounts, updates, worktree editing | partial | accounts, account-sign-in, account-claude, account-switch, worktree-settings; updates not yet: アップデートを確認 opens the releases page in the default browser, outside the app |
 | Accessibility: the settings overlay is modal, message roles | covered | settings-modal, send-message |
-| Accessibility: VoiceOver reads in the visual order | covered | reading-order (a question reads before its turn's work and answer after scrolling back and forth) |
-| Accessibility: a scrolled list says where it is | covered | reading-order, history-position (`expect_scrolled`: the conversation is an AXScrollArea whose vertical scroll bar gives its position) |
+| Accessibility: VoiceOver reads in the visual order | covered | reading-order (`expect_reading_order`: the conversation's texts, folds and buttons read top to bottom after scrolling 2000 lines back and forth; the rows the list left behind stay unread) |
+| Accessibility: a scrolled list says where it is | covered | reading-order, history-position, history-live-scroll (`expect_scrolled`: the conversation is an AXScrollArea whose vertical scroll bar gives its position) |
 | Onboarding without a Host | n/a | the desktop app always lists this PC's Host and starts it when needed, so the Mac never lacks one; pairing another PC is in the environment settings (environment-settings, saved-connections) |
 | First-run setup: environment and AI, then importing projects from history | covered | onboarding |
 | Settings: importing existing projects | partial | onboarding (the same import as the first run); opening it from the settings has no scenario |

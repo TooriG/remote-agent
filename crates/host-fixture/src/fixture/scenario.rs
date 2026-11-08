@@ -69,6 +69,91 @@ pub(super) fn end_background(
     Ok(())
 }
 
+/// The background command and subagent a `[background]` turn starts.
+fn start_background(
+    context: &Context,
+    thread_id: &str,
+    thread: &SharedThread,
+    turn: &Turn,
+    suffix: &str,
+) -> Result<()> {
+    context.stream_item(thread_id, turn, json!({"id":format!("fixture-background-command-{suffix}"),"type":"commandExecution",
+        "command":"npm run dev","cwd":thread.borrow().metadata["cwd"],"processId":format!("fixture-process-{suffix}"),
+        "aggregatedOutput":"","status":"inProgress"}))?;
+    context.stream_item(
+        thread_id,
+        turn,
+        json!({"id":format!("fixture-background-agent-{suffix}"),"type":"collabAgentToolCall",
+        "tool":"spawnAgent","prompt":"Review the change","status":"inProgress"}),
+    )
+}
+
+/// Ends that work once the scenario releases it (`codex-background-release`).
+async fn release_background(context: &Context, thread_id: &str, turn: &Turn) -> Result<()> {
+    while !context.home.join("codex-background-release").exists() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    end_background(context, thread_id, turn, None, "completed")
+}
+
+/// The turn Codex runs when woken for the ended work: its report.
+fn report_background(
+    context: &Context,
+    thread_id: &str,
+    thread: &SharedThread,
+    turn: &Turn,
+    suffix: &str,
+) -> Result<()> {
+    let index = turn.borrow()["items"].as_array().unwrap().len();
+    context.stream_item(
+        thread_id,
+        turn,
+        json!({"id":format!("fixture-report-{suffix}"),"type":"agentMessage",
+        "text":"バックグラウンドのコマンドの結果を確認しました","phase":"final_answer"}),
+    )?;
+    complete(context, thread_id, turn, index)?;
+    context.finish(thread, turn, "completed", None)
+}
+
+/// A long Markdown answer streamed in chunks; false once the turn is stopped.
+async fn long_markdown(
+    context: &Context,
+    thread_id: &str,
+    turn: &Turn,
+    index: usize,
+    final_id: &str,
+    stop: &CancellationToken,
+) -> Result<bool> {
+    let turn_id = turn.borrow()["id"].as_str().unwrap().to_owned();
+    let body = "Markdown stream fixture ".repeat(80) + "\n";
+    let prose = (0..300)
+        .map(|index| {
+            format!(
+                "Paragraph {index}. {}\n\n",
+                "Long selectable prose retains its complete text while the reader edits a draft. "
+                    .repeat(4)
+            )
+        })
+        .collect::<String>();
+    let ending = format!("\n```\n\n{prose}**MARKDOWN_STREAM_COMPLETE**");
+    for chunk in std::iter::once("```text\n")
+        .chain(std::iter::repeat_n(body.as_str(), 36))
+        .chain(std::iter::once(ending.as_str()))
+    {
+        if interrupted(stop, Duration::from_millis(250)).await {
+            return Ok(false);
+        }
+        if let Value::String(text) = &mut turn.borrow_mut()["items"][index]["text"] {
+            text.push_str(chunk);
+        }
+        context.notify(
+            "item/agentMessage/delta",
+            &json!({"threadId":thread_id,"turnId":turn_id,"itemId":final_id,"delta":chunk}),
+        )?;
+    }
+    Ok(true)
+}
+
 fn complete(context: &Context, thread_id: &str, turn: &Turn, index: usize) -> Result<()> {
     let turn = turn.borrow();
     context.item_event(
@@ -195,15 +280,7 @@ impl ScenarioTurn {
         )?;
         // Woken for a background command that ended, Codex reports on it.
         if prompt.starts_with("Background command completed") {
-            let index = turn.borrow()["items"].as_array().unwrap().len();
-            context.stream_item(
-                &thread_id,
-                turn,
-                json!({"id":format!("fixture-report-{suffix}"),"type":"agentMessage",
-                "text":"バックグラウンドのコマンドの結果を確認しました","phase":"final_answer"}),
-            )?;
-            complete(context, &thread_id, turn, index)?;
-            return context.finish(thread, turn, "completed", None);
+            return report_background(context, &thread_id, thread, turn, suffix);
         }
         context.stream_item(
             &thread_id,
@@ -269,11 +346,7 @@ impl ScenarioTurn {
         // terminals and agents do, until `codex-background-release` exists.
         let background = prompt.contains("[background]");
         if background {
-            context.stream_item(&thread_id, turn, json!({"id":format!("fixture-background-command-{suffix}"),"type":"commandExecution",
-                "command":"npm run dev","cwd":thread.borrow().metadata["cwd"],"processId":format!("fixture-process-{suffix}"),
-                "aggregatedOutput":"","status":"inProgress"}))?;
-            context.stream_item(&thread_id, turn, json!({"id":format!("fixture-background-agent-{suffix}"),"type":"collabAgentToolCall",
-                "tool":"spawnAgent","prompt":"Review the change","status":"inProgress"}))?;
+            start_background(context, &thread_id, thread, turn, suffix)?;
         }
         if prompt.contains("[workspace-edit]") {
             let cwd = thread
@@ -345,28 +418,8 @@ impl ScenarioTurn {
         if prompt.contains("[render-stream]") {
             render_stream(context, &thread_id, turn, index, stop).await?;
         } else if prompt.contains("[long-markdown]") {
-            let body = "Markdown stream fixture ".repeat(80) + "\n";
-            let prose = (0..300)
-            .map(|index| format!("Paragraph {index}. {}\n\n", "Long selectable prose retains its complete text while the reader edits a draft. ".repeat(4)))
-            .collect::<String>();
-            let ending = format!("\n```\n\n{prose}**MARKDOWN_STREAM_COMPLETE**");
-            for chunk in std::iter::once("```text\n")
-                .chain(std::iter::repeat_n(body.as_str(), 36))
-                .chain(std::iter::once(ending.as_str()))
-            {
-                if interrupted(stop, Duration::from_millis(250)).await {
-                    return Ok(());
-                }
-                {
-                    let mut turn = turn.borrow_mut();
-                    if let Value::String(text) = &mut turn["items"][index]["text"] {
-                        text.push_str(chunk);
-                    }
-                }
-                context.notify(
-                    "item/agentMessage/delta",
-                    &json!({"threadId":thread_id,"turnId":turn_id,"itemId":final_id,"delta":chunk}),
-                )?;
+            if !long_markdown(context, &thread_id, turn, index, &final_id, stop).await? {
+                return Ok(());
             }
         } else {
             context.notify(
@@ -378,10 +431,7 @@ impl ScenarioTurn {
         complete(context, &thread_id, turn, index)?;
         context.finish(thread, turn, "completed", None)?;
         if background {
-            while !context.home.join("codex-background-release").exists() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            end_background(context, &thread_id, turn, None, "completed")?;
+            release_background(context, &thread_id, turn).await?;
         }
         if scenario == "duplicate" {
             thread.borrow_mut().turns.push(Rc::new(RefCell::new(json!({"id":turn_id,"status":"completed","items":[

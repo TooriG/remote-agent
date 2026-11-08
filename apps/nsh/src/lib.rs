@@ -206,6 +206,11 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         }
     });
     let language = computed(move || state.with(|state| state.language));
+    #[cfg(desktop)]
+    effect(move || {
+        language.get();
+        nsh_core::element::desktop::set_menu_labels(desktop::menu_labels());
+    });
     each(
         move || vec![language.get()],
         |language| language.code(),

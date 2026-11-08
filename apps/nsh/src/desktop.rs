@@ -153,11 +153,10 @@ pub fn run() -> std::process::ExitCode {
     result
 }
 
-/// The menus NSH makes itself, in the UI language the app starts in: the Mac's
-/// menu bar (the app menu, Edit and Window) and Windows' menus of text fields
-/// and selectable text. NSH takes them once, so a language chosen later
-/// labels them from the next launch.
-fn menu_labels() -> nsh_core::desktop::MenuLabels {
+/// The menus NSH makes itself, in the UI language: the Mac's menu bar (the app
+/// menu, Edit and Window) and Windows' menus of text fields and selectable
+/// text. The app opens with them and relabels them as its language changes.
+pub(crate) fn menu_labels() -> nsh_core::desktop::MenuLabels {
     use crate::l10n::tr;
     use nsh_core::desktop::{MenuLabels, MenuRole};
     let mut labels = MenuLabels::default();

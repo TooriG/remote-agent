@@ -252,12 +252,12 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             guard range.length > 0, NSMaxRange(range) <= (textStorage?.length ?? 0) else { return menu }
             let selected = (string as NSString).substring(with: range)
             let target = document.target
-            let quote = NSMenuItem(title: "チャットに追加", action: #selector(quoteSelection(_:)), keyEquivalent: "")
+            let quote = NSMenuItem(title: document.menu.quote, action: #selector(quoteSelection(_:)), keyEquivalent: "")
             quote.target = self
             quote.representedObject = ["action": "quote", "text": selected, "target": target]
             menu.insertItem(quote, at: 0)
             if document.sideChat {
-                let side = NSMenuItem(title: "サイドチャットで質問", action: #selector(quoteSelection(_:)), keyEquivalent: "")
+                let side = NSMenuItem(title: document.menu.sideChat, action: #selector(quoteSelection(_:)), keyEquivalent: "")
                 side.target = self
                 side.representedObject = ["action": "sideChat", "text": selected, "target": target]
                 menu.insertItem(side, at: 1)
@@ -442,12 +442,12 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             guard range.length > 0, NSMaxRange(range) <= textView.attributedText.length else { return nil }
             let selected = (textView.text as NSString).substring(with: range)
             let target = document.target
-            var actions: [UIMenuElement] = [UIAction(title: "チャットに追加", image: UIImage(systemName: "bubble")) {
+            var actions: [UIMenuElement] = [UIAction(title: document.menu.quote, image: UIImage(systemName: "bubble")) {
                 [weak self] _ in self?.action?(["action": "quote", "text": selected, "target": target])
             }]
             if document.sideChat {
                 actions.append(UIAction(
-                    title: "サイドチャットで質問",
+                    title: document.menu.sideChat,
                     image: UIImage(systemName: "bubble.left.and.bubble.right")
                 ) {
                     [weak self] _ in self?.action?(["action": "sideChat", "text": selected, "target": target])
