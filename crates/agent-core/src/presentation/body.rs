@@ -61,7 +61,7 @@ pub fn item_body(item: &Item) -> ItemBody {
             .or_else(|| {
                 data.as_ref()
                     .filter(|data| !data.is_empty())
-                    .map(|data| format!("data:image/png;base64,{data}"))
+                    .map(|data| crate::presentation::media::encoded_image_source(data))
             })
             .into_iter()
             .collect(),

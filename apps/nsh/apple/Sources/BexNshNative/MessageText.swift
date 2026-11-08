@@ -98,7 +98,9 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
 
         func textView(_: NSTextView, clickedOnLink link: Any, at _: Int) -> Bool {
             let url = (link as? URL)?.absoluteString ?? (link as? String) ?? ""
-            action?(["action": "link", "text": url, "target": document.target])
+            // Command-click opens a web page in the in-app browser.
+            let command = NSApp.currentEvent?.modifierFlags.contains(.command) ?? false
+            action?(["action": "link", "text": url, "target": document.target, "command": command])
             return true
         }
 

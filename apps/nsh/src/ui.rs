@@ -67,6 +67,8 @@ impl Icon {
     #[cfg(desktop)]
     pub(crate) const DETAILS: Self = icon!(SquareMenu, "list.bullet.rectangle");
     pub(crate) const DIFF: Self = icon!(Diff, "plusminus");
+    #[cfg(desktop)]
+    pub(crate) const DOWNLOAD: Self = icon!(Download, "square.and.arrow.down");
     pub(crate) const ELLIPSIS: Self = icon!(Ellipsis, "ellipsis");
     pub(crate) const WRENCH: Self = icon!(Wrench, "wrench.adjustable");
     pub(crate) const TERMINAL: Self = icon!(SquareTerminal, "apple.terminal");
@@ -116,6 +118,10 @@ impl Icon {
     pub(crate) const SERVER: Self = icon!(Server, "server.rack");
     pub(crate) const BOT: Self = icon!(Bot, "cpu");
     pub(crate) const STEER: Self = icon!(Redo2, "arrow.uturn.forward");
+    #[cfg(desktop)]
+    pub(crate) const ZOOM_IN: Self = icon!(ZoomIn, "plus.magnifyingglass");
+    #[cfg(desktop)]
+    pub(crate) const ZOOM_OUT: Self = icon!(ZoomOut, "minus.magnifyingglass");
     /// A filled square, which Lucide's outlined `square` is not.
     pub(crate) const STOP: Self = Self {
         markup: include_str!("../assets/stop.svg"),

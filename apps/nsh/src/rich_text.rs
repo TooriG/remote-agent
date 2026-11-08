@@ -47,6 +47,7 @@ pub(crate) struct Surroundings {
     pub connection: Connection,
     pub files: crate::files::Browser,
     pub preview: crate::media::Preview,
+    pub workspace: crate::workbench::Workbench,
 }
 
 impl Surroundings {
@@ -56,6 +57,24 @@ impl Surroundings {
             connection: use_context::<Connection>().unwrap(),
             files: use_context::<crate::files::Browser>().unwrap(),
             preview: use_context::<crate::media::Preview>().unwrap(),
+            workspace: use_context::<crate::workbench::Workbench>().unwrap(),
+        }
+    }
+
+    /// Opens a link clicked in `target`'s text: a web page in the in-app
+    /// browser with `in_app` (Command held, Control off the Mac), as the
+    /// desktop client's links did; anything else as the file browser does.
+    fn open_link(self, link: String, target: Target, in_app: bool) {
+        if in_app && (link.starts_with("https://") || link.starts_with("http://")) {
+            self.workspace.browse(link);
+        } else {
+            self.files.open(
+                link,
+                target.cwd,
+                target.home,
+                target.host,
+                self.connection.client.get(),
+            );
         }
     }
 }
@@ -169,15 +188,11 @@ fn view_parts(
                                         );
                                     })
                                 }
-                                Some("link") => {
-                                    files.open(
-                                        text.into(),
-                                        target.cwd,
-                                        target.home,
-                                        target.host,
-                                        connection.client.get(),
-                                    );
-                                }
+                                Some("link") => surroundings.open_link(
+                                    text.into(),
+                                    target,
+                                    event.data["command"].as_bool().unwrap_or(false),
+                                ),
                                 _ => {}
                             }
                         })
@@ -185,13 +200,7 @@ fn view_parts(
                 };
                 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
                 let message = move || {
-                    drawn::message(
-                        part,
-                        move || kind() == Kind::Activity,
-                        target,
-                        connection,
-                        files,
-                    )
+                    drawn::message(part, move || kind() == Kind::Activity, target, surroundings)
                 };
                 view()
                     .w_full()
@@ -418,8 +427,8 @@ fn table(
 /// are TextKit's menu, which these texts do not have.
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod drawn {
-    use super::{Part, Target};
-    use crate::{Connection, ui::colors};
+    use super::{Part, Surroundings, Target};
+    use crate::ui::colors;
     use nsh_core::{element::rgb, prelude::*};
     use serde_json::Value;
 
@@ -427,20 +436,12 @@ mod drawn {
         part: ReadSignal<(usize, Part)>,
         secondary: impl Fn() -> bool + Copy + 'static,
         target: Memo<String>,
-        connection: Connection,
-        files: crate::files::Browser,
+        surroundings: Surroundings,
     ) -> View {
-        let open = move |link: String| {
-            let Ok(target) = serde_json::from_str::<Target>(&target.get_untracked()) else {
-                return;
-            };
-            files.open(
-                link,
-                target.cwd,
-                target.home,
-                target.host,
-                connection.client.get(),
-            );
+        let open = move |link: String, in_app: bool| {
+            if let Ok(target) = serde_json::from_str::<Target>(&target.get_untracked()) {
+                surroundings.open_link(link, target, in_app);
+            }
         };
         view()
             .w_full()
@@ -464,7 +465,11 @@ mod drawn {
     }
 
     /// One paragraph of the document `rich_text::paragraph` writes.
-    fn paragraph(block: Value, secondary: bool, open: impl Fn(String) + Copy + 'static) -> View {
+    fn paragraph(
+        block: Value,
+        secondary: bool,
+        open: impl Fn(String, bool) + Copy + 'static,
+    ) -> View {
         let code = block["code"].as_bool().unwrap_or(false);
         let size = match block["header"].as_u64() {
             Some(1) => 22.0,
@@ -519,7 +524,7 @@ mod drawn {
                 span = span
                     .text_color(colors::ACCENT)
                     .underline()
-                    .on_press(move || open(link.clone()));
+                    .on_press(move |press: &PressEvent| open(link.clone(), press.modifiers.ctrl));
             }
             line = line.child(span);
         }

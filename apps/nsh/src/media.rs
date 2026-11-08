@@ -8,11 +8,15 @@ use crate::{
 };
 use agent_core::presentation::markdown::{MarkdownFileSurface, markdown_file_target};
 use nsh_core::{ImageSource, prelude::*};
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Preview {
     state: Signal<PreviewState>,
+    /// The generated images of the conversation whose image the desktop
+    /// viewer shows, beside it.
+    #[cfg(desktop)]
+    gallery: Signal<Option<Gallery>>,
     owner: Owner,
 }
 
@@ -23,10 +27,24 @@ enum PreviewState {
     Ready(Shared<LocalFile>),
 }
 
+#[cfg(desktop)]
+#[derive(Clone, PartialEq)]
+struct Gallery {
+    request: uuid::Uuid,
+    host: String,
+    cwd: String,
+    /// The source of the image the viewer shows.
+    shown: String,
+    /// The conversation's generated images, `None` while they load.
+    sources: Option<Result<Vec<String>, String>>,
+}
+
 impl Preview {
     pub fn new() -> Self {
         Self {
             state: signal(PreviewState::Closed),
+            #[cfg(desktop)]
+            gallery: signal(None),
             owner: Owner::current(),
         }
     }
@@ -38,6 +56,8 @@ impl Preview {
     pub fn begin(self) -> uuid::Uuid {
         let request = uuid::Uuid::new_v4();
         self.state.set(PreviewState::Loading(request));
+        #[cfg(desktop)]
+        self.gallery.set(None);
         request
     }
 
@@ -67,58 +87,143 @@ impl Preview {
 
     pub fn close(self) {
         self.state.set(PreviewState::Closed);
+        #[cfg(desktop)]
+        self.gallery.set(None);
+    }
+
+    /// The image the desktop's own viewer shows: an image file the preview
+    /// holds, which Quick Look shows elsewhere.
+    #[cfg(desktop)]
+    fn shown_image(self) -> Option<Shared<LocalFile>> {
+        self.state.with(|state| match state {
+            PreviewState::Ready(file) if native::image_file(&file.path) => Some(file.clone()),
+            _ => None,
+        })
+    }
+
+    /// Shows a conversation's image, `file` loaded from `source`, beside the
+    /// conversation's generated images, as the desktop client's gallery did.
+    #[cfg(desktop)]
+    fn open_image(self, connection: Connection, source: String, file: Shared<LocalFile>) {
+        use agent_core::{
+            presentation::media::gallery_sources,
+            state::{Intent, operations as op},
+            store::Outcome,
+        };
+        self.show(file);
+        let host = connection.host.get_untracked();
+        let thread = connection
+            .context
+            .with_untracked(|c| c.navigation().thread_id.clone());
+        let request = uuid::Uuid::new_v4();
+        self.gallery.set(Some(Gallery {
+            request,
+            host: host.clone(),
+            cwd: connection
+                .composer
+                .with_untracked(|c| c.controls.navigation.cwd.clone()),
+            shown: source,
+            sources: thread.is_none().then(|| Ok(Vec::new())),
+        }));
+        let Some(thread_id) = thread else {
+            return;
+        };
+        let response = connection.client.with(|client| {
+            client.request(
+                &host,
+                connection.pane,
+                Intent::LoadSessionImages(op::LoadSessionImages { thread_id }),
+            )
+        });
+        self.owner.run(move || {
+            spawn(async move {
+                let result = match response.recv().await {
+                    Ok(Ok(Outcome::SessionImages { images })) => Ok(gallery_sources(images)),
+                    Ok(Ok(_)) => Err(tr("画像一覧を読み込めませんでした。").to_owned()),
+                    Ok(Err(reason)) => Err(reason.to_string()),
+                    Err(reason) => Err(reason.to_string()),
+                };
+                self.gallery.update(|gallery| {
+                    if let Some(gallery) = gallery.as_mut().filter(|g| g.request == request) {
+                        gallery.sources = Some(result);
+                    }
+                });
+            })
+        });
+    }
+
+    /// Shows the gallery's image at `source`, `file` loaded from it.
+    #[cfg(desktop)]
+    fn select(self, source: String, file: Shared<LocalFile>) {
+        self.show(file);
+        self.gallery.update(|gallery| {
+            if let Some(gallery) = gallery {
+                gallery.shown = source;
+            }
+        });
     }
 }
 
 pub(crate) fn preview() -> impl Element {
     let preview = use_context::<Preview>().unwrap();
+    let root = view();
+    #[cfg(desktop)]
+    let root = root.child(when(
+        move || preview.shown_image().is_some(),
+        move || viewer(preview),
+    ));
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    return drawn_preview(preview);
+    let root = root.child(opened_file(preview));
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    view()
-        .child(native("bex.preview")
-            .h(px(0.0))
-            .prop("path", move || serde_json::json!(preview.state.with(|file| match file {
-                PreviewState::Ready(file) => file.path.to_string_lossy().into_owned(),
-                _ => String::new(),
-            })))
-            .on_native_event(move |event: &NativeEvent| {
-                if &*event.name == "closed" && preview.state.with_untracked(|file| matches!(file, PreviewState::Ready(file) if event.data.as_str() == file.path.to_str())) {
-                    preview.state.set(PreviewState::Closed);
-                } else if &*event.name == "error" {
-                    preview.state.set(PreviewState::Closed);
-                    native::message(tr("プレビュー"), tr("このファイルをプレビューできませんでした。"));
-                }
-            }))
-        .child(when(move || matches!(preview.state.get(), PreviewState::Loading(_)), || text(tr("ファイルを読み込み中…"))))
+    let root = root.child(quick_look(preview));
+    root.child(when(
+        move || matches!(preview.state.get(), PreviewState::Loading(_)),
+        || text(tr("ファイルを読み込み中…")),
+    ))
 }
 
-/// The preview where QuickLook is not: an image in NSH's own viewer over the
-/// window; another file in the app the system opens it with, while a bar keeps
-/// its local copy until it is dismissed.
+/// Quick Look shows what the desktop's viewer does not: every file on the
+/// iPhone, a file other than an image on the Mac.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn quick_look(preview: Preview) -> impl Element {
+    native("bex.preview")
+        .h(px(0.0))
+        .prop("path", move || {
+            serde_json::json!(preview.state.with(|file| match file {
+                PreviewState::Ready(file) if !cfg!(desktop) || !native::image_file(&file.path) =>
+                    file.path.to_string_lossy().into_owned(),
+                _ => String::new(),
+            }))
+        })
+        .on_native_event(move |event: &NativeEvent| {
+            if &*event.name == "closed"
+                && preview.state.with_untracked(|file| {
+                    matches!(file, PreviewState::Ready(file) if event.data.as_str() == file.path.to_str())
+                })
+            {
+                preview.state.set(PreviewState::Closed);
+            } else if &*event.name == "error" {
+                preview.state.set(PreviewState::Closed);
+                native::message(
+                    tr("プレビュー"),
+                    tr("このファイルをプレビューできませんでした。"),
+                );
+            }
+        })
+}
+
+/// Where Quick Look is not, a file other than an image opens in the app the
+/// system opens it with, while a bar keeps its local copy until it is
+/// dismissed.
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-fn drawn_preview(preview: Preview) -> View {
-    use crate::ui::{self, Icon, colors};
-    use nsh_core::element::{overlay, rgba};
+fn opened_file(preview: Preview) -> View {
+    use crate::ui::{self, colors};
     let file = computed(move || match preview.state.get() {
-        PreviewState::Ready(file) => Some(file),
+        PreviewState::Ready(file) if !native::image_file(&file.path) => Some(file),
         _ => None,
     });
-    let image = move || {
-        file.with(|file| {
-            file.as_ref()
-                .is_some_and(|file| native::image_file(&file.path))
-        })
-    };
-    let path = move || {
-        file.with(|file| {
-            file.as_ref()
-                .map(|file| file.path.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        })
-    };
     effect(move || {
-        let Some(file) = file.get().filter(|file| !native::image_file(&file.path)) else {
+        let Some(file) = file.get() else {
             return;
         };
         let opened = open_path(file.path.clone());
@@ -129,71 +234,304 @@ fn drawn_preview(preview: Preview) -> View {
             }
         });
     });
-    view()
-        .child(when(image, move || {
-            overlay()
-                .absolute()
-                .inset_0()
+    view().child(when(
+        move || file.with(Option::is_some),
+        move || {
+            view()
+                .flex_row()
                 .items_center()
-                .justify_center()
-                .p_8()
-                .bg(rgba(0x000000cc))
-                .on_press(move || preview.close())
+                .gap_2()
+                .px_3()
+                .py_2()
+                .border_b_1()
+                .border_b_color(colors::BORDER)
                 .child(
-                    nsh_core::element::image(path)
-                        .w_full()
-                        .h_full()
-                        .object_fit(ResizeMode::Contain)
-                        .label(tr("プレビュー"))
-                        .on_error(move |_: &str| {
-                            preview.close();
-                            native::message(
-                                tr("プレビュー"),
-                                tr("このファイルをプレビューできませんでした。"),
-                            );
-                        }),
-                )
-                .child(
-                    view()
-                        .absolute()
-                        .top(px(16.0))
-                        .right(px(16.0))
-                        .child(ui::icon_button(Icon::CLOSE, tr("閉じる"), move || {
-                            preview.close()
-                        })),
-                )
-        }))
-        .child(when(
-            move || file.with(Option::is_some) && !image(),
-            move || {
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_b_color(colors::BORDER)
-                    .child(
-                        text(move || {
-                            file.with(|file| {
-                                file.as_ref()
-                                    .and_then(|file| file.path.file_name())
-                                    .map(|name| name.to_string_lossy().into_owned())
-                                    .unwrap_or_default()
-                            })
+                    text(move || {
+                        file.with(|file| {
+                            file.as_ref()
+                                .and_then(|file| file.path.file_name())
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default()
                         })
-                        .flex_1()
-                        .min_w_0()
-                        .number_of_lines(1),
+                    })
+                    .flex_1()
+                    .min_w_0()
+                    .number_of_lines(1),
+                )
+                .child(ui::text_button(tr("閉じる"), move || preview.close()))
+        },
+    ))
+}
+
+/// The desktop's image viewer over the window, as the desktop client's: the
+/// image, magnified by steps and scrolled, saved where the user chooses, and
+/// beside it the conversation's generated images, each shown when pressed.
+#[cfg(desktop)]
+fn viewer(preview: Preview) -> impl Element {
+    use crate::ui::{self, Enabled, Icon, colors};
+    use agent_core::presentation::media::{ImageZoom, gallery_title};
+    use nsh_core::element::{overlay, rgba};
+    let file = computed(move || preview.shown_image());
+    let zoom = signal(ImageZoom::FIT);
+    let saved = signal(false);
+    effect(move || {
+        file.get();
+        zoom.set(ImageZoom::FIT);
+        saved.set(false);
+    });
+    let sources = computed(move || {
+        preview.gallery.with(|gallery| {
+            gallery
+                .as_ref()
+                .and_then(|gallery| gallery.sources.clone()?.ok())
+                .unwrap_or_default()
+        })
+    });
+    let title = move || {
+        preview.gallery.with(|gallery| match gallery {
+            Some(gallery) => {
+                sources.with(|sources| localized(gallery_title(sources, &gallery.shown)))
+            }
+            None => file.with(|file| {
+                file.as_ref()
+                    .and_then(|file| file.path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            }),
+        })
+    };
+    let loading = move || {
+        preview
+            .gallery
+            .with(|gallery| gallery.as_ref().is_some_and(|g| g.sources.is_none()))
+    };
+    let failure = move || {
+        preview.gallery.with(|gallery| {
+            gallery
+                .as_ref()
+                .and_then(|g| g.sources.clone()?.err())
+                .map(localized)
+        })
+    };
+    let thumbnails = move || !sources.with(Vec::is_empty);
+    // The Mac's window buttons sit over the top of the window.
+    let top = if cfg!(target_os = "macos") {
+        44.0
+    } else {
+        16.0
+    };
+    // The image fits the window but for the viewer's bars and thumbnails.
+    let fit = move || {
+        let window = window();
+        let side = if thumbnails() { 88.0 + 16.0 } else { 0.0 };
+        (
+            (window.width.0 - 32.0 - side).max(120.0),
+            (window.height.0 - top - 124.0).max(120.0),
+        )
+    };
+    let path = move || {
+        file.with(|file| {
+            file.as_ref()
+                .map(|file| file.path.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        })
+    };
+    overlay()
+        .absolute()
+        .inset_0()
+        .p_4()
+        .pt(px(top))
+        .gap_3()
+        .bg(rgba(0x000000e6))
+        .text_color(colors::FOREGROUND)
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .h(px(28.0))
+                .child(text(title).flex_1().min_w_0().number_of_lines(1))
+                .child(when(loading, || {
+                    text(tr("画像一覧を読み込み中…"))
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED)
+                }))
+                .child(
+                    ui::icon_button(
+                        Icon::DOWNLOAD,
+                        move || {
+                            SharedString::from(if saved.get() {
+                                tr("保存済み")
+                            } else {
+                                tr("保存")
+                            })
+                        },
+                        move || {
+                            if let Some(file) = file.get_untracked() {
+                                save_image(file, Some(saved));
+                            }
+                        },
                     )
-                    .child(ui::text_button(tr("閉じる"), move || preview.close()))
+                    .enabled(move || !saved.get()),
+                )
+                .child(ui::icon_button(Icon::CLOSE, tr("閉じる"), move || {
+                    preview.close()
+                })),
+        )
+        .child(when(
+            move || failure().is_some(),
+            move || {
+                text(move || failure().unwrap_or_default())
+                    .text_size(px(12.0))
+                    .text_color(nsh_core::element::rgb(0xff8e86))
             },
         ))
-        .child(when(
-            move || matches!(preview.state.get(), PreviewState::Loading(_)),
-            || text(tr("ファイルを読み込み中…")),
-        ))
+        .child(
+            view()
+                .flex_1()
+                .min_h_0()
+                .flex_row()
+                .gap_4()
+                .child(when(thumbnails, move || {
+                    gallery_thumbnails(preview, sources)
+                }))
+                .child(
+                    scroll().flex_1().min_w_0().h_full().child(
+                        scroll().horizontal().child(
+                            nsh_core::element::image(path)
+                                .w(move || px(fit().0 * zoom.get().scale()))
+                                .h(move || px(fit().1 * zoom.get().scale()))
+                                .object_fit(ResizeMode::Contain)
+                                .label(tr("プレビュー"))
+                                .on_error(move |_: &str| {
+                                    preview.close();
+                                    native::message(
+                                        tr("プレビュー"),
+                                        tr("このファイルをプレビューできませんでした。"),
+                                    );
+                                }),
+                        ),
+                    ),
+                ),
+        )
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child(
+                    ui::icon_button(Icon::ZOOM_OUT, tr("縮小"), move || {
+                        if let Some(smaller) = zoom.get_untracked().zoomed_out() {
+                            zoom.set(smaller);
+                        }
+                    })
+                    .enabled(move || zoom.get().zoomed_out().is_some()),
+                )
+                .child(
+                    nsh_base::button()
+                        .accessibility_label(Some(SharedString::from(tr("倍率をリセット"))))
+                        .h(px(24.0))
+                        .px_2()
+                        .rounded(px(ui::RADIUS))
+                        .justify_center()
+                        .hover(|s| s.bg(colors::GHOST_HOVER))
+                        .child(text(move || zoom.get().label()).text_size(px(14.0)))
+                        .on_press(move || zoom.set(ImageZoom::FIT)),
+                )
+                .child(
+                    ui::icon_button(Icon::ZOOM_IN, tr("拡大"), move || {
+                        if let Some(larger) = zoom.get_untracked().zoomed_in() {
+                            zoom.set(larger);
+                        }
+                    })
+                    .enabled(move || zoom.get().zoomed_in().is_some()),
+                ),
+        )
+}
+
+/// The gallery's column of thumbnails, the shown image's marked.
+#[cfg(desktop)]
+fn gallery_thumbnails(preview: Preview, sources: Memo<Vec<String>>) -> impl Element {
+    use crate::ui::colors;
+    let connection = use_context::<Connection>().unwrap();
+    let place = move || {
+        preview.gallery.with_untracked(|gallery| {
+            gallery
+                .as_ref()
+                .map(|g| (g.host.clone(), g.cwd.clone()))
+                .unwrap_or_default()
+        })
+    };
+    scroll()
+        .w(px(88.0))
+        .h_full()
+        .child(view().gap_2().child(each(
+            move || sources.get().into_iter().enumerate().collect::<Vec<_>>(),
+            |(_, source): &(usize, String)| source.clone(),
+            move |entry, _| {
+                let (index, source) = entry.get_untracked();
+                let (host, cwd) = place();
+                let shown = {
+                    let source = source.clone();
+                    move || {
+                        preview
+                            .gallery
+                            .with(|g| g.as_ref().is_some_and(|g| g.shown == source))
+                    }
+                };
+                let selected = source.clone();
+                view()
+                    .w(px(80.0))
+                    .h(px(80.0))
+                    .p_2()
+                    .rounded(px(crate::ui::RADIUS))
+                    .style_when(shown, |s| s.bg(colors::SELECTED))
+                    .child(loaded_image(
+                        connection.client,
+                        computed(move || (host.clone(), cwd.clone(), source.clone())),
+                        64.0,
+                        64.0,
+                        tr_format("生成画像 {0}", [&(index + 1)]),
+                        move |file| preview.select(selected.clone(), file),
+                        false,
+                    ))
+            },
+        )))
+}
+
+/// Saves the image's local copy where the user chooses, as the desktop
+/// client's did; `saved` marks it once it is.
+#[cfg(desktop)]
+fn save_image(file: Shared<LocalFile>, saved: Option<Signal<bool>>) {
+    let mut dialog = nsh_core::file_dialog::SaveDialog::new();
+    if let Some(name) = file.path.file_name() {
+        dialog = dialog.file_name(name.to_string_lossy());
+    }
+    let chosen = pick_save_path(dialog);
+    spawn(async move {
+        let target = match chosen.await {
+            Ok(Some(target)) => target,
+            Ok(None) => return,
+            Err(reason) => return native::message(tr("画像を保存"), reason),
+        };
+        let source = file.path.clone();
+        let copied = blocking(move || {
+            if target != source {
+                std::fs::copy(&source, &target)?;
+            }
+            Ok::<_, std::io::Error>(())
+        })
+        .await;
+        match copied {
+            Ok(Ok(())) => {
+                if let Some(saved) = saved {
+                    saved.set(true);
+                }
+            }
+            _ => native::message(tr("画像を保存"), tr("画像を保存できませんでした。")),
+        }
+    });
 }
 
 pub(crate) async fn receive(
@@ -250,6 +588,8 @@ pub(crate) async fn load_image(
     receive(transfer).await
 }
 
+/// A conversation's or the composer's image, which opens in the viewer and,
+/// on the desktop, offers to save it from its menu.
 pub(crate) fn image_view(
     connection: Connection,
     preview: Preview,
@@ -257,25 +597,55 @@ pub(crate) fn image_view(
     width: f32,
     height: f32,
 ) -> impl Element {
-    let decode_error = signal(None::<String>);
+    let source = computed(source);
     let key = computed(move || {
         (
             connection.host.get(),
             connection
                 .composer
                 .with(|p| p.controls.navigation.cwd.clone()),
-            source(),
+            source.get(),
         )
     });
+    loaded_image(
+        connection.client,
+        key,
+        width,
+        height,
+        tr("画像を拡大"),
+        move |file| {
+            #[cfg(desktop)]
+            preview.open_image(connection, source.get_untracked(), file);
+            #[cfg(not(desktop))]
+            preview.show(file);
+        },
+        true,
+    )
+}
+
+/// The image `key` (Host, folder, source) names, loaded to a local copy and
+/// `press`ed with it; `menu` offers to save it on the desktop.
+fn loaded_image(
+    client: Stored<Arc<Client>>,
+    key: Memo<(String, String, String)>,
+    width: f32,
+    height: f32,
+    label: impl Into<SharedString>,
+    press: impl Fn(Shared<LocalFile>) + 'static,
+    menu: bool,
+) -> View {
+    let label = label.into();
+    let decode_error = signal(None::<String>);
     let loaded = resource(
         move || Some(key.get()),
-        move |(host, cwd, source), _| load_image(connection.client.get(), host, cwd, source),
+        move |(host, cwd, source), _| load_image(client.get(), host, cwd, source),
     );
     effect(move || {
         key.get();
         decode_error.set(None);
     });
     let failed = move || loaded.error().is_some() || decode_error.get().is_some();
+    let press = Rc::new(press);
     // TextView's image wrapper has intrinsic width; a percentage alone collapses it.
     // A failed image keeps only its message's height, not the image's.
     view()
@@ -286,7 +656,8 @@ pub(crate) fn image_view(
         .child(when(
             move || loaded.get().is_some(),
             move || {
-                image(move || {
+                let press = press.clone();
+                let image = image(move || {
                     loaded.with(|file| {
                         file.map(|file| file.path.to_string_lossy().into_owned())
                             .unwrap_or_default()
@@ -295,14 +666,26 @@ pub(crate) fn image_view(
                 .w_full()
                 .h(px(height))
                 .object_fit(ResizeMode::Contain)
-                .label(tr("画像を拡大"))
+                .label(label.clone())
                 .role(AccessibilityRole::ImageButton)
                 .on_error(move |reason: &str| decode_error.set(Some(reason.into())))
                 .on_press(move || {
                     if let Some(file) = loaded.get() {
-                        preview.show(file);
+                        press(file);
                     }
-                })
+                });
+                #[cfg(desktop)]
+                let image = image.on_context_menu(move |_: &ContextMenuEvent| {
+                    if let Some(file) = loaded.get().filter(|_| menu) {
+                        crate::ui::popup(
+                            &serde_json::json!([{"id": "save", "title": tr("画像を名前を付けて保存…")}]),
+                            move |_| save_image(file.clone(), None),
+                        );
+                    }
+                });
+                #[cfg(not(desktop))]
+                let _ = menu;
+                image
             },
         ))
         .child(when(

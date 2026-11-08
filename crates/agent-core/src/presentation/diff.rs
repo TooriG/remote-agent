@@ -213,19 +213,24 @@ impl DiffRow {
 }
 
 /// A row of the Diff panel, each file a card: its header, then, unless it is
-/// collapsed, its lines or the note that it has no text diff. Rows index
-/// [`diff_files`]' result rather than copy its text.
+/// collapsed, its lines, the note that it has no text diff, or, in place of
+/// Git's `Binary files … differ`, the note that the binary file changed. Rows
+/// index [`diff_files`]' result rather than copy its text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiffPanelRow {
     File { file: usize, collapsed: bool },
     Line { file: usize, line: usize },
     NoTextDiff { file: usize },
+    Binary { file: usize },
 }
 
 impl DiffPanelRow {
     pub fn file(self) -> usize {
         match self {
-            Self::File { file, .. } | Self::Line { file, .. } | Self::NoTextDiff { file } => file,
+            Self::File { file, .. }
+            | Self::Line { file, .. }
+            | Self::NoTextDiff { file }
+            | Self::Binary { file } => file,
         }
     }
 }
@@ -248,9 +253,27 @@ pub fn diff_panel_rows(
         if entry.rows.is_empty() {
             rows.push(DiffPanelRow::NoTextDiff { file });
         }
-        rows.extend((0..entry.rows.len()).map(|line| DiffPanelRow::Line { file, line }));
+        rows.extend(entry.rows.iter().enumerate().map(|(line, row)| {
+            if row.kind == "M" && row.text.starts_with("Binary files ") {
+                DiffPanelRow::Binary { file }
+            } else {
+                DiffPanelRow::Line { file, line }
+            }
+        }));
     }
     rows
+}
+
+/// The row of `rows` that heads the card of `files`' file at `path`, to
+/// scroll to it.
+pub fn diff_panel_file_row(
+    files: &[WorkspaceDiffFile],
+    rows: &[DiffPanelRow],
+    path: &str,
+) -> Option<usize> {
+    let file = files.iter().position(|file| file.path == path)?;
+    rows.iter()
+        .position(|row| matches!(row, DiffPanelRow::File { file: at, .. } if *at == file))
 }
 
 /// Whether `rows[index]` ends its file's card: the next row starts another file.
@@ -530,6 +553,36 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(ends, [2, 4, 5]);
         assert!(rows.iter().map(|row| row.file()).is_sorted());
+        assert_eq!(diff_panel_file_row(&files, &rows, "a.txt"), Some(0));
+        assert_eq!(diff_panel_file_row(&files, &rows, "c.txt"), Some(5));
+        assert_eq!(diff_panel_file_row(&files, &rows, "missing.txt"), None);
+    }
+
+    #[test]
+    fn a_binary_file_reads_as_changed_rather_than_gits_marker() {
+        let review: crate::models::WorkspaceReview = serde_json::from_value(serde_json::json!({
+            "branch":"main", "additions":1, "deletions":0,
+            "files":[{"path":"image.png","status":"M","additions":null,"deletions":null},
+                     {"path":"Binary files.txt","status":"?","additions":1,"deletions":0}],
+            "diff":"diff --git a/image.png b/image.png\nindex 1..2 100644\nBinary files a/image.png and b/image.png differ\ndiff --git a/Binary files.txt b/Binary files.txt\n--- /dev/null\n+++ b/Binary files.txt\n@@ -0,0 +1 @@\n+Binary files are mentioned here\n"
+        })).unwrap();
+        let rows = diff_panel_rows(&diff_files(&review), &Default::default());
+        assert_eq!(
+            rows,
+            [
+                DiffPanelRow::File {
+                    file: 0,
+                    collapsed: false
+                },
+                DiffPanelRow::Binary { file: 0 },
+                DiffPanelRow::File {
+                    file: 1,
+                    collapsed: false
+                },
+                DiffPanelRow::Line { file: 1, line: 0 },
+                DiffPanelRow::Line { file: 1, line: 1 },
+            ]
+        );
     }
 
     proptest! {

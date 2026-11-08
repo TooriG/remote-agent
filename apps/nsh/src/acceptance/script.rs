@@ -22,9 +22,11 @@
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
 //!   menu, as a right click on it; `press` then chooses its items.
-//! - `choose <path>`: answers the open panel the app shows with `<path>`,
-//!   waiting for one to appear. A leading `$AGENT_STATE_DIR` is the fixture Host's
-//!   directory, whose `project` folder is the fixture's project.
+//! - `choose <path>`: answers the open or save panel the app shows with
+//!   `<path>`, waiting for one to appear. A leading `$AGENT_STATE_DIR` is the
+//!   fixture Host's directory, whose `project` folder is the fixture's project.
+//! - `expect_file <path> [timeout-ms]`: waits until the file at `<path>` (as
+//!   `choose` reads it) exists and is not empty.
 //! - `expect_clipboard <text> [timeout-ms]`: waits until the clipboard's text
 //!   contains `<text>`. The driver restores the clipboard when the scenario ends.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
@@ -54,6 +56,7 @@ pub(crate) enum Step {
     Select(Find, String),
     Menu(Find),
     Choose(String),
+    ExpectFile(String, Duration),
     ExpectClipboard(String, Duration),
     Wait(Duration),
     Screenshot(String),
@@ -169,8 +172,12 @@ fn step(words: &[String]) -> Result<Step, String> {
             Step::Select(find(target, rest)?, (*text).to_owned())
         }
         ("menu", [target, rest @ ..]) => Step::Menu(find(target, rest)?),
-        ("choose", [path]) if path.starts_with('/') || path.starts_with(STATE_DIRECTORY) => {
-            Step::Choose((*path).to_owned())
+        ("choose", [path]) if absolute(path) => Step::Choose((*path).to_owned()),
+        ("expect_file", [path]) if absolute(path) => {
+            Step::ExpectFile((*path).to_owned(), DEFAULT_TIMEOUT)
+        }
+        ("expect_file", [path, timeout]) if absolute(path) => {
+            Step::ExpectFile((*path).to_owned(), milliseconds(timeout)?)
         }
         ("expect_clipboard", [text]) => Step::ExpectClipboard((*text).to_owned(), DEFAULT_TIMEOUT),
         ("expect_clipboard", [text, timeout]) => {
@@ -181,6 +188,11 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("dump", [name]) => Step::Dump(artifact(name)?),
         (name, _) => return Err(format!("unknown step or wrong arguments: {name}")),
     })
+}
+
+/// Whether a step's `path` is absolute or in the fixture Host's directory.
+fn absolute(path: &str) -> bool {
+    path.starts_with('/') || path.starts_with(STATE_DIRECTORY)
 }
 
 /// Whether an element's `text` is the `label` a step names, `*` at either end of
@@ -298,6 +310,7 @@ mod tests {
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
              scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
         )
@@ -353,6 +366,11 @@ mod tests {
                 }),
                 Step::Choose("/tmp/a.txt".into()),
                 Step::Choose("$AGENT_STATE_DIR/project".into()),
+                Step::ExpectFile(
+                    "$AGENT_STATE_DIR/saved.png".into(),
+                    Duration::from_millis(500)
+                ),
+                Step::ExpectFile("/tmp/b.png".into(), DEFAULT_TIMEOUT),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
                 Step::Control("/release-inputs".into()),
                 Step::Wait(Duration::from_millis(250)),
@@ -426,6 +444,10 @@ mod tests {
             (
                 "choose a.txt",
                 "line 1: unknown step or wrong arguments: choose",
+            ),
+            (
+                "expect_file saved.png",
+                "line 1: unknown step or wrong arguments: expect_file",
             ),
             (
                 "expect_clipboard a b c",

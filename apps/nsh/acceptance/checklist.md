@@ -49,7 +49,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | HistoryUITests.testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText | covered | long-markdown |
 | HistoryUITests.testSimulatorReopensCompletedHistoryCollapsed | covered | folded-work, markdown-table (reopened collapsed) |
 | ImagesUITests.testSimulatorShowsGeneratedImagesAndOpensFileLinksAfterReopening | partial | images (a file link opens in the tool panel); generated images are screenshot evidence only |
-| ImagesUITests.testSimulatorOpensOnlyTheTappedImageAndSavesIt | not yet | Quick Look shows only while the app is frontmost, which the runner does not force; it reports "このファイルをプレビューできませんでした。" there |
+| ImagesUITests.testSimulatorOpensOnlyTheTappedImageAndSavesIt | covered | image-viewer (the Mac's own viewer: the pressed image beside the conversation's generated images, saved through the save panel) |
 | ImagesUITests.testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening | covered | images |
 | ModelSelectionUITests.testSimulatorModelPickerUsesNativeFormAndAgentPicker | covered | model-picker |
 | NavigationUITests.testSimulatorRemovesHostAndRequiresPairingAfterRelaunch | not yet | each scenario runs one app process; removing the only Host ends the scenario's connection |
@@ -91,7 +91,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Sidebar: search, project menu, add/hide/rename project | covered | sidebar-search, projects |
 | Sidebar: unseen completions, merged worktrees | covered | unseen-completion, merged-worktrees |
 | New-chat hero: project choice, start without a project | covered | new-chat-hero |
-| Conversation: messages, folded work, approvals, questions | covered | send-message, folded-work, live-work, approval, question-choice, question-skip |
+| Conversation: messages, folded work, approvals, questions | covered | send-message, folded-work, live-work, approval, question-choice, question-skip, question-back |
 | Conversation: errors, reconnecting, opening and its failure | covered | failed-turn, retry-stream, history-loading, history-retry |
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork |
 | Conversation: steering a running turn, minimap | covered | steering, queued-input |
@@ -99,7 +99,11 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
-| Changed-files bar and review | covered | review-panel, worktree-review |
+| Changed-files bar and review | covered | review-panel, worktree-review, diff-files (a file row opens the diff at that file) |
+| Diff: binary files, file menu, copying the diff | covered | diff-files |
+| Image viewer: zoom, reset, save, the conversation's generated images | covered | image-viewer |
+| An image's menu: save as | not yet | the driver's right click does not reliably open the menu of a view NSH draws |
+| Command-click (Control-click on Windows) on a web link opens the in-app browser | not yet | the driver clicks a link through its text view, without modifier keys |
 | Tool panel: files, file preview, diff, close | covered | tool-panel |
 | Tool panel: layout, browser, terminal, agents, side chat | partial | review-panel (layout), tools, side-chat; the terminal's screen and a loaded page are not observable |
 | Settings: general, providers, environment, worktrees | covered | settings, environment-settings |
