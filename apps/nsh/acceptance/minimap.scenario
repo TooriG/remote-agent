@@ -1,8 +1,8 @@
-# From a 640 point wide window the timeline keeps T3 Code's 48 point padding
-# beside its lane, so the minimap stays shown in that gutter and never covers
-# message text, here with the sidebar and the side panel open in a window just
-# wider than that. Hidden marks would stay in the accessibility tree, so the
-# screenshot is the evidence that they show.
+# The minimap's strips stay in the gutter T3 Code's timeline keeps beside its
+# lane (1.25rem from a 640 point wide window) and never cover message text,
+# here with the sidebar and the side panel open in a window just wider than
+# that. Over a gutter this narrow the minimap shows while the pointer is on it,
+# as T3 Code's; its marks stay in the accessibility tree either way.
 fixture /long-conversation/minimap
 expect "検証プロジェクト" 30000
 press 検証プロジェクト

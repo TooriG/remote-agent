@@ -305,18 +305,242 @@
         }
       }
     },
-    "<1秒": {
+    "duration.milliseconds": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "<1秒"
+            "value": "{0}ミリ秒"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "<1s"
+            "value": "{0}ms"
+          }
+        }
+      }
+    },
+    "work.group.commands": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 件のコマンドを実行しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ran {0} commands"
+          }
+        }
+      }
+    },
+    "work.group.command": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 件のコマンドを実行しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ran {0} command"
+          }
+        }
+      }
+    },
+    "work.group.files": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 件のファイルを変更しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changed {0} files"
+          }
+        }
+      }
+    },
+    "work.group.file": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 件のファイルを変更しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changed {0} file"
+          }
+        }
+      }
+    },
+    "work.group.searches": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Web を {0} 回検索しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searched the web {0} times"
+          }
+        }
+      }
+    },
+    "work.group.search": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Web を {0} 回検索しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searched the web {0} time"
+          }
+        }
+      }
+    },
+    "work.group.tools": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 件のツールを使用しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used {0} tools"
+          }
+        }
+      }
+    },
+    "work.group.tool": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} 件のツールを使用しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used {0} tool"
+          }
+        }
+      }
+    },
+    "work.group.others": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかに {0} 件の操作を実行しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Performed {0} other actions"
+          }
+        }
+      }
+    },
+    "work.group.other": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかに {0} 件の操作を実行しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Performed {0} other action"
+          }
+        }
+      }
+    },
+    "work.group.thoughts": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "思考 (×{0})"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thought (×{0})"
+          }
+        }
+      }
+    },
+    "実行を中断しました": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "実行を中断しました"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run interrupted"
+          }
+        }
+      }
+    },
+    "入力を求めています": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "入力を求めています"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Input requested"
+          }
+        }
+      }
+    },
+    "work.live.running": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{0} を実行中"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running {0}"
           }
         }
       }
@@ -6316,7 +6540,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Work completed"
+            "value": "Worked"
           }
         }
       }
@@ -9212,7 +9436,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Go to latest message"
+            "value": "Scroll to end"
           }
         }
       }
@@ -16908,7 +17132,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Worked for {0} · completed"
+            "value": "Worked for {0}"
           }
         }
       }
@@ -16924,7 +17148,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Worked for {0} · interrupted"
+            "value": "You stopped after {0}"
           }
         }
       }
@@ -16972,7 +17196,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Working for {0}…"
+            "value": "Working for {0}"
           }
         }
       }

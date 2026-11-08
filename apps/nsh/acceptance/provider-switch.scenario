@@ -5,7 +5,7 @@ expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
 type "AI に依頼する" "[groups] 作業中に切り替えます"
 press 送信
-expect "./gradlew test" 20000
+expect "最初の確認が終わりました。次のコマンドを確認します。" 20000
 press "Fixture Model"
 press "Claude Code" 10000
 press Sonnet

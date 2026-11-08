@@ -90,7 +90,7 @@ pub(crate) fn screen(id: u64, host: String) -> impl IntoElement {
                     .flex_1()
                     .min_w_0()
                     .child(crate::notices::notices(|| false, || false))
-                    .child(crate::conversation::list(following))
+                    .child(crate::conversation::Timeline::new(following).list())
                     .child(crate::composer::composer(following))
             },
         ))

@@ -12,9 +12,11 @@ use std::{
     sync::Arc,
 };
 mod follow;
-pub use follow::{FOLLOW_REARM_DISTANCE, ScrollPosition, follows_end};
+pub use follow::{FOLLOW_REARM_DISTANCE, ScrollPosition, away_from_end, follows_end};
 mod images;
 pub mod rows;
+mod timeline;
+pub use timeline::{TurnRow, turn_rows};
 mod work;
 pub use work::{LiveActivity, WorkRowLabel};
 mod row_binding;
@@ -161,67 +163,103 @@ pub struct ActivityPresentation {
     pub is_in_progress: bool,
     pub load_items: Option<crate::state::operations::LoadTurnItems>,
 }
-/// A mark on T3 Code's timeline minimap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A strip on T3 Code's timeline minimap.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MinimapMarker {
     /// The timeline row of the user message it jumps to.
     pub row: usize,
-    /// Whether the scroll top lies between this mark and the next.
-    pub current: bool,
+    /// Whether its message is among the rows in view, which lights the strip.
+    pub in_view: bool,
+    /// Where it sits from the rail's top.
+    pub top: f32,
 }
 
-/// The minimap marks at most eight user messages, spaced evenly from the
-/// first to the last, and the one the scroll top has reached is current. A
-/// single message needs no map.
-pub fn minimap_markers(user_rows: &[usize], top_row: usize) -> Vec<MinimapMarker> {
-    const MAX: usize = 8;
+/// The rail's spacing between strips, as T3 Code's.
+const MINIMAP_STRIP_SPACING: f32 = 8.;
+
+/// How tall T3 Code's rail is for `count` strips: 8 points apart, at most
+/// `max_height` (the window's height less 18rem).
+pub fn minimap_rail_height(count: usize, max_height: f32) -> f32 {
+    (count.saturating_sub(1) as f32 * MINIMAP_STRIP_SPACING)
+        .max(1.)
+        .min(max_height.max(1.))
+}
+
+/// As T3 Code's minimap: a strip for each user message once there are two,
+/// spread evenly over the rail, each lit while its message is in `viewable`
+/// (the first and last rows in view).
+pub fn minimap_markers(
+    user_rows: &[usize],
+    viewable: Option<(usize, usize)>,
+    max_height: f32,
+) -> Vec<MinimapMarker> {
     if user_rows.len() < 2 {
         return Vec::new();
     }
-    let count = user_rows.len().min(MAX);
-    let sample = |position: usize| position * (user_rows.len() - 1) / (count - 1).max(1);
-    (0..count)
-        .map(|position| {
-            let row = user_rows[sample(position)];
-            let next = (position + 1 < count).then(|| user_rows[sample(position + 1)]);
-            MinimapMarker {
-                row,
-                current: top_row >= row && next.is_none_or(|next| top_row < next),
-            }
+    let height = minimap_rail_height(user_rows.len(), max_height);
+    let last = (user_rows.len() - 1) as f32;
+    user_rows
+        .iter()
+        .enumerate()
+        .map(|(index, &row)| MinimapMarker {
+            row,
+            in_view: viewable.is_some_and(|(first, last)| (first..=last).contains(&row)),
+            top: index as f32 / last * height,
         })
         .collect()
 }
 
-/// The widest the column of messages and of the composer grows.
-pub const LANE_WIDTH: f32 = 780.;
+/// A message's time of day as T3 Code shows it in each language: `2:17 AM`,
+/// `14:17`.
+pub fn time_of_day(language: UiLanguage, hour: u32, minute: u32) -> String {
+    match language {
+        UiLanguage::English => format!(
+            "{}:{minute:02} {}",
+            (hour + 11) % 12 + 1,
+            if hour < 12 { "AM" } else { "PM" }
+        ),
+        UiLanguage::Japanese => format!("{hour:02}:{minute:02}"),
+    }
+}
+
+/// The widest the column of messages and of the composer grows, as T3 Code's
+/// `--chat-content-max-width` (46rem).
+pub const LANE_WIDTH: f32 = 736.;
 
 /// The space the timeline and the composer keep beside their lane, as T3 Code's
-/// (`0.75rem`, `3rem` from a 640 pt wide window), so that from there on the
-/// minimap has a gutter of its own.
+/// workspace gutter (`0.75rem`, `1.25rem` from a 640 pt wide window).
 pub fn lane_padding(window_width: f32) -> f32 {
-    if window_width >= 640. { 48. } else { 12. }
+    if window_width >= 640. { 20. } else { 12. }
 }
 
-/// How wide the minimap is at the timeline's leading edge, its marks' hit
-/// areas included.
-pub const MINIMAP_WIDTH: f32 = 48.;
+/// The side gutter T3 Code's minimap needs to stay shown.
+const MINIMAP_PERSISTENT_GUTTER: f32 = 48.;
 
-/// The minimap stays shown only beside a gutter wide enough for it: the space
-/// the lane leaves at each side of a timeline `timeline_width` wide with
-/// `padding` beside it. Over narrower gutters it shows while the pointer is on it.
-pub fn minimap_persistent(timeline_width: f32, padding: f32) -> bool {
-    let lane = (timeline_width - 2. * padding).clamp(0., LANE_WIDTH);
-    (timeline_width - lane) / 2. >= MINIMAP_WIDTH
+/// As T3 Code's: the minimap stays shown while the chat canvas (`canvas_width`:
+/// the conversation's whole width with its side panel, which T3 Code floats
+/// over its canvas) leaves 48 points beside a centred lane `lane_width` wide.
+/// Over narrower gutters it shows while the pointer is on it.
+pub fn minimap_persistent(canvas_width: f32, lane_width: f32) -> bool {
+    (canvas_width - lane_width.min(canvas_width)) / 2. >= MINIMAP_PERSISTENT_GUTTER
 }
 
-/// A mark's line widens toward the hovered one.
+/// Where the strips start from the minimap's leading edge.
+pub const MINIMAP_STRIP_INSET: f32 = 12.;
+
+/// How wide the strips' pointer area is: T3 Code's 40 points at most, and,
+/// so that it never covers message text, no further than the lane, which
+/// starts `gutter` points from the minimap's edge.
+pub fn minimap_hit_width(gutter: f32) -> f32 {
+    (gutter.floor() - MINIMAP_STRIP_INSET).clamp(0., 40.)
+}
+
+/// A strip's length: T3 Code's 24 point strip, scaled toward the hovered one.
 pub fn minimap_marker_width(distance_from_hover: Option<usize>) -> f32 {
-    match distance_from_hover {
-        Some(0) => 28.,
-        Some(1) => 20.,
-        Some(2) => 14.,
-        Some(3) => 10.,
-        _ => 7.,
+    24. * match distance_from_hover {
+        Some(0) => 1.,
+        Some(1) => 0.667,
+        Some(2) => 0.417,
+        _ => 0.333,
     }
 }
 
@@ -277,7 +315,7 @@ impl WorkProgress {
     pub fn label(&self, language: UiLanguage, now_seconds: f64) -> String {
         // As T3 Code's working row: the time so far, in the fold's units.
         let elapsed = self.started_at.map(|started| {
-            super::duration_text(language, ((now_seconds - started).max(0.) * 1000.) as u64)
+            super::elapsed_text(language, ((now_seconds - started).max(0.) * 1000.) as u64)
         });
         match (
             elapsed,
@@ -3647,65 +3685,87 @@ mod minimap_tests {
     use super::*;
 
     #[test]
-    fn short_histories_mark_every_message() {
-        let markers = minimap_markers(&[0, 4, 9], 5);
+    fn every_message_has_a_strip_lit_while_it_is_in_view() {
+        let markers = minimap_markers(&[0, 4, 9], Some((3, 6)), 500.);
         assert_eq!(markers.iter().map(|m| m.row).collect::<Vec<_>>(), [0, 4, 9]);
         assert_eq!(
-            markers.iter().map(|m| m.current).collect::<Vec<_>>(),
+            markers.iter().map(|m| m.in_view).collect::<Vec<_>>(),
             [false, true, false]
+        );
+        assert_eq!(
+            markers.iter().map(|m| m.top).collect::<Vec<_>>(),
+            [0., 8., 16.]
+        );
+        assert!(
+            minimap_markers(&[0, 4], None, 500.)
+                .iter()
+                .all(|m| !m.in_view)
         );
     }
 
     #[test]
-    fn long_histories_keep_eight_marks_from_first_to_last() {
-        let rows = (0..39).map(|index| index * 2).collect::<Vec<_>>();
-        let markers = minimap_markers(&rows, 0);
-        assert_eq!(markers.len(), 8);
-        assert_eq!(markers.first().unwrap().row, 0);
-        assert_eq!(markers.last().unwrap().row, 76);
-        assert!(markers[0].current);
-        assert!(markers[1..].iter().all(|m| !m.current));
+    fn a_long_history_spreads_its_strips_over_the_tallest_rail() {
+        let rows = (0..101).collect::<Vec<_>>();
+        assert_eq!(minimap_rail_height(rows.len(), 400.), 400.);
+        let markers = minimap_markers(&rows, None, 400.);
+        assert_eq!(markers.len(), 101);
+        assert_eq!(markers[50].top, 200.);
+        assert_eq!(markers[100].top, 400.);
     }
 
     #[test]
-    fn the_last_mark_stays_current_past_it_and_none_before_the_first() {
-        assert!(minimap_markers(&[3, 6], 40)[1].current);
-        assert!(minimap_markers(&[3, 6], 1).iter().all(|m| !m.current));
-        assert!(minimap_markers(&[], 0).is_empty());
-        assert!(minimap_markers(&[2], 2).is_empty());
+    fn a_single_message_needs_no_map() {
+        assert!(minimap_markers(&[], None, 400.).is_empty());
+        assert!(minimap_markers(&[2], Some((0, 9)), 400.).is_empty());
     }
 
     #[test]
-    fn lanes_keep_the_minimaps_gutter_from_a_640_point_window() {
+    fn times_read_as_t3_codes_in_each_language() {
+        let time = |hour, minute| {
+            (
+                time_of_day(UiLanguage::English, hour, minute),
+                time_of_day(UiLanguage::Japanese, hour, minute),
+            )
+        };
+        assert_eq!(time(0, 5), ("12:05 AM".into(), "00:05".into()));
+        assert_eq!(time(2, 17), ("2:17 AM".into(), "02:17".into()));
+        assert_eq!(time(12, 0), ("12:00 PM".into(), "12:00".into()));
+        assert_eq!(time(23, 59), ("11:59 PM".into(), "23:59".into()));
+    }
+
+    #[test]
+    fn lanes_keep_t3s_workspace_gutter() {
         assert_eq!(lane_padding(639.9), 12.);
-        assert_eq!(lane_padding(640.), 48.);
-        assert_eq!(lane_padding(1440.), 48.);
+        assert_eq!(lane_padding(640.), 20.);
+        assert_eq!(lane_padding(1440.), 20.);
         assert_eq!(lane_padding(0.), 12.);
     }
 
     #[test]
-    fn the_map_stays_beside_a_gutter_the_padding_or_a_wide_timeline_leaves() {
-        // The padding alone is the gutter, however narrow the lane gets.
-        for width in [96., 300., 640., 876., 2000.] {
-            assert!(minimap_persistent(width, 48.), "{width}");
-        }
-        // A smaller padding is no gutter until the lane stops growing.
-        assert!(!minimap_persistent(600., 12.));
-        assert!(!minimap_persistent(875., 12.));
-        assert!(minimap_persistent(876., 12.));
-        // Too narrow for any lane.
-        assert!(!minimap_persistent(95., 48.));
-        assert!(!minimap_persistent(0., 12.));
+    fn the_map_stays_beside_a_48_point_gutter_of_the_canvas() {
+        assert!(minimap_persistent(1008., 668.));
+        assert!(minimap_persistent(832., 736.));
+        assert!(!minimap_persistent(831., 736.));
+        assert!(!minimap_persistent(500., 900.));
+        assert!(!minimap_persistent(0., 0.));
     }
 
     #[test]
-    fn marks_widen_toward_the_hovered_one() {
-        assert_eq!(minimap_marker_width(Some(0)), 28.);
+    fn the_pointer_area_never_reaches_the_lane() {
+        assert_eq!(minimap_hit_width(20.), 8.);
+        assert_eq!(minimap_hit_width(12.5), 0.);
+        assert_eq!(minimap_hit_width(5.), 0.);
+        assert_eq!(minimap_hit_width(200.), 40.);
+    }
+
+    #[test]
+    fn strips_widen_toward_the_hovered_one() {
+        assert_eq!(minimap_marker_width(Some(0)), 24.);
         assert!(minimap_marker_width(Some(1)) > minimap_marker_width(Some(2)));
+        assert!(minimap_marker_width(Some(2)) > minimap_marker_width(Some(3)));
         assert_eq!(minimap_marker_width(Some(9)), minimap_marker_width(None));
     }
 }
-
 #[cfg(test)]
 mod progress_tests {
     use super::*;
@@ -3737,7 +3797,7 @@ mod progress_tests {
             );
             assert_eq!(
                 turn.work_progress(false).label(UiLanguage::Japanese, 99.),
-                "<1秒 作業中…"
+                "0秒 作業中…"
             );
             // The time so far reads in the fold's units, as T3 Code's working row.
             assert_eq!(

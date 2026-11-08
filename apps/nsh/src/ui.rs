@@ -47,11 +47,13 @@ macro_rules! icon {
 }
 
 impl Icon {
-    pub(crate) const ARROW_DOWN: Self = icon!(ArrowDown);
     pub(crate) const ARROW_LEFT: Self = icon!(ArrowLeft);
     pub(crate) const ARROW_RIGHT: Self = icon!(ArrowRight);
     pub(crate) const ARROW_UP: Self = icon!(ArrowUp);
-    pub(crate) const FORK: Self = icon!(GitBranch);
+    pub(crate) const GIT_FORK: Self = icon!(GitFork);
+    pub(crate) const UNDO: Self = icon!(Undo2);
+    pub(crate) const WRAP: Self = icon!(TextWrap);
+    pub(crate) const WARNING: Self = icon!(TriangleExclamationPoint);
     pub(crate) const CHECK: Self = icon!(Check);
     pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown);
     pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight);
@@ -66,7 +68,6 @@ impl Icon {
     pub(crate) const ELLIPSIS: Self = icon!(Ellipsis);
     pub(crate) const WRENCH: Self = icon!(Wrench);
     pub(crate) const TERMINAL: Self = icon!(SquareTerminal);
-    pub(crate) const FILE_PEN: Self = icon!(FilePen);
     pub(crate) const BRAIN: Self = icon!(Brain);
     pub(crate) const REPLACE: Self = icon!(Replace);
     #[cfg(desktop)]
@@ -137,7 +138,8 @@ impl Icon {
     const NOTIFY_EYE: Self = icon!(Eye);
     const NOTIFY_ZAP: Self = icon!(Zap);
     /// Lucide 1 names circle-alert circle-exclamation-point.
-    const NOTIFY_ALERT: Self = icon!(CircleExclamationPoint);
+    pub(crate) const ALERT: Self = icon!(CircleExclamationPoint);
+    const HAMMER: Self = icon!(Hammer);
 
     /// A notification row's icon, as T3 Code's work log draws it.
     pub(crate) fn notification(
@@ -149,15 +151,16 @@ impl Icon {
             Terminal => Self::NOTIFY_TERMINAL,
             Eye => Self::NOTIFY_EYE,
             Zap => Self::NOTIFY_ZAP,
-            CircleAlert => Self::NOTIFY_ALERT,
+            CircleAlert => Self::ALERT,
         }
     }
 
     /// A work item's tool, as T3 Code's work log shows it.
     pub(crate) fn work(kind: &str) -> Self {
         match kind {
-            "command" => Self::TERMINAL,
-            "fileChange" => Self::FILE_PEN,
+            "command" => Self::NOTIFY_TERMINAL,
+            "fileChange" => Self::NEW_CHAT,
+            "mixed" => Self::HAMMER,
             "reasoning" => Self::BRAIN,
             _ => Self::WRENCH,
         }

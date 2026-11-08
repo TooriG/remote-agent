@@ -13,6 +13,10 @@ use agent_core::{
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::{Value, json};
 
+/// How far a code block keeps its code from its edges, as T3 Code's `pre`
+/// (`0.8rem 0.9rem`) inside its 1 point border.
+const CODE_INSET: f32 = 15.0;
+
 #[derive(Clone, PartialEq)]
 enum Part {
     Text(Vec<Value>),
@@ -409,7 +413,7 @@ fn view_parts(
                                 json!({"blocks": blocks, "secondary": kind() == Kind::Activity,
                         "role": if kind() == Kind::User { "user" } else { "assistant" },
                         "target": target.get(), "sideChat": connection.pane.is_none(),
-                        "maxWidth": if is_code() && !wrap.get() { 1_000_000.0 } else { (max_width.get() - if is_code() { 34.0 } else { 0.0 }).max(0.0) },
+                        "maxWidth": if is_code() && !wrap.get() { 1_000_000.0 } else { (max_width.get() - if is_code() { 2.0 * CODE_INSET } else { 0.0 }).max(0.0) },
                         // The selection menu's items, which TextKit shows.
                         "menu": {"quote": tr("チャットに追加"), "sideChat": tr("サイドチャットで質問")}})
                             })
@@ -437,8 +441,8 @@ fn view_parts(
                         }
                     })
                 },
-                320.0,
-                240.0,
+                crate::media::ImageSize::Natural,
+
             )
             .into_element(),
             Part::Link(_) => crate::ui::row_text_button(tr("ファイルを開く"), move || {
@@ -475,33 +479,48 @@ fn frame(
             _ => None,
         })
     });
-    let wrap = signal(false);
+    // As T3 Code's, a code block wraps its lines until asked not to.
+    let wrap = signal(true);
     let source_shown = signal(false);
     let large = signal(false);
     let drawn = move || diagram.with(Option::is_some) && !source_shown.get();
     let shown_code = move || code() && !drawn();
+    // T3 Code's `pre`: 14 points around the code, inside the block's border.
+    let inset = move |content: AnyElement| {
+        view()
+            .w_full()
+            .style_when(code, |s| {
+                s.px(px(CODE_INSET))
+                    .pt(px(CODE_INSET - 1.0))
+                    .pb(px(CODE_INSET))
+            })
+            .child(content)
+    };
     view()
         .w_full()
-        .gap_2()
         .style_when(code, |s| {
-            s.px_4()
-                .pt_2()
-                .pb_4()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(crate::ui::colors::BORDER)
-                .bg(crate::ui::colors::SURFACE)
+            s.rounded(px(8.0))
+                .overflow_hidden()
+                .bg(crate::conversation::look::CODE)
         })
         .child(when(code, move || {
             code_header(part, diagram, wrap, source_shown, large)
         }))
         .child(when(
             move || !code() || (shown_code() && wrap.get()),
-            move || message(wrap),
+            move || inset(message(wrap)),
         ))
         .child(when(
             move || shown_code() && !wrap.get(),
-            move || scroll().horizontal().w_full().child(message(wrap)),
+            move || {
+                inset(
+                    scroll()
+                        .horizontal()
+                        .w_full()
+                        .child(message(wrap))
+                        .into_element(),
+                )
+            },
         ))
         .child(when(drawn, move || {
             // The drawing keeps its proportions and never grows past its own
@@ -518,21 +537,26 @@ fn frame(
                     }
                     / height
             };
-            svg(move || {
-                ImageSrc::svg_markup(
-                    &diagram.with(|d| d.as_ref().map(|d| d.svg.clone()).unwrap_or_default()),
-                )
-            })
-            .w_full()
-            .max_w(move || px(limit()))
-            .aspect_ratio(move || {
-                let (width, height) = size();
-                width / height
-            })
+            inset(
+                svg(move || {
+                    ImageSrc::svg_markup(
+                        &diagram.with(|d| d.as_ref().map(|d| d.svg.clone()).unwrap_or_default()),
+                    )
+                })
+                .w_full()
+                .max_w(move || px(limit()))
+                .aspect_ratio(move || {
+                    let (width, height) = size();
+                    width / height
+                })
+                .into_element(),
+            )
         }))
         .into_element()
 }
 
+/// T3 Code's code block header: the language at the start in small mono
+/// type, the block's actions at the end.
 fn code_header(
     part: ReadSignal<(usize, Part)>,
     diagram: Memo<Option<Diagram>>,
@@ -540,13 +564,17 @@ fn code_header(
     source_shown: Signal<bool>,
     large: Signal<bool>,
 ) -> impl IntoElement {
+    use crate::conversation::look;
     let toggle = |flag: Signal<bool>| move || flag.update(|flag| *flag = !*flag);
     let mermaid = move || diagram.with(Option::is_some);
     view()
         .flex_row()
         .items_center()
-        .justify_end()
+        .justify_between()
         .gap_2()
+        .pt(px(7.0))
+        .pr(px(7.0))
+        .pl(px(13.0))
         .child(
             text(move || {
                 part.with(|(_, part)| match part {
@@ -556,71 +584,89 @@ fn code_header(
             })
             .max_w(px(220.0))
             .number_of_lines(1)
-            .text_size(px(12.0)),
+            .font_family(SharedString::from("monospace"))
+            .text_size(px(11.0))
+            .text_color(look::FOREGROUND.alpha(0.72)),
         )
-        .child(when(mermaid, move || {
-            crate::ui::row_text_button(
-                move || {
-                    SharedString::from(if source_shown.get() {
-                        tr("図を表示")
-                    } else {
-                        tr("ソース")
-                    })
-                },
-                toggle(source_shown),
-            )
-        }))
-        .child(when(
-            move || mermaid() && !source_shown.get(),
-            move || {
-                crate::ui::row_text_button(
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(2.0))
+                .text_color(look::MUTED)
+                .child(when(mermaid, move || {
+                    crate::ui::row_text_button(
+                        move || {
+                            SharedString::from(if source_shown.get() {
+                                tr("図を表示")
+                            } else {
+                                tr("ソース")
+                            })
+                        },
+                        toggle(source_shown),
+                    )
+                }))
+                .child(when(
+                    move || mermaid() && !source_shown.get(),
                     move || {
-                        SharedString::from(if large.get() {
-                            tr("縮小")
-                        } else {
-                            tr("拡大")
-                        })
+                        crate::ui::row_text_button(
+                            move || {
+                                SharedString::from(if large.get() {
+                                    tr("縮小")
+                                } else {
+                                    tr("拡大")
+                                })
+                            },
+                            toggle(large),
+                        )
                     },
-                    toggle(large),
-                )
-            },
-        ))
-        .child(when(
-            move || !mermaid() || source_shown.get(),
-            move || {
-                crate::ui::row_text_button(
+                ))
+                .child(when(
+                    move || !mermaid() || source_shown.get(),
                     move || {
-                        SharedString::from(if wrap.get() {
-                            tr("折り返し解除")
-                        } else {
-                            tr("折り返し")
-                        })
+                        crate::ui::icon_button_sized(
+                            crate::ui::Icon::WRAP,
+                            move || {
+                                SharedString::from(if wrap.get() {
+                                    tr("折り返し解除")
+                                } else {
+                                    tr("折り返し")
+                                })
+                            },
+                            24.0,
+                            12.0,
+                            toggle(wrap),
+                        )
+                        .text_color(look::MUTED)
                     },
-                    toggle(wrap),
-                )
-            },
-        ))
-        .child(crate::ui::icon_button(
-            crate::ui::Icon::COPY,
-            move || {
-                SharedString::from(if mermaid() {
-                    tr("Mermaidをコピー")
-                } else {
-                    tr("コードをコピー")
-                })
-            },
-            move || {
-                part.with_untracked(|(_, part)| {
-                    if let Part::Code { source, .. } = part {
-                        set_clipboard(source.clone());
-                    }
-                })
-            },
-        ))
+                ))
+                .child(
+                    crate::ui::icon_button_sized(
+                        crate::ui::Icon::COPY,
+                        move || {
+                            SharedString::from(if mermaid() {
+                                tr("Mermaidをコピー")
+                            } else {
+                                tr("コードをコピー")
+                            })
+                        },
+                        24.0,
+                        12.0,
+                        move || {
+                            part.with_untracked(|(_, part)| {
+                                if let Part::Code { source, .. } = part {
+                                    set_clipboard(source.clone());
+                                }
+                            })
+                        },
+                    )
+                    .text_color(look::MUTED),
+                ),
+        )
 }
 
-/// A table in the desktop client's frame: ruled cells, the header row raised, its copy
-/// actions below.
+/// A table as T3 Code's, its rows ruled below; its copy and wrapping
+/// actions below it.
 fn table(
     surroundings: Surroundings,
     part: ReadSignal<(usize, Part)>,
@@ -628,7 +674,6 @@ fn table(
     kind: impl Fn() -> Kind + Copy + 'static,
     max_width: Memo<f32>,
 ) -> impl IntoElement {
-    use crate::ui::colors;
     let copy = move |markdown: bool| {
         part.with_untracked(|(_, part)| {
             if let Part::Table { source, csv, .. } = part {
@@ -641,73 +686,60 @@ fn table(
         })
     };
     let compact = signal(false);
+    // T3 Code's table: rows ruled below, no frame, the header row's cells a
+    // little taller.
+    let rule = crate::conversation::look::RULE;
     let frame = move || {
-        view()
-            .w_full()
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(colors::BORDER)
-            .overflow_hidden()
-            .child(each(
-                move || {
-                    part.with(|(_, part)| {
-                        if let Part::Table { rows, .. } = part {
-                            rows.clone().into_iter().enumerate().collect()
-                        } else {
-                            Vec::new()
-                        }
-                    })
-                },
-                |(index, _): &(usize, Vec<Vec<Part>>)| *index,
-                move |row, position| {
-                    let header = row.with_untracked(|(index, _)| *index == 0);
-                    view()
-                        .flex_row()
-                        .items_stretch()
-                        .style_when(
-                            move || position.get() > 0,
-                            |s| s.border_t_1().border_t_color(colors::BORDER),
-                        )
-                        .style_when(move || header, |s| s.bg(colors::RAISED))
-                        .child(each(
-                            move || {
-                                row.with(|(_, row)| {
-                                    row.clone().into_iter().enumerate().collect::<Vec<_>>()
-                                })
-                            },
-                            |(index, _): &(usize, Vec<Part>)| *index,
-                            move |cell, column| {
-                                view()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .px_3()
-                                    .py_2()
-                                    .style_when(
-                                        move || column.get() > 0,
-                                        |s| s.border_l_1().border_l_color(colors::BORDER),
-                                    )
-                                    .child(view_parts(
-                                        surroundings,
-                                        move || cell.with(|(_, parts)| parts.clone()),
-                                        target,
-                                        kind,
-                                        computed(move || {
-                                            let columns =
-                                                row.with(|(_, cells)| cells.len()).max(1) as f32;
-                                            if compact.get() {
-                                                1_000_000.0
-                                            } else {
-                                                ((max_width.get() - 2.0 - (columns - 1.0))
-                                                    / columns
-                                                    - 24.0)
-                                                    .max(0.0)
-                                            }
-                                        }),
-                                    ))
-                            },
-                        ))
-                },
-            ))
+        view().w_full().child(each(
+            move || {
+                part.with(|(_, part)| {
+                    if let Part::Table { rows, .. } = part {
+                        rows.clone().into_iter().enumerate().collect()
+                    } else {
+                        Vec::new()
+                    }
+                })
+            },
+            |(index, _): &(usize, Vec<Vec<Part>>)| *index,
+            move |row, _| {
+                let header = row.with_untracked(|(index, _)| *index == 0);
+                view()
+                    .flex_row()
+                    .items_stretch()
+                    .border_b_1()
+                    .border_b_color(rule)
+                    .child(each(
+                        move || {
+                            row.with(|(_, row)| {
+                                row.clone().into_iter().enumerate().collect::<Vec<_>>()
+                            })
+                        },
+                        |(index, _): &(usize, Vec<Part>)| *index,
+                        move |cell, _| {
+                            view()
+                                .flex_1()
+                                .min_w_0()
+                                .px_3()
+                                .py(px(if header { 9.0 } else { 7.0 }))
+                                .child(view_parts(
+                                    surroundings,
+                                    move || cell.with(|(_, parts)| parts.clone()),
+                                    target,
+                                    kind,
+                                    computed(move || {
+                                        let columns =
+                                            row.with(|(_, cells)| cells.len()).max(1) as f32;
+                                        if compact.get() {
+                                            1_000_000.0
+                                        } else {
+                                            (max_width.get() / columns - 24.0).max(0.0)
+                                        }
+                                    }),
+                                ))
+                        },
+                    ))
+            },
+        ))
     };
     view()
         .w_full()

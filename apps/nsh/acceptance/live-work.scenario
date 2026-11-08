@@ -6,13 +6,13 @@ press このプロジェクトで新しいチャット
 type "AI に依頼する" "[groups] ライブの作業を確認します"
 press 送信
 expect "最初の確認が終わりました。次のコマンドを確認します。" 20000
-expect "コマンドを実行しました"
+expect "1 件のコマンドを実行しました"
 # As T3 Code, the live row names the current work, apart from the timer.
-expect "pwd"
+expect "pwd を実行中"
 expect "Fixture Model"
 expect_absent "./gradlew test"
 screenshot live
-press コマンドを実行しました
+press "1 件のコマンドを実行しました"
 expect "./gradlew test"
 screenshot expanded
 fixture /release-inputs

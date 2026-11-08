@@ -352,12 +352,47 @@ fn work_summary(language: UiLanguage, turn: &Turn) -> String {
     )
 }
 
-/// A duration as the conversation names it: `<1秒`, `12秒`, `1時間 3秒`.
+/// A duration as T3 Code's `formatDuration` names it: `350ms`, `2.5s`, `12s`,
+/// `1h 2m 3s`.
 fn duration_text(language: UiLanguage, ms: u64) -> String {
+    let seconds =
+        |value: String| localized_ui_format(language, "duration.seconds".into(), vec![value]);
     if ms < 1000 {
-        return language.text("<1秒").into();
+        return localized_ui_format(
+            language,
+            "duration.milliseconds".into(),
+            vec![ms.max(1).to_string()],
+        );
     }
-    let seconds = ms / 1000;
+    if ms < 10_000 {
+        let tenths = (ms as f64 / 100.).round() / 10.;
+        return seconds(if tenths >= 10. {
+            "10".into()
+        } else {
+            format!("{tenths:.1}")
+        });
+    }
+    if ms < 60_000 {
+        return seconds(((ms as f64 / 1000.).round() as u64).to_string());
+    }
+    clock_text(language, (ms as f64 / 1000.).round() as u64)
+}
+
+/// How long a running turn has worked, as T3 Code's working timer counts it:
+/// whole seconds for its first minute, then as a duration.
+fn elapsed_text(language: UiLanguage, ms: u64) -> String {
+    if ms < 60_000 {
+        return localized_ui_format(
+            language,
+            "duration.seconds".into(),
+            vec![(ms / 1000).to_string()],
+        );
+    }
+    duration_text(language, ms)
+}
+
+/// Whole seconds as hours, minutes and seconds, each only when not zero.
+fn clock_text(language: UiLanguage, seconds: u64) -> String {
     [
         (seconds / 3600, "duration.hours"),
         (seconds / 60 % 60, "duration.minutes"),
@@ -866,8 +901,8 @@ mod projection_tests {
     #[case(
         TurnStatus::Completed,
         Some(0),
-        "<1秒 作業しました",
-        "Worked for <1s · completed"
+        "1ミリ秒 作業しました",
+        "Worked for 1ms"
     )]
     #[case(
         TurnStatus::Failed,
@@ -879,15 +914,15 @@ mod projection_tests {
         TurnStatus::Interrupted,
         Some(3600000),
         "1時間 作業した後に中断しました",
-        "Worked for 1h · interrupted"
+        "You stopped after 1h"
     )]
     #[case(
         TurnStatus::Completed,
         Some(3723000),
         "1時間 2分 3秒 作業しました",
-        "Worked for 1h 2m 3s · completed"
+        "Worked for 1h 2m 3s"
     )]
-    #[case(TurnStatus::Completed, None, "作業しました", "Work completed")]
+    #[case(TurnStatus::Completed, None, "作業しました", "Worked")]
     #[case(TurnStatus::Failed, None, "作業に失敗しました", "Work failed")]
     #[case(
         TurnStatus::Interrupted,
@@ -926,11 +961,11 @@ mod projection_tests {
         for (language, expected) in [
             (
                 UiLanguage::Japanese,
-                "<1秒 作業した後に失敗しました・コマンドを実行しました、ファイルを変更しました、ツールを使用しました",
+                "1ミリ秒 作業した後に失敗しました・コマンドを実行しました、ファイルを変更しました、ツールを使用しました",
             ),
             (
                 UiLanguage::English,
-                "Worked for <1s · failed · Ran a command, Changed files, Used a tool",
+                "Worked for 1ms · failed · Ran a command, Changed files, Used a tool",
             ),
         ] {
             let segment = project_items(language, &turn, kinds.len(), |index| ItemMetadata {

@@ -152,6 +152,24 @@ final class MessageTests: XCTestCase {
             XCTAssertEqual(actions.last?["id"] as? String, "code")
         }
 
+        @MainActor func testALineIsT3CodesLineTallWhateverItsScripts() throws {
+            // A bracket falls back to a font whose leading would grow its line.
+            for (role, text) in [("assistant", "シミュレータで完了しました。"), ("user", "[groups] 完了した作業を確認します")] {
+                let run = MessageRun(text: text, strong: false, emphasis: false, strikethrough: false, code: false,
+                                     link: nil, darkColor: nil, lightColor: nil)
+                let block = MessageParagraph(header: nil, marker: nil, code: false, quoted: false,
+                                             depth: 0, alignment: "left", runs: [run])
+                let view = MessageTextContainer()
+                var heights: [CGFloat] = []
+                view.send = { if let height = $0["measuredHeight"] as? CGFloat { heights.append(height) } }
+                view.update(MessageDocument(blocks: [block], secondary: false, role: role, target: "t",
+                                            sideChat: false, maxWidth: 600,
+                                            menu: MessageMenuTitles(quote: "", sideChat: "")))
+                // T3 Code's `text-sm leading-relaxed`: 22.75 points.
+                XCTAssertEqual(heights.last, 23, role)
+            }
+        }
+
         @MainActor func testRecycledTextReportsOnlyTheHeightAtItsNewColumnsWidth() throws {
             let run = MessageRun(text: String(repeating: "A long response retains its reading position. ", count: 80),
                                  strong: false, emphasis: false, strikethrough: false, code: false,
@@ -190,7 +208,8 @@ final class MessageTests: XCTestCase {
         XCTAssertEqual(link?.absoluteString, "file:///fixture/%E6%97%A5%E6%9C%AC%E8%AA%9E.txt")
         #if os(macOS)
             let font = try XCTUnwrap(attributed.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
-            XCTAssertEqual(font.pointSize, 23)
+            // T3 Code's `h2`: 1.125rem.
+            XCTAssertEqual(font.pointSize, 18)
             XCTAssertTrue(NSFontManager.shared.traits(of: font).contains(.boldFontMask))
         #endif
     }

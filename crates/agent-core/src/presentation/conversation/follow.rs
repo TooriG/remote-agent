@@ -33,10 +33,16 @@ pub fn follows_end(following: bool, previous: Option<ScrollPosition>, now: Scrol
     if toward_start && now.content > now.viewport {
         return false;
     }
-    if now.content - now.offset - now.viewport <= FOLLOW_REARM_DISTANCE {
+    if !away_from_end(now) {
         return true;
     }
     following
+}
+
+/// Whether the reader is further from the end than the follow band, where
+/// T3 Code offers its scroll-to-bottom button.
+pub fn away_from_end(position: ScrollPosition) -> bool {
+    position.content - position.offset - position.viewport > FOLLOW_REARM_DISTANCE
 }
 
 #[cfg(test)]
@@ -81,6 +87,15 @@ mod tests {
     }
 
     #[test]
+    fn the_way_back_shows_only_beyond_the_follow_band() {
+        assert!(!away_from_end(at(1500., 2000.)));
+        assert!(!away_from_end(at(1460., 2000.)));
+        assert!(away_from_end(at(1459., 2000.)));
+        // Content that fits has no end to be away from.
+        assert!(!away_from_end(at(0., 300.)));
+    }
+
+    #[test]
     fn the_first_scroll_of_a_following_conversation_leaves_its_end() {
         // Nothing scrolled the list since it opened at its end.
         assert!(!follows_end(true, None, at(1300., 2000.)));
@@ -101,7 +116,10 @@ mod tests {
             let now = at(offset.min(content - 500.).max(0.), content);
             let gap = now.content - now.offset - now.viewport;
             let below = at(now.offset + delta, content);
-            if gap <= FOLLOW_REARM_DISTANCE {
+            // A following conversation was at its end: any scroll above it,
+            // even within the band, leaves it.
+            let left = following && now.offset < now.content - now.viewport - 0.5;
+            if gap <= FOLLOW_REARM_DISTANCE && !left {
                 proptest::prop_assert!(follows_end(following, None, now));
             } else {
                 // Away from the end, the reader left it.

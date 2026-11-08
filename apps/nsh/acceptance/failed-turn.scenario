@@ -1,15 +1,13 @@
-# A failed turn keeps its work folded and shows what failed, copyable.
-# iOS: testSimulatorKeepsFailedWorkCollapsedWithVisibleTerminalError
+# A failed turn keeps its work in view, as T3 Code's, and shows what failed,
+# copyable.
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
 type "AI に依頼する" "[failed] 失敗を確認します"
 press 送信
 expect "コンテキストの上限に達しました" 20000
 expect "context is full"
-expect_absent "./gradlew test"
+expect "./gradlew test"
 expect_absent "シミュレータで完了しました。"
 screenshot failed
-press "*作業しました"
-expect "./gradlew test"
 press エラーの詳細をコピー
 expect_clipboard "context is full"

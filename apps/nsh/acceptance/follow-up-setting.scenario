@@ -12,7 +12,7 @@ press 閉じる
 press このプロジェクトで新しいチャット
 type "AI に依頼する" "[groups] 設定どおりに送ります"
 press 送信
-expect "./gradlew test" 20000
+expect "最初の確認が終わりました。次のコマンドを確認します。" 20000
 type "AI に依頼する" "そのまま指示します"
 expect "追加の指示を送信"
 press 追加の指示を送信

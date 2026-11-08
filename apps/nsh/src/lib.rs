@@ -323,8 +323,15 @@ fn app_content(
     let hero = desktop_workspace::draft_hero;
     #[cfg(not(desktop))]
     let hero = view;
+    // T3 Code's chat canvas, the conversation beside the sidebar: its details
+    // card floats over it, as Bex's side panel stands beside the timeline.
+    #[cfg(desktop)]
+    let canvas = move || window().width.0 - if sidebar.get() { sidebar::WIDTH } else { 0.0 };
+    #[cfg(not(desktop))]
+    let canvas = move || window().width.0;
     let content = move || {
         let following = signal(true);
+        let timeline = conversation::Timeline::new(following);
         // A selected conversation still opening is not a new one.
         let welcome = computed(move || {
             is_desktop()
@@ -337,12 +344,13 @@ fn app_content(
             .min_w_0()
             .pb_keyboard()
             .style_when(move || welcome.get(), |s| s.justify_center())
-            .child(when(
-                move || !welcome.get(),
-                move || conversation::list(following),
-            ))
+            .child(when(move || !welcome.get(), move || timeline.list()))
             .child(when(move || welcome.get(), hero))
             .child(composer::composer(following))
+            .child(when(
+                move || !welcome.get(),
+                move || timeline.minimap(canvas),
+            ))
     };
     let notices = move || {
         view()

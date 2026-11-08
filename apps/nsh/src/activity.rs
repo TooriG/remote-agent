@@ -15,6 +15,29 @@ pub(crate) struct Item {
     pub turn: TurnId,
     /// Its turn's live row (`RenderedTurn::live_activity`), which shimmers.
     pub live: bool,
+    /// What its row reads (`TurnRow::Work`, `TurnRow::Live`).
+    pub label: String,
+}
+
+/// T3 Code's work log line: `icon` in its box, then the label.
+pub(crate) fn line(icon: impl IntoElement, label: impl IntoElement) -> View {
+    use crate::conversation::look;
+    view()
+        .flex_1()
+        .min_w_0()
+        .flex_row()
+        .items_center()
+        .gap(px(look::ICON_GAP))
+        .child(
+            view()
+                .w(px(look::ICON_BOX))
+                .h(px(look::ICON_BOX))
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .child(icon),
+        )
+        .child(label)
 }
 
 pub(crate) fn details(
@@ -89,35 +112,67 @@ pub(crate) fn details(
     let label = computed(move || {
         item.with(|item| {
             item.as_ref()
-                .map(|item| item.source.work_row_label(item.live))
+                .map(|item| (item.source.work_row_label(item.live), item.label.clone()))
         })
     });
     let heading = move || {
         label.with(|label| {
             label
                 .as_ref()
-                .map(|label| label.heading.clone())
+                .map(|(label, _)| label.heading.clone())
                 .unwrap_or_default()
         })
     };
     // As T3 Code's work log: reasoning reads as its trace on one line, and
-    // expanded as Thinking above the whole of it.
-    let preview = move || {
-        label
-            .with(|label| label.as_ref().and_then(|l| l.preview.clone()))
-            .filter(|_| !open())
+    // opened as Thought above the whole of it.
+    let reasoning = move || {
+        item.with(|item| {
+            item.as_ref()
+                .is_some_and(|item| item.source.data.kind == "reasoning")
+        })
     };
-    let summary = move || preview().unwrap_or_else(heading);
+    let summary = move || {
+        if reasoning() && open() {
+            heading()
+        } else {
+            label.with(|label| {
+                label
+                    .as_ref()
+                    .map(|(_, row)| row.clone())
+                    .unwrap_or_default()
+            })
+        }
+    };
     let accessible = move || {
-        SharedString::from(match preview() {
-            Some(preview) => format!("{}: {preview}", heading()),
-            None => heading(),
+        let summary = summary();
+        SharedString::from(if reasoning() && !open() {
+            format!("{}: {summary}", heading())
+        } else {
+            summary
         })
     };
     let live = move || item.with(|item| item.as_ref().is_some_and(|item| item.live));
+    // A reused row shows another tool's icon: it is made anew for each kind.
+    let icon = move || {
+        view().child(each(
+            move || {
+                vec![item.with(|item| {
+                    item.as_ref()
+                        .map(|item| item.source.data.kind.clone())
+                        .unwrap_or_default()
+                })]
+            },
+            |kind: &String| kind.clone(),
+            |kind, _| {
+                crate::ui::icon(
+                    crate::ui::Icon::work(&kind.get_untracked()),
+                    crate::conversation::look::ICON_SIZE,
+                )
+            },
+        ))
+    };
     view()
         .w_full()
-        .gap_1()
         // As T3 Code's work log: the tool's icon and a one-line summary.
         .child(
             nsh_base::button()
@@ -126,32 +181,29 @@ pub(crate) fn details(
                 ))
                 .flex_row()
                 .items_center()
-                .gap_3()
-                .h(px(24.0))
-                .text_color(crate::ui::colors::MUTED)
-                .hover(|s| s.text_color(crate::ui::colors::FOREGROUND))
+                .min_h(px(24.0))
+                .px(px(2.0))
+                .rounded(px(6.0))
+                .text_color(crate::conversation::look::MUTED)
                 .on_press(toggle)
-                .child(crate::ui::icon(
-                    item.with_untracked(|item| {
-                        crate::ui::Icon::work(
-                            item.as_ref()
-                                .map_or("", |item| item.source.data.kind.as_str()),
-                        )
-                    }),
-                    16.0,
-                ))
                 .child(when(live, move || {
                     // As T3's `live-tool-shine`, over the label alone.
-                    crate::shimmer::line(None, summary, crate::shimmer::Sweep::Shine, 14.0)
+                    crate::shimmer::line(Some(icon), summary, crate::shimmer::Sweep::Shine)
                 }))
                 .child(when(
                     move || !live(),
                     move || {
-                        text(summary)
-                            .flex_1()
-                            .min_w_0()
-                            .number_of_lines(1)
-                            .text_size(px(14.0))
+                        line(
+                            view()
+                                .text_color(crate::conversation::look::ICON)
+                                .child(icon()),
+                            text(summary)
+                                .flex_1()
+                                .min_w_0()
+                                .number_of_lines(1)
+                                .text_size(px(crate::conversation::look::TEXT))
+                                .line_height(px(crate::conversation::look::LINE)),
+                        )
                     },
                 )),
         )
@@ -204,33 +256,62 @@ pub(crate) fn details(
 }
 
 /// A live status line that is not a work row: T3 Code's Thinking row, with
-/// its brain icon, and setting up a worktree, which its body names. Both
-/// sweep as T3 Code's `ActivityShimmerOverlay`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// its brain icon, its retry of the provider, with a wrench, and setting up
+/// a worktree, which its body names.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Status {
     /// The turn works with nothing else live.
     Thinking,
+    /// The provider's stream dropped and is retried.
+    Retrying,
+    /// The turn waits for an answer: an approval (its body names what for)
+    /// or input.
+    Requested {
+        approval: bool,
+    },
     SettingUp,
 }
 
-/// A row keeps its status: it is made for the one it shows.
-pub(crate) fn status(status: Memo<Option<Status>>, body: impl Fn() -> String + 'static) -> View {
-    let thinking = status.get_untracked() == Some(Status::Thinking);
+/// A status line, as T3 Code's live activity row: thinking and setting up
+/// sweep as its `ActivityShimmerOverlay`, a retry or a request as its live
+/// tool's `live-tool-shine`.
+pub(crate) fn status(
+    status: Memo<Option<Status>>,
+    body: impl Fn() -> String + Copy + 'static,
+) -> View {
+    use crate::{shimmer::Sweep, ui::Icon};
+    // A reused cell shows another status: its line is made anew.
     view()
         .w_full()
-        .h(px(24.0))
+        .min_h(px(24.0))
+        .px(px(2.0))
         .flex_row()
         .items_center()
-        .child(crate::shimmer::line(
-            thinking.then(|| crate::ui::Icon::work("reasoning")),
-            move || {
-                if thinking {
-                    tr("思考中").to_owned()
-                } else {
-                    body()
-                }
+        .child(each(
+            move || status.get().into_iter().collect::<Vec<_>>(),
+            |status: &Status| *status,
+            move |status, _| {
+                let status = status.get_untracked();
+                let (icon, sweep) = match status {
+                    Status::Thinking => (Some(Icon::work("reasoning")), Sweep::Focus),
+                    Status::Retrying => (Some(Icon::WRENCH), Sweep::Shine),
+                    Status::Requested { approval: true } => {
+                        (Some(Icon::work("command")), Sweep::Shine)
+                    }
+                    Status::Requested { approval: false } => (Some(Icon::QUESTION), Sweep::Shine),
+                    Status::SettingUp => (None, Sweep::Focus),
+                };
+                crate::shimmer::line(
+                    icon.map(|icon| {
+                        move || crate::ui::icon(icon, crate::conversation::look::ICON_SIZE)
+                    }),
+                    move || match status {
+                        Status::Thinking => tr("思考中").to_owned(),
+
+                        _ => body(),
+                    },
+                    sweep,
+                )
             },
-            crate::shimmer::Sweep::Focus,
-            14.0,
         ))
 }

@@ -1,4 +1,5 @@
-# Work of a finished turn folds into one row and expands on press.
+# Work of a finished turn folds into one row; opened, it reads as T3 Code's:
+# commentary between groups of tools, a group opening on press.
 # iOS: testSimulatorReopensCompletedHistoryCollapsed, testSimulatorGroupsLiveCommandsBetweenCommentaryAndExpandsOnTap
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
@@ -9,6 +10,8 @@ expect "作業しました"
 expect_absent "./gradlew test"
 screenshot folded
 press "*作業しました"
-expect "./gradlew test"
 expect "シミュレータで確認しています…"
+expect_absent "./gradlew test"
+press "1 件のコマンドを実行しました"
+expect "./gradlew test"
 screenshot expanded

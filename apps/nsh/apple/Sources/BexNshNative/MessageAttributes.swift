@@ -91,30 +91,28 @@ struct MessageMenuTitles: Decodable, Equatable {
 }
 
 @MainActor enum MessageAttributes {
-    static func text(_ blocks: [MessageParagraph], secondary: Bool, dark: Bool) -> NSAttributedString {
+    /// `answer`: an assistant's text, which T3 Code draws at 80% of the
+    /// foreground on the Mac.
+    static func text(_ blocks: [MessageParagraph], secondary: Bool, dark: Bool,
+                     answer: Bool = false) -> NSAttributedString {
         let result = NSMutableAttributedString(string: "")
         for (index, block) in blocks.enumerated() {
             let start = result.length
-            #if os(macOS)
-                let base: CGFloat = 14
-            #else
-                let base: CGFloat = block.code ? 15 : 18
-            #endif
-            let size = block.header.map { [26.0, 23, 21, 19, 18, 18][min(5, max(0, $0 - 1))] } ?? base
+            let size = Self.size(block)
             if let marker = block.marker {
                 result.append(NSAttributedString(string: marker + " ", attributes: [
                     .font: font(size: size, mono: block.code, bold: false, italic: false),
-                    .foregroundColor: color(secondary: secondary)
+                    .foregroundColor: color(secondary: secondary, answer: answer)
                 ]))
             }
             for (position, run) in block.runs.enumerated() {
                 var attributes = attributes(
                     run, size: size, code: block.code, heading: block.header != nil,
-                    secondary: secondary, dark: dark
+                    secondary: secondary, answer: answer, dark: dark
                 )
                 if caption(block.runs, at: position) {
                     // A chip's authored caption reads as text, and opens as the chip does.
-                    attributes[.foregroundColor] = color(secondary: secondary)
+                    attributes[.foregroundColor] = color(secondary: secondary, answer: answer)
                     attributes[.underlineStyle] = nil
                 }
                 if let file = run.file, let link = run.link {
@@ -132,13 +130,7 @@ struct MessageMenuTitles: Decodable, Equatable {
                 }
                 result.append(NSAttributedString(string: run.text, attributes: attributes))
             }
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.alignment = block.alignment == "center" ? .center : block.alignment == "right" ? .right : .left
-            paragraph.lineSpacing = block.code ? 0 : 5
-            paragraph.paragraphSpacing = index + 1 == blocks.count ? 0 : 14
-            let indent = CGFloat(max(0, Int(block.depth) - 1)) * 22 + (block.quoted ? 12 : 0)
-            paragraph.firstLineHeadIndent = indent
-            paragraph.headIndent = indent + (block.depth > 0 ? 22 : 0)
+            let paragraph = style(block, size: size, at: index, of: blocks)
             if index + 1 < blocks.count {
                 result.append(NSAttributedString(string: "\n", attributes: [
                     .font: font(size: size, mono: block.code, bold: false, italic: false)
@@ -149,6 +141,62 @@ struct MessageMenuTitles: Decodable, Equatable {
         }
         return result
     }
+
+    /// The paragraph style of the block at `index`.
+    private static func style(_ block: MessageParagraph, size: CGFloat, at index: Int,
+                              of blocks: [MessageParagraph]) -> NSParagraphStyle {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = block.alignment == "center" ? .center : block.alignment == "right" ? .right : .left
+        let last = index + 1 == blocks.count
+        #if os(macOS)
+            // T3 Code's lines: `leading-relaxed` (1.625) text, 1.3 headings
+            // and `leading-snug` (1.375) code, the extra half above and half
+            // below the glyphs; blocks 0.65rem apart, list items 0.25rem, a
+            // heading 1.25rem below what precedes it (margins collapse).
+            // TextKit puts a line's extra height above its glyphs; the text
+            // view moves them up by half of it (`halfLeading`).
+            paragraph.minimumLineHeight = lineHeight(block, size: size)
+            paragraph.maximumLineHeight = lineHeight(block, size: size)
+            let item = block.marker != nil && !last && blocks[index + 1].marker != nil
+            paragraph.paragraphSpacing = last || block.code ? 0 : item ? 4 : 10.4
+            paragraph.paragraphSpacingBefore = block.header != nil && index > 0 ? 9.6 : 0
+        #else
+            paragraph.lineSpacing = block.code ? 0 : 5
+            paragraph.paragraphSpacing = last ? 0 : 14
+        #endif
+        let indent = CGFloat(max(0, Int(block.depth) - 1)) * 22 + (block.quoted ? 12 : 0)
+        paragraph.firstLineHeadIndent = indent
+        paragraph.headIndent = indent + (block.depth > 0 ? 22 : 0)
+        return paragraph
+    }
+
+    /// A block's text size: on the Mac T3 Code's `.chat-markdown` (14 pt
+    /// text, 13 pt code, headings from 20 pt).
+    private static func size(_ block: MessageParagraph) -> CGFloat {
+        #if os(macOS)
+            let (base, headings): (CGFloat, [CGFloat]) = (block.code ? 13 : 14, [20, 18, 16, 14, 14, 14])
+        #else
+            let (base, headings): (CGFloat, [CGFloat]) = (block.code ? 15 : 18, [26, 23, 21, 19, 18, 18])
+        #endif
+        return block.header.map { headings[min(5, max(0, $0 - 1))] } ?? base
+    }
+
+    #if os(macOS)
+        /// A block's line as T3 Code's: `leading-relaxed` text, 1.3
+        /// headings, `leading-snug` code.
+        private static func lineHeight(_ block: MessageParagraph, size: CGFloat) -> CGFloat {
+            size * (block.code ? 1.375 : block.header == nil ? 1.625 : 1.3)
+        }
+
+        /// Half the extra height of the first block's lines: CSS centres a
+        /// line's glyphs in it where TextKit puts them at its bottom.
+        static func halfLeading(_ blocks: [MessageParagraph]) -> CGFloat {
+            guard let block = blocks.first else { return 0 }
+            let size = Self.size(block)
+            let font = font(size: size, mono: block.code, bold: block.header != nil, italic: false)
+            return max(0, (lineHeight(block, size: size) - (font.ascender - font.descender)) / 2)
+        }
+    #endif
 
     /// Whether the run at `position` is part of the caption a chip's author
     /// wrote before it: a link to the same target, up to the chip.
@@ -196,19 +244,20 @@ struct MessageMenuTitles: Decodable, Equatable {
                      blue: CGFloat(rgb & 255) / 255, alpha: 1)
     }
 
-    private static func color(secondary: Bool) -> MessageColor {
+    private static func color(secondary: Bool, answer: Bool = false) -> MessageColor {
         #if os(macOS)
-            secondary ? .secondaryLabelColor : .labelColor
+            // T3 Code's answer: the foreground at 80%.
+            secondary ? .secondaryLabelColor : answer ? NSColor(white: 0.74, alpha: 1) : .labelColor
         #else
             secondary ? .secondaryLabel : .label
         #endif
     }
 
     private static func attributes(_ run: MessageRun, size: CGFloat, code: Bool, heading: Bool,
-                                   secondary: Bool, dark: Bool) -> [NSAttributedString.Key: Any] {
+                                   secondary: Bool, answer: Bool, dark: Bool) -> [NSAttributedString.Key: Any] {
         var result: [NSAttributedString.Key: Any] = [
             .font: font(size: size, mono: code || run.code, bold: heading || run.strong, italic: run.emphasis),
-            .foregroundColor: color(secondary: secondary)
+            .foregroundColor: color(secondary: secondary, answer: answer)
         ]
         if let color = dark ? run.darkColor : run.lightColor {
             result[.foregroundColor] = rgb(color)

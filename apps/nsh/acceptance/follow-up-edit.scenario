@@ -5,7 +5,7 @@ expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
 type "AI に依頼する" "[groups] キューを編集します"
 press 送信
-expect "./gradlew test" 20000
+expect "最初の確認が終わりました。次のコマンドを確認します。" 20000
 type "AI に依頼する" "最初の文面"
 press メッセージをキューに追加
 type "AI に依頼する" "取り消す文面"

@@ -12,7 +12,7 @@
 //! window is on screen, focused or not. It stops where it is, and never moves
 //! under Reduce Motion, where the line reads plainly. A step that leaves
 //! every glyph where it was changes nothing.
-use crate::ui::colors;
+use crate::conversation::look;
 use nsh_core::{platform::Lifecycle, prelude::*};
 use std::time::Duration;
 
@@ -31,9 +31,8 @@ const PERIOD: Duration = Duration::from_millis(2200);
 /// `4.5rem`.
 const BAND: f32 = 72.0;
 const SLICES: usize = 8;
-/// A line's icon and its gap to the label (`gap_3`).
-const ICON: f32 = 16.0;
-const GAP: f32 = 12.0;
+/// Where a line's label starts: after T3 Code's work log icon box and gap.
+const LEAD: f32 = look::ICON_BOX + look::ICON_GAP;
 
 impl Sweep {
     /// How much of the foreground color the band gives at `x` points into it.
@@ -105,9 +104,8 @@ fn centers(label: &str, size: f32) -> (Vec<f32>, f32) {
     (centers, x)
 }
 
-/// The muted color with `opacity` of the foreground over it.
-fn blend(opacity: f32) -> Rgba {
-    let (from, to) = (colors::MUTED, colors::FOREGROUND);
+/// `from` with `opacity` of `to` over it.
+fn blend(from: Rgba, to: Rgba, opacity: f32) -> Rgba {
     let mix = |a: f32, b: f32| a + (b - a) * opacity;
     Rgba {
         r: mix(from.r, to.r),
@@ -117,17 +115,17 @@ fn blend(opacity: f32) -> Rgba {
     }
 }
 
-/// `label` on one line in `size`-point text after `icon`, swept by `sweep`.
-pub(crate) fn line(
-    icon: Option<crate::ui::Icon>,
+/// `label` on one line of T3 Code's work log after `icon`, swept by `sweep`:
+/// the muted label and icon take the foreground under the band.
+pub(crate) fn line<I: IntoElement>(
+    icon: Option<impl Fn() -> I + 'static>,
     label: impl Fn() -> String + 'static,
     sweep: Sweep,
-    size: f32,
 ) -> View {
     let step = signal(0_u32);
     let width = signal(0_f32);
     let label = computed(label);
-    let centers = computed(move || label.with(|label| centers(label, size)));
+    let centers = computed(move || label.with(|label| centers(label, look::TEXT)));
     let moving = computed(move || lifecycle() != Lifecycle::Background && !reduce_motion());
     effect(move || {
         if moving.get() {
@@ -139,7 +137,7 @@ pub(crate) fn line(
         }
     });
     // Positions are the line's own: the icon first, the label after it.
-    let lead = if icon.is_some() { ICON + GAP } else { 0.0 };
+    let lead = if icon.is_some() { LEAD } else { 0.0 };
     let left = computed(move || {
         if reduce_motion() {
             // Everything is before the band.
@@ -156,31 +154,52 @@ pub(crate) fn line(
     let slice = BAND / SLICES as f32;
     let spans = (0..SLICES + 2).fold(text(""), |line, part| {
         let color = match part {
-            0 => colors::MUTED,
-            part if part == SLICES + 1 => colors::MUTED,
-            part => blend(sweep.opacity((part as f32 - 0.5) * slice)),
+            0 => look::MUTED,
+            part if part == SLICES + 1 => look::MUTED,
+            part => blend(
+                look::MUTED,
+                look::FOREGROUND,
+                sweep.opacity((part as f32 - 0.5) * slice),
+            ),
         };
         line.child(
             text(move || SharedString::from(split.with(|split| split[part].clone())))
                 .text_color(color),
         )
     });
-    let line = view().flex_1().min_w_0().flex_row().items_center().gap_3();
+    let label = view()
+        .flex_1()
+        .min_w_0()
+        .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
+        .child(
+            spans
+                .number_of_lines(1)
+                .text_size(px(look::TEXT))
+                .line_height(px(look::LINE)),
+        );
     match icon {
-        Some(icon) => line.child(
+        Some(icon) => crate::activity::line(
             view()
-                .text_color(move || blend(sweep.opacity(ICON / 2.0 - left.get())))
-                .child(crate::ui::icon(icon, ICON)),
+                // T3 Code's `live-tool-shine` sweeps the label alone; its
+                // focus overlay takes the icon too.
+                .text_color(move || match sweep {
+                    Sweep::Shine => look::ICON,
+                    Sweep::Focus => blend(
+                        look::ICON,
+                        look::FOREGROUND,
+                        sweep.opacity(look::ICON_BOX / 2.0 - left.get()),
+                    ),
+                })
+                .child(icon()),
+            label,
         ),
-        None => line,
-    }
-    .child(
-        view()
+        None => view()
             .flex_1()
             .min_w_0()
-            .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
-            .child(spans.number_of_lines(1).text_size(px(size))),
-    )
+            .flex_row()
+            .items_center()
+            .child(label),
+    }
 }
 
 #[cfg(test)]
@@ -245,7 +264,7 @@ mod tests {
 
     #[test]
     fn blending_runs_from_the_muted_color_to_the_foreground() {
-        assert_eq!(blend(0.0), colors::MUTED);
-        assert_eq!(blend(1.0), colors::FOREGROUND);
+        assert_eq!(blend(look::MUTED, look::FOREGROUND, 0.0), look::MUTED);
+        assert_eq!(blend(look::MUTED, look::FOREGROUND, 1.0), look::FOREGROUND);
     }
 }

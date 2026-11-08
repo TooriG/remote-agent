@@ -472,7 +472,7 @@ fn language_changes_replace_localized_content_and_reject_old_projection_context(
                     Some(activity.activity_summary.as_str()),
                 _ => None,
             }),
-        Some("Worked for 1s · completed")
+        Some("Worked for 1.0s")
     );
     let unchanged = Presentation::project(english.snapshot.clone(), "", Some(&english)).unwrap();
     assert!(Arc::ptr_eq(

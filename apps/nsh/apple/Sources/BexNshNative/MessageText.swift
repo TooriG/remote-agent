@@ -46,6 +46,16 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         private var reported = false
         private var geometryObservers: [NSKeyValueObservation] = []
         private var lastVisibleRect: NSRect = .zero
+        /// How far the glyphs move up to sit in their lines as CSS centres
+        /// them (`MessageAttributes.halfLeading`).
+        var halfLeading: CGFloat = 0 {
+            didSet { if halfLeading != oldValue { needsDisplay = true } }
+        }
+
+        override var textContainerOrigin: NSPoint {
+            let origin = super.textContainerOrigin
+            return NSPoint(x: origin.x, y: origin.y - halfLeading)
+        }
 
         func watchScrollingGeometry() {
             geometryObservers.removeAll()
@@ -163,6 +173,9 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let container = NSTextContainer(size: .zero)
             storage.addLayoutManager(manager)
             manager.addTextContainer(container)
+            // Lines are as tall as T3 Code's (`MessageAttributes`): a
+            // fallback font's leading would grow a line holding its glyph.
+            manager.usesFontLeading = false
             super.init(frame: .zero, textContainer: container)
             wantsLayer = true
             isEditable = false
@@ -374,7 +387,8 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let document = text.document
             let content = MessageAttributes.text(document.blocks, secondary: document.secondary,
                                                  dark: effectiveAppearance
-                                                     .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+                                                     .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
+                                                 answer: document.role == "assistant")
             let range = text.selectedRange()
             let keep = range.length > 0 && NSMaxRange(range) <= content.length && NSMaxRange(range) <= text.string.utf16
                 .count
@@ -384,6 +398,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             if RenderProbe.enabled { text.preparePaints(for: content.string) }
             #endif
             text.textStorage?.setAttributedString(content)
+            text.halfLeading = MessageAttributes.halfLeading(document.blocks)
             // The natural size comes from TextKit's own layout, whose glyphs the
             // wrapped layout below reuses, rather than a second typesetting pass.
             if let container = text.textContainer, let manager = text.layoutManager {

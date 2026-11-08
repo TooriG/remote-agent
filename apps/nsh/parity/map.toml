@@ -88,7 +88,7 @@ elements = ["composer", "user-bubble", "user-copy", "user-edit", "user-time"]
 name = "turn-expanded"
 screen = "Conversation"
 description = "The finished turn's work expanded down to its tool rows and commentary."
-nsh = ["send [groups] 展開した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000", "press \"Worked for*\"", "expect \"./gradlew test\""]
+nsh = ["send [groups] 展開した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000", "press \"Worked for*\"", "press \"Ran 1 command\"", "expect \"./gradlew test\""]
 t3 = [{ send = "[groups] 展開した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }, { click = "[data-timeline-row-kind=turn-fold] button" }, { click = "[data-timeline-row-kind=work-toggle] button" }, { waitText = "./gradlew test" }]
 column = "composer"
 elements = ["composer", "work-toggle", "work-group-toggle", "tool-row", "tool-row-icon", "commentary-text", "assistant-text", "scroll-to-bottom"]
@@ -136,7 +136,7 @@ description = "A command waiting for approval: the request above the composer."
 nsh = ["send [approval] 承認を確認します", "expect \"echo fixture\" 20000"]
 t3 = [{ send = "[approval] 承認を確認します" }, { waitText = "Command approval" }]
 column = "composer"
-elements = ["composer", "approval-panel", "approval-title", "approval-command", "approval-accept", "approval-decline", "working-header", "live-row"]
+elements = ["composer", "approval-panel", "approval-title", "approval-command", "approval-accept", "approval-decline", "working-header", "approval-live-row"]
 
 [[state]]
 name = "question"
@@ -145,13 +145,13 @@ description = "A question from the agent: its options above the composer."
 nsh = ["send [request] 質問を確認します", "expect \"このまま続けますか？\" 20000"]
 t3 = [{ send = "[request] 質問を確認します" }, { waitText = "このまま続けますか？" }]
 column = "composer"
-elements = ["composer", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-submit", "composer-placeholder", "working-header", "live-row"]
+elements = ["composer", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-submit", "composer-placeholder", "working-header", "question-live-row"]
 
 [[state]]
 name = "markdown-document"
 screen = "Conversation"
 description = "A Markdown answer: heading, emphasis, quote, lists, tasks, a code block and an image that cannot load."
-nsh = ["send [markdown-document] [immediate] 文書を確認します", "expect \"見出し\" 30000"]
+nsh = ["send [markdown-document] [immediate] 文書を確認します", "expect \"見出し\" 30000", "wait 1500"]
 t3 = [{ send = "[markdown-document] [immediate] 文書を確認します" }, { waitText = "見出し" }]
 column = "composer"
 elements = ["composer", "markdown-body", "markdown-code", "markdown-code-language", "markdown-code-copy", "markdown-image-error", "assistant-copy"]
@@ -160,7 +160,7 @@ elements = ["composer", "markdown-body", "markdown-code", "markdown-code-languag
 name = "markdown-table"
 screen = "Conversation"
 description = "A Markdown table in an answer."
-nsh = ["send [markdown-table] [immediate] 表を確認します", "expect \"構成\" 30000"]
+nsh = ["send [markdown-table] [immediate] 表を確認します", "expect \"構成\" 30000", "wait 1500"]
 t3 = [{ send = "[markdown-table] [immediate] 表を確認します" }, { waitText = "構成" }]
 column = "composer"
 elements = ["composer", "markdown-table", "markdown-table-header"]
@@ -178,7 +178,7 @@ elements = ["composer", "assistant-image"]
 name = "changed-files"
 screen = "Conversation"
 description = "A finished turn that edited files: how each client shows the changes."
-nsh = ["send [workspace-edit] 編集を確認します", "expect \"./gradlew test\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000"]
+nsh = ["send [workspace-edit] 編集を確認します", "wait 4000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000"]
 t3 = [{ send = "[workspace-edit] 編集を確認します" }, { waitText = "Working for" }, { waitMs = 3000 }, { release = true }, { waitText = "シミュレータで完了しました。" }]
 column = "composer"
 elements = ["composer", "assistant-text", "changed-files-card", "changed-files-row"]
@@ -211,7 +211,8 @@ what = "Composer surface"
 kind = "box"
 group = "composer"
 t3 = "[data-chat-composer-surface]"
-nsh = { class = "NshInputPad", up = "background" }
+# The sidebar's search field is the window's first input pad.
+nsh = { class = "NshInputPad", nth = 1, up = "background" }
 
 [[element]]
 id = "composer-placeholder"
@@ -362,6 +363,9 @@ nsh = { text = "Toggle right panel" }
 id = "user-bubble"
 what = "User message bubble"
 kind = "box"
+# At the column's end, as T3 Code's: the sidebar keeps the GPUI client's width,
+# so the columns differ in width.
+from_end = true
 t3 = "[data-message-role=user] .bg-message"
 nsh = { text = "message.user-text", up = "background" }
 
@@ -369,6 +373,7 @@ nsh = { text = "message.user-text", up = "background" }
 id = "user-text"
 what = "User message text"
 kind = "text"
+from_end = true
 t3 = "[data-message-role=user] [data-user-message-body]"
 nsh = { text = "message.user-text" }
 
@@ -376,6 +381,7 @@ nsh = { text = "message.user-text" }
 id = "user-copy"
 what = "User message: copy"
 kind = "icon"
+from_end = true
 t3 = "[data-message-role=user] button[aria-label='Copy message']"
 nsh = { text = "Copy message" }
 
@@ -383,6 +389,7 @@ nsh = { text = "Copy message" }
 id = "user-edit"
 what = "User message: edit"
 kind = "icon"
+from_end = true
 t3 = "[data-message-role=user] button[aria-label='Edit from here']"
 nsh = { text = "Edit in composer" }
 
@@ -390,6 +397,7 @@ nsh = { text = "Edit in composer" }
 id = "user-time"
 what = "User message time"
 kind = "text"
+from_end = true
 t3 = "[data-message-role=user] p.tabular-nums"
 nsh = { contains = ":", role = "AXStaticText" }
 
@@ -411,7 +419,8 @@ nsh = { contains = "Ran ", role = "AXStaticText" }
 id = "assistant-text"
 what = "Answer text"
 kind = "text"
-t3 = "[data-message-role=assistant] .chat-markdown"
+# The answer, which carries its actions below (`pb-4`), not commentary.
+t3 = "[data-timeline-row-kind=message][data-message-role=assistant].pb-4 .chat-markdown"
 nsh = { text = "シミュレータで完了しました。" }
 
 [[element]]
@@ -446,6 +455,7 @@ nsh = { contains = "Working for" }
 id = "thinking-row"
 what = "Thinking row"
 kind = "text"
+group = "live"
 t3 = "[data-timeline-row-kind=thinking] .truncate"
 nsh = { contains = "Thinking" }
 
@@ -453,29 +463,46 @@ nsh = { contains = "Thinking" }
 id = "live-row"
 what = "Live activity row (running tool or request)"
 kind = "text"
+group = "live"
 t3 = "[data-timeline-row-kind=work-live] .truncate"
-nsh = { contains = "Working for", role = "AXStaticText" }
+nsh = { contains = "Running", role = "AXStaticText" }
+
+[[element]]
+id = "approval-live-row"
+what = "Live activity row: the approval it waits for"
+kind = "text"
+group = "live"
+t3 = "[data-timeline-row-kind=work-live] .truncate"
+nsh = { text = "結合テストの承認確認", role = "AXStaticText" }
+
+[[element]]
+id = "question-live-row"
+what = "Live activity row: input requested"
+kind = "text"
+group = "live"
+t3 = "[data-timeline-row-kind=work-live] .truncate"
+nsh = { text = "Input requested", role = "AXStaticText" }
 
 [[element]]
 id = "live-row-icon"
 what = "Live activity row: tool icon"
 kind = "icon"
 t3 = "[data-timeline-row-kind=work-live] .size-4"
-nsh = {}
+nsh = { contains = "Running", role = "AXButton", down = [0, 0, 0] }
 
 [[element]]
 id = "live-commentary"
 what = "Commentary while the turn runs"
 kind = "text"
 t3 = "[data-message-role=assistant] .chat-markdown"
-nsh = { text = "最初の確認が終わりました。次のコマンドを確認します。" }
+nsh = { text = "シミュレータで確認しています…" }
 
 [[element]]
 id = "live-done-group"
 what = "Finished commands while the turn runs (Ran …)"
 kind = "text"
 t3 = "[data-timeline-row-kind=work-toggle] .truncate"
-nsh = { contains = "Ran a command" }
+nsh = { contains = "Ran ", role = "AXStaticText" }
 
 [[element]]
 id = "tool-row"
@@ -489,7 +516,7 @@ id = "tool-row-icon"
 what = "Tool row icon"
 kind = "icon"
 t3 = "[data-timeline-row-kind=work] [aria-label='./gradlew test'] .size-4"
-nsh = { text = "./gradlew test", role = "AXButton" }
+nsh = { text = "./gradlew test", role = "AXButton", down = [0, 0, 0] }
 
 [[element]]
 id = "web-search-row"
@@ -509,15 +536,15 @@ nsh = { contains = "確認計画" }
 id = "commentary-text"
 what = "Commentary in expanded work"
 kind = "text"
-t3 = "[data-timeline-row-kind=work] .chat-markdown"
+t3 = "[data-message-role=assistant] .chat-markdown"
 nsh = { text = "シミュレータで確認しています…" }
 
 [[element]]
 id = "scroll-to-bottom"
 what = "Scroll to the latest message"
 kind = "icon"
-t3 = "button[aria-label*='bottom' i], button[aria-label*='latest' i]"
-nsh = { text = "Go to latest message", up = 1 }
+t3 = "button[aria-label='Scroll to end']"
+nsh = { text = "Scroll to end", role = "AXButton" }
 
 [[element]]
 id = "error-banner"
@@ -530,7 +557,7 @@ nsh = {}
 id = "error-title"
 what = "Turn error: title"
 kind = "text"
-t3 = "[data-timeline-row-kind=work] .text-destructive"
+t3 = "[data-timeline-row-kind=work] span.font-medium.text-destructive"
 nsh = { text = "Context limit reached" }
 
 [[element]]
@@ -558,8 +585,10 @@ nsh = { contains = "Run interrupted" }
 id = "retry-notice"
 what = "Retrying stream notice"
 kind = "text"
+group = "live"
 t3 = "[data-timeline-row-kind=work-live] .truncate"
-nsh = { contains = "Retrying" }
+# Bex names the retry by its error (the server is busy), T3 Code as a retry.
+nsh = { contains = "Reconnecting" }
 
 [[element]]
 id = "approval-panel"
@@ -644,7 +673,7 @@ nsh = { text = "回答を送信", class = "NSButton" }
 id = "markdown-body"
 what = "Markdown answer body (NSH draws it as one text view)"
 kind = "text"
-t3 = "[data-message-role=assistant] .chat-markdown"
+t3 = "[data-timeline-row-kind=message][data-message-role=assistant].pb-4 .chat-markdown"
 nsh = { contains = "見出し", role = "AXTextArea" }
 
 [[element]]
@@ -680,7 +709,7 @@ id = "markdown-table"
 what = "Markdown table"
 kind = "box"
 t3 = "[data-message-role=assistant] .chat-markdown table"
-nsh = { contains = "構成", up = "background" }
+nsh = { text = "構成", role = "AXTextArea", up = 8 }
 
 [[element]]
 id = "markdown-table-header"
@@ -694,12 +723,14 @@ id = "assistant-image"
 what = "Image in an answer"
 kind = "box"
 t3 = "[data-message-role=assistant] img"
+# The answer's first image, from the Host, after the user's attachment.
 nsh = { text = "Enlarge image", nth = 1 }
 
 [[element]]
 id = "changed-files-card"
 what = "Changed files summary"
 kind = "box"
+group = "bex-only"
 t3 = "[data-timeline-row-kind=message] [data-changed-files], [data-timeline-row-kind=assistant-meta]"
 nsh = { text = "Show changes", up = "background" }
 
@@ -707,6 +738,7 @@ nsh = { text = "Show changes", up = "background" }
 id = "changed-files-row"
 what = "Changed file row"
 kind = "text"
+group = "bex-only"
 t3 = "[data-timeline-row-kind=assistant-meta] button"
 nsh = { text = "hello.txt", role = "AXStaticText" }
 
@@ -715,14 +747,14 @@ id = "minimap"
 what = "Timeline minimap"
 kind = "box"
 t3 = "[data-testid=timeline-minimap]"
-nsh = {}
+nsh = { contains = "Go to message", role = "AXButton", up = 3 }
 
 [[element]]
 id = "minimap-strip"
 what = "Minimap strip (first turn)"
 kind = "box"
 t3 = "[data-minimap-strip]"
-nsh = {}
+nsh = { contains = "Go to message", role = "AXButton", down = [0] }
 
 [[element]]
 id = "timeline-gutter-text"
@@ -809,3 +841,23 @@ group = "composer"
 reason = "composer keeps Bex's own design"
 approved = "2026-11-08"
 by = "the user"
+
+# The live rows' shimmer: NSH sweeps the label by recolouring its spans on a
+# timer (`apps/nsh/src/shimmer.rs`), which the capture cannot list as a Core
+# Animation; where the band is when each side is captured decides the
+# strongest colour measured.
+[[approved]]
+group = "live"
+metrics = ["animation", "text or glyph colour"]
+reason = "a timer-driven shimmer: not a layer animation, and its colour depends on the band's phase at capture"
+approved = "2026-11-09"
+by = "pending the user's confirmation"
+
+# Bex-only: T3 Code shows a turn's changed files only from its checkpoints,
+# which the fixture project does not make; Bex keeps its card.
+[[approved]]
+group = "bex-only"
+metrics = ["present"]
+reason = "Bex's changed-files card, kept by the user's decision"
+approved = "2026-11-09"
+by = "pending the user's confirmation"

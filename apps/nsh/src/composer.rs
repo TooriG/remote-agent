@@ -1060,8 +1060,7 @@ fn attachment(
                     connection,
                     preview,
                     move || file.with(|file| file.path.clone()),
-                    120.0,
-                    120.0,
+                    crate::media::ImageSize::Box(120.0, 120.0),
                 )
             },
         ))

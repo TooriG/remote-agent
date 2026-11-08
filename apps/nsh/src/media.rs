@@ -502,8 +502,7 @@ fn gallery_thumbnails(preview: Preview, sources: Memo<Vec<String>>) -> impl Elem
                     .child(loaded_image(
                         connection.client,
                         computed(move || (host.clone(), cwd.clone(), source.clone())),
-                        64.0,
-                        64.0,
+                        ImageSize::Box(64.0, 64.0),
                         tr_format("生成画像 {0}", [&(index + 1)]),
                         move |file| preview.select(selected.clone(), file),
                         false,
@@ -600,14 +599,23 @@ pub(crate) async fn load_image(
     receive(transfer).await
 }
 
+/// How large an image shows.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum ImageSize {
+    /// Fitted in a box of these points.
+    Box(f32, f32),
+    /// As T3 Code's answer images: a point per pixel, at most 30rem tall and
+    /// as wide as there is room, its corners rounded.
+    Natural,
+}
+
 /// A conversation's or the composer's image, which opens in the viewer and,
 /// on the desktop, offers to save it from its menu.
 pub(crate) fn image_view(
     connection: Connection,
     preview: Preview,
     source: impl Fn() -> String + 'static,
-    width: f32,
-    height: f32,
+    size: ImageSize,
 ) -> impl Element {
     let source = computed(source);
     let key = computed(move || {
@@ -622,8 +630,7 @@ pub(crate) fn image_view(
     loaded_image(
         connection.client,
         key,
-        width,
-        height,
+        size,
         tr("画像を拡大"),
         move |file| {
             #[cfg(desktop)]
@@ -640,14 +647,24 @@ pub(crate) fn image_view(
 fn loaded_image(
     client: Stored<Arc<Client>>,
     key: Memo<(String, String, String)>,
-    width: f32,
-    height: f32,
+    size: ImageSize,
     label: impl Into<SharedString>,
     press: impl Fn(Shared<LocalFile>) + 'static,
     menu: bool,
 ) -> View {
     let label = label.into();
     let decode_error = signal(None::<String>);
+    // Its pixels once it loaded, and the points it shows in.
+    let pixels = signal(None::<(f32, f32)>);
+    let natural = size == ImageSize::Natural;
+    let shown = move || match size {
+        ImageSize::Box(width, height) => (width, height),
+        // `max-height: 30rem`; until it loads, T3 Code's 16:9 slot.
+        ImageSize::Natural => pixels.get().map_or((480.0, 270.0), |(width, height)| {
+            let scale = (480.0 / height).min(1.0);
+            (width * scale, height * scale)
+        }),
+    };
     let loaded = resource(
         move || Some(key.get()),
         move |(host, cwd, source), _| load_image(client.get(), host, cwd, source),
@@ -661,8 +678,8 @@ fn loaded_image(
     // TextView's image wrapper has intrinsic width; a percentage alone collapses it.
     // A failed image keeps only its message's height, not the image's.
     view()
-        .w(px(width))
-        .style_when(move || !failed(), |s| s.min_h(px(height)))
+        .w(move || px(shown().0))
+        .style_when(move || !failed(), move |s| s.min_h(move || px(shown().1)))
         .max_w(relative(1.0))
         .gap_2()
         .child(when(
@@ -676,8 +693,12 @@ fn loaded_image(
                     })
                 })
                 .w_full()
-                .h(px(height))
+                .h(move || px(shown().1))
                 .object_fit(ResizeMode::Contain)
+                .style_when(move || natural, |s| s.rounded(px(10.0)).overflow_hidden())
+                .on_load(move |loaded: &Size<DevicePixels>| {
+                    pixels.set(Some((loaded.width.0 as f32, loaded.height.0 as f32)))
+                })
                 .label(label.clone())
                 .role(AccessibilityRole::ImageButton)
                 .on_error(move |reason: &str| decode_error.set(Some(reason.into())))
@@ -705,15 +726,46 @@ fn loaded_image(
             || text(tr("画像を読み込み中…")),
         ))
         .child(when(failed, move || {
+            use crate::conversation::look;
             view()
                 .gap_2()
-                .child(text(move || {
-                    loaded
-                        .error()
-                        .or_else(|| decode_error.get())
-                        .map(localized)
-                        .unwrap_or_default()
-                }))
+                .items_start()
+                // In its slot, as T3 Code's media frame.
+                .style_when(move || natural, move |s| {
+                    s.w_full()
+                        .h(move || px(shown().1))
+                        .rounded(px(10.0))
+                        .bg(look::CODE)
+                        .items_center()
+                        .justify_center()
+                })
+                // As T3 Code's unavailable image: its warning and why, in a
+                // small muted chip.
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .px_2()
+                        .py_1()
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_color(look::RULE)
+                        .bg(look::CODE)
+                        .text_color(look::MUTED)
+                        .child(crate::ui::icon(crate::ui::Icon::WARNING, 14.0))
+                        .child(
+                            text(move || {
+                                loaded
+                                    .error()
+                                    .or_else(|| decode_error.get())
+                                    .map(localized)
+                                    .unwrap_or_default()
+                            })
+                            .text_size(px(12.0))
+                            .line_height(px(16.0)),
+                        ),
+                )
                 .child(view().flex_row().child(crate::ui::text_button(
                     tr("再試行"),
                     move || {
