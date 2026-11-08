@@ -2380,13 +2380,22 @@ async fn claude_forks_a_completed_turn_while_a_later_turn_runs() {
             .any(|item| item_text(item) == Some("Waiting for interruption"))
     );
 
-    // The source's turn kept running in its CLI: it takes the next input and
-    // answers, and that CLI stays retained for the turn after it.
+    // The source's turn kept running in its CLI: it takes the next input,
+    // steered in as the follow-up behavior's alternate, and answers, and that
+    // CLI stays retained for the turn after it.
     store
         .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
         .await
         .unwrap();
-    send(&store, "after fork", "running-fork-steer").await;
+    draft(&store, "after fork").await;
+    store
+        .dispatch(Intent::Submit {
+            thread_id: Some(id.clone()),
+            client_user_message_id: "running-fork-steer".into(),
+            alternate: true,
+        })
+        .await
+        .unwrap();
     let snapshot = completed(&store, &id, 2, "completed").await;
     assert!(
         snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1]
