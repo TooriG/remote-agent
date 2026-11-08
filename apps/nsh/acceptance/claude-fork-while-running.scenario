@@ -1,0 +1,21 @@
+# As in T3 Code, a Claude answer forks while a later turn is still answering:
+# the forked conversation opens with that answer and without the running turn.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+press "Fixture Model"
+press "Claude Code"
+press "Default (recommended)" after モデルを検索 20000
+expect_absent "モデルを検索"
+type "AI に依頼する" "分岐元の回答です"
+press 送信
+expect "reply 1: 分岐元の回答です" 30000
+type "AI に依頼する" "wait"
+press 送信
+expect "Waiting for interruption" 20000
+screenshot running
+press ここから会話を分岐
+expect "(fork)" 20000
+expect "reply 1: 分岐元の回答です"
+expect_absent "Waiting for interruption"
+expect_absent "ホストで操作に失敗しました"
+screenshot forked

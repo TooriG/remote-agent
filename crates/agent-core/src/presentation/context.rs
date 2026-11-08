@@ -112,6 +112,9 @@ impl ConversationContext {
                 .filter(|(key, _)| match key {
                     OperationKey::Fork {
                         session: target, ..
+                    }
+                    | OperationKey::TurnItems {
+                        session: target, ..
                     } => Some(target) == session,
                     OperationKey::Item { item } => Some(&item.thread_id) == session,
                     OperationKey::Request { id } => session
@@ -200,6 +203,15 @@ impl ConversationContext {
         self.operation_error(&OperationKey::Fork { session, turn })
             .cloned()
     }
+    /// Why the work a folded turn expands to could not be loaded.
+    pub fn turn_items_error(
+        &self,
+        turn: agent_protocol::ids::TurnId,
+    ) -> Option<super::error::ErrorText> {
+        let session = self.navigation.thread_id.clone()?;
+        self.operation_error(&OperationKey::TurnItems { session, turn })
+            .cloned()
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +262,10 @@ mod tests {
             session: selected.clone(),
             turn: "turn".into(),
         };
+        let turn_items = OperationKey::TurnItems {
+            session: selected.clone(),
+            turn: "turn".into(),
+        };
         let item = OperationKey::Item {
             item: ReadItem {
                 thread_id: selected,
@@ -260,7 +276,7 @@ mod tests {
         let request = OperationKey::Request {
             id: "request".into(),
         };
-        for key in [&fork, &item, &request] {
+        for key in [&fork, &turn_items, &item, &request] {
             Arc::make_mut(&mut snapshot.operations).insert(
                 key.clone(),
                 OperationState {
@@ -276,7 +292,7 @@ mod tests {
             "questions use the composer's field"
         );
         assert_eq!(initial.docked[0].id.as_str(), "request");
-        for key in [&fork, &item, &request] {
+        for key in [&fork, &turn_items, &item, &request] {
             assert!(initial.operation_running(key));
             assert!(initial.operation_error(key).is_none());
         }
@@ -287,6 +303,10 @@ mod tests {
 
         for key in [
             OperationKey::Fork {
+                session: other.clone(),
+                turn: "turn".into(),
+            },
+            OperationKey::TurnItems {
                 session: other.clone(),
                 turn: "turn".into(),
             },
@@ -317,7 +337,7 @@ mod tests {
             assert!(Arc::ptr_eq(&initial, &next));
             assert!(!next.operation_running(&key));
         }
-        for key in [&fork, &item, &request] {
+        for key in [&fork, &turn_items, &item, &request] {
             Arc::make_mut(&mut snapshot.operations)
                 .get_mut(key)
                 .unwrap()
@@ -327,7 +347,7 @@ mod tests {
             &initial,
             &ConversationContext::project(&snapshot, snapshot.panes.primary(), "", Some(&initial)),
         ));
-        for key in [&fork, &item, &request] {
+        for key in [&fork, &turn_items, &item, &request] {
             Arc::make_mut(&mut snapshot.operations)
                 .get_mut(key)
                 .unwrap()
@@ -337,7 +357,7 @@ mod tests {
         }
         let failed =
             ConversationContext::project(&snapshot, snapshot.panes.primary(), "", Some(&initial));
-        for key in [&fork, &item, &request] {
+        for key in [&fork, &turn_items, &item, &request] {
             assert!(!failed.operation_running(key));
             assert_eq!(
                 failed.operation_error(key),
@@ -345,12 +365,14 @@ mod tests {
             );
         }
         assert!(failed.fork_error("turn".into()).is_some());
+        assert!(failed.turn_items_error("turn".into()).is_some());
         Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id = None;
         let empty =
             ConversationContext::project(&snapshot, snapshot.panes.primary(), "", Some(&failed));
         assert!(empty.fork_phase("turn".into()).is_none());
         assert!(empty.fork_error("turn".into()).is_none());
-        for key in [&fork, &item, &request] {
+        assert!(empty.turn_items_error("turn".into()).is_none());
+        for key in [&fork, &turn_items, &item, &request] {
             assert!(empty.operation_error(key).is_none());
         }
     }

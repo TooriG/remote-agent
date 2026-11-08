@@ -371,7 +371,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                     })
                                             })
                                         };
-                                        fold_row(
+                                        view().w_full().child(fold_row(
                                             move || label().unwrap_or_default().to_string(),
                                             open,
                                             move || {
@@ -407,7 +407,8 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                     }
                                                 }
                                             },
-                                        )
+                                        ))
+                                        .child(work_load_failure(connection, row, open))
                                     },
                                 ))
                                 .child(when(
@@ -735,6 +736,52 @@ fn fold_row(
         )
 }
 
+/// An opened folded turn whose work did not load says why where that work
+/// would show, as T3 Code's "Couldn't load output" in an opened row, and
+/// loads it again on retry.
+fn work_load_failure(
+    connection: Connection,
+    row: Memo<Option<Row>>,
+    open: impl Fn() -> bool + Copy + 'static,
+) -> View {
+    let load = move || {
+        row.with(|row| {
+            row.as_ref()
+                .and_then(|row| row.activity.as_ref())
+                .and_then(|activity| activity.load_items.clone())
+        })
+    };
+    let failure = move || {
+        load()
+            .and_then(|load| {
+                connection
+                    .context
+                    .with(|context| context.turn_items_error(load.turn_id))
+            })
+            .map(|error| localized(error.to_string()))
+    };
+    view().child(when(
+        move || open() && failure().is_some(),
+        move || {
+            view()
+                .pt_2()
+                .gap_2()
+                .items_start()
+                .child(
+                    text(move || failure().unwrap_or_default())
+                        .selectable(true)
+                        .text_size(px(13.0))
+                        .text_color(nsh_core::element::rgb(0xff8e86)),
+                )
+                .child(crate::ui::text_button(tr("再試行"), move || {
+                    if let Some(load) = untracked(load) {
+                        connection.dispatch(Intent::LoadTurnItems(load));
+                    }
+                }))
+        },
+    ))
+}
+
 /// A selected conversation whose history has not arrived: it is loading, or
 /// its read failed and can be retried.
 fn opening(connection: Connection) -> View {
@@ -888,18 +935,21 @@ fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
             .context
             .with(|context| context.navigation().thread_id)
     };
-    let forking = move || match (thread(), fork()) {
-        (Some(session), Some(turn)) => connection.publication.with(|p| {
-            p.snapshot
-                .operation_running(op::OperationKey::Fork { session, turn })
-        }),
-        _ => false,
+    let forking = move || {
+        fork().and_then(|turn| connection.context.with(|context| context.fork_phase(turn)))
+            == Some(op::OperationPhase::Running)
     };
-    view()
+    // As the desktop client's, a failed fork says why beside its button: Core
+    // leaves it there rather than among the conversation's notices.
+    let failure = move || {
+        fork()
+            .and_then(|turn| connection.context.with(|context| context.fork_error(turn)))
+            .map(|error| localized(error.to_string()))
+    };
+    let actions = view()
         .flex_row()
         .items_center()
         .gap_4()
-        .mt_2()
         .child(ui::icon_button(
             Icon::COPY,
             tr("回答をコピー"),
@@ -932,7 +982,16 @@ fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
                 .text_size(px(12.0))
                 .text_color(colors::MUTED)
         }))
-        .child(time(row))
+        .child(time(row));
+    view().mt_2().gap_1().child(actions).child(when(
+        move || failure().is_some(),
+        move || {
+            text(move || failure().unwrap_or_default())
+                .selectable(true)
+                .text_size(px(12.0))
+                .text_color(nsh_core::element::rgb(0xff8e86))
+        },
+    ))
 }
 
 /// The user's own message's actions, shown while the pointer is over it: its time,

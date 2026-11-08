@@ -1,0 +1,15 @@
+# A fork the Host cannot make says why beside its answer, in Japanese with the
+# Host's words verbatim; pressing it again forks.
+fixture /fail-next-fork
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] 分岐に失敗する会話です"
+press 送信
+expect "シミュレータで完了しました。" 30000
+press ここから会話を分岐
+expect "ホストで操作に失敗しました。" 20000
+expect "fixture fork storage is unavailable"
+screenshot failed
+press ここから会話を分岐
+expect "Simulator conversation" 20000
+expect "分岐に失敗する会話です" after "Simulator conversation"
