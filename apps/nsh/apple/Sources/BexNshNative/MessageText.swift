@@ -54,6 +54,15 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             textContainerInset = .zero
             textContainer?.lineFragmentPadding = 0
             textContainer?.widthTracksTextView = false
+            // Read-only text needs no checking; it otherwise analyzes every message off the main thread.
+            isContinuousSpellCheckingEnabled = false
+            isGrammarCheckingEnabled = false
+            isAutomaticSpellingCorrectionEnabled = false
+            isAutomaticTextReplacementEnabled = false
+            isAutomaticDataDetectionEnabled = false
+            isAutomaticLinkDetectionEnabled = false
+            isAutomaticTextCompletionEnabled = false
+            enabledTextCheckingTypes = 0
             delegate = self
             setAccessibilityIdentifier("message.assistant-text")
         }
@@ -144,8 +153,14 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
                 && (text.string as NSString).substring(with: range) == (content.string as NSString)
                 .substring(with: range)
             text.textStorage?.setAttributedString(content)
-            let size = content.size()
-            reportSize(CGSize(width: ceil(size.width), height: ceil(size.height)))
+            // The natural size comes from TextKit's own layout, whose glyphs the
+            // wrapped layout below reuses, rather than a second typesetting pass.
+            if let container = text.textContainer, let manager = text.layoutManager {
+                container.containerSize = CGSize(width: 1_000_000, height: CGFloat.greatestFiniteMagnitude)
+                manager.ensureLayout(for: container)
+                let size = manager.usedRect(for: container).size
+                reportSize(CGSize(width: ceil(size.width), height: ceil(size.height)))
+            }
             text.setSelectedRange(keep ? range : NSRange(location: 0, length: 0))
             needsLayout = true
         }
