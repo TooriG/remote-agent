@@ -9,7 +9,14 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let preview = use_context::<crate::media::Preview>().unwrap();
     let files = use_context::<crate::files::Browser>().unwrap();
     let workspace = use_context::<crate::workbench::Workbench>().unwrap();
-    let composing = signal(false);
+    // What an input method composes. NSH reports the field's text only once
+    // a composition commits, so Core's draft lacks it until then.
+    let composition = signal(None::<String>);
+    let composed = move || {
+        composition.with(|text| text.as_deref().is_some_and(|text| !text.trim().is_empty()))
+    };
+    // A send pressed while composing, waiting for the composition to commit.
+    let send_composed = signal(false);
     let focused = signal(false);
     let field_ref = connection.composer_ref;
     let file_pick = signal(0_u64);
@@ -36,6 +43,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             && !controls.with(|c| c.transcribing)
             && controls.with(|c| c.running_turn.is_some())
             && answering.with(Option::is_none)
+            && !composed()
             && composer.with(|c| c.draft.text.trim().is_empty() && c.draft.attachments.is_empty())
     };
     let stop_label = move || {
@@ -59,15 +67,16 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         }
     });
     let enabled = move || {
-        !composing.get()
-            && !requesting.get()
+        !requesting.get()
             && composer.with(|c| {
                 if answering.with(Option::is_some) {
                     c.can_advance_question()
                 } else if stopping() {
                     c.can_interrupt()
                 } else {
-                    !connection.uploading() && c.can_submit(recording.get())
+                    // Text being composed is content Core is yet to hear of,
+                    // as a recording is.
+                    !connection.uploading() && c.can_submit(recording.get() || composed())
                 }
             })
     };
@@ -111,7 +120,14 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             });
         } else if stopping() {
             interrupt();
-        } else if !composing.get_untracked() {
+        } else if composition.with_untracked(Option::is_some) {
+            // Japanese live conversion keeps a whole message marked until
+            // return. Commit it, as a click outside a browser's field does,
+            // and send once Core has the committed text.
+            send_composed.set(true);
+            field_ref.blur();
+            field_ref.focus();
+        } else {
             following.set(true);
             connection.dispatch(Intent::Submit {
                 thread_id: controls.with_untracked(|c| c.navigation.thread_id.clone()),
@@ -186,7 +202,14 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             })
             .on_focus(move || focused.set(true))
             .on_blur(move || focused.set(false))
-            .on_composition_change(move |event: &Composition| composing.set(event.composing))
+            .on_composition_change(move |event: &Composition| {
+                composition.set(event.composing.then(|| event.text.clone()));
+                // The committed text's change came first: Core holds it now.
+                if !event.composing && send_composed.get_untracked() {
+                    send_composed.set(false);
+                    submit();
+                }
+            })
             .auto_correct(false)
             .auto_capitalize(AutoCapitalize::None)
             .h(move || if collapsed() { px(36.0) } else { px(64.0) })
@@ -484,7 +507,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         .child(crate::requests::panels(following))
         .child(when(
             move || {
-                !composing.get()
+                composition.with(Option::is_none)
                     && !recording.get()
                     && !requesting.get()
                     && !controls.with(|c| c.transcribing)

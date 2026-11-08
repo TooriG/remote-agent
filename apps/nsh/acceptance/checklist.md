@@ -98,6 +98,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Conversation: one without a message yet (a side chat's) opens empty and sends its first message | covered | empty-conversation |
 | Composer: model picker | covered | model-picker |
 | Composer: why a send waits (another agent chosen while the conversation works) | covered | provider-switch |
+| Composer: Japanese input method (confirming return, sending while composing) | covered | input-method (needs NSH to commit marked text on blur) |
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
