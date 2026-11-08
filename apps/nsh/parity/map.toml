@@ -145,7 +145,7 @@ description = "A question from the agent: its options above the composer."
 nsh = ["send [request] 質問を確認します", "expect \"このまま続けますか？\" 20000"]
 t3 = [{ send = "[request] 質問を確認します" }, { waitText = "このまま続けますか？" }]
 column = "composer"
-elements = ["composer", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-submit", "composer-placeholder", "working-header", "live-row"]
+elements = ["composer", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-dismiss", "question-submit", "composer-placeholder", "working-header", "live-row"]
 
 [[state]]
 name = "markdown-document"
@@ -687,6 +687,14 @@ t3 = "[data-slot=composer-banner] .text-2xs"
 nsh = { text = "作業を進めます" }
 anchor = "composer"
 
+[[element]]
+id = "question-dismiss"
+what = "Question: dismiss without answering"
+kind = "icon"
+t3 = "[data-pending-user-input-dismiss]"
+nsh = { text = "Dismiss question without answering" }
+anchor = "composer"
+
 # Not in the composer group: the question's actions follow T3, though the
 # composer around them keeps Bex's design.
 [[element]]
@@ -959,3 +967,10 @@ metrics = ["text extent (drawn)", "text or glyph colour"]
 reason = "Japanese in the monospaced system font falls back to a different face in each: AppKit's is narrower and heavier than Chromium's (the same text in the sans-serif face, the question's, matches)"
 approved = "2026-11-09"
 by = "the map (a platform difference)"
+
+[[approved]]
+element = "question-dismiss"
+metrics = ["present"]
+reason = "Bex's Host can skip any question; hiding dismiss would remove skipping"
+approved = "2026-11-09"
+by = "the coordinator"
