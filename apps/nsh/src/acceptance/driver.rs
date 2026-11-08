@@ -187,13 +187,7 @@ fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
             driver.fixture,
         )
     };
-    let place = Place {
-        menus: &menus,
-        output: &output,
-        fixture,
-        mtm,
-    };
-    match attempt(&step, elapsed, &place) {
+    match attempt(&step, elapsed, &menus, &output, fixture, mtm) {
         Attempt::Passed(message, artifact) => {
             driver.borrow_mut().record("passed", &message, artifact)
         }
@@ -234,21 +228,15 @@ fn limit(step: &Step) -> Duration {
     }
 }
 
-/// What a step acts within.
-struct Place<'a> {
-    menus: &'a [Retained<NSMenu>],
-    output: &'a Path,
+/// `fixture` is the fixture Host's control port.
+fn attempt(
+    step: &Step,
+    elapsed: Duration,
+    menus: &[Retained<NSMenu>],
+    output: &Path,
     fixture: Option<u16>,
     mtm: MainThreadMarker,
-}
-
-fn attempt(step: &Step, elapsed: Duration, place: &Place) -> Attempt {
-    let &Place {
-        menus,
-        output,
-        fixture,
-        mtm,
-    } = place;
+) -> Attempt {
     match step {
         Step::Fixture(_) => Attempt::Passed("prepared by the runner".into(), None),
         Step::Control(path) => done(
@@ -1015,11 +1003,16 @@ fn choose(path: &str, mtm: MainThreadMarker) -> Attempt {
 }
 
 /// The clipboard's items, each as its data by type.
-struct Clipboard(Vec<Vec<(Retained<NSString>, Retained<NSData>)>>);
+struct Clipboard {
+    items: Vec<Vec<(Retained<NSString>, Retained<NSData>)>>,
+    /// The clipboard's change count then: unchanged, it is left alone.
+    count: isize,
+}
 
 impl Clipboard {
     fn save() -> Self {
-        let items = NSPasteboard::generalPasteboard()
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let items = pasteboard
             .pasteboardItems()
             .map(|items| {
                 items
@@ -1033,14 +1026,20 @@ impl Clipboard {
                     .collect()
             })
             .unwrap_or_default();
-        Self(items)
+        Self {
+            items,
+            count: pasteboard.changeCount(),
+        }
     }
 
     fn restore(&self) {
         let pasteboard = NSPasteboard::generalPasteboard();
+        if pasteboard.changeCount() == self.count {
+            return;
+        }
         pasteboard.clearContents();
         let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = self
-            .0
+            .items
             .iter()
             .map(|kinds| {
                 let item = NSPasteboardItem::new();
