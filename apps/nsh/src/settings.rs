@@ -65,6 +65,12 @@ impl Page {
 pub(crate) fn overlay(hosts: Memo<Vec<Host>>) -> View {
     let connection = use_context::<Connection>().unwrap();
     let page = signal(Page::General);
+    // A provider chosen from outside (the model picker's accounts) shows its page.
+    effect(move || {
+        if connection.state.with(|state| state.provider.is_some()) {
+            page.set(Page::Providers);
+        }
+    });
     let locked = computed(move || connection.state.with(|state| state.account_locked()));
     let close = move || {
         if !locked.get_untracked() {

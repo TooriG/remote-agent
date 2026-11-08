@@ -149,9 +149,10 @@ fn act(connection: Connection, picker: Signal<Option<Picker>>, action: &str, val
         "accounts" => {
             if let Some(provider) = current.provider {
                 picker.set(None);
-                connection
-                    .application
-                    .with(|app| app.navigate(crate::Navigation::Provider(Some(provider))));
+                connection.application.with(|app| {
+                    app.navigate(crate::Navigation::Settings(true));
+                    app.navigate(crate::Navigation::Provider(Some(provider)));
+                });
             }
         }
         "provider"

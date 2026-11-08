@@ -268,9 +268,11 @@ fn app_content(
                 workbench::open_tool(action)
             }
             "compose" => {
+                // A new chat stays in the selected project; a chat without one
+                // works in the Host's chat folder, which is no project.
                 connection.dispatch(Intent::NewChat {
                     cwd: if is_desktop() {
-                        publication.with(|p| p.snapshot.pane.navigation.cwd.clone())
+                        publication.with(|p| p.context.selected_directory())
                     } else {
                         String::new()
                     },
