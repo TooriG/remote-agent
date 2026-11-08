@@ -409,11 +409,18 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
     let choice_menu = move |key: &'static str, title: &'static str, action: &'static str| {
         ui::text_button(
             move || {
-                let current = field("quick")()[key].clone();
-                SharedString::from(format!(
-                    "{title}: {}",
-                    current.as_str().unwrap_or(tr("既定"))
-                ))
+                let quick = field("quick")();
+                let current = &quick[key];
+                // A speed reads as its menu names it (通常, 高速), not its id.
+                let shown = if key == "speed" {
+                    quick["speeds"]
+                        .as_array()
+                        .and_then(|speeds| speeds.iter().find(|speed| speed["id"] == *current))
+                        .and_then(|speed| speed["title"].as_str())
+                } else {
+                    current.as_str()
+                };
+                SharedString::from(format!("{title}: {}", shown.unwrap_or(tr("既定"))))
             },
             move || {
                 let quick = field("quick")();
