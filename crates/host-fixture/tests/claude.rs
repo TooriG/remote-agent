@@ -2071,6 +2071,117 @@ async fn claude_responses_show_their_time_and_fork_from_the_selected_turn() {
     fixture.close().await.unwrap();
 }
 
+/// T3 Code forks a completed turn while a later one runs; only the turn still
+/// answering cannot be forked, and the source keeps running in its CLI.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_forks_a_completed_turn_while_a_later_turn_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    store
+        .dispatch(Intent::SelectModel {
+            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
+            model: models::ModelRef {
+                provider: ProviderKind::Claude,
+                id: "default".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let id = send(&store, "first", "running-fork-first").await;
+    let snapshot = completed(&store, &id, 1, "completed").await;
+    let first = snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0]
+        .id
+        .clone();
+    send(&store, "wait", "running-fork-wait").await;
+    let snapshot = completed(&store, &id, 2, "running").await;
+    let running = snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1]
+        .id
+        .clone();
+
+    let refused = store
+        .dispatch(Intent::ForkSession(op::ForkSession::new(
+            id.clone(),
+            running.clone(),
+        )))
+        .await;
+    assert!(refused.is_err(), "{refused:?}");
+    let error = store
+        .snapshot()
+        .operation_error(op::OperationKey::Fork {
+            session: id.clone(),
+            turn: running.clone(),
+        })
+        .unwrap();
+    assert!(error.message.contains("生成中"), "{error:?}");
+
+    store
+        .dispatch(Intent::ForkSession(op::ForkSession::new(id.clone(), first)))
+        .await
+        .unwrap();
+    let snapshot = until(&store, |snapshot| {
+        snapshot
+            .sessions
+            .conversations
+            .iter()
+            .any(|(fork, thread)| {
+                fork != &id && thread.turns.as_ref().is_some_and(|turns| turns.len() == 1)
+            })
+    })
+    .await;
+    let (_, forked) = snapshot
+        .sessions
+        .conversations
+        .iter()
+        .find(|(fork, _)| *fork != &id)
+        .unwrap();
+    let items = forked.turns.as_ref().unwrap()[0].items.as_ref().unwrap();
+    assert!(
+        items
+            .iter()
+            .any(|item| item_text(item) == Some("reply 1: first"))
+    );
+    assert!(
+        !items
+            .iter()
+            .any(|item| item_text(item) == Some("Waiting for interruption"))
+    );
+
+    // The source's turn kept running in its CLI and stops normally.
+    store
+        .dispatch(Intent::Interrupt(op::Interrupt {
+            thread_id: id.clone(),
+            turn_id: running,
+        }))
+        .await
+        .unwrap();
+    completed(&store, &id, 2, "interrupted").await;
+    send(&store, "after fork", "running-fork-after").await;
+    let snapshot = completed(&store, &id, 3, "completed").await;
+    assert!(
+        snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2]
+            .items
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|item| item_text(item) == Some("reply 3: after fork"))
+    );
+    let inputs = session_inputs(session_trace(root.path()));
+    assert_eq!(
+        inputs[1]["process"], inputs[2]["process"],
+        "the running CLI must stay retained across the fork"
+    );
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_stops_it() {
     let root = tempfile::tempdir().unwrap();

@@ -93,7 +93,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | New-chat hero: project choice, start without a project | covered | new-chat-hero |
 | Conversation: messages, folded work, approvals, questions | covered | send-message, folded-work, live-work, approval, question-choice, question-skip |
 | Conversation: errors, reconnecting, opening and its failure | covered | failed-turn, retry-stream, history-loading, history-retry |
-| Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork |
+| Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork, claude-fork-while-running, fork-failure |
 | Conversation: steering a running turn, minimap | covered | steering, queued-input |
 | Composer: model picker | covered | model-picker |
 | Composer: approval mode menu | covered | permission-mode |
