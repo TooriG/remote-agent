@@ -22,12 +22,20 @@
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
 //!   menu, as a right click on it; `press` then chooses its items.
+//! - `hover <label> [after <anchor>] [timeout-ms]`: moves the pointer over that
+//!   element's centre, as hover-only controls need.
 //! - `choose <path>`: answers the open panel the app shows with `<path>`,
 //!   waiting for one to appear. A leading `$AGENT_STATE_DIR` is the fixture Host's
 //!   directory, whose `project` folder is the fixture's project.
 //! - `expect_clipboard <text> [timeout-ms]`: waits until the clipboard's text
 //!   contains `<text>`. The driver restores the clipboard when the scenario ends.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
+//! - `window <width> <height>`: resizes the main window's content to that many points.
+//! - `capture <name>`: `<name>.png` as `screenshot` writes it, and `<name>.json`: every
+//!   view of the main window, parents first, with its frame in the content's points
+//!   (origin top left), accessibility role and texts, its layer's background, border
+//!   and corner radius, and the animations running in its layers. `cargo xtask
+//!   nsh-parity` compares it with T3's rendering of the same state.
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 use std::time::Duration;
@@ -53,11 +61,15 @@ pub(crate) enum Step {
     Scroll(Find, i32),
     Select(Find, String),
     Menu(Find),
+    Hover(Find),
     Choose(String),
     ExpectClipboard(String, Duration),
     Wait(Duration),
     Screenshot(String),
     Dump(String),
+    /// The main window's content size in points.
+    Window(u32, u32),
+    Capture(String),
 }
 
 /// What a step looks for, and how long it waits for it.
@@ -169,6 +181,7 @@ fn step(words: &[String]) -> Result<Step, String> {
             Step::Select(find(target, rest)?, (*text).to_owned())
         }
         ("menu", [target, rest @ ..]) => Step::Menu(find(target, rest)?),
+        ("hover", [target, rest @ ..]) => Step::Hover(find(target, rest)?),
         ("choose", [path]) if path.starts_with('/') || path.starts_with(STATE_DIRECTORY) => {
             Step::Choose((*path).to_owned())
         }
@@ -179,6 +192,8 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
+        ("window", [width, height]) => Step::Window(points(width)?, points(height)?),
+        ("capture", [name]) => Step::Capture(artifact(name)?),
         (name, _) => return Err(format!("unknown step or wrong arguments: {name}")),
     })
 }
@@ -210,6 +225,14 @@ fn find(text: &str, rest: &[&str]) -> Result<Find, String> {
         after,
         timeout,
     })
+}
+
+fn points(value: &str) -> Result<u32, String> {
+    value
+        .parse()
+        .ok()
+        .filter(|points| (200..=8000).contains(points))
+        .ok_or_else(|| format!("{value:?} is not a window size in points"))
 }
 
 fn milliseconds(value: &str) -> Result<Duration, String> {
@@ -297,9 +320,9 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nhover 回答\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
-             dump tree_1\n",
+             dump tree_1\nwindow 1280 800\ncapture state_1\n",
         )
         .unwrap();
         let steps: Vec<_> = lines.iter().map(|line| line.step.clone()).collect();
@@ -351,6 +374,11 @@ mod tests {
                     after: Some("見出し".into()),
                     timeout: DEFAULT_TIMEOUT
                 }),
+                Step::Hover(Find {
+                    text: "回答".into(),
+                    after: None,
+                    timeout: DEFAULT_TIMEOUT
+                }),
                 Step::Choose("/tmp/a.txt".into()),
                 Step::Choose("$AGENT_STATE_DIR/project".into()),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
@@ -358,6 +386,8 @@ mod tests {
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
                 Step::Dump("tree_1".into()),
+                Step::Window(1280, 800),
+                Step::Capture("state_1".into()),
             ]
         );
         assert_eq!(lines[0].number, 2);
@@ -430,6 +460,14 @@ mod tests {
             (
                 "expect_clipboard a b c",
                 "line 1: unknown step or wrong arguments: expect_clipboard",
+            ),
+            (
+                "window 10 800",
+                "line 1: \"10\" is not a window size in points",
+            ),
+            (
+                "window 1280",
+                "line 1: unknown step or wrong arguments: window",
             ),
             (
                 "fixture release-inputs",

@@ -1,0 +1,772 @@
+# The states `cargo xtask nsh-parity` brings NSH and T3 Code to, and the
+# elements it pairs in each. The step language of `nsh` is the acceptance
+# scenarios' (`apps/nsh/src/acceptance/script.rs`) plus `send <text>`; `t3`
+# steps are `scripts/nsh-parity-t3.ts`'s. Prompts carry the Codex fixture's
+# scenario tags (`crates/host-fixture/src/fixture/scenario.rs`), so both
+# clients show the same turn. T3 selectors are written from a run's
+# `<state>/t3-outline.txt`, NSH matchers from its `<state>/nsh.json`.
+# `apps/nsh/parity/states.md` lists every state of T3's conversation screen
+# and which of them this map covers.
+
+[viewport]
+width = 1280
+height = 800
+
+[tolerance]
+position = 4
+size = 4
+text = 1
+color = 24
+radius = 2
+
+# ── Conversation ────────────────────────────────────────────────────────────
+
+[[state]]
+name = "draft"
+screen = "Conversation"
+description = "A new chat in the project before anything is sent: the hero and the empty composer."
+nsh = ["press \"New chat in this project\"", "expect \"Ask AI\""]
+t3 = []
+column = "composer"
+elements = ["header-new-chat", "composer", "composer-placeholder", "composer-send", "composer-attach", "composer-model", "composer-mode", "composer-dictation", "composer-context-strip", "draft-hero", "draft-hero-project", "draft-without-project"]
+
+[[state]]
+name = "composer-draft"
+screen = "Conversation"
+description = "A new chat with three lines typed: the composer grows and the send button turns on."
+nsh = ["press \"New chat in this project\"", "type \"Ask AI\" 一行目", "key shift+return", "type \"Ask AI\" 二行目", "key shift+return", "type \"Ask AI\" 三行目"]
+t3 = [{ type = "一行目" }, { key = "Shift+Enter" }, { type = "二行目" }, { key = "Shift+Enter" }, { type = "三行目" }]
+column = "composer"
+elements = ["composer", "composer-text", "composer-send"]
+
+[[state]]
+name = "model-picker"
+screen = "Conversation"
+description = "The composer's model picker open."
+nsh = ["press \"New chat in this project\"", "press \"Fixture Model\"", "wait 800"]
+t3 = [{ click = "[data-chat-provider-model-picker]" }, { waitMs = 800 }]
+column = "composer"
+elements = ["composer", "composer-model", "model-menu", "model-menu-row"]
+
+[[state]]
+name = "turn-thinking"
+screen = "Conversation"
+description = "A running turn before any work or text arrives: T3 shows its working header and a Thinking row with a moving highlight."
+nsh = ["send [delayed-input] 考える様子を確認します", "expect \"考える様子を確認します\" 20000", "wait 1500"]
+t3 = [{ send = "[delayed-input] 考える様子を確認します" }, { waitFor = "[data-timeline-row-kind=thinking]" }]
+column = "composer"
+elements = ["composer", "header-title", "user-bubble", "user-text", "working-header", "thinking-row", "composer-stop"]
+
+[[state]]
+name = "turn-live"
+screen = "Conversation"
+description = "A running turn with a command in flight: the working header and the live activity row with its shimmer."
+nsh = ["send [groups] ライブの作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000"]
+t3 = [{ send = "[groups] ライブの作業を確認します" }, { waitText = "Running pwd" }]
+column = "composer"
+elements = ["composer", "header-title", "user-bubble", "user-text", "working-header", "live-row", "live-row-icon", "live-commentary", "live-done-group", "composer-stop", "changed-files-card"]
+
+[[state]]
+name = "turn-finished"
+screen = "Conversation"
+description = "A finished turn: the user's message, the folded work row, the answer and its actions."
+nsh = ["send [groups] 完了した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000"]
+t3 = [{ send = "[groups] 完了した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }]
+column = "composer"
+elements = ["composer", "composer-send", "header-title", "header-details-toggle", "header-panel-toggle", "user-bubble", "user-text", "user-copy", "user-edit", "user-time", "work-toggle", "assistant-text", "assistant-copy", "assistant-fork", "assistant-time", "changed-files-card"]
+
+[[state]]
+name = "turn-hover"
+screen = "Conversation"
+description = "The pointer over the user's message: its hover-only actions."
+nsh = ["send [immediate] ホバーを確認します", "expect \"シミュレータで完了しました。\" 30000", "hover \"message.user-text\""]
+t3 = [{ send = "[immediate] ホバーを確認します" }, { waitText = "シミュレータで完了しました。" }, { hover = "[data-message-role=user] [data-user-message-body]" }]
+column = "composer"
+elements = ["composer", "user-bubble", "user-copy", "user-edit", "user-time"]
+
+[[state]]
+name = "turn-expanded"
+screen = "Conversation"
+description = "The finished turn's work expanded down to its tool rows and commentary."
+nsh = ["send [groups] 展開した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000", "press \"Worked for*\"", "expect \"./gradlew test\""]
+t3 = [{ send = "[groups] 展開した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }, { click = "[data-timeline-row-kind=turn-fold] button" }, { click = "[data-timeline-row-kind=work-toggle] button" }, { waitText = "./gradlew test" }]
+column = "composer"
+elements = ["composer", "work-toggle", "work-group-toggle", "tool-row", "tool-row-icon", "commentary-text", "assistant-text", "scroll-to-bottom"]
+
+[[state]]
+name = "turn-items"
+screen = "Conversation"
+description = "A finished turn whose work holds every Codex item kind the fixture sends (plan, MCP, dynamic and agent tools, web search, image view, compaction, review mode), expanded."
+nsh = ["send [items] [immediate] 項目を確認します", "expect \"シミュレータで完了しました。\" 30000", "press \"Worked for*\"", "wait 800"]
+t3 = [{ send = "[items] [immediate] 項目を確認します" }, { waitText = "シミュレータで完了しました。" }, { click = "[data-timeline-row-kind=turn-fold] button" }, { waitMs = 800 }]
+column = "composer"
+elements = ["composer", "work-toggle", "work-group-toggle", "tool-row", "web-search-row", "plan-row"]
+
+[[state]]
+name = "turn-failed"
+screen = "Conversation"
+description = "A turn that failed: its work and the error in the timeline, and T3's error banner."
+nsh = ["send [failed] 失敗を確認します", "expect \"context is full\" 20000"]
+t3 = [{ send = "[failed] 失敗を確認します" }, { waitText = "Provider error" }]
+column = "composer"
+elements = ["composer", "user-bubble", "error-banner", "error-title", "error-detail", "error-copy", "tool-row"]
+
+[[state]]
+name = "turn-interrupted"
+screen = "Conversation"
+description = "A turn the provider interrupted."
+nsh = ["send [interrupted] 中断を確認します", "wait 4000"]
+t3 = [{ send = "[interrupted] 中断を確認します" }, { waitMs = 4000 }]
+column = "composer"
+elements = ["composer", "user-bubble", "work-toggle", "interrupted-row"]
+
+[[state]]
+name = "turn-retry"
+screen = "Conversation"
+description = "A stream that disconnected and is being retried."
+nsh = ["send [retry] 再接続を確認します", "expect \"再接続を確認します\" 20000", "wait 300"]
+t3 = [{ send = "[retry] 再接続を確認します" }, { waitText = "Retrying" }]
+column = "composer"
+elements = ["composer", "working-header", "retry-notice"]
+
+[[state]]
+name = "approval"
+screen = "Conversation"
+description = "A command waiting for approval: the request above the composer."
+nsh = ["send [approval] 承認を確認します", "expect \"echo fixture\" 20000"]
+t3 = [{ send = "[approval] 承認を確認します" }, { waitText = "Command approval" }]
+column = "composer"
+elements = ["composer", "approval-panel", "approval-title", "approval-command", "approval-accept", "approval-decline", "working-header", "live-row"]
+
+[[state]]
+name = "question"
+screen = "Conversation"
+description = "A question from the agent: its options above the composer."
+nsh = ["send [request] 質問を確認します", "expect \"このまま続けますか？\" 20000"]
+t3 = [{ send = "[request] 質問を確認します" }, { waitText = "このまま続けますか？" }]
+column = "composer"
+elements = ["composer", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-submit", "composer-placeholder", "working-header", "live-row"]
+
+[[state]]
+name = "markdown-document"
+screen = "Conversation"
+description = "A Markdown answer: heading, emphasis, quote, lists, tasks, a code block and an image that cannot load."
+nsh = ["send [markdown-document] [immediate] 文書を確認します", "expect \"見出し\" 30000"]
+t3 = [{ send = "[markdown-document] [immediate] 文書を確認します" }, { waitText = "見出し" }]
+column = "composer"
+elements = ["composer", "markdown-body", "markdown-code", "markdown-code-language", "markdown-code-copy", "markdown-image-error", "assistant-copy"]
+
+[[state]]
+name = "markdown-table"
+screen = "Conversation"
+description = "A Markdown table in an answer."
+nsh = ["send [markdown-table] [immediate] 表を確認します", "expect \"構成\" 30000"]
+t3 = [{ send = "[markdown-table] [immediate] 表を確認します" }, { waitText = "構成" }]
+column = "composer"
+elements = ["composer", "markdown-table", "markdown-table-header"]
+
+[[state]]
+name = "images"
+screen = "Conversation"
+description = "An answer with a Host image and an inline image, and the user's attached image."
+nsh = ["send [images] [immediate] 画像を確認します", "expect \"インライン画像です。\" 30000", "wait 1500"]
+t3 = [{ send = "[images] [immediate] 画像を確認します" }, { waitText = "インライン画像です。" }, { waitMs = 1500 }]
+column = "composer"
+elements = ["composer", "assistant-image"]
+
+[[state]]
+name = "changed-files"
+screen = "Conversation"
+description = "A finished turn that edited files: how each client shows the changes."
+nsh = ["send [workspace-edit] 編集を確認します", "expect \"./gradlew test\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000"]
+t3 = [{ send = "[workspace-edit] 編集を確認します" }, { waitText = "Working for" }, { waitMs = 3000 }, { release = true }, { waitText = "シミュレータで完了しました。" }]
+column = "composer"
+elements = ["composer", "assistant-text", "changed-files-card", "changed-files-row"]
+
+[[state]]
+name = "history-minimap"
+screen = "Conversation"
+description = "Three finished turns: the minimap in the timeline's side gutter."
+nsh = ["send [immediate] 一つ目を確認します", "expect \"シミュレータで完了しました。\" 30000", "send [immediate] 二つ目を確認します", "expect \"二つ目を確認します\" 30000", "wait 2500", "send [immediate] 三つ目を確認します", "expect \"三つ目を確認します\" 30000", "wait 2500"]
+t3 = [{ send = "[immediate] 一つ目を確認します" }, { waitText = "シミュレータで完了しました。" }, { send = "[immediate] 二つ目を確認します" }, { waitMs = 2500 }, { send = "[immediate] 三つ目を確認します" }, { waitMs = 2500 }]
+column = "composer"
+elements = ["composer", "minimap", "minimap-strip", "user-bubble", "timeline-gutter-text"]
+
+# ── Sidebar (compared with the GPUI client) ─────────────────────────────────
+
+[[state]]
+name = "sidebar"
+screen = "Sidebar"
+description = "The sidebar beside a chat: its search field, actions and project row, against the GPUI client's layout."
+reference = "gpui"
+nsh = ["send [immediate] サイドバーを確認します", "expect \"シミュレータで完了しました。\" 30000"]
+elements = ["sidebar", "sidebar-search-field", "sidebar-search-icon", "sidebar-new-chat", "sidebar-project-row", "sidebar-project-icon", "sidebar-settings"]
+
+# ── Elements ────────────────────────────────────────────────────────────────
+# `nsh = {}`: NSH draws no counterpart, so the element is reported missing.
+
+[[element]]
+id = "composer"
+what = "Composer surface"
+kind = "box"
+t3 = "[data-chat-composer-surface]"
+nsh = { class = "NshInputPad", up = "background" }
+
+[[element]]
+id = "composer-placeholder"
+what = "Composer placeholder"
+kind = "text"
+t3 = "[data-chat-composer-body] div:has(> [data-testid=composer-editor]) + div"
+nsh = { contains = "", class = "NSTextField" }
+anchor = "composer"
+
+[[element]]
+id = "composer-text"
+what = "Typed draft"
+kind = "text"
+t3 = "[data-testid=composer-editor]"
+nsh = { class = "NshTextView" }
+anchor = "composer"
+
+[[element]]
+id = "composer-send"
+what = "Send button"
+kind = "icon"
+t3 = "button[aria-label='Submit message']"
+nsh = { text = "Send" }
+anchor = "composer"
+
+[[element]]
+id = "composer-stop"
+what = "Stop button"
+kind = "icon"
+t3 = "button[aria-label='Stop generation']"
+nsh = { text = "Stop" }
+anchor = "composer"
+
+[[element]]
+id = "composer-attach"
+what = "Attach button"
+kind = "icon"
+t3 = "button[aria-label='Attach files']"
+nsh = { text = "Attach file" }
+anchor = "composer"
+
+[[element]]
+id = "composer-dictation"
+what = "Dictation button"
+kind = "icon"
+t3 = "button[aria-label*='ictat'], button[aria-label*='microphone' i]"
+nsh = { text = "Transcribe audio with Codex" }
+anchor = "composer"
+
+[[element]]
+id = "composer-model"
+what = "Model picker"
+kind = "text"
+t3 = "[data-chat-provider-model-picker]"
+nsh = { text = "Fixture Model", class = "NSButton" }
+anchor = "composer"
+
+[[element]]
+id = "composer-mode"
+what = "Access mode picker"
+kind = "text"
+t3 = "button[aria-label='Runtime mode']"
+nsh = { text = "Change approval mode" }
+anchor = "composer"
+
+[[element]]
+id = "composer-context-strip"
+what = "Project and destination strip"
+kind = "text"
+t3 = "[data-slot=composer-context-strip]"
+nsh = { text = "Destination", up = 2 }
+
+[[element]]
+id = "model-menu"
+what = "Model picker popup"
+kind = "box"
+t3 = "[data-slot=popover-popup]"
+nsh = { text = "Search models", up = "background" }
+
+[[element]]
+id = "model-menu-row"
+what = "Model picker: the model's row"
+kind = "text"
+t3 = "[data-slot=popover-popup] [role=option], [data-slot=popover-popup] button"
+nsh = { text = "Fixture Model", role = "AXButton" }
+
+[[element]]
+id = "draft-hero"
+what = "New chat heading"
+kind = "text"
+t3 = "main h1"
+nsh = { contains = "What should", role = "AXStaticText" }
+
+[[element]]
+id = "draft-hero-project"
+what = "New chat heading: project choice"
+kind = "text"
+t3 = "main h1 button"
+nsh = { text = "Choose project" }
+
+[[element]]
+id = "draft-without-project"
+what = "Start without a project"
+kind = "text"
+t3 = "main h1 + p button"
+nsh = { text = "Start without a project" }
+
+[[element]]
+id = "header-new-chat"
+what = "Header: new chat title"
+kind = "text"
+t3 = "header h2 [data-slot=workspace-breadcrumb-text]"
+nsh = { text = "New chat", role = "AXStaticText" }
+
+[[element]]
+id = "header-title"
+what = "Header: chat title"
+kind = "text"
+t3 = "header h2 [data-slot=workspace-breadcrumb-text]"
+nsh = { contains = "を確認します", role = "AXStaticText" }
+
+[[element]]
+id = "header-details-toggle"
+what = "Header: details panel toggle"
+kind = "icon"
+t3 = "button[aria-label='Toggle thread details panel']"
+nsh = { text = "Toggle thread details" }
+
+[[element]]
+id = "header-panel-toggle"
+what = "Header: right panel toggle"
+kind = "icon"
+t3 = "button[aria-label='Toggle right panel']"
+nsh = { text = "Toggle right panel" }
+
+[[element]]
+id = "user-bubble"
+what = "User message bubble"
+kind = "box"
+t3 = "[data-message-role=user] .bg-message"
+nsh = { text = "message.user-text", up = "background" }
+
+[[element]]
+id = "user-text"
+what = "User message text"
+kind = "text"
+t3 = "[data-message-role=user] [data-user-message-body]"
+nsh = { text = "message.user-text" }
+
+[[element]]
+id = "user-copy"
+what = "User message: copy"
+kind = "icon"
+t3 = "[data-message-role=user] button[aria-label='Copy message']"
+nsh = { text = "Copy message" }
+
+[[element]]
+id = "user-edit"
+what = "User message: edit"
+kind = "icon"
+t3 = "[data-message-role=user] button[aria-label='Edit from here']"
+nsh = { text = "Edit in composer" }
+
+[[element]]
+id = "user-time"
+what = "User message time"
+kind = "text"
+t3 = "[data-message-role=user] p.tabular-nums"
+nsh = { contains = ":", role = "AXStaticText" }
+
+[[element]]
+id = "work-toggle"
+what = "Folded work row (Worked for …)"
+kind = "text"
+t3 = "[data-timeline-row-kind=turn-fold] button span"
+nsh = { contains = "Worked for", role = "AXStaticText" }
+
+[[element]]
+id = "work-group-toggle"
+what = "Work group toggle (Ran … commands)"
+kind = "text"
+t3 = "[data-timeline-row-kind=work-toggle] .truncate"
+nsh = { contains = "Ran ", role = "AXStaticText" }
+
+[[element]]
+id = "assistant-text"
+what = "Answer text"
+kind = "text"
+t3 = "[data-message-role=assistant] .chat-markdown"
+nsh = { text = "シミュレータで完了しました。" }
+
+[[element]]
+id = "assistant-copy"
+what = "Answer: copy"
+kind = "icon"
+t3 = "[data-message-role=assistant] button[aria-label='Copy message']"
+nsh = { text = "Copy answer" }
+
+[[element]]
+id = "assistant-fork"
+what = "Answer: fork"
+kind = "icon"
+t3 = "[data-message-role=assistant] button[aria-label='Fork from this response']"
+nsh = { text = "Branch conversation here" }
+
+[[element]]
+id = "assistant-time"
+what = "Answer time"
+kind = "text"
+t3 = "[data-message-role=assistant] p.tabular-nums"
+nsh = { contains = ":", role = "AXStaticText", nth = 1 }
+
+[[element]]
+id = "working-header"
+what = "Working header (Working for …)"
+kind = "text"
+t3 = "[data-timeline-row-kind=working] span.relative"
+nsh = { contains = "Working for" }
+
+[[element]]
+id = "thinking-row"
+what = "Thinking row"
+kind = "text"
+t3 = "[data-timeline-row-kind=thinking] .truncate"
+nsh = { contains = "Thinking" }
+
+[[element]]
+id = "live-row"
+what = "Live activity row (running tool or request)"
+kind = "text"
+t3 = "[data-timeline-row-kind=work-live] .truncate"
+nsh = { contains = "Working for", role = "AXStaticText" }
+
+[[element]]
+id = "live-row-icon"
+what = "Live activity row: tool icon"
+kind = "icon"
+t3 = "[data-timeline-row-kind=work-live] .size-4"
+nsh = {}
+
+[[element]]
+id = "live-commentary"
+what = "Commentary while the turn runs"
+kind = "text"
+t3 = "[data-message-role=assistant] .chat-markdown"
+nsh = { text = "最初の確認が終わりました。次のコマンドを確認します。" }
+
+[[element]]
+id = "live-done-group"
+what = "Finished commands while the turn runs (Ran …)"
+kind = "text"
+t3 = "[data-timeline-row-kind=work-toggle] .truncate"
+nsh = { contains = "Ran a command" }
+
+[[element]]
+id = "tool-row"
+what = "Tool row (./gradlew test)"
+kind = "text"
+t3 = "[data-timeline-row-kind=work] [aria-label='./gradlew test'] .truncate"
+nsh = { text = "./gradlew test", role = "AXStaticText" }
+
+[[element]]
+id = "tool-row-icon"
+what = "Tool row icon"
+kind = "icon"
+t3 = "[data-timeline-row-kind=work] [aria-label='./gradlew test'] .size-4"
+nsh = { text = "./gradlew test", role = "AXButton" }
+
+[[element]]
+id = "web-search-row"
+what = "Web search row"
+kind = "text"
+t3 = "[data-v2-item-type=web_search]"
+nsh = { contains = "Codex", role = "AXStaticText" }
+
+[[element]]
+id = "plan-row"
+what = "Plan row"
+kind = "text"
+t3 = "[data-v2-item-type=plan], [data-v2-item-type=todo_list]"
+nsh = { contains = "確認計画" }
+
+[[element]]
+id = "commentary-text"
+what = "Commentary in expanded work"
+kind = "text"
+t3 = "[data-timeline-row-kind=work] .chat-markdown"
+nsh = { text = "シミュレータで確認しています…" }
+
+[[element]]
+id = "scroll-to-bottom"
+what = "Scroll to the latest message"
+kind = "icon"
+t3 = "button[aria-label*='bottom' i], button[aria-label*='latest' i]"
+nsh = { text = "Go to latest message", up = 1 }
+
+[[element]]
+id = "error-banner"
+what = "Error banner above the timeline"
+kind = "box"
+t3 = "button[aria-label='Dismiss error'] ~ *, [role=alert]"
+nsh = {}
+
+[[element]]
+id = "error-title"
+what = "Turn error: title"
+kind = "text"
+t3 = "[data-timeline-row-kind=work] .text-destructive"
+nsh = { text = "Context limit reached" }
+
+[[element]]
+id = "error-detail"
+what = "Turn error: message"
+kind = "text"
+t3 = "[data-timeline-row-kind=work] p.whitespace-pre-wrap"
+nsh = { text = "context is full", role = "AXStaticText" }
+
+[[element]]
+id = "error-copy"
+what = "Turn error: copy details"
+kind = "icon"
+t3 = "[data-timeline-row-kind=work] button[aria-label*='Copy' i]"
+nsh = { text = "Copy error details" }
+
+[[element]]
+id = "interrupted-row"
+what = "Interrupted turn notice"
+kind = "text"
+t3 = "[data-timeline-row-kind=event] .font-medium"
+nsh = { contains = "nterrupt" }
+
+[[element]]
+id = "retry-notice"
+what = "Retrying stream notice"
+kind = "text"
+t3 = "[data-timeline-row-kind=work-live] .truncate"
+nsh = { contains = "etry" }
+
+[[element]]
+id = "approval-panel"
+what = "Approval request panel"
+kind = "box"
+t3 = "[data-slot=composer-banner]"
+nsh = { contains = "Waiting for command approval", up = "background" }
+
+[[element]]
+id = "approval-title"
+what = "Approval: title"
+kind = "text"
+t3 = "[data-slot=composer-banner] .text-warning"
+nsh = { contains = "Waiting for command approval" }
+
+[[element]]
+id = "approval-command"
+what = "Approval: command detail"
+kind = "text"
+t3 = "code[aria-label=Command]"
+nsh = { contains = "echo fixture" }
+
+[[element]]
+id = "approval-accept"
+what = "Approval: approve button"
+kind = "text"
+t3 = "[data-slot=composer-banner] button:has(span.max-w-40)"
+nsh = { text = "承認", role = "AXButton" }
+t3_nth = 1
+
+[[element]]
+id = "approval-decline"
+what = "Approval: decline button"
+kind = "text"
+t3 = "[data-slot=composer-banner] button:has(span.max-w-40)"
+nsh = { text = "拒否", role = "AXButton" }
+
+[[element]]
+id = "question-panel"
+what = "Question panel"
+kind = "box"
+t3 = "[data-slot=composer-banner]"
+nsh = { text = "このまま続けますか？", up = "background" }
+
+[[element]]
+id = "question-header"
+what = "Question: header"
+kind = "text"
+t3 = "[data-slot=composer-banner] span.font-medium.text-muted-foreground"
+nsh = { text = "継続" }
+
+[[element]]
+id = "question-text"
+what = "Question text"
+kind = "text"
+t3 = "[data-slot=composer-banner] p"
+nsh = { text = "このまま続けますか？" }
+
+[[element]]
+id = "question-option"
+what = "Question: first option"
+kind = "text"
+t3 = "[data-slot=composer-banner] span.text-sm.font-medium"
+nsh = { text = "続ける", role = "AXStaticText" }
+
+[[element]]
+id = "question-option-detail"
+what = "Question: first option's description"
+kind = "text"
+t3 = "[data-slot=composer-banner] .text-2xs"
+nsh = { text = "作業を進めます" }
+
+[[element]]
+id = "question-submit"
+what = "Question: submit"
+kind = "text"
+t3 = "[data-chat-composer-actions] button:last-child"
+nsh = { text = "回答を送信", class = "NSButton" }
+
+[[element]]
+id = "markdown-body"
+what = "Markdown answer body (NSH draws it as one text view)"
+kind = "text"
+t3 = "[data-message-role=assistant] .chat-markdown"
+nsh = { contains = "見出し", role = "AXTextArea" }
+
+[[element]]
+id = "markdown-code"
+what = "Markdown code block"
+kind = "box"
+t3 = "[data-message-role=assistant] .chat-markdown div:has(> [role=toolbar])"
+nsh = { contains = "stays code", up = "background" }
+
+[[element]]
+id = "markdown-code-language"
+what = "Markdown code block: language"
+kind = "text"
+t3 = "[data-message-role=assistant] .chat-markdown span.truncate"
+nsh = { text = "text", role = "AXStaticText" }
+
+[[element]]
+id = "markdown-code-copy"
+what = "Markdown code block: copy"
+kind = "icon"
+t3 = "button[aria-label='Copy code']"
+nsh = { text = "Copy code" }
+
+[[element]]
+id = "markdown-image-error"
+what = "Markdown image that cannot load"
+kind = "text"
+t3 = "[data-message-role=assistant] .chat-markdown span.inline-flex.items-center"
+nsh = { text = "The file or folder could not be found." }
+
+[[element]]
+id = "markdown-table"
+what = "Markdown table"
+kind = "box"
+t3 = "[data-message-role=assistant] .chat-markdown table"
+nsh = { contains = "構成", up = "background" }
+
+[[element]]
+id = "markdown-table-header"
+what = "Markdown table: first header cell"
+kind = "text"
+t3 = "[data-message-role=assistant] .chat-markdown th"
+nsh = { text = "構成" }
+
+[[element]]
+id = "assistant-image"
+what = "Image in an answer"
+kind = "box"
+t3 = "[data-message-role=assistant] img"
+nsh = { text = "Enlarge image", nth = 1 }
+
+[[element]]
+id = "changed-files-card"
+what = "Changed files summary"
+kind = "box"
+t3 = "[data-timeline-row-kind=message] [data-changed-files], [data-timeline-row-kind=assistant-meta]"
+nsh = { text = "Show changes", up = "background" }
+
+[[element]]
+id = "changed-files-row"
+what = "Changed file row"
+kind = "text"
+t3 = "[data-timeline-row-kind=assistant-meta] button"
+nsh = { text = "hello.txt", role = "AXStaticText" }
+
+[[element]]
+id = "minimap"
+what = "Timeline minimap"
+kind = "box"
+t3 = "[data-testid=timeline-minimap]"
+nsh = {}
+
+[[element]]
+id = "minimap-strip"
+what = "Minimap strip (first turn)"
+kind = "box"
+t3 = "[data-minimap-strip]"
+nsh = {}
+
+[[element]]
+id = "timeline-gutter-text"
+what = "Answer text's left edge (the timeline's side gutter)"
+kind = "box"
+t3 = "[data-message-role=assistant] .chat-markdown"
+nsh = { text = "シミュレータで完了しました。" }
+
+# Sidebar elements, against GPUI's source at b539d6069^ (apps/desktop) and
+# gpui-component 0.9.0, the version it used.
+
+[[element]]
+id = "sidebar"
+what = "Sidebar"
+kind = "box"
+nsh = { text = "Close sidebar", up = 4 }
+gpui = { x = 0, y = 0, width = 272, source = "view.rs:426 w(px(272.))" }
+
+[[element]]
+id = "sidebar-search-field"
+what = "Search field"
+kind = "box"
+nsh = { text = "Search", class = "NSButton", up = 1 }
+gpui = { x = 12, height = 24, source = "sidebar.rs:741 Input::small(): h_6 (sizing.rs:285); Sidebar header px_3 (sidebar/mod.rs:441)" }
+
+[[element]]
+id = "sidebar-search-icon"
+what = "Search icon in the search field"
+kind = "icon"
+nsh = { text = "Search", class = "NSButton" }
+centred_in = "sidebar-search-field"
+gpui = { glyph_dy = 0, source = "sidebar.rs:744 prefix(IconName::Search), input.rs:794 items_center: the glyph on the field's centre line" }
+
+[[element]]
+id = "sidebar-new-chat"
+what = "New chat button"
+kind = "icon"
+nsh = { text = "New chat" }
+gpui = { source = "sidebar.rs:750 icon_button" }
+
+[[element]]
+id = "sidebar-project-row"
+what = "Project row"
+kind = "text"
+nsh = { text = "検証プロジェクト", role = "AXButton" }
+gpui = { height = 44, source = "sidebar.rs:268 h(px(44.)), px_2, gap_2" }
+
+[[element]]
+id = "sidebar-project-icon"
+what = "Project icon"
+kind = "box"
+nsh = { text = "検ト", up = 1 }
+gpui = { width = 16, height = 16, source = "sidebar.rs:176/184 size_4, rounded(px(4.))" }
+
+[[element]]
+id = "sidebar-settings"
+what = "Settings button"
+kind = "icon"
+nsh = { text = "Open settings" }
+gpui = { source = "sidebar.rs:778 icon_button(Settings) in a py_2 footer" }

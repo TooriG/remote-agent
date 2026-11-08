@@ -30,24 +30,8 @@ const STREAM_DELAY_MS: &str = "2000";
 
 pub async fn run(filters: &[String]) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| cwd.join("target"));
-    let tools = Tools {
-        app: target.join(APP),
-        fixture: target.join(FIXTURES).join("agent-ui-fixture"),
-        codex: target.join(FIXTURES).join("agent-codex-fixture"),
-        claude: target.join(FIXTURES).join("agent-claude-fixture"),
-    };
-    for path in [&tools.app, &tools.fixture, &tools.codex, &tools.claude] {
-        if !path.is_file() {
-            return Err(format!(
-                "{} is missing; `just nsh-acceptance` builds it",
-                path.display()
-            )
-            .into());
-        }
-    }
+    let target = target(&cwd);
+    let tools = Tools::locate(&target)?;
     let mut scenarios = Vec::new();
     for entry in fs::read_dir(cwd.join(SCENARIOS))? {
         let path = entry?.path();
@@ -117,19 +101,66 @@ pub async fn run(filters: &[String]) -> Result<()> {
     Ok(())
 }
 
-struct Tools {
+/// The workspace's build output directory.
+pub(crate) fn target(cwd: &Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cwd.join("target"))
+}
+
+/// The dev app and the fixture programs `just nsh-acceptance` builds.
+pub(crate) struct Tools {
     app: PathBuf,
     fixture: PathBuf,
-    codex: PathBuf,
+    pub(crate) codex: PathBuf,
     claude: PathBuf,
+}
+
+impl Tools {
+    pub(crate) fn locate(target: &Path) -> Result<Self> {
+        let tools = Self {
+            app: target.join(APP),
+            fixture: target.join(FIXTURES).join("agent-ui-fixture"),
+            codex: target.join(FIXTURES).join("agent-codex-fixture"),
+            claude: target.join(FIXTURES).join("agent-claude-fixture"),
+        };
+        for path in [&tools.app, &tools.fixture, &tools.codex, &tools.claude] {
+            if !path.is_file() {
+                return Err(format!(
+                    "{} is missing; `just nsh-acceptance` builds it",
+                    path.display()
+                )
+                .into());
+            }
+        }
+        Ok(tools)
+    }
 }
 
 /// What the app's driver wrote to `result.json`.
 #[derive(Default, Deserialize)]
-struct Report {
+pub(crate) struct Report {
     passed: Option<bool>,
     steps: Vec<StepResult>,
     evidence: Vec<String>,
+}
+
+impl Report {
+    /// Why the scenario did not pass, if it did not.
+    pub(crate) fn failure(&self) -> Option<String> {
+        if self.passed == Some(true) {
+            return None;
+        }
+        Some(
+            self.steps
+                .iter()
+                .find(|step| step.status == "failed")
+                .map_or_else(
+                    || "the scenario did not finish".to_owned(),
+                    |step| format!("line {} `{}`: {}", step.line, step.source, step.message),
+                ),
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -191,7 +222,7 @@ fn fixture_paths(script: &str) -> Vec<String> {
         .collect()
 }
 
-async fn scenario(
+pub(crate) async fn scenario(
     path: &Path,
     output: &Path,
     tools: &Tools,
