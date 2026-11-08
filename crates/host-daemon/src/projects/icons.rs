@@ -293,7 +293,7 @@ mod tests {
         color_file(root, &format!("{catalog}/light.png"), [255, 0, 0, 255]);
         color_file(root, &format!("{catalog}/dark.png"), [0, 255, 0, 255]);
         color_file(root, &format!("{catalog}/tinted.png"), [0, 0, 255, 255]);
-        color_file(root, "apps/desktop/assets/icon.png", [255, 0, 255, 255]);
+        color_file(root, "apps/nsh/assets/icon.png", [255, 0, 255, 255]);
         std::fs::write(root.join(catalog).join("Contents.json"), serde_json::json!({"images":[
             {"filename":"tinted.png","size":"1024x1024","appearances":[{"appearance":"luminosity","value":"tinted"}]},
             {"filename":"dark.png","size":"1024x1024","appearances":[{"appearance":"luminosity","value":"dark"}]},

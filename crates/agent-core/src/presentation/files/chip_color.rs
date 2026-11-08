@@ -1,40 +1,5 @@
-//! Chat ContextChip accents and the contrast solver from T3's
-//! lib/contextChipAccents.ts and themePalette.ts. Surfaces are opaque sRGB.
-use super::desktop_file_icon;
-
-pub fn desktop_file_chip_color(path: &str, surfaces: &[u32]) -> u32 {
-    let (chroma, hue) = match desktop_file_icon(path) {
-        "t3-file-icon-pdf" => (0.16, 24.),
-        "t3-file-icon-word" => (0.136, 248.),
-        "t3-file-icon-spreadsheet" => (0.134, 148.),
-        "t3-file-icon-slides" => (0.134, 56.),
-        "t3-file-icon-epub" => (0.16, 291.),
-        _ => (0.11, 215.),
-    };
-    let contrast = |color| {
-        surfaces
-            .iter()
-            .map(|surface| contrast_ratio(color, *surface))
-            .fold(f64::INFINITY, f64::min)
-    };
-    let black = contrast(0);
-    let white = contrast(0xffffff);
-    let lighter = white > black;
-    let minimum = 5f64.min(black.max(white));
-    if contrast(to_rgb(0.62, chroma, hue)) >= minimum {
-        return to_rgb(0.62, chroma, hue);
-    }
-    let (mut low, mut high) = if lighter { (0.62, 1.) } else { (0., 0.62) };
-    for _ in 0..18 {
-        let mid = (low + high) / 2.;
-        if (contrast(to_rgb(mid, chroma, hue)) >= minimum) == lighter {
-            high = mid;
-        } else {
-            low = mid;
-        }
-    }
-    to_rgb(if lighter { high } else { low }, chroma, hue)
-}
+//! Mention chip accents and the contrast solver from T3's themePalette.ts.
+//! Surfaces are opaque sRGB.
 
 /// T3 mobile's composerChipPresentation/themeAccentWithContrast. Callers supply
 /// the opaque, same-text-shade message/composer/canvas surfaces of their theme.
@@ -167,34 +132,6 @@ mod tests {
             for surface in surfaces {
                 assert!(contrast_ratio(color, surface) >= 5.);
             }
-        }
-    }
-
-    #[test]
-    fn accents_remain_readable_on_every_surface_and_share_document_families() {
-        for surfaces in [
-            &[0xffffff, 0xfafafa, 0xf4f4f5][..],
-            &[0x080808, 0x0f0f0f, 0x141414][..],
-        ] {
-            let mut colors = std::collections::HashSet::new();
-            for name in ["a.rs", "a.pdf", "a.docx", "a.xlsx", "a.pptx", "a.epub"] {
-                let color = desktop_file_chip_color(name, surfaces);
-                assert!(
-                    surfaces
-                        .iter()
-                        .all(|surface| contrast_ratio(color, *surface) >= 5.),
-                    "{name}: {color:06x}"
-                );
-                assert!(colors.insert(color));
-            }
-            assert_eq!(
-                desktop_file_chip_color("a.doc", surfaces),
-                desktop_file_chip_color("a.docx", surfaces)
-            );
-            assert_eq!(
-                desktop_file_chip_color("a.rs", surfaces),
-                desktop_file_chip_color("a.png", surfaces)
-            );
         }
     }
 }

@@ -86,14 +86,8 @@
             ANDROID_NDK_HOME = "${androidSdk}/libexec/android-sdk/ndk-bundle";
           };
           nativeBuildTools = with pkgs; [ pkg-config cmake clang zig ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-          # The desktop, Host and their tests link these on Linux.
-          linuxDesktopLibraries = with pkgs; [
-            lsof
-            alsa-lib fontconfig freetype libxkbcommon wayland libGL vulkan-loader
-            libxcb libX11 libXcursor libXi libXrandr
-            openssl procps
-          ];
-          linuxDesktopLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader pkgs.libGL pkgs.libxkbcommon pkgs.wayland ];
+          # The Host and its tests use these on Linux.
+          linuxHostTools = with pkgs; [ lsof openssl procps ];
           runtimeShellHook = ''
             # Keep child processes and interactive sessions on the pinned shell.
             export SHELL="${pkgs.zsh}/bin/zsh"
@@ -134,8 +128,7 @@
             RUST_TOOLCHAIN_VERSION = hostRustToolchain.version;
             NEXTEST_VERSION = pkgs.cargo-nextest.version;
             packages = with pkgs; [ (withCargo hostRustToolchain) cccc cargo-mutants cargo-nextest just jq git perl ] ++ nativeBuildTools
-              ++ [ workflowLinter nodejs powershell ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraries;
-            LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux linuxDesktopLibraryPath;
+              ++ [ workflowLinter nodejs powershell ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux linuxHostTools;
             shellHook = appleSdkHook;
           };
           ios-test = pkgs.mkShellNoCC {
@@ -164,7 +157,7 @@
               cccc
               cargo-mutants
               cargo-nextest
-            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (nativeBuildTools ++ linuxDesktopLibraries ++ [
+            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (nativeBuildTools ++ linuxHostTools ++ [
               # Host worktree management needs a newer Git than many distributions ship.
               git
               gradle
@@ -179,9 +172,7 @@
             ];
 
             shellHook = appleSdkHook;
-          } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (androidBuildEnvironment // {
-            LD_LIBRARY_PATH = linuxDesktopLibraryPath;
-          }));
+          } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux androidBuildEnvironment);
         } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           host-build = mkDevShell {
             packages = with pkgs; [
@@ -200,6 +191,8 @@
           });
         } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
           ios-build = mkDevShell {
+            # Browser acceptance packages the Mac app as the fixture's native browser owner.
+            AGENT_NODE_RUNTIME = "${nodeRuntime}";
             packages = with pkgs; [
               (withCargo (buildRustToolchain.override {
                 targets = [ "aarch64-apple-ios-sim" ];

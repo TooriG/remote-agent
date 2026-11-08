@@ -118,7 +118,7 @@ impl Icon {
     pub(crate) const STEER: Self = icon!(Redo2, "arrow.uturn.forward");
     /// A filled square, which Lucide's outlined `square` is not.
     pub(crate) const STOP: Self = Self {
-        markup: include_str!("../../desktop/assets/stop.svg"),
+        markup: include_str!("../assets/stop.svg"),
         #[cfg(target_os = "macos")]
         symbol: "stop.fill",
     };

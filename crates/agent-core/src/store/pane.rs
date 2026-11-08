@@ -11,16 +11,6 @@ pub struct Pane {
 }
 
 impl Store {
-    pub fn primary_pane(self: &Arc<Self>) -> Arc<Pane> {
-        Arc::new(Pane {
-            store: self.clone(),
-            id: String::new(),
-            presentations: self.subscribe_presentation(),
-            stop: self.stop.child_token(),
-            side_chat_preparation: Arc::new(tokio::sync::Mutex::new(())),
-        })
-    }
-
     pub fn open_pane(self: &Arc<Self>, cwd: String) -> Result<Arc<Pane>, PeerError> {
         let id = self.create_pane(cwd)?;
         let stop = self.stop.child_token();

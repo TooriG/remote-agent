@@ -69,8 +69,8 @@ jobs:
           cache-directories: ~/.cargo/targets
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - name: Build desktop, Host and CLI
-        run: nix develop .#native --command cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p agent-desktop -p host-daemon -p agent-cli
+      - name: Build Host and CLI
+        run: nix develop .#native --command cargo build --locked --features agent-core/bindings -p codex-app-server -p agent-process -p host-daemon -p agent-cli
       - name: Build the SDK runtime beside the Host
         run: nix develop .#native --command node scripts/build-claude-sdk.ts target/debug
       - name: Core contracts and isolated iroh Host

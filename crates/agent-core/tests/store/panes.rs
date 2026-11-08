@@ -189,30 +189,6 @@ async fn closing_a_side_chat_during_creation_cannot_apply_its_quote_to_another_p
 }
 
 #[tokio::test]
-async fn closing_the_primary_view_does_not_close_the_host_or_accept_more_view_actions() {
-    let store = Arc::new(Store::offline(Snapshot::default()));
-    let primary = store.primary_pane();
-    let side = store.open_pane("/side".into()).unwrap();
-    primary.close();
-    assert!(primary.dispatch(Intent::ShowThreadList).await.is_err());
-    side.dispatch(Intent::NewChat {
-        cwd: "/still-open".into(),
-    })
-    .await
-    .unwrap();
-    assert_eq!(side.snapshot().unwrap().pane.navigation.cwd, "/still-open");
-    let replacement = store.primary_pane();
-    replacement
-        .dispatch(Intent::NewChat {
-            cwd: "/primary".into(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(store.snapshot().pane.navigation.cwd, "/primary");
-    store.close().await.unwrap();
-}
-
-#[tokio::test]
 async fn local_validation_errors_and_dismissals_belong_to_the_originating_pane() {
     let store = Arc::new(Store::offline(Snapshot::default()));
     let pane = store.open_pane("/side".into()).unwrap();

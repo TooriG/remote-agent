@@ -117,15 +117,16 @@ async fn main() {
     if let Some(argument) = std::env::args_os().nth(6) {
         assert_eq!(argument, "--prepare-browser");
         println!("Preparing native browser dependency");
-        // Use the production native owner in an isolated desktop window. The
-        // fixture's authenticated Host RPC reaches exactly that renderer.
+        // Use the production native owner in an isolated Mac app window: the
+        // bex.app `scripts/build-macos.sh desktop dev` packages beside this
+        // fixture. The fixture's authenticated Host RPC reaches exactly that renderer.
         #[cfg(target_os = "macos")]
         {
             let executable = std::env::current_exe()
                 .unwrap()
                 .parent()
                 .unwrap()
-                .join("agent-desktop");
+                .join("bex.app/Contents/MacOS/bex");
             let mut child = tokio::process::Command::new(executable)
                 .env("AGENT_STATE_DIR", &directory)
                 .env("AGENT_ISOLATED_HOST", "1")

@@ -84,8 +84,7 @@ pub(crate) fn header(expanded: bool, toggle: impl Fn() + 'static) -> View {
     use base64::Engine;
     let logo = format!(
         "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD
-            .encode(include_bytes!("../../desktop/assets/icon.png"))
+        base64::engine::general_purpose::STANDARD.encode(include_bytes!("../assets/icon.png"))
     );
     let (glyph, label) = if expanded {
         (Icon::PANEL_LEFT_CLOSE, tr("サイドバーを閉じる"))

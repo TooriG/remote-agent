@@ -262,11 +262,6 @@ impl Browser {
             .find(|t| t.saved.scope == scope && t.saved.id == tab)
             .is_some_and(|tab| focus::has_focus(&tab.view.webview()))
     }
-    pub fn focus_parent(&self) {
-        for tab in &self.0.borrow().tabs {
-            focus::release(&tab.view.webview());
-        }
-    }
     /// Bounds use the parent's top-left coordinate system, as Wry's child API does.
     pub fn layout(&self, scope: &str, tab: &str, parent: &NSView, bounds: NSRect) {
         let mut owner = self.0.borrow_mut();

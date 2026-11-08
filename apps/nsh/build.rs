@@ -23,7 +23,7 @@ fn main() {
 /// The desktop client's file glyphs (T3 Code's Pierre tree icons) in the app's
 /// dark look, by the names Core's `desktop_file_icon` gives.
 fn file_icons(manifest: &std::path::Path) {
-    let directory = manifest.join("../desktop/assets/file-icons");
+    let directory = manifest.join("assets/file-icons");
     println!("cargo:rerun-if-changed={}", directory.display());
     let mut icons = std::fs::read_dir(&directory)
         .unwrap()

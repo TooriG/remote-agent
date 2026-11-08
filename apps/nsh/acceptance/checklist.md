@@ -83,7 +83,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | WorktreeUITests.testSimulatorEditsHostWorktreeSettingsFromTaskMenu | covered | worktree-settings (from the settings; the Mac has no task menu) |
 | WorktreeUITests.testSimulatorReviewsTheOpenSessionsWorktree | covered | worktree-review, review-panel |
 
-## GPUI desktop client (`apps/desktop`)
+## Desktop client features
 
 | Feature | Status | Mac scenario / note |
 |---|---|---|

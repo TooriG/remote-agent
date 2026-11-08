@@ -100,10 +100,9 @@ ios-archive archive-path derived-data-path *args:
 ios-markdown:
     cargo xtask ios-markdown
 
-# Exercise native pages through the Host using an isolated desktop window.
+# Exercise native pages through the Host using an isolated Mac app window.
 macos-e2e:
-    # Match the workspace test feature graph instead of rebuilding GPUI and core without test support.
-    cargo build --locked --workspace --bins --tests --features agent-core/bindings
+    AGENT_CODE_SIGN_IDENTITY=- bash scripts/build-macos.sh desktop dev
     AGENT_RUNTIME_DIRECTORY="$PWD/target/debug" cargo nextest run --locked --workspace --lib --bins --test browser_native --features agent-core/bindings --run-ignored only -E 'binary(browser_native) & test(=shared_browser_live)'
 
 # Build and test Store recovery, Markdown and network permission on a fresh Android 17 emulator.

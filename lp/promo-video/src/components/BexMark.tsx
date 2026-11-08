@@ -1,6 +1,6 @@
 import React from 'react';
 
-// Vector redraw of apps/desktop/assets/logo.png so each part can take its own color.
+// Vector redraw of apps/nsh/assets/logo.png so each part can take its own color.
 export const BexMark: React.FC<{size: number; body: string; face: string; dot: string; style?: React.CSSProperties}> = ({
   size,
   body,

@@ -60,8 +60,6 @@ pub struct FileDraft {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     #[serde(skip)]
-    pub file_metadata: crate::presentation::files::FileMetadataCache,
-    #[serde(skip)]
     pub file_trees: crate::presentation::files::FileTrees,
     pub settings: Option<Arc<WorktreeSettings>>,
     pub worktrees: Option<Arc<Vec<crate::models::Worktree>>>,
@@ -707,10 +705,6 @@ fn reduce_intent(previous: &Snapshot, intent: Intent) -> (Snapshot, Vec<Effect>)
         Intent::RefreshModels => return (next, op::refresh_models()),
         Intent::SetConnectionEnabled { enabled } => next.connection.connection_disabled = !enabled,
         Intent::SetPreferredEditor { editor } => next.files.preferred_editor = Some(editor),
-        Intent::EnsureFileMetadata { paths, now_ms } => {
-            let effects = op::ensure_file_metadata(&mut next, paths, now_ms);
-            return (next, effects);
-        }
         Intent::FileTree { key, action } => {
             let effects = op::file_tree_action(&mut next, key, action);
             return (next, effects);
@@ -1513,9 +1507,6 @@ impl Snapshot {
             }
         }
 
-        Arc::make_mut(&mut self.files.workspace)
-            .file_metadata
-            .disconnected();
         Arc::make_mut(&mut self.files.workspace)
             .file_trees
             .disconnected();

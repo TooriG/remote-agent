@@ -158,7 +158,7 @@ const REASONS: Reasons[] = [
     title: '軽さの理由は、Rust。',
     lines: [
       ['Rust', 'ガベージコレクションがなく、メモリが膨らみにくい'],
-      ['GPUI', 'Web ではなく GPU で直接描くので、軽くてなめらか'],
+      ['NSH', 'Web ではなく OS 標準の部品で描くので、軽くてなめらか'],
       ['共通コア', '同じ Rust のコアで、どの端末でも同じ動き'],
     ],
     left: 1760,
@@ -453,7 +453,7 @@ export const Film: React.FC = () => (
       <Opening />
       <Connection />
       <div style={{...centered, left: 960, top: 70}}>
-        <Words parts={['Mac 版も、Rust + GPUI で軽い。']} at={32.5} out={36} size={56} />
+        <Words parts={['Mac 版も、Rust + NSH で軽い。']} at={32.5} out={36} size={56} />
       </div>
       <div style={{...centered, left: 960, top: 70}}>
         <Words parts={['メモリ使用量、実測。']} at={37} out={43} size={56} />

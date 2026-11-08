@@ -61,13 +61,13 @@ pub fn parse(source: &str) -> Vec<DiffRow> {
     }
     rows
 }
-pub fn is_file_metadata(line: &str) -> bool {
+fn is_file_metadata(line: &str) -> bool {
     ["index ", "--- ", "+++ "]
         .iter()
         .any(|prefix| line.starts_with(prefix))
 }
 
-pub fn file_names(rows: &[DiffRow]) -> HashMap<u64, String> {
+fn file_names(rows: &[DiffRow]) -> HashMap<u64, String> {
     let mut names = HashMap::new();
     for row in rows {
         let line = row.text.as_str();

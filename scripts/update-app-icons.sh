@@ -2,7 +2,7 @@
 # Build standard app icons from the logo. Requires macOS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source=apps/desktop/assets/logo.png
+source=apps/nsh/assets/logo.png
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
 # Standard launcher icons use a white backdrop; the source keeps alpha.
@@ -31,7 +31,7 @@ CGImageDestinationAddImage(destination, context.makeImage()!, nil)
 precondition(CGImageDestinationFinalize(destination))
 SWIFT
 xcrun swiftc "$temporary/app-icon.swift" -o "$temporary/app-icon"
-icon=apps/desktop/assets/icon.png
+icon=apps/nsh/assets/icon.png
 "$temporary/app-icon" "$source" "$icon"
 cp "$icon" apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 for variant in Preview Dev; do
@@ -51,4 +51,4 @@ create_icns() {
     done
     iconutil -c icns "$iconset" -o "$destination"
 }
-create_icns "$icon" apps/desktop/assets/icon.icns
+create_icns "$icon" apps/nsh/assets/icon.icns

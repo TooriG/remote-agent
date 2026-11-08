@@ -114,7 +114,7 @@ pub fn file_changes(item: &Item) -> impl Iterator<Item = FileChange<'_>> {
         proposal: change.proposal.as_ref(),
     })
 }
-pub fn file_change_details(
+fn file_change_details(
     diff: Option<&str>,
     proposal: Option<&crate::models::FileProposal>,
 ) -> String {

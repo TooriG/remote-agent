@@ -123,7 +123,7 @@ mod appkit {
         assert!(focus::has_focus(&page));
         focus::release(&page);
         assert!(window.firstResponder().unwrap().isEqual(Some(&parent)));
-        println!("Native browser focus returns to GPUI and preserves other fields");
+        println!("Native browser focus returns to the parent view and preserves other fields");
     }
 }
 

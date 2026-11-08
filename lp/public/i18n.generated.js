@@ -4,7 +4,7 @@
     "hero.tech": "Native speed with Rust. Mobile access over QUIC.",
     "strength.title": "Built for responsiveness. Built to stay connected.",
     "strength.native.title": "Native by design. Light on busywork.",
-    "strength.native.body": "Rust and GPUI render the desktop UI. Unchanged presentation data is reused to cut unnecessary work, keeping conversations and diffs responsive by design.",
+    "strength.native.body": "Rust and NSH render the desktop UI with standard OS controls. Unchanged presentation data is reused to cut unnecessary work, keeping conversations and diffs responsive by design.",
     "strength.connection.title": "A stronger foundation for mobile.",
     "strength.connection.body": "Your phone and computer connect over encrypted, QUIC-based iroh. Conversations, requests and attachments use independent streams, so one waiting transfer need not hold up the others.",
     "strength.recovery.title": "Lose the signal. Keep the work.",

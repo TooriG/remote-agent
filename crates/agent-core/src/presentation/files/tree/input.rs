@@ -58,17 +58,6 @@ impl FileTreeView {
         let query = desktop_query(&self.query);
         !query.is_empty() && matches_query_path(&row.path, row.kind, &query)
     }
-    /// A compressed directory chain shares a row with its terminal directory.
-    pub fn index_for_path(&self, path: &str) -> Option<usize> {
-        self.rows
-            .iter()
-            .position(|row| row.path == path)
-            .or_else(|| {
-                self.rows
-                    .iter()
-                    .position(|row| is_descendant(&row.path, path))
-            })
-    }
     pub(super) fn desktop_keyboard_input(
         &self,
         key: &str,
@@ -223,17 +212,6 @@ impl FileTreeView {
 }
 
 impl FileTreeView {
-    /// Pierre suppresses dragging during search and drags the whole selection
-    /// only when the grabbed row already belongs to it.
-    pub fn drag_paths(&self, path: &str) -> Vec<String> {
-        if !self.query.trim().is_empty() {
-            Vec::new()
-        } else if self.selected_paths.iter().any(|selected| selected == path) {
-            self.selected_paths.clone()
-        } else {
-            vec![path.into()]
-        }
-    }
     pub fn handles_desktop_key(&self, key: &str, additive: bool, shift: bool) -> bool {
         self.desktop_keyboard_input(key, additive, shift, None)
             .is_some()

@@ -1,5 +1,7 @@
 #![cfg(target_os = "macos")]
 //! Explicit native acceptance. Never runs in unit-tests or touches installed Bex.
+mod mac_app;
+
 use agent_protocol::{
     browser::*,
     session::{ProviderKind, SessionRef},
@@ -112,19 +114,10 @@ async fn wait(browser: &Browser, thread: &SessionRef, expression: &str, expected
 }
 
 #[tokio::test]
-#[ignore = "explicit native UI check; build agent-desktop first"]
+#[ignore = "explicit native UI check; package the Mac app first"]
 async fn shared_browser_live() {
-    let target = agent_process::runtime_directory().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let mut desktop = tokio::process::Command::new(target.join("agent-desktop"))
-        .env("AGENT_STATE_DIR", root.path())
-        .env("AGENT_ISOLATED_HOST", "1")
-        .env("AGENT_HOST_DAEMON", "/usr/bin/false")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+    let mut app = mac_app::spawn(root.path());
     for _ in 0..100 {
         if agent_local_host::browser::read_renderer(root.path()).is_ok() {
             break;
@@ -132,8 +125,8 @@ async fn shared_browser_live() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(
-        desktop.try_wait().unwrap().is_none(),
-        "native desktop exited during launch"
+        app.try_wait().unwrap().is_none(),
+        "the Mac app exited during launch"
     );
     agent_local_host::browser::read_renderer(root.path()).unwrap();
     let browser = Browser::start(root.path().join("browser")).await.unwrap();
@@ -555,18 +548,10 @@ async fn shared_browser_live() {
         before_restart.tabs,
         "Host restart must not recreate native tabs"
     );
-    // Restart only this isolated desktop. Restore the same tab IDs and the
+    // Restart only this isolated app. Restore the same tab IDs and the
     // persistent shared login profile rather than creating a new conversation.
-    desktop.kill().await.unwrap();
-    desktop = tokio::process::Command::new(target.join("agent-desktop"))
-        .env("AGENT_STATE_DIR", root.path())
-        .env("AGENT_ISOLATED_HOST", "1")
-        .env("AGENT_HOST_DAEMON", "/usr/bin/false")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+    app.kill().await.unwrap();
+    app = mac_app::spawn(root.path());
     for _ in 0..100 {
         if agent_local_host::browser::read_renderer(root.path()).is_ok_and(|r| r.id != owner_id) {
             break;
@@ -646,7 +631,7 @@ async fn shared_browser_live() {
             .tabs
             .is_empty()
     );
-    desktop.kill().await.unwrap();
+    app.kill().await.unwrap();
     browser.shutdown().await;
     server.abort();
 }

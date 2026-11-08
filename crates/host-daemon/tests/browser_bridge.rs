@@ -1,4 +1,7 @@
 #![cfg(unix)]
+#[cfg(target_os = "macos")]
+mod mac_app;
+
 use agent_transport::peer::{JsonlReader, JsonlWriter};
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::Stdio, time::Duration};
@@ -81,29 +84,20 @@ async fn stdio_browser_tool_is_typed_and_does_not_expose_generic_execution() {
 }
 
 #[tokio::test]
-#[ignore = "requires installed Codex, native desktop (Mac) or Chromium (Linux), and the process supervisor; no model turn is submitted"]
+#[ignore = "requires installed Codex, the packaged Mac app (Mac) or Chromium (Linux), and the process supervisor; no model turn is submitted"]
 async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     let root = tempfile::tempdir().unwrap();
     #[cfg(target_os = "macos")]
-    let mut desktop = {
-        let target = agent_process::runtime_directory().unwrap();
-        let mut desktop = tokio::process::Command::new(target.join("agent-desktop"))
-            .env("AGENT_STATE_DIR", root.path())
-            .env("AGENT_ISOLATED_HOST", "1")
-            .env("AGENT_HOST_DAEMON", "/usr/bin/false")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+    let mut app = {
+        let mut app = mac_app::spawn(root.path());
         for _ in 0..100 {
             if agent_local_host::browser::read_renderer(root.path()).is_ok() {
                 break;
             }
-            assert!(desktop.try_wait().unwrap().is_none());
+            assert!(app.try_wait().unwrap().is_none());
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        desktop
+        app
     };
     let browser = host_daemon::browser::Browser::start(root.path().join("profile"))
         .await
@@ -181,7 +175,7 @@ async fn installed_codex_exposes_the_same_browser_as_the_phone() {
     server.shutdown().await.unwrap();
     browser.shutdown().await;
     #[cfg(target_os = "macos")]
-    desktop.kill().await.unwrap();
+    app.kill().await.unwrap();
 }
 
 #[tokio::test]

@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "apps/desktop",
     "apps/native-focus",
     "apps/native-browser",
     "apps/nsh",
@@ -17,7 +16,6 @@ members = [
     "crates/xtask",
     "crates/host-fixture",
 ]
-exclude = ["vendor/gpui-pre"]
 resolver = "2"
 
 [workspace.package]
@@ -34,25 +32,14 @@ codegen-units = 16
 [profile.dev]
 debug = "line-tables-only"
 
-# Development Hosts and clients run daily. Unoptimized GPUI layout and rendering
-# keep desktop frames over budget, and debug compression is slow.
+# Development Hosts and clients run daily. Unoptimized dependencies keep client
+# frames over budget, and debug compression is slow.
 [profile.dev.package."*"]
 opt-level = 3
 
 # UniFFI's generator runs only while building bindings. Keep its initial compilation cheap.
 [profile.dev.package.uniffi_bindgen]
 opt-level = 0
-
-# UI builders and their GPUI monomorphizations compile in the desktop crate,
-# not in GPUI. Keep them responsive in the development app as well.
-[profile.dev.package.agent-desktop]
-opt-level = 1
-
-# GPUI's Windows debug renderer reads HLSL from its build-time Cargo source
-# directory. Embed compiled shaders so development packages also run on other PCs.
-# This applies to the crate's build script as well; other crates keep assertions.
-[profile.dev.package.gpui-pre-windows]
-debug-assertions = false
 
 [workspace.dependencies]
 tracing = "0.1.44"
@@ -71,8 +58,6 @@ url = "2.5.8"
 zeroize = "1.9.1"
 
 [patch.crates-io]
-# Retain nested caches, native caption hitboxes, and current-frame overlay state.
-gpui-pre = { path = "vendor/gpui-pre" }
 # UDP rebind recovery: https://github.com/n0-computer/net-tools/pull/235
 netwatch = { git = "https://github.com/ttizze/net-tools", rev = "1d54cca14f47ebfa20a75234e8a08351d9f5a8d4" }
 alacritty_terminal = { path = "vendor/alacritty_terminal" }

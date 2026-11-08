@@ -879,7 +879,7 @@ async fn build_test_bundle(
         )
         .await?;
     }
-    let mut host_build = args![vec;
+    let host_build = args![vec;
         "cargo",
         "build",
         "--locked",
@@ -896,23 +896,7 @@ async fn build_test_bundle(
         "--bin",
         "agent-claude-fixture"
     ];
-    // Full-suite CI caches include the desktop's unified dependency features.
-    // Match that graph for focused tests when both caches were restored.
-    if browser
-        || matches!(
-            std::env::var("AGENT_IOS_USE_CACHED_HOST_GRAPH").as_deref(),
-            Ok("true")
-        )
-    {
-        host_build.extend(args![
-            "--package",
-            "agent-desktop",
-            "--bin",
-            "agent-desktop"
-        ]);
-    }
-    // Each phase reports its duration, so CI logs show where a slow build spent its time.
-    for (phase, arguments) in [
+    let mut phases = vec![
         (
             "iOS bindings",
             args![vec; "scripts/build-agent-ios.sh", "simulator"],
@@ -922,7 +906,16 @@ async fn build_test_bundle(
             "SDK runtime",
             args![vec; "node", "scripts/build-claude-sdk.ts", target.join("debug")],
         ),
-    ] {
+    ];
+    if browser {
+        // The fixture opens this app as the Host's native browser owner.
+        phases.push((
+            "Mac browser app",
+            args![vec; "env", "AGENT_CODE_SIGN_IDENTITY=-", "scripts/build-macos.sh", "desktop", "dev"],
+        ));
+    }
+    // Each phase reports its duration, so CI logs show where a slow build spent its time.
+    for (phase, arguments) in phases {
         println!("Building {phase}");
         let phase_started = Instant::now();
         supervision::run(&arguments, cwd, Io::Log(log), cancel, BUILD_TIMEOUT).await?;
@@ -1007,7 +1000,7 @@ fn test_bundle_paths(browser: bool) -> Vec<&'static str> {
         "debug/Claude-Agent-SDK-LICENSE.md",
     ];
     if browser {
-        paths.push("debug/agent-desktop");
+        paths.push("debug/bex.app");
     }
     paths
 }
@@ -1576,6 +1569,10 @@ case ${0##*/} in
   git)
     if [[ $1 == rev-parse ]]; then echo "$root/git-common"; else echo fixture-revision; fi ;;
   build-agent-ios.sh) touch "$root/ios-ready" ;;
+  build-macos.sh)
+    [[ $AGENT_CODE_SIGN_IDENTITY == - ]]
+    mkdir -p "$root/target/debug/bex.app/Contents/MacOS"
+    touch "$root/target/debug/bex.app/Contents/MacOS/bex" ;;
   cargo)
     if [[ $1 == metadata ]]; then cat "$root/metadata.json"; exit; fi
     [[ $AGENT_IOS_BUILD_TEST_MODE != failure ]] || exit 19
@@ -1593,6 +1590,7 @@ esac
 "#;
         for executable in [
             "scripts/build-agent-ios.sh",
+            "scripts/build-macos.sh",
             "bin/cargo",
             "bin/node",
             "bin/xcodebuild",
@@ -1617,10 +1615,6 @@ esac
             .env("AGENT_IOS_TEST_SHARDS", "1")
             .env("AGENT_IOS_TEST_WORKERS", "1")
             .env("AGENT_IOS_TEST_ROUNDS", "1")
-            .env(
-                "AGENT_IOS_USE_CACHED_HOST_GRAPH",
-                if mode == "cached" { "true" } else { "false" },
-            )
             .env(
                 "PATH",
                 std::env::join_paths(
@@ -1656,7 +1650,7 @@ esac
             }
             return;
         }
-        for mode in ["host", "browser", "cached", "failure"] {
+        for mode in ["host", "browser", "failure"] {
             let temporary = build_fixture();
             let root = temporary.path().canonicalize().unwrap();
             let output = build_command(
@@ -1681,14 +1675,18 @@ esac
                     .count(),
                 1
             );
-            let desktop = matches!(mode, "browser" | "cached");
-            assert_eq!(commands.contains("--bin agent-desktop"), desktop);
+            let app = mode == "browser";
+            assert_eq!(commands.contains("build-macos.sh desktop dev"), app);
             assert_eq!(commands.contains("xcodebuild "), mode != "failure");
             assert_eq!(
                 commands.contains("AGENT_BUILD_REVISION=fixture-revision"),
                 mode != "failure"
             );
-            assert_eq!(root.join("target/debug/agent-desktop").is_file(), desktop);
+            assert_eq!(
+                root.join("target/debug/bex.app/Contents/MacOS/bex")
+                    .is_file(),
+                app
+            );
         }
     }
 
@@ -1910,14 +1908,14 @@ esac
         let target = directory.path().join("build");
         let products = target.join("qa/ios-derived-data/Build/Products");
         fs::create_dir_all(&products).unwrap();
-        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::create_dir_all(target.join("debug/bex.app/Contents/MacOS")).unwrap();
         for name in [
             "xtask",
             "agent-ui-fixture",
             "agent-codex-fixture",
             "agent-claude-fixture",
             "agent-provider-supervisor",
-            "agent-desktop",
+            "bex.app/Contents/MacOS/bex",
         ] {
             let path = target.join("debug").join(name);
             fs::write(&path, format!("executable {name}")).unwrap();
@@ -1973,13 +1971,16 @@ esac
                     & 0o777,
                 0o755
             );
-            assert_eq!(restored.join("debug/agent-desktop").exists(), browser);
+            assert_eq!(
+                restored.join("debug/bex.app/Contents/MacOS/bex").is_file(),
+                browser
+            );
             if !browser {
                 assert!(
                     prebuilt_test_bundle(restored, true)
                         .unwrap_err()
                         .to_string()
-                        .contains("agent-desktop")
+                        .contains("bex.app")
                 );
             }
             fs::remove_file(restored.join("debug/agent-ui-fixture")).unwrap();

@@ -110,13 +110,12 @@ jobs:
                 scripts/build-agent-android.ts) area=android ;;
               apps/mobile/iosApp/* | .swiftformat | .swiftlint.yml | scripts/ios-e2e.sh | \
                 scripts/build-agent-ios.sh | scripts/archive-ios.sh) area=iphone ;;
-              apps/desktop/*) area=desktop ;;
               *) area=all ;;
             esac
-            if [[ $area == all || $area == desktop || $area == windows || $area == nsh ]]; then windows=true; fi
+            if [[ $area == all || $area == windows || $area == nsh ]]; then windows=true; fi
             if [[ $area == all || $area == android ]]; then android=true; fi
             if [[ $area == all || $area == iphone || $area == iphone-mac || $area == nsh ]]; then iphone=true; fi
-            if [[ $area == all || $area == mac || $area == iphone-mac || $area == desktop || $area == nsh ]]; then mac=true; fi
+            if [[ $area == all || $area == mac || $area == iphone-mac || $area == nsh ]]; then mac=true; fi
           done <<< "$changed"
           printf 'windows=%s\nandroid=%s\niphone=%s\nmac=%s\n' "$windows" "$android" "$iphone" "$mac" | tee -a "$GITHUB_OUTPUT"
   toolchain:
@@ -378,7 +377,7 @@ jobs:
           # Either Apple job may be unavailable; each must publish its own cache.
           key: macos-swift-xcode-26.6-${{ hashFiles('flake.lock', 'tools/cargo/package.nix') }}
           cache-targets: false
-          # Focused tests may omit the desktop renderer; only full builds publish.
+          # Focused tests may omit the Mac browser app; only full builds publish.
           save-if: ${{ github.ref == 'refs/heads/main' && !inputs.ios-tests }}
           cache-on-failure: true
       - *restore-cargo-cache
@@ -413,7 +412,6 @@ jobs:
       - name: iPhone contracts and shared test build
         run: |
           set -o pipefail
-          export AGENT_IOS_USE_CACHED_HOST_GRAPH="${{ steps.cargo-cache.outputs.cache-matched-key != '' }}"
           mkdir -p target/qa
           nix develop .#ios-build --command just ios-unit-tests 2>&1 | tee target/qa/quality.log
           if [[ -n "$AGENT_IOS_TESTS" ]]; then

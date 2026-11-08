@@ -188,7 +188,7 @@ mod tests {
             "vendor/App/assets",
             "target/assets",
             ".worktree/other/assets",
-            "apps/desktop/assets",
+            "apps/nsh/assets",
         ] {
             std::fs::create_dir_all(root.path().join(path)).unwrap();
             std::fs::write(root.path().join(path).join("icon.png"), []).unwrap();
@@ -198,10 +198,7 @@ mod tests {
             .unwrap();
         let icons = sources(root.path());
         assert_eq!(icons.len(), 1);
-        assert_eq!(
-            icons[0].light,
-            [PathBuf::from("apps/desktop/assets/icon.png")]
-        );
+        assert_eq!(icons[0].light, [PathBuf::from("apps/nsh/assets/icon.png")]);
     }
     #[test]
     fn discovery_stops_before_deeply_nested_assets() {

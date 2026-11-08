@@ -90,7 +90,7 @@ cp "${AGENT_NODE_RUNTIME:?Use the pinned Nix development environment}/bin/node" 
 cp apps/nsh/macos/Node.Info.plist "$node_bundle/Contents/Info.plist"
 cp "$AGENT_NODE_RUNTIME/share/doc/node/LICENSE" "$resources/Node-LICENSE.txt"
 cp apps/nsh/macos/Info.plist "$bundle/Contents/Info.plist"
-cp apps/desktop/assets/icon.icns "$resources/bex.icns"
+cp apps/nsh/assets/icon.icns "$resources/bex.icns"
 # Provider marks and other named images the views show.
 xcrun actool apps/mobile/iosApp/Bex/Assets.xcassets --compile "$resources" \
     --platform macosx --minimum-deployment-target 26.0 > /dev/null
