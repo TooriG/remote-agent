@@ -101,6 +101,8 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
 | Changed-files bar and review | covered | review-panel, worktree-review |
 | Tool panel: files, file preview, diff, close | covered | tool-panel |
+| File list beside an open file: workspace tree, drag into the composer, Shift+F10 menu, resizing | partial | explorer; ⌘/Shift-click selection is Core-tested (the driver presses without keys), the width surviving a relaunch is unit-tested, and the handle takes no arrow keys (NSH handles take only drags and VoiceOver steps) |
+| File chips: glyph, accent, caption, menu, opening | partial | file-chips; the size tooltip and ⌘-click to the editor need the pointer and an installed editor |
 | Tool panel: layout, browser, terminal, agents, side chat | partial | review-panel (layout), tools, side-chat; the terminal's screen and a loaded page are not observable |
 | Settings: general, providers, environment, worktrees | covered | settings, environment-settings |
 | Settings: display language | covered | display-language |
@@ -108,4 +110,4 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Accessibility: the settings overlay is modal, message roles | covered | settings-modal, send-message |
 | Onboarding without a Host | not yet | the runner always starts a fixture Host |
 | Keyboard shortcuts | partial | composer (Return sends); the app binds no other shortcut (⌘, does nothing) |
-| Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet |
+| Markdown tables, diagrams, images, file links | covered | markdown-table, markdown-document, mermaid, images, visualization, file-chips |

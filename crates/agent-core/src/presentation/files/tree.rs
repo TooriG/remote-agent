@@ -80,6 +80,12 @@ pub enum FileTreeAction {
     },
     ToggleAll,
     Refresh,
+    DragStart {
+        path: String,
+    },
+    DragEnd {
+        paths: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -518,6 +524,30 @@ impl Tree {
                 if !self.query.trim().is_empty() {
                     return Some(self.restart_search());
                 }
+            }
+            FileTreeAction::DragStart { path }
+                if !self.desktop_search() && valid_tree_path(&path) =>
+            {
+                if !self.selected.contains(&path) {
+                    self.selected = vec![path.clone()];
+                    self.anchor = Some(path.clone());
+                }
+                self.focused = Some(path);
+            }
+            FileTreeAction::DragEnd { paths } => {
+                let removed = (paths.len() >= 64 && self.selected.len() >= 64).then(|| {
+                    paths
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<std::collections::HashSet<_>>()
+                });
+                self.selected.retain(|path| {
+                    !removed.as_ref().map_or_else(
+                        || paths.contains(path),
+                        |removed| removed.contains(path.as_str()),
+                    )
+                });
+                self.retain_discoveries();
             }
             _ => {}
         }

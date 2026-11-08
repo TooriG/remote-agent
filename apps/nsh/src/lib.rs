@@ -18,6 +18,8 @@ mod details;
 mod dictation;
 mod editor;
 mod environment;
+#[cfg(desktop)]
+mod file_actions;
 mod files;
 mod invocations;
 mod l10n;
@@ -82,6 +84,8 @@ pub(crate) struct Connection {
     pairing: Memo<bool>,
     pane: Option<u64>,
     composer_ref: ElementRef,
+    /// The desktop composer's box, which rows dragged from a file tree drop on.
+    composer_box: ElementRef,
 }
 
 /// What every connection of one application shares.
@@ -122,6 +126,7 @@ impl Connection {
             }),
             pane,
             composer_ref: element_ref(),
+            composer_box: element_ref(),
         }
     }
 

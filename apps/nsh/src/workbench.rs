@@ -189,7 +189,7 @@ pub(crate) fn screen(leading: Option<AnyElement>) -> impl IntoElement {
                 let PanelSurface { id, kind, path } = surface.get_untracked();
                 match kind {
                     PanelKind::Files => crate::files::screen(id).into_element(),
-                    PanelKind::File => crate::editor::editors().into_element(),
+                    PanelKind::File => file(id),
                     PanelKind::Terminal => {
                         crate::terminal::screen(surface.get_untracked(), host).into_element()
                     }
@@ -207,6 +207,52 @@ pub(crate) fn screen(leading: Option<AnyElement>) -> impl IntoElement {
             move || workspace.state.with(|s| s.selected().is_none()),
             picker,
         ))
+}
+
+/// An open file; on the desktop, the workspace's file list beside it, as the
+/// desktop client's explorer: its width the user's, within what leaves the
+/// file its room.
+#[cfg(desktop)]
+fn file(id: u64) -> AnyElement {
+    use agent_core::presentation::files::{
+        EXPLORER_CONTENT_MIN_WIDTH, EXPLORER_MIN_WIDTH, explorer_max_width, explorer_width,
+    };
+    let connection = use_context::<Connection>().unwrap();
+    let available = signal(f32::INFINITY);
+    let preferred = computed(move || connection.state.with(|state| state.explorer_width));
+    view()
+        .flex_1()
+        .min_h_0()
+        .on_layout(move |frame: &nsh_core::Bounds<Points>| available.set(frame.size.width.0))
+        .child(
+            nsh_base::h_resizable()
+                .handle_class("w-px bg-border group-hover:bg-primary group-active:bg-primary")
+                .handle_accessibility_label(Some(SharedString::from(tr("ファイル一覧の幅を変更"))))
+                .child(
+                    nsh_base::resizable_panel()
+                        .min_size(px(EXPLORER_CONTENT_MIN_WIDTH))
+                        .child(crate::editor::editors()),
+                )
+                .child(
+                    nsh_base::resizable_panel()
+                        .size(move || Some(px(explorer_width(preferred.get(), available.get()))))
+                        .min_size(px(EXPLORER_MIN_WIDTH))
+                        .max_size(move || Some(px(explorer_max_width(available.get()))))
+                        .on_resize(move |size: &Points| {
+                            let width = explorer_width(size.0, available.get_untracked());
+                            connection
+                                .application
+                                .with(|application| application.set_explorer_width(width));
+                        })
+                        .child(crate::files::explorer(id)),
+                ),
+        )
+        .into_element()
+}
+
+#[cfg(not(desktop))]
+fn file(_: u64) -> AnyElement {
+    crate::editor::editors().into_element()
 }
 
 /// The panel bar's height: the conversation header's beside it.

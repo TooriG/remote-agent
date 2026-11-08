@@ -174,6 +174,20 @@ impl Snapshot {
     }
 }
 
+/// SSH receives a destination argument, never shell code or additional options.
+pub fn validate_ssh_destination(destination: &str) -> Result<&str, &'static str> {
+    let destination = destination.trim();
+    if destination.is_empty()
+        || destination.starts_with('-')
+        || !destination
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-@:[]".contains(&byte))
+    {
+        return Err("SSH接続先に user@server またはSSHのホスト名を入力してください。");
+    }
+    Ok(destination)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,6 +376,15 @@ mod tests {
             let actual = availability(connected, provider, &models, Some(&accounts), &errors);
             proptest::prop_assert_eq!(actual == AgentAvailability::Ready, connected && authenticated && catalog && !failed && !account_failed);
         }
+
+        #[test]
+        fn ssh_targets_cannot_inject_options_or_shell_syntax(value in ".{0,120}") {
+            if let Ok(target) = validate_ssh_destination(&value) {
+                proptest::prop_assert!(!target.is_empty());
+                proptest::prop_assert!(!target.starts_with('-'));
+                proptest::prop_assert!(!target.chars().any(|c| c.is_whitespace() || ";|&$`\\\"'".contains(c)));
+            }
+        }
     }
 
     #[test]
@@ -456,5 +479,24 @@ mod tests {
             ),
             AgentAvailability::Checking
         );
+    }
+
+    #[test]
+    fn ssh_accepts_destinations_and_rejects_options_and_commands() {
+        assert_eq!(
+            validate_ssh_destination(" user@server \n"),
+            Ok("user@server")
+        );
+        for target in ["user@server", "dev-server", "user@[::1]"] {
+            assert_eq!(validate_ssh_destination(target), Ok(target));
+        }
+        for target in [
+            "",
+            "-oProxyCommand=anything",
+            "user@server; command",
+            "user@$(command)",
+        ] {
+            assert!(validate_ssh_destination(target).is_err());
+        }
     }
 }

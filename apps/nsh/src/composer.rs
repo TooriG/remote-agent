@@ -369,6 +369,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         #[cfg(desktop)]
         let controls_row = controls_row.child(crate::permissions::control());
         view()
+            .element_ref(&connection.composer_box)
             .w_full()
             .p(px(7.0))
             .gap_2()

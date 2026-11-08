@@ -10,6 +10,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [features]
 bindings = ["dep:uniffi", "dep:zeroize"]
+diagrams = ["dep:mermaid-rs-renderer", "dep:usvg"]
 # The desktop update flow: release downloads and replacing the installed app.
 app-updates = ["dep:agent-local-host", "dep:anyhow", "dep:reqwest", "dep:ring", "dep:rustls", "dep:tempfile", "tokio/fs"]
 
@@ -36,6 +37,10 @@ percent-encoding = "2.3"
 regex = "1.13.1"
 # Markdown uses bundled syntax/theme dumps; file loaders and HTML output are unused.
 syntect = { version = "=5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
+mermaid-rs-renderer = { version = "=0.3.1", default-features = false, optional = true }
+# Outlines a diagram's labels with the system's fonts: the SVG renderers that
+# draw it may have none.
+usvg = { version = "=0.46.0", default-features = false, features = ["text", "system-fonts"], optional = true }
 base64.workspace = true
 agent-local-host = { path = "../agent-local-host", optional = true }
 anyhow = { workspace = true, optional = true }

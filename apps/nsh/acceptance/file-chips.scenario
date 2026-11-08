@@ -1,0 +1,18 @@
+# Paths in an answer show as file chips, an authored caption before its chip:
+# a chip's menu copies its path, and a press opens the file in the tool panel.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[file-paths] [immediate] ファイルを確認します"
+press 送信
+expect "確認したファイルです。" 30000
+expect "hello.txt · L2"
+expect "子ファイル"
+expect "child.txt"
+screenshot chips
+select "*確認したファイルです。*" "hello.txt · L2"
+menu "*確認したファイルです。*"
+press フルパスをコピー
+expect_clipboard "/project/hello.txt:2"
+press "*hello.txt · L2"
+expect "日本語のファイル" after ツールを閉じる 20000
+screenshot opened

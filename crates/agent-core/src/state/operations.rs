@@ -39,6 +39,10 @@ macro_rules! rpc_operation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum Intent {
+    EnsureFileMetadata {
+        paths: Vec<String>,
+        now_ms: u64,
+    },
     FileTree {
         key: crate::presentation::files::FileTreeKey,
         action: crate::presentation::files::FileTreeAction,
@@ -508,6 +512,8 @@ pub use workspace::*;
 mod file_tree;
 pub(crate) use file_tree::file_tree_action;
 pub(super) use file_tree::{reconnect_file_trees, refresh_file_trees};
+mod file_metadata;
+pub(crate) use file_metadata::ensure_file_metadata;
 mod file_reference;
 pub use file_reference::ResolveFileReference;
 mod lists;

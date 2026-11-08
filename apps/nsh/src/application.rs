@@ -69,6 +69,9 @@ pub(crate) struct State {
     pub browser_renderer: String,
     pub worktrees: Option<WorktreeEditor>,
     pub language: UiLanguage,
+    /// The width the user gave the file list beside an open file.
+    #[cfg(any(desktop, test))]
+    pub explorer_width: f32,
     /// This app's own update, on the desktop.
     #[cfg(desktop)]
     pub update: Option<agent_core::updates::UpdateState>,
@@ -97,6 +100,8 @@ impl Default for State {
             browser_renderer: String::new(),
             worktrees: None,
             language: UiLanguage::default(),
+            #[cfg(any(desktop, test))]
+            explorer_width: agent_core::presentation::files::EXPLORER_DEFAULT_WIDTH,
             #[cfg(desktop)]
             update: None,
             #[cfg(desktop)]
@@ -214,6 +219,8 @@ pub(crate) struct Application {
     /// Only the desktop settings change the language.
     #[cfg(any(desktop, test))]
     language_path: PathBuf,
+    #[cfg(any(desktop, test))]
+    explorer_width_path: PathBuf,
     #[cfg(desktop)]
     updater: Option<Arc<agent_core::updates::Updater>>,
 }
@@ -239,6 +246,17 @@ impl Application {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         crate::l10n::set(language);
+        #[cfg(any(desktop, test))]
+        let explorer_width_path = root.join("file-explorer-width.json");
+        // As the language, an unreadable width is the default's.
+        #[cfg(any(desktop, test))]
+        let explorer_width = crate::storage::read(&explorer_width_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<f32>(&bytes).ok())
+            .map_or(
+                agent_core::presentation::files::EXPLORER_DEFAULT_WIDTH,
+                |width| agent_core::presentation::files::explorer_width(width, f32::INFINITY),
+            );
         #[cfg(desktop)]
         let scope = local.clone();
         let (runtime, client, incoming) = Client::new(root, local)?;
@@ -254,6 +272,8 @@ impl Application {
             host: selection.host_id.clone().unwrap_or_default(),
             all_hosts: selection.all,
             language,
+            #[cfg(any(desktop, test))]
+            explorer_width,
             ..State::default()
         }));
         let application = Arc::new(Self {
@@ -266,6 +286,8 @@ impl Application {
             selection_path,
             #[cfg(any(desktop, test))]
             language_path,
+            #[cfg(any(desktop, test))]
+            explorer_width_path,
             #[cfg(desktop)]
             updater,
         });
@@ -377,6 +399,20 @@ impl Application {
         if start {
             self.client.pair(invitation);
         }
+    }
+
+    /// Saves the file list's width and publishes it; a width that cannot be
+    /// saved still holds until the app ends, and the failure shows.
+    #[cfg(any(desktop, test))]
+    pub fn set_explorer_width(&self, width: f32) {
+        let saved = agent_local_host::save_private_json(&self.explorer_width_path, &width);
+        self.state.send_modify(|state| {
+            let state = Arc::make_mut(state);
+            state.explorer_width = width;
+            if let Err(reason) = saved {
+                state.failure = Some(reason.to_string());
+            }
+        });
     }
 
     /// Saves the UI language, then publishes it so the root is made again in it.
@@ -787,6 +823,27 @@ mod tests {
         restored.select_language(UiLanguage::Japanese);
         assert_eq!(crate::l10n::tr("設定"), "設定");
         runtime.block_on(restored.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn the_file_list_width_is_restored_on_the_next_launch_and_a_broken_one_is_the_default() {
+        use agent_core::presentation::files::EXPLORER_DEFAULT_WIDTH;
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, application) = Application::new(directory.path().into(), None).unwrap();
+        assert_eq!(
+            application.snapshot().explorer_width,
+            EXPLORER_DEFAULT_WIDTH
+        );
+        application.set_explorer_width(336.0);
+        assert_eq!(application.snapshot().explorer_width, 336.0);
+        runtime.block_on(application.shutdown()).unwrap();
+        let (runtime, restored) = Application::new(directory.path().into(), None).unwrap();
+        assert_eq!(restored.snapshot().explorer_width, 336.0);
+        runtime.block_on(restored.shutdown()).unwrap();
+        std::fs::write(directory.path().join("file-explorer-width.json"), b"broken").unwrap();
+        let (runtime, broken) = Application::new(directory.path().into(), None).unwrap();
+        assert_eq!(broken.snapshot().explorer_width, EXPLORER_DEFAULT_WIDTH);
+        runtime.block_on(broken.shutdown()).unwrap();
     }
 
     #[test]

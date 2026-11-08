@@ -251,8 +251,9 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                             },
                             move || {
                                 following.set(false);
-                                if let Some(thread_id) =
-                                    connection.context.with_untracked(|p| p.navigation().thread_id)
+                                if let Some(thread_id) = connection
+                                    .context
+                                    .with_untracked(|p| p.navigation().thread_id)
                                 {
                                     connection.dispatch(Intent::ReadOlder { thread_id });
                                 }
@@ -286,15 +287,38 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 move |at| {
                     // The list's cells can outlive the list's own values while a
                     // conversation closes: a row then reads as none.
-                    let row = computed(move || rows.try_get().and_then(|rows| rows.get(at.index()).cloned()));
+                    let row = computed(move || {
+                        rows.try_get()
+                            .and_then(|rows| rows.get(at.index()).cloned())
+                    });
                     let user =
                         move || row.with(|r| r.as_ref().is_some_and(|r| r.kind == Kind::User));
                     let kind = move || row.with(|r| r.as_ref().map_or(Kind::Response, |r| r.kind));
-                    let detail = computed(move || row.with(|r| r.as_ref().and_then(|r| r.detail.clone())));
-                    let error = computed(move || row.with(|r| r.as_ref().and_then(|r| r.error.clone())));
-                    let label = move || row.with(|row| row.as_ref().map(|row| {
-                        row.progress.as_ref().map(|progress| localized(progress.label(clock.get().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64())).into()).unwrap_or_else(|| row.body.clone())
-                    }));
+                    let detail =
+                        computed(move || row.with(|r| r.as_ref().and_then(|r| r.detail.clone())));
+                    let error =
+                        computed(move || row.with(|r| r.as_ref().and_then(|r| r.error.clone())));
+                    let label = move || {
+                        row.with(|row| {
+                            row.as_ref().map(|row| {
+                                row.progress
+                                    .as_ref()
+                                    .map(|progress| {
+                                        localized(
+                                            progress.label(
+                                                clock
+                                                    .get()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs_f64(),
+                                            ),
+                                        )
+                                        .into()
+                                    })
+                                    .unwrap_or_else(|| row.body.clone())
+                            })
+                        })
+                    };
                     view()
                         .w_full()
                         .items_center()
@@ -308,21 +332,34 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                 .items_start()
                                 .style_when(user, |s| s.items_end())
                                 .child(when(
-                                    move || row.with(|row| row.as_ref().is_some_and(|row| row.steer)),
+                                    move || {
+                                        row.with(|row| row.as_ref().is_some_and(|row| row.steer))
+                                    },
                                     steer_marker,
                                 ))
                                 .child(when(
                                     move || {
                                         row.with(|row| {
-                                            row.as_ref().is_some_and(|row| row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse))
+                                            row.as_ref().is_some_and(|row| {
+                                                row.activity.as_ref().is_some_and(|activity| {
+                                                    activity.activity_can_collapse
+                                                })
+                                            })
                                         })
                                     },
                                     move || {
                                         let open = move || {
                                             row.with(|row| {
-                                                row.as_ref().and_then(|row| row.activity.as_ref()).is_some_and(|activity| {
-                                                    expanded.with(|all| activity_is_expanded(&activity.status, all.get(&activity.id).cloned()))
-                                                })
+                                                row.as_ref()
+                                                    .and_then(|row| row.activity.as_ref())
+                                                    .is_some_and(|activity| {
+                                                        expanded.with(|all| {
+                                                            activity_is_expanded(
+                                                                &activity.status,
+                                                                all.get(&activity.id).cloned(),
+                                                            )
+                                                        })
+                                                    })
                                             })
                                         };
                                         fold_row(
@@ -364,7 +401,19 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         )
                                     },
                                 ))
-                                .child(when(move || detail.get().is_some(), move || crate::activity::details(surroundings, detail, expanded_items, list, at, following)))
+                                .child(when(
+                                    move || detail.get().is_some(),
+                                    move || {
+                                        crate::activity::details(
+                                            surroundings,
+                                            detail,
+                                            expanded_items,
+                                            list,
+                                            at,
+                                            following,
+                                        )
+                                    },
+                                ))
                                 .child(
                                     view()
                                         .max_w(relative(1.0))
@@ -381,14 +430,25 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                             move || error_card(error),
                                         ))
                                         .child(when(
-                                            move || row.with(|row| row.as_ref().is_some_and(|row| {
-                                                !row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse) && row.detail.is_none() && row.error.is_none()
-                                            })),
-                                            move || crate::rich_text::content(
-                                                surroundings,
-                                                move || label().map(|text| agent_core::presentation::markdown::markdown_blocks(text.to_string())).unwrap_or_default(),
-                                                kind,
-                                            ),
+                                            move || {
+                                                row.with(|row| {
+                                                    row.as_ref().is_some_and(|row| {
+                                                        !row.activity.as_ref().is_some_and(
+                                                            |activity| {
+                                                                activity.activity_can_collapse
+                                                            },
+                                                        ) && row.detail.is_none()
+                                                            && row.error.is_none()
+                                                    })
+                                                })
+                                            },
+                                            move || {
+                                                crate::rich_text::message(
+                                                    surroundings,
+                                                    move || label().map(|text| text.to_string()),
+                                                    kind,
+                                                )
+                                            },
                                         )),
                                 )
                                 .child(each(
@@ -400,7 +460,15 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         })
                                     },
                                     |source: &String| source.clone(),
-                                    move |source, _| crate::media::image_view(connection, surroundings.preview, move || source.get(), 320.0, 240.0),
+                                    move |source, _| {
+                                        crate::media::image_view(
+                                            connection,
+                                            surroundings.preview,
+                                            move || source.get(),
+                                            320.0,
+                                            240.0,
+                                        )
+                                    },
                                 ))
                                 .child(when(
                                     move || {
@@ -431,14 +499,23 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             .element_ref(&list)
             .estimated_item_size(px(170.0))
             .follow_end(px(FOLLOW_END_THRESHOLD))
-            .on_scroll_drag_start(move |_: &Point<Points>| { dragging.replace(true); })
+            .on_scroll_drag_start(move |_: &Point<Points>| {
+                dragging.replace(true);
+            })
             .on_scroll(move |event: &ScrollEvent| {
                 if dragging.get() {
-                    following.set(event.offset.y + event.size.height >= event.content_size.height - px(FOLLOW_END_THRESHOLD));
+                    following.set(
+                        event.offset.y + event.size.height
+                            >= event.content_size.height - px(FOLLOW_END_THRESHOLD),
+                    );
                 }
             })
-            .on_scroll_end(move |_: &Point<Points>| { dragging.replace(false); })
-            .on_momentum_end(move |_: &Point<Points>| { dragging.replace(false); })
+            .on_scroll_end(move |_: &Point<Points>| {
+                dragging.replace(false);
+            })
+            .on_momentum_end(move |_: &Point<Points>| {
+                dragging.replace(false);
+            })
             .on_viewable_items_change(move |items: &ViewableItems| {
                 if let Some((first, _)) = items.viewable {
                     top_row.set(first);
@@ -449,17 +526,31 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
         )
         .child(when(is_desktop, move || {
             minimap(rows, top_row, list, following, move || {
-                agent_core::presentation::conversation::minimap_persistent(width.get(), CONTENT_WIDTH)
+                agent_core::presentation::conversation::minimap_persistent(
+                    width.get(),
+                    CONTENT_WIDTH,
+                )
             })
         }))
-        .child(when(move || !following.get(), move || {
-            crate::ui::icon_button_sized(crate::ui::Icon::ARROW_DOWN, tr("最新のメッセージへ"), 32.0, 16.0, move || following.set(true))
+        .child(when(
+            move || !following.get(),
+            move || {
+                crate::ui::icon_button_sized(
+                    crate::ui::Icon::ARROW_DOWN,
+                    tr("最新のメッセージへ"),
+                    32.0,
+                    16.0,
+                    move || following.set(true),
+                )
                 .bg(crate::ui::colors::RAISED)
                 .border_1()
                 .border_color(crate::ui::colors::BORDER)
                 .rounded_full()
-                .absolute().self_center().bottom(px(6.0))
-        }))
+                .absolute()
+                .self_center()
+                .bottom(px(6.0))
+            },
+        ))
 }
 
 /// T3 Code's timeline minimap: marks for user messages at the left edge that

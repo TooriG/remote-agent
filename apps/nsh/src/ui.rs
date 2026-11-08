@@ -322,7 +322,7 @@ pub(crate) fn icon_button_sized(
 }
 
 /// A hint over a control, as the desktop client's tooltips.
-fn tooltip(label: impl IntoReactive<SharedString>) -> AnyElement {
+pub(crate) fn tooltip(label: impl IntoReactive<SharedString>) -> AnyElement {
     view()
         .px_2()
         .py_1()
