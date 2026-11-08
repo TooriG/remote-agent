@@ -327,6 +327,7 @@ impl HostRpcService {
                 .map_err(Failure::before_submission)?;
             op::validate_thread(&response, None)
                 .map_err(|error| Failure::new("invalid_thread", error))?;
+            let name = response.thread.name.clone();
             let native = response
                 .thread
                 .id
@@ -337,8 +338,30 @@ impl HostRpcService {
                     "created session provider does not match",
                 ));
             }
-            self.change_preparation(id, StartupChange::Binding { native })
-                .await?;
+            self.change_preparation(
+                id,
+                StartupChange::Binding {
+                    native: native.clone(),
+                },
+            )
+            .await?;
+            // A provider that names its session at creation never renames it,
+            // so its name reaches the open clients as the rename it would be;
+            // they would otherwise see it only in a later list.
+            if let Some(name) = name.filter(|name| !name.trim().is_empty())
+                && let Some(renamed) = self.inner.conversations.route(
+                    crate::providers::AgentChange::Renamed {
+                        session: native,
+                        name: Some(name),
+                    },
+                    false,
+                )?
+            {
+                self.inner
+                    .router
+                    .apply(renamed, &[])
+                    .map_err(|error| Failure::new("rename_failed", error))?;
+            }
         }
         let (row, _) = self.change_preparation(id, StartupChange::Sending).await?;
         let mut native = input;

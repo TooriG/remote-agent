@@ -278,6 +278,36 @@ async fn admission_lists_and_reopens_the_same_task_before_workspace_preparation(
 }
 
 #[tokio::test]
+async fn a_name_the_provider_gives_at_creation_reaches_open_clients_as_the_tasks_rename() {
+    let directory = tempfile::tempdir().unwrap();
+    let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("native"));
+    let host = HostRpcService::new(
+        [agent.backend()],
+        ProjectStore::new(directory.path().join("worktrees.json")),
+    );
+    let mut client = host.open_session();
+    let (opened, _updates) = admit(&host, client.id(), &request(directory.path())).await;
+    let renamed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let notice: agent_protocol::protocol::Notification =
+                agent_protocol::protocol::decode(&client.recv().await.unwrap()).unwrap();
+            if let agent_protocol::protocol::Notification::SessionRenamed {
+                session, name, ..
+            } = notice
+            {
+                return (session, name);
+            }
+        }
+    })
+    .await
+    .expect("the provider's name must reach the open client");
+    assert_eq!(
+        renamed,
+        (opened.session, Some("codex conversation".to_owned()))
+    );
+}
+
+#[tokio::test]
 async fn repeated_admission_does_not_wait_for_or_duplicate_provider_creation() {
     let directory = tempfile::tempdir().unwrap();
     let agent = NativeAgent::new(ProviderKind::Codex, directory.path().join("native"));
