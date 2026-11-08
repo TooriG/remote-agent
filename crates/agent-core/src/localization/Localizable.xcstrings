@@ -12417,6 +12417,22 @@
         }
       }
     },
+    "マイクが見つかりません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "マイクが見つかりません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No microphone was found."
+          }
+        }
+      }
+    },
     "音声を録音できませんでした。もう一度録音してください。": {
       "localizations": {
         "ja": {

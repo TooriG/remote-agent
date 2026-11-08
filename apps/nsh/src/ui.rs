@@ -87,7 +87,7 @@ impl Icon {
     pub(crate) const FOLDER_PLUS: Self = icon!(FolderPlus, "folder.badge.plus");
     pub(crate) const LOADER: Self = icon!(Loader, "progress.indicator");
     pub(crate) const MERGE: Self = icon!(GitMerge, "arrow.triangle.merge");
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(dictation)]
     pub(crate) const MICROPHONE: Self = icon!(Mic, "mic");
     #[cfg(not(target_os = "macos"))]
     pub(crate) const MONITOR: Self = icon!(Monitor);

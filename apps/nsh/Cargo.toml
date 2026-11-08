@@ -52,6 +52,8 @@ objc2-avf-audio = { version = "=0.3.2", default-features = false, features = ["s
 [target.'cfg(windows)'.dependencies]
 nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3", default-features = false }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+# The microphone, through WASAPI.
+cpal = "0.18.2"
 
 # The Host streams a terminal's bytes; off Apple platforms, which hand them to
 # SwiftTerm, the app emulates and draws the screen itself.

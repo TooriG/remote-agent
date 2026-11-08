@@ -494,7 +494,7 @@ impl Client {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(dictation)]
     pub fn prepare_dictation(
         &self,
         host: &str,
@@ -510,7 +510,7 @@ impl Client {
             .ok_or_else(|| error(tr("Host 未接続")))
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(dictation)]
     pub fn dictate(
         self: &Arc<Self>,
         host: String,
