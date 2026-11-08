@@ -6,16 +6,17 @@ language is documented in `apps/nsh/src/acceptance/script.rs`.
 
 Status: **covered** (a scenario checks it), **partial** (a scenario checks part of
 it; the note says what is missing), **not yet** (applies to the Mac, no scenario
-yet; the note says why), **n/a** (no Mac equivalent).
+yet; the note says why), **blocked** (needs a change outside this repository
+first; the note says which), **n/a** (no Mac equivalent).
 
 ## iOS acceptance tests (`apps/mobile/iosApp/UITests`)
 
 | iOS test | Status | Mac scenario / note |
 |---|---|---|
-| AccountUITests.testSimulatorSwitchesCodexAccountsAndForksConversation | partial | fork; switching needs a second account, and the fixture's sign-in does not complete on the Mac (accounts stops it) |
-| AccountUITests.testSimulatorAddsClaudeAccountAndKeepsCodexSelected | not yet | the fixture's sign-in does not complete on the Mac: after `account/login/start` the Host lists the same account |
-| AccountUITests.testSimulatorGoesBackFromAccountLoginAndCanStartAgain | partial | accounts (Codex device-code sign-in stopped and started again); Claude's code entry not yet |
-| AccountUITests.testSimulatorSignsInDirectlyFromModelSettings | not yet | as above, the sign-in does not complete |
+| AccountUITests.testSimulatorSwitchesCodexAccountsAndForksConversation | covered | account-sign-in (adds a second Codex account and switches back), account-switch (switching keeps the open conversation; forking after it) |
+| AccountUITests.testSimulatorAddsClaudeAccountAndKeepsCodexSelected | covered | account-claude |
+| AccountUITests.testSimulatorGoesBackFromAccountLoginAndCanStartAgain | covered | accounts (Codex sign-in stopped and started again), account-claude (Claude's code entry stopped, then completed) |
+| AccountUITests.testSimulatorSignsInDirectlyFromModelSettings | covered | account-claude (from the model picker's account row), account-sign-in (sign-out confirmation) |
 | AccountUITests.testSimulatorOpensAccountManagementFromSettingsAndModelPicker | covered | settings, accounts, model-picker (account row opens the provider's settings) |
 | AccountUITests.testSimulatorAutomaticallyShowsModelControlsInExistingAndRunningConversations | covered | live-work (model in a running conversation), long-history (sends in an existing one) |
 | AccountUITests.testSimulatorComposerOffersFastModelAndEffortBeforeMicrophone | not yet | effort and speed show in the model picker only for the selected provider's model; no scenario reads them |
@@ -104,8 +105,9 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Tool panel: layout, browser, terminal, agents, side chat | covered | review-panel (layout), tools, browser, terminal-paste, terminal-query, terminal-reopen, side-chat |
 | Settings: general, providers, environment, worktrees | covered | settings, environment-settings |
 | Settings: display language | covered | display-language |
-| Settings: accounts, updates, worktree editing | partial | accounts (sign-in starts and stops), worktree-settings; completing a sign-in and updates not yet |
+| Settings: accounts, updates, worktree editing | partial | accounts, account-sign-in, account-claude, account-switch, worktree-settings; updates not yet: アップデートを確認 opens the releases page in the default browser, outside the app |
 | Accessibility: the settings overlay is modal, message roles | covered | settings-modal, send-message |
+| Accessibility: VoiceOver reads in the visual order | blocked | on an NSH patch. NSH's virtual list keeps its cells by recycling slot (nsh-core `core/components.rs`, `VirtualListState::cells`), and nsh-platform-macos `src/view.rs` `accessibility_children` (the `accessibilityChildren` override) returns AppKit's subview order, so a recycled list reads in slot order: a conversation reads a turn's "3秒 作業しました" before the user's message above it. The fix: in that override, for a virtual list's cell container, return the cells sorted by row position (frame top first, in the flipped view's coordinates), the rest unchanged. The sidebar, main column, header, composer (left to right), right panel, settings and sheets already read in visual order |
 | Onboarding without a Host | not yet | the runner always starts a fixture Host |
 | Keyboard shortcuts | partial | composer (Return sends); the app binds no other shortcut (⌘, does nothing) |
 | Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet |
