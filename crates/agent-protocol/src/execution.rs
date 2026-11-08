@@ -155,6 +155,8 @@ pub struct BackgroundReport {
     pub kind: BackgroundTaskKind,
     pub label: Option<String>,
     pub outcome: BackgroundOutcome,
+    /// How a command exited, when the provider reports it.
+    pub exit_code: Option<i32>,
 }
 
 /// Whether a roster keeps its conversation waiting rather than done.

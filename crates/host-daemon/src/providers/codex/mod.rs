@@ -1034,7 +1034,7 @@ impl Agent for Codex {
         // their background terminals.
         let session = SessionRef::new(ProviderKind::Codex, id.into())
             .map_err(|error| Failure::new("invalid_session", error))?;
-        let terminals = self.rosters.terminals(&session);
+        let terminals = self.rosters.stop(&session);
         if terminals.is_empty() {
             return self
                 .request(
@@ -1195,14 +1195,15 @@ impl Agent for Codex {
                             let result = match event_change(instance, &request) {
                                 Ok(Some(change)) => {
                                     subscriptions.observe(&change);
-                                    let roster = rosters.observe(
+                                    let background = rosters.observe(
                                         &change,
                                         &request.params::<Value>().unwrap_or_default(),
                                     );
+                                    wake(&process, &change, background.continuations);
                                     if matches!(change, AgentChange::TaskParent { .. }) {
                                         Ok(())
                                     } else {
-                                        emit_all(&output, [Some(change), roster]).await
+                                        emit_all(&output, [Some(change), background.roster]).await
                                     }
                                 }
                                 Ok(None) => Ok(()),
@@ -1256,6 +1257,31 @@ impl Agent for Codex {
         if let Ok(process) = &self.process {
             let _ = process.shutdown().await;
         }
+    }
+}
+
+/// Starts the turn in which Codex reports on its ended background commands,
+/// as T3 Code continues a thread with the command's detail.
+fn wake(process: &Arc<CodexAppServer>, change: &AgentChange, prompts: Vec<String>) {
+    let AgentChange::Session { session, .. } = change else {
+        return;
+    };
+    for prompt in prompts {
+        let process = process.clone();
+        let params = serde_json::json!({
+            "threadId": session.id,
+            "input": native::encode_input(&[op::Input::Text { text: prompt }]),
+        });
+        tokio::spawn(async move {
+            let started = process
+                .request_sequenced::<_, Value>("turn/start", &params)
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|reply| reply.value.outcome.map_err(|error| format!("{error:?}")));
+            if let Err(error) = started {
+                tracing::warn!(target: "agent", operation = "host.codex.background_wake", message = %error);
+            }
+        });
     }
 }
 

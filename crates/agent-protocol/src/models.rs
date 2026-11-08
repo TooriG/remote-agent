@@ -267,6 +267,7 @@ fn is_conversation(item: &Item) -> bool {
         ItemBody::UserMessage { .. }
             | ItemBody::AssistantText { .. }
             | ItemBody::ImageGeneration { .. }
+            | ItemBody::Notification { .. }
     )
 }
 

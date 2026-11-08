@@ -2,7 +2,7 @@
 
 use crate::{models::*, session::*};
 use agent_protocol::editors::*;
-use agent_protocol::execution::BackgroundTaskKind;
+use agent_protocol::execution::{BackgroundOutcome, BackgroundReport, BackgroundTaskKind};
 use agent_protocol::file_metadata::{FileMetadata, FileMetadataKind, FilePathMetadata};
 use agent_protocol::file_tree::EntryKind;
 use agent_protocol::live_activity::*;
@@ -32,6 +32,21 @@ struct CodexCliStatus {
     pub version: Option<String>,
     pub restart_required: bool,
     pub error: Option<String>,
+}
+#[uniffi::remote(Enum)]
+enum BackgroundOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    Updated,
+    Unknown,
+}
+#[uniffi::remote(Record)]
+struct BackgroundReport {
+    pub kind: BackgroundTaskKind,
+    pub label: Option<String>,
+    pub outcome: BackgroundOutcome,
+    pub exit_code: Option<i32>,
 }
 #[uniffi::remote(Enum)]
 enum BackgroundTaskKind {

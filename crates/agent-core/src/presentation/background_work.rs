@@ -130,45 +130,149 @@ fn noun(kind: BackgroundTaskKind, language: UiLanguage, count: usize) -> &'stati
     }
 }
 
+/// The icon of a notification row, as T3 Code's work log draws it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
+pub enum NotificationIcon {
+    Bot,
+    Terminal,
+    Eye,
+    Zap,
+    CircleAlert,
+}
+
+/// A failure shows as one; otherwise the reports' kind, and mixed kinds are
+/// generic background work.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn notification_icon(reports: Vec<BackgroundReport>) -> NotificationIcon {
+    if combined_outcome(&reports) == BackgroundOutcome::Failed {
+        return NotificationIcon::CircleAlert;
+    }
+    let kind = reports
+        .first()
+        .map_or(BackgroundTaskKind::BackgroundTask, |first| {
+            if reports.iter().all(|report| report.kind == first.kind) {
+                first.kind
+            } else {
+                BackgroundTaskKind::BackgroundTask
+            }
+        });
+    match kind {
+        BackgroundTaskKind::Subagent => NotificationIcon::Bot,
+        BackgroundTaskKind::Command => NotificationIcon::Terminal,
+        BackgroundTaskKind::Monitor => NotificationIcon::Eye,
+        BackgroundTaskKind::BackgroundTask => NotificationIcon::Zap,
+    }
+}
+
 /// What the background work a notification reports did, as T3 Code's
-/// notification summary names it.
-pub(crate) fn notification_title(reports: &[BackgroundReport]) -> String {
-    let named = |report: &BackgroundReport| {
-        let noun = noun(report.kind, UiLanguage::Japanese, 1);
-        match report_label(report) {
-            Some(label) => format!("{noun}「{label}」"),
-            None => noun.to_owned(),
+/// notification summary names it: `Command "npm run dev" finished (exit 0)`.
+#[cfg_attr(feature = "bindings", uniffi::export)]
+pub fn notification_text(reports: Vec<BackgroundReport>, language: UiLanguage) -> String {
+    use UiLanguage::*;
+    let outcome = combined_outcome(&reports);
+    let single = reports.len() == 1;
+    let verb = match (language, outcome) {
+        (English, BackgroundOutcome::Failed) => "failed",
+        (English, BackgroundOutcome::Cancelled) if single => "was stopped",
+        (English, BackgroundOutcome::Cancelled) => "were stopped",
+        (English, BackgroundOutcome::Updated)
+            if single && reports[0].kind == BackgroundTaskKind::Monitor =>
+        {
+            "reported new output"
         }
-    };
-    let verb = match combined_outcome(reports) {
-        BackgroundOutcome::Failed => "が失敗しました",
-        BackgroundOutcome::Cancelled => "が停止されました",
-        BackgroundOutcome::Updated
-            if reports
-                .iter()
-                .all(|report| report.kind == BackgroundTaskKind::Monitor) =>
+        (English, BackgroundOutcome::Updated) => "updated",
+        (English, _) => "finished",
+        (Japanese, BackgroundOutcome::Failed) => "が失敗しました",
+        (Japanese, BackgroundOutcome::Cancelled) => "が停止されました",
+        (Japanese, BackgroundOutcome::Updated)
+            if single && reports[0].kind == BackgroundTaskKind::Monitor =>
         {
             "が新しい出力を報告しました"
         }
-        BackgroundOutcome::Updated => "が更新されました",
-        BackgroundOutcome::Completed | BackgroundOutcome::Unknown => "が完了しました",
+        (Japanese, BackgroundOutcome::Updated) => "が更新されました",
+        (Japanese, _) => "が完了しました",
     };
-    match reports {
-        [] => format!("バックグラウンドの作業{verb}"),
-        [only] => format!("{}{verb}", named(only)),
-        _ if reports.len() > 3 || reports.iter().all(|report| report_label(report).is_none()) => {
-            let kind = reports[0].kind;
-            let noun = if reports.iter().all(|report| report.kind == kind) {
-                noun(kind, UiLanguage::Japanese, 2)
-            } else {
-                noun(BackgroundTaskKind::BackgroundTask, UiLanguage::Japanese, 2)
-            };
-            format!("{noun} {}件{verb}", reports.len())
+    let subject = if !single
+        && (reports.len() > 3 || reports.iter().all(|report| report_label(report).is_none()))
+    {
+        let kind = if reports.iter().all(|report| report.kind == reports[0].kind) {
+            reports[0].kind
+        } else {
+            BackgroundTaskKind::BackgroundTask
+        };
+        let noun = noun(kind, language, reports.len());
+        match language {
+            English => format!("{} {noun}", reports.len()),
+            Japanese => format!("{noun} {}件", reports.len()),
         }
-        _ => format!(
-            "{}{verb}",
-            reports.iter().map(named).collect::<Vec<_>>().join("、")
-        ),
+    } else {
+        // One report's exit follows its verb; in a list, each name's own.
+        let names: Vec<_> = reports
+            .iter()
+            .enumerate()
+            .map(|(index, report)| named_report(report, language, index == 0, !single))
+            .collect();
+        match language {
+            English => join_with_and(&names),
+            Japanese => names.join("、"),
+        }
+    };
+    let exit = reports
+        .first()
+        .filter(|_| single)
+        .map(|report| exit_suffix(report, language))
+        .unwrap_or_default();
+    match language {
+        English => format!("{subject} {verb}{exit}"),
+        Japanese => format!("{subject}{verb}{exit}"),
+    }
+}
+
+fn exit_suffix(report: &BackgroundReport, language: UiLanguage) -> String {
+    match (report.exit_code, report.kind, language) {
+        (Some(code), BackgroundTaskKind::Command, UiLanguage::English) => format!(" (exit {code})"),
+        (Some(code), BackgroundTaskKind::Command, UiLanguage::Japanese) => {
+            format!("（終了コード {code}）")
+        }
+        _ => String::new(),
+    }
+}
+
+/// `Command "npm run dev" (exit 0)`, the first capitalized as T3 Code's.
+fn named_report(
+    report: &BackgroundReport,
+    language: UiLanguage,
+    first: bool,
+    exit: bool,
+) -> String {
+    let noun = noun(report.kind, language, 1);
+    let label = report_label(report);
+    let named = match language {
+        UiLanguage::English => {
+            let mut named = if first {
+                let mut chars = noun.chars();
+                chars
+                    .next()
+                    .map(|initial| initial.to_uppercase().chain(chars).collect())
+                    .unwrap_or_default()
+            } else {
+                noun.to_owned()
+            };
+            if let Some(label) = label {
+                named.push_str(&format!(" \"{label}\""));
+            }
+            named
+        }
+        UiLanguage::Japanese => match label {
+            Some(label) => format!("{noun}「{label}」"),
+            None => noun.to_owned(),
+        },
+    };
+    if exit {
+        named + &exit_suffix(report, language)
+    } else {
+        named
     }
 }
 
@@ -235,51 +339,70 @@ mod tests {
     }
 
     #[test]
-    fn notifications_name_what_the_work_did_as_t3_code() {
+    fn notifications_name_what_the_work_did_in_either_language_as_t3_code() {
         use BackgroundOutcome::*;
         let report = |kind, label: Option<&str>, outcome| BackgroundReport {
             kind,
             label: label.map(str::to_owned),
             outcome,
+            exit_code: None,
         };
-        for (reports, title) in [
+        let exited = BackgroundReport {
+            exit_code: Some(0),
+            ..report(Command, Some("npm run dev\nmore"), Completed)
+        };
+        for (reports, english, japanese, icon) in [
             (
-                vec![report(Command, Some("npm run dev\nmore"), Completed)],
-                "コマンド「npm run dev」が完了しました",
+                vec![exited],
+                "Command \"npm run dev\" finished (exit 0)",
+                "コマンド「npm run dev」が完了しました（終了コード 0）",
+                NotificationIcon::Terminal,
             ),
             (
                 vec![report(Monitor, Some("Watch the build"), Updated)],
+                "Monitor \"Watch the build\" reported new output",
                 "モニター「Watch the build」が新しい出力を報告しました",
+                NotificationIcon::Eye,
             ),
             (
                 vec![report(Subagent, None, Cancelled)],
+                "Subagent was stopped",
                 "サブエージェントが停止されました",
+                NotificationIcon::Bot,
             ),
             (
                 vec![
                     report(Subagent, Some("Review"), Completed),
                     report(Command, Some("npm test"), Failed),
                 ],
+                "Subagent \"Review\" and command \"npm test\" failed",
                 "サブエージェント「Review」、コマンド「npm test」が失敗しました",
+                NotificationIcon::CircleAlert,
             ),
             (
                 vec![
                     report(Command, None, Completed),
                     report(Command, None, Unknown),
                 ],
+                "2 commands finished",
                 "コマンド 2件が完了しました",
+                NotificationIcon::Terminal,
             ),
             (
                 vec![
                     report(Command, Some("a"), Completed),
                     report(Monitor, Some("b"), Completed),
                     report(Subagent, Some("c"), Completed),
-                    report(Command, Some("d"), Completed),
+                    report(Command, Some("d"), Cancelled),
                 ],
-                "バックグラウンドタスク 4件が完了しました",
+                "4 background tasks were stopped",
+                "バックグラウンドタスク 4件が停止されました",
+                NotificationIcon::Zap,
             ),
         ] {
-            assert_eq!(notification_title(&reports), title);
+            assert_eq!(notification_text(reports.clone(), English), english);
+            assert_eq!(notification_text(reports.clone(), Japanese), japanese);
+            assert_eq!(notification_icon(reports), icon);
         }
     }
 

@@ -87,9 +87,11 @@ pub enum ConversationRowContent {
         text: String,
     },
     /// What the background work its agent woke for did, starting the turn
-    /// without a user message, as T3 Code's notification row.
+    /// without a user message, as T3 Code's notification row. Clients name
+    /// it in their language with `notification_text`.
     Notification {
-        text: String,
+        reports: Vec<agent_protocol::execution::BackgroundReport>,
+        icon: super::background_work::NotificationIcon,
     },
     User {
         item: Arc<RenderedItem>,
@@ -1101,9 +1103,12 @@ fn render_turn(
         };
         let in_progress = segment.last && source.status == models::TurnStatus::Running;
         for item in group(Role::User) {
-            if item.data.kind == "notification" {
+            if let ItemSource::Native(native) = &item.source
+                && let models::ItemBody::Notification { reports } = native.body()
+            {
                 push(Notification {
-                    text: item.data.title.clone().unwrap_or_default(),
+                    reports: reports.clone(),
+                    icon: super::background_work::notification_icon(reports.clone()),
                 });
             } else if item.data.deferred {
                 push(Activity {
@@ -1490,6 +1495,7 @@ mod tests {
                                 kind: BackgroundTaskKind::Command,
                                 label: Some("Start the dev server".into()),
                                 outcome: BackgroundOutcome::Completed,
+                                exit_code: None,
                             }],
                         },
                     )),
@@ -1516,10 +1522,20 @@ mod tests {
         .turns[0]
             .rows
             .clone();
-        let ConversationRowContent::Notification { text } = &rows[0].content else {
+        let ConversationRowContent::Notification { reports, icon } = &rows[0].content else {
             panic!("the notification is the turn's first row");
         };
-        assert_eq!(text, "コマンド「Start the dev server」が完了しました");
+        assert_eq!(
+            super::super::background_work::notification_text(
+                reports.clone(),
+                crate::localization::UiLanguage::English
+            ),
+            "Command \"Start the dev server\" finished"
+        );
+        assert_eq!(
+            *icon,
+            super::super::background_work::NotificationIcon::Terminal
+        );
         assert!(
             !rows
                 .iter()

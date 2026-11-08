@@ -897,12 +897,14 @@ impl Worker {
                     kind: task.kind,
                     label: task.description.clone(),
                     outcome,
+                    exit_code: None,
                 },
                 (None, Some(item)) => native::background_report(item.body(), outcome),
                 (None, None) => BackgroundReport {
                     kind: BackgroundTaskKind::BackgroundTask,
                     label: None,
                     outcome,
+                    exit_code: None,
                 },
             };
             let Some(key) = call.or(response::task_key(message)) else {
@@ -3251,6 +3253,7 @@ process.stdin.resume();
                     kind: BackgroundTaskKind::Command,
                     label: Some("Start the dev server".into()),
                     outcome: BackgroundOutcome::Completed,
+                    exit_code: None,
                 }],
             }
         );

@@ -347,6 +347,7 @@ pub(super) fn background_report(body: &ItemBody, outcome: BackgroundOutcome) -> 
             .filter(|label| !label.is_empty())
             .map(str::to_owned),
         outcome,
+        exit_code: None,
     }
 }
 

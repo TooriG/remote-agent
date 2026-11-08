@@ -172,6 +172,43 @@ async fn until(store: &Store, condition: impl Fn(&Snapshot) -> bool) -> Arc<Snap
     })
 }
 
+/// The conversation as a fresh client reads it from a restarted Host.
+async fn reread(
+    root: &Path,
+    memory: Arc<Memory>,
+    (store, endpoint, fixture): (Store, Endpoint, HostFixture),
+    id: &agent_protocol::session::SessionRef,
+) -> Arc<Snapshot> {
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+    let fixture = host(root, memory, fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
+        .await
+        .unwrap();
+    let snapshot = store.snapshot();
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+    snapshot
+}
+
+/// The notification that starts a turn.
+fn notification(
+    snapshot: &Snapshot,
+    id: &agent_protocol::session::SessionRef,
+    turn: usize,
+) -> agent_protocol::items::ItemBody {
+    snapshot.sessions.conversations[id].turns.as_ref().unwrap()[turn]
+        .items
+        .as_ref()
+        .unwrap()[0]
+        .body()
+        .clone()
+}
+
 async fn completed(
     store: &Store,
     id: &agent_protocol::session::SessionRef,
@@ -2200,7 +2237,8 @@ async fn claude_waits_on_a_background_shell_reports_in_a_new_turn_and_stop_ends_
 async fn claude_waits_on_its_background_roster_refuses_a_model_change_and_reports_in_a_new_turn() {
     use agent_protocol::execution::BackgroundTaskKind::*;
     let root = tempfile::tempdir().unwrap();
-    let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+    let memory = Arc::new(Memory::default());
+    let fixture = host(root.path(), memory.clone(), fixture_program()).await;
     let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
     store
         .dispatch(Intent::NewChat {
@@ -2297,9 +2335,13 @@ async fn claude_waits_on_its_background_roster_refuses_a_model_change_and_report
             .any(|item| item_text(item) == Some("バックグラウンドの作業が終わりました")),
         "as T3 Code, Claude reports in a turn of its own"
     );
-    store.close().await.unwrap();
-    endpoint.close().await;
-    fixture.close().await.unwrap();
+    let live = notification(&snapshot, &id, 1);
+    let reloaded = reread(root.path(), memory, (store, endpoint, fixture), &id).await;
+    assert_eq!(
+        notification(&reloaded, &id, 1),
+        live,
+        "the report names the work as it did live"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2378,6 +2420,76 @@ async fn codex_waits_on_the_commands_and_subagents_its_turn_left_running() {
         "completed",
         "Stop ended the command, not the answer"
     );
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_reports_on_its_ended_background_command_in_a_new_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    store
+        .dispatch(Intent::SelectModel {
+            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
+            model: models::ModelRef {
+                provider: ProviderKind::Codex,
+                id: "fixture-model".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let id = send(
+        &store,
+        "[background] [immediate] 開発サーバーを起動します",
+        "codex-background-report",
+    )
+    .await;
+    until(&store, |snapshot| {
+        snapshot.sessions.conversations[&id].background.len() == 2
+    })
+    .await;
+    std::fs::write(root.path().join("codex-background-release"), []).unwrap();
+    let snapshot = completed(&store, &id, 2, "completed").await;
+    let thread = &snapshot.sessions.conversations[&id];
+    assert!(thread.background.is_empty());
+    let live = notification(&snapshot, &id, 1);
+    assert_eq!(
+        live,
+        agent_protocol::items::ItemBody::Notification {
+            reports: vec![agent_protocol::execution::BackgroundReport {
+                kind: agent_protocol::execution::BackgroundTaskKind::Command,
+                label: Some("npm run dev".into()),
+                outcome: agent_protocol::execution::BackgroundOutcome::Completed,
+                exit_code: Some(0),
+            }],
+        },
+        "as T3 Code, the ended command wakes Codex in a turn its notification starts"
+    );
+    assert!(
+        thread.turns.as_ref().unwrap()[1]
+            .items
+            .iter()
+            .flatten()
+            .any(|item| item_text(item) == Some("バックグラウンドのコマンドの結果を確認しました"))
+    );
+    // The fixture's app-server keeps threads only while it runs, so another
+    // client reads the conversation from the same Host.
+    let (reader, reader_endpoint) = connect(&fixture, Snapshot::default()).await;
+    reader
+        .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
+        .await
+        .unwrap();
+    assert_eq!(notification(&reader.snapshot(), &id, 1), live);
+    reader.close().await.unwrap();
+    reader_endpoint.close().await;
     store.close().await.unwrap();
     endpoint.close().await;
     fixture.close().await.unwrap();

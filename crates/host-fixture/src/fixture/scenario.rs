@@ -190,6 +190,18 @@ impl ScenarioTurn {
             json!({"id":format!("fixture-user-{suffix}"),"clientId":client_id,
         "type":"userMessage","text":prompt,"content":inputs}),
         )?;
+        // Woken for a background command that ended, Codex reports on it.
+        if prompt.starts_with("Background command completed") {
+            let index = turn.borrow()["items"].as_array().unwrap().len();
+            context.stream_item(
+                &thread_id,
+                turn,
+                json!({"id":format!("fixture-report-{suffix}"),"type":"agentMessage",
+                "text":"バックグラウンドのコマンドの結果を確認しました","phase":"final_answer"}),
+            )?;
+            complete(context, &thread_id, turn, index)?;
+            return context.finish(thread, turn, "completed", None);
+        }
         context.stream_item(
             &thread_id,
             turn,

@@ -105,8 +105,10 @@ extension ThreadScreen {
         switch (row.content, item) {
         case let (.preparation(preparation), _):
             ThreadPreparationRow(preparation: preparation) { model.perform($0) }
-        case let (.providerHandoff(text), _), let (.notification(text), _):
+        case let (.providerHandoff(text), _):
             Text(text).font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
+        case let (.notification(reports, _), _):
+            NotificationRow(reports: reports)
         case let (.user, item?):
             userMessageRow(item, timestampMs: row.timestampMs)
                 .padding(
@@ -239,5 +241,16 @@ func conversationRows(_ rows: [ThreadConversationRow],
         case .inProgress, .pendingRequest: return false
         default: return true
         }
+    }
+}
+
+/// What the background work the agent woke for did, in the app's language.
+private struct NotificationRow: View {
+    let reports: [BackgroundReport]
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        Text(notificationText(reports: reports, language: locale.appLanguage))
+            .font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
     }
 }

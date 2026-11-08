@@ -125,6 +125,27 @@ impl Icon {
 }
 
 impl Icon {
+    const NOTIFY_BOT: Self = icon!(Bot, "cpu");
+    const NOTIFY_TERMINAL: Self = icon!(Terminal, "apple.terminal");
+    const NOTIFY_EYE: Self = icon!(Eye, "eye");
+    const NOTIFY_ZAP: Self = icon!(Zap, "bolt");
+    /// Lucide 1 names circle-alert circle-exclamation-point.
+    const NOTIFY_ALERT: Self = icon!(CircleExclamationPoint, "exclamationmark.circle");
+
+    /// A notification row's icon, as T3 Code's work log draws it.
+    pub(crate) fn notification(
+        icon: agent_core::presentation::background_work::NotificationIcon,
+    ) -> Self {
+        use agent_core::presentation::background_work::NotificationIcon::*;
+        match icon {
+            Bot => Self::NOTIFY_BOT,
+            Terminal => Self::NOTIFY_TERMINAL,
+            Eye => Self::NOTIFY_EYE,
+            Zap => Self::NOTIFY_ZAP,
+            CircleAlert => Self::NOTIFY_ALERT,
+        }
+    }
+
     /// A work item's tool, as T3 Code's work log shows it.
     pub(crate) fn work(kind: &str) -> Self {
         match kind {

@@ -47,6 +47,8 @@ struct Row {
     time: Option<String>,
     /// A message sent while its turn worked; only the first of a run says so.
     steer: bool,
+    /// A notification row's icon.
+    notification: Option<crate::ui::Icon>,
     error: Option<TurnErrorPresentation>,
 }
 
@@ -104,6 +106,7 @@ fn project(
             let fork = match &row.content { ConversationRowContent::Response { fork_turn_id, .. } => fork_turn_id.clone(), _ => None };
             let retry = match &row.content { ConversationRowContent::Preparation { preparation } => preparation.retry.clone(), _ => None };
             let error = match &row.content { ConversationRowContent::Error { error } => Some(error.clone()), _ => None };
+            let notification = match &row.content { ConversationRowContent::Notification { icon, .. } => Some(crate::ui::Icon::notification(*icon)), _ => None };
             let detail = match &row.content {
                 ConversationRowContent::Activity { item, turn_id } if item.data.collapsible => {
                     Some(crate::activity::Item { source: Shared(item.clone()), turn: turn_id.clone() })
@@ -126,8 +129,11 @@ fn project(
                 ConversationRowContent::Preparation { preparation } => {
                     (Kind::Activity, localized(preparation.text))
                 }
-                ConversationRowContent::ProviderHandoff { text }
-                | ConversationRowContent::Notification { text } => (Kind::Activity, localized(text)),
+                ConversationRowContent::ProviderHandoff { text } => (Kind::Activity, localized(text)),
+                ConversationRowContent::Notification { reports, .. } => (
+                    Kind::Activity,
+                    agent_core::presentation::background_work::notification_text(reports, crate::l10n::language()),
+                ),
                 ConversationRowContent::Error { error } => (Kind::Activity, localized(error.message)),
                 ConversationRowContent::InProgress { .. } => (Kind::Activity, tr("作業中…").into()),
                 ConversationRowContent::PendingRequest { .. } => return None,
@@ -146,6 +152,7 @@ fn project(
                 time,
                 steer,
                 error,
+                notification,
             })
         })
         .collect::<Vec<_>>()
@@ -157,6 +164,25 @@ fn project(
             Some(row)
         })
         .collect()
+}
+
+/// The background work the agent woke for, as T3 Code's notification row:
+/// the work's icon beside what it did.
+fn notification_row(row: Memo<Option<Row>>) -> impl IntoElement {
+    use crate::ui::{self, colors};
+    let icon = row.with_untracked(|row| row.as_ref().and_then(|row| row.notification));
+    view()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .text_color(colors::MUTED)
+        .child(icon.map(|icon| ui::icon(icon, 14.0).into_element()))
+        .child(
+            text(move || {
+                row.with(|row| row.as_ref().map(|row| row.body.clone()).unwrap_or_default())
+            })
+            .text_size(px(13.0)),
+        )
 }
 
 pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
@@ -313,6 +339,10 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                     steer_marker,
                                 ))
                                 .child(when(
+                                    move || row.with(|row| row.as_ref().is_some_and(|row| row.notification.is_some())),
+                                    move || notification_row(row),
+                                ))
+                                .child(when(
                                     move || {
                                         row.with(|row| {
                                             row.as_ref().is_some_and(|row| row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse))
@@ -383,7 +413,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         ))
                                         .child(when(
                                             move || row.with(|row| row.as_ref().is_some_and(|row| {
-                                                !row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse) && row.detail.is_none() && row.error.is_none()
+                                                !row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse) && row.detail.is_none() && row.error.is_none() && row.notification.is_none()
                                             })),
                                             move || crate::rich_text::content(
                                                 surroundings,

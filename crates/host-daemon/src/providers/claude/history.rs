@@ -764,6 +764,7 @@ fn notification(
         kind: BackgroundTaskKind::BackgroundTask,
         label: None,
         outcome: BackgroundOutcome::Unknown,
+        exit_code: None,
     };
     let mut finished = false;
     if let Some(outcome) =
@@ -1476,11 +1477,13 @@ mod tests {
                         kind: BackgroundTaskKind::Command,
                         label: Some("npm run dev".into()),
                         outcome: BackgroundOutcome::Completed,
+                        exit_code: None,
                     },
                     BackgroundReport {
                         kind: BackgroundTaskKind::Subagent,
                         label: Some("Review the change".into()),
                         outcome: BackgroundOutcome::Completed,
+                        exit_code: None,
                     },
                 ],
             }

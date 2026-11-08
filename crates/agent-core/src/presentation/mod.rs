@@ -420,7 +420,10 @@ pub fn item_presentation(
         ItemBody::ImageGeneration { .. } => ("imageGeneration", None, false),
         ItemBody::Notification { reports } => (
             "notification",
-            Some(background_work::notification_title(reports)),
+            Some(background_work::notification_text(
+                reports.clone(),
+                crate::localization::UiLanguage::Japanese,
+            )),
             false,
         ),
         _ => ("unknown", Some(tool_title(item.body())), true),

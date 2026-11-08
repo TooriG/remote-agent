@@ -95,7 +95,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Conversation: errors, reconnecting, opening and its failure | covered | failed-turn, retry-stream, history-loading, history-retry |
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork |
 | Conversation: steering a running turn, minimap | covered | steering, queued-input |
-| Conversation: waiting on background work (Claude, Codex), its report, Stop, refused model change | covered | background-waiting, background-model-change, codex-background-waiting |
+| Conversation: waiting on background work (Claude, Codex), its report and notification after reopening and in English, Stop, refused model change | covered | background-waiting, background-model-change, codex-background-waiting, codex-background-report |
 | Composer: model picker | covered | model-picker |
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |

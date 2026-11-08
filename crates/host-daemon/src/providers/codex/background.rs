@@ -20,6 +20,8 @@ struct Roster {
     running: bool,
     work: Vec<Work>,
     published: Vec<BackgroundTask>,
+    /// Prompts for commands that ended while a later turn ran.
+    pending: Vec<String>,
 }
 
 struct Work {
@@ -27,6 +29,19 @@ struct Work {
     task: BackgroundTask,
     /// The background terminal a command runs in.
     process: Option<String>,
+    /// The work outlived the turn that started it.
+    outlived: bool,
+    /// Stop ended it; nothing reports on it.
+    stopped: bool,
+}
+
+/// What a native change means for a conversation's background work.
+#[derive(Default)]
+pub(super) struct Observation {
+    pub roster: Option<AgentChange>,
+    /// As T3 Code, a command that outlived its turn wakes Codex to report on
+    /// it once it ends, with this prompt.
+    pub continuations: Vec<String>,
 }
 
 impl Roster {
@@ -46,6 +61,22 @@ impl Roster {
             .position(|work| work.item == item.id)
             .map(|index| self.work.remove(index));
         if item.status != ItemStatus::Running {
+            if let (
+                Some(work),
+                ItemBody::CommandExecution {
+                    command,
+                    exit_code,
+                    output,
+                    ..
+                },
+            ) = (&known, item.body())
+                && work.outlived
+                && !work.stopped
+            {
+                self.pending.push(super::native::background_command_detail(
+                    command, *exit_code, output,
+                ));
+            }
             return;
         }
         let (kind, description) = match item.body() {
@@ -58,6 +89,9 @@ impl Roster {
             ),
             _ => return,
         };
+        let (process, outlived, stopped) = known.map_or((None, false, false), |work| {
+            (work.process, work.outlived, work.stopped)
+        });
         self.work.push(Work {
             item: item.id.clone(),
             task: BackgroundTask {
@@ -69,19 +103,18 @@ impl Roster {
                     .map(str::to_owned),
             },
             // A turn's summary of its items can omit what their start named.
-            process: native["processId"]
-                .as_str()
-                .map(str::to_owned)
-                .or(known.and_then(|work| work.process)),
+            process: native["processId"].as_str().map(str::to_owned).or(process),
+            outlived,
+            stopped,
         });
     }
 }
 
 impl Rosters {
-    /// The roster change a native change implies for its conversation.
-    pub(super) fn observe(&self, change: &AgentChange, params: &Value) -> Option<AgentChange> {
+    /// The roster change and wake-ups a native change implies for its conversation.
+    pub(super) fn observe(&self, change: &AgentChange, params: &Value) -> Observation {
         let AgentChange::Session { session, change } = change else {
-            return None;
+            return Observation::default();
         };
         let mut rosters = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
         let roster = rosters.entry(session.clone()).or_default();
@@ -90,6 +123,11 @@ impl Rosters {
                 roster.running = !completed;
                 for item in turn.items.iter().flatten() {
                     roster.track(item, &Value::Null);
+                }
+                if *completed {
+                    for work in &mut roster.work {
+                        work.outlived = true;
+                    }
                 }
                 // A stopped or failed turn leaves nothing it will report on.
                 if *completed && turn.status != TurnStatus::Completed {
@@ -102,27 +140,43 @@ impl Rosters {
             {
                 roster.running = false;
             }
-            _ => return None,
+            _ => return Observation::default(),
         }
+        // Wake-ups wait behind a running turn, as T3 Code queues them after it.
+        let continuations = if roster.running {
+            Vec::new()
+        } else {
+            std::mem::take(&mut roster.pending)
+        };
         let waiting = roster.waiting();
-        if waiting == roster.published {
-            return None;
+        let roster = (waiting != roster.published).then(|| {
+            roster.published = waiting.clone();
+            AgentChange::Session {
+                session: session.clone(),
+                change: SessionChange::Background { tasks: waiting },
+            }
+        });
+        Observation {
+            roster,
+            continuations,
         }
-        roster.published = waiting.clone();
-        Some(AgentChange::Session {
-            session: session.clone(),
-            change: SessionChange::Background { tasks: waiting },
-        })
     }
 
-    /// The background terminals Stop ends while the conversation waits.
-    pub(super) fn terminals(&self, session: &SessionRef) -> Vec<String> {
-        let rosters = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
-        rosters
-            .get(session)
-            .filter(|roster| !roster.running)
-            .into_iter()
-            .flat_map(|roster| roster.work.iter().filter_map(|work| work.process.clone()))
+    /// The background terminals Stop ends while the conversation waits. What
+    /// it ends wakes Codex for nothing.
+    pub(super) fn stop(&self, session: &SessionRef) -> Vec<String> {
+        let mut rosters = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let Some(roster) = rosters.get_mut(session).filter(|roster| !roster.running) else {
+            return Vec::new();
+        };
+        roster
+            .work
+            .iter_mut()
+            .filter_map(|work| {
+                let process = work.process.clone()?;
+                work.stopped = true;
+                Some(process)
+            })
             .collect()
     }
 }
@@ -171,8 +225,8 @@ mod tests {
         }
     }
 
-    fn roster(change: Option<AgentChange>) -> Option<Vec<(String, BackgroundTaskKind)>> {
-        match change? {
+    fn roster(observation: Observation) -> Option<Vec<(String, BackgroundTaskKind)>> {
+        match observation.roster? {
             AgentChange::Session {
                 change: SessionChange::Background { tasks },
                 ..
@@ -229,7 +283,7 @@ mod tests {
                 ("Review the change".into(), BackgroundTaskKind::Subagent),
             ])
         );
-        assert_eq!(rosters.terminals(&session()), ["process-1"]);
+        assert_eq!(rosters.stop(&session()), ["process-1"]);
         assert_eq!(
             roster(rosters.observe(&item("server", ItemStatus::Failed, command()), &Value::Null)),
             Some(vec![(
@@ -237,11 +291,75 @@ mod tests {
                 BackgroundTaskKind::Subagent
             )])
         );
-        assert!(rosters.terminals(&session()).is_empty());
+        assert!(rosters.stop(&session()).is_empty());
         assert_eq!(
             roster(rosters.observe(&turn(TurnStatus::Interrupted), &Value::Null)),
             Some(vec![]),
             "a stopped turn reports on nothing"
+        );
+    }
+
+    #[test]
+    fn a_command_that_outlived_its_turn_wakes_codex_once_no_turn_runs() {
+        let finished = |exit_code| {
+            item(
+                "server",
+                ItemStatus::Completed,
+                ItemBody::CommandExecution {
+                    command: "npm run dev".into(),
+                    cwd: None,
+                    output: "ready\n".into(),
+                    exit_code,
+                },
+            )
+        };
+        let rosters = Rosters::default();
+        rosters.observe(&turn(TurnStatus::Running), &Value::Null);
+        rosters.observe(
+            &item("inside", ItemStatus::Running, command()),
+            &Value::Null,
+        );
+        assert!(
+            rosters
+                .observe(
+                    &item("inside", ItemStatus::Completed, command()),
+                    &Value::Null
+                )
+                .continuations
+                .is_empty(),
+            "work that ends within its turn is part of the answer"
+        );
+        rosters.observe(
+            &item("server", ItemStatus::Running, command()),
+            &Value::Null,
+        );
+        rosters.observe(&turn(TurnStatus::Completed), &Value::Null);
+        assert_eq!(
+            rosters
+                .observe(&finished(Some(0)), &Value::Null)
+                .continuations,
+            ["Background command completed (exit 0): npm run dev\n\nOutput tail:\nready"]
+        );
+
+        rosters.observe(
+            &item("server", ItemStatus::Running, command()),
+            &Value::Null,
+        );
+        rosters.observe(&turn(TurnStatus::Completed), &Value::Null);
+        rosters.observe(&turn(TurnStatus::Running), &Value::Null);
+        assert!(
+            rosters
+                .observe(&finished(Some(1)), &Value::Null)
+                .continuations
+                .is_empty(),
+            "a running turn goes first"
+        );
+        assert_eq!(
+            rosters
+                .observe(&turn(TurnStatus::Completed), &Value::Null)
+                .continuations
+                .len(),
+            1
         );
     }
 }
