@@ -9,8 +9,17 @@ use crate::state::{
 };
 use std::sync::Arc;
 
+/// A turn's own control: forking from it, or loading the work its folded
+/// row expands to. Its progress and failure show beside that control.
+#[derive(Clone, Copy, PartialEq)]
+enum TurnAction {
+    Fork,
+    Items,
+}
+
 #[derive(Clone, PartialEq)]
-struct ForkControl {
+struct TurnControl {
+    action: TurnAction,
     turn: agent_protocol::ids::TurnId,
     phase: OperationPhase,
 }
@@ -52,7 +61,7 @@ pub struct ConversationContext {
     history: Option<HistoryControl>,
     history_notice: Option<String>,
     notices: Vec<ErrorNotice>,
-    forks: Vec<ForkControl>,
+    turn_controls: Vec<TurnControl>,
     workspace_error: Option<super::error::ErrorText>,
 }
 
@@ -85,18 +94,22 @@ impl ConversationContext {
             notices: snapshot.error_notices(ErrorScope::Conversation {
                 draft_key: snapshot.pane.navigation.draft_key.clone(),
             }),
-            forks: snapshot
+            turn_controls: snapshot
                 .operations
                 .iter()
-                .filter_map(|(key, state)| match key {
-                    OperationKey::Fork {
-                        session: target,
-                        turn,
-                    } if Some(target) == session => Some(ForkControl {
+                .filter_map(|(key, state)| {
+                    let (action, target, turn) = match key {
+                        OperationKey::Fork { session, turn } => (TurnAction::Fork, session, turn),
+                        OperationKey::TurnItems { session, turn } => {
+                            (TurnAction::Items, session, turn)
+                        }
+                        _ => return None,
+                    };
+                    (Some(target) == session).then(|| TurnControl {
+                        action,
                         turn: turn.clone(),
                         phase: state.phase.clone(),
-                    }),
-                    _ => None,
+                    })
                 })
                 .collect(),
         };
@@ -143,16 +156,37 @@ impl ConversationContext {
         self.notices.clone()
     }
     pub fn fork_phase(&self, turn: agent_protocol::ids::TurnId) -> Option<OperationPhase> {
-        self.forks
-            .iter()
-            .find(|entry| entry.turn == turn)
-            .map(|entry| entry.phase.clone())
+        self.turn_phase(TurnAction::Fork, &turn)
     }
     pub fn fork_error(&self, turn: agent_protocol::ids::TurnId) -> Option<super::error::ErrorText> {
-        match self.fork_phase(turn) {
-            Some(OperationPhase::Failed { message }) => Some(super::error::error_text(&message)),
-            _ => None,
-        }
+        failure(self.turn_phase(TurnAction::Fork, &turn))
+    }
+    /// Why the work a folded turn expands to could not be loaded.
+    pub fn turn_items_error(
+        &self,
+        turn: agent_protocol::ids::TurnId,
+    ) -> Option<super::error::ErrorText> {
+        failure(self.turn_phase(TurnAction::Items, &turn))
+    }
+}
+
+impl ConversationContext {
+    fn turn_phase(
+        &self,
+        action: TurnAction,
+        turn: &agent_protocol::ids::TurnId,
+    ) -> Option<OperationPhase> {
+        self.turn_controls
+            .iter()
+            .find(|entry| entry.action == action && &entry.turn == turn)
+            .map(|entry| entry.phase.clone())
+    }
+}
+
+fn failure(phase: Option<OperationPhase>) -> Option<super::error::ErrorText> {
+    match phase {
+        Some(OperationPhase::Failed { message }) => Some(super::error::error_text(&message)),
+        _ => None,
     }
 }
 
@@ -205,5 +239,59 @@ mod tests {
         Arc::make_mut(&mut snapshot.sessions.conversations)
             .insert(session, Arc::new(models::Thread::default()));
         assert_eq!(opening(&snapshot), None, "its history shows instead");
+    }
+
+    #[test]
+    fn a_turns_fork_and_work_load_report_their_own_progress_and_failure() {
+        let session = SessionRef::new(ProviderKind::Codex, "selected".into()).unwrap();
+        let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+            Some(session.clone());
+        let failed = |message: &str| OperationState {
+            generation: 1,
+            phase: OperationPhase::Failed {
+                message: message.into(),
+            },
+        };
+        snapshot.operations.insert(
+            OperationKey::TurnItems {
+                session: session.clone(),
+                turn: "work".into(),
+            },
+            failed("items unavailable"),
+        );
+        snapshot.operations.insert(
+            OperationKey::Fork {
+                session: session.clone(),
+                turn: "work".into(),
+            },
+            OperationState {
+                generation: 2,
+                phase: OperationPhase::Running,
+            },
+        );
+        snapshot.operations.insert(
+            OperationKey::TurnItems {
+                session: other,
+                turn: "elsewhere".into(),
+            },
+            failed("other conversation"),
+        );
+        let context = ConversationContext::project(&snapshot, None);
+        assert_eq!(
+            context.turn_items_error("work".into()),
+            Some(crate::presentation::error::error_text("items unavailable"))
+        );
+        assert_eq!(context.fork_error("work".into()), None);
+        assert_eq!(
+            context.fork_phase("work".into()),
+            Some(OperationPhase::Running)
+        );
+        assert_eq!(
+            context.turn_items_error("elsewhere".into()),
+            None,
+            "another conversation's load stays with it"
+        );
     }
 }

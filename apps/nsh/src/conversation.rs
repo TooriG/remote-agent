@@ -325,7 +325,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                 })
                                             })
                                         };
-                                        fold_row(
+                                        view().w_full().child(fold_row(
                                             move || label().unwrap_or_default().to_string(),
                                             open,
                                             move || {
@@ -361,7 +361,8 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                     }
                                                 }
                                             },
-                                        )
+                                        ))
+                                        .child(work_load_failure(connection, row, open))
                                     },
                                 ))
                                 .child(when(move || detail.get().is_some(), move || crate::activity::details(surroundings, detail, expanded_items, list, at, following)))
@@ -625,6 +626,52 @@ fn fold_row(
                     || ui::icon(Icon::CHEVRON_RIGHT, 14.0),
                 )),
         )
+}
+
+/// An opened folded turn whose work did not load says why where that work
+/// would show, as T3 Code's "Couldn't load output" in an opened row, and
+/// loads it again on retry.
+fn work_load_failure(
+    connection: Connection,
+    row: Memo<Option<Row>>,
+    open: impl Fn() -> bool + Copy + 'static,
+) -> View {
+    let load = move || {
+        row.with(|row| {
+            row.as_ref()
+                .and_then(|row| row.activity.as_ref())
+                .and_then(|activity| activity.load_items.clone())
+        })
+    };
+    let failure = move || {
+        load()
+            .and_then(|load| {
+                connection
+                    .context
+                    .with(|context| context.turn_items_error(load.turn_id))
+            })
+            .map(|error| localized(error.to_string()))
+    };
+    view().child(when(
+        move || open() && failure().is_some(),
+        move || {
+            view()
+                .pt_2()
+                .gap_2()
+                .items_start()
+                .child(
+                    text(move || failure().unwrap_or_default())
+                        .selectable(true)
+                        .text_size(px(13.0))
+                        .text_color(nsh_core::element::rgb(0xff8e86)),
+                )
+                .child(crate::ui::text_button(tr("再試行"), move || {
+                    if let Some(load) = untracked(load) {
+                        connection.dispatch(Intent::LoadTurnItems(load));
+                    }
+                }))
+        },
+    ))
 }
 
 /// A selected conversation whose history has not arrived: it is loading, or
