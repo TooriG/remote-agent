@@ -2401,22 +2401,6 @@
         }
       }
     },
-    "この端末ではブラウザデータを取り込めません。": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "この端末ではブラウザデータを取り込めません。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Browser data can't be imported on this device."
-          }
-        }
-      }
-    },
     "この端末の表示言語を選びます。": {
       "localizations": {
         "ja": {
@@ -4845,6 +4829,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Open folder"
+          }
+        }
+      }
+    },
+    "エクスプローラーで開く": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エクスプローラーで開く"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in File Explorer"
           }
         }
       }
@@ -12413,6 +12413,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Could not record audio."
+          }
+        }
+      }
+    },
+    "マイクが見つかりません。": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "マイクが見つかりません。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No microphone was found."
           }
         }
       }

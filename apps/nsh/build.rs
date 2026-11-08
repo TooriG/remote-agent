@@ -9,6 +9,14 @@ fn main() {
     ) {
         println!("cargo::rustc-cfg=desktop");
     }
+    // `dictation`: the platforms whose microphone the app records.
+    println!("cargo::rustc-check-cfg=cfg(dictation)");
+    if matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("macos" | "ios" | "windows")
+    ) {
+        println!("cargo::rustc-cfg=dictation");
+    }
     if std::env::var("TARGET").is_ok_and(|target| target.ends_with("-apple-ios-sim")) {
         // Xcode embeds Simulator entitlements in Mach-O. Keeping them out of
         // the ad-hoc macOS signature also keeps the Simulator binary launchable.

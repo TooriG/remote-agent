@@ -49,6 +49,11 @@ ring = { workspace = true, optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 tempfile = { version = "3", optional = true }
 
+# Recorded speech at a microphone's own rate; Apple platforms record at the
+# transcription's.
+[target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
+rubato = { version = "5", default-features = false }
+
 [dev-dependencies]
 agent-protocol = { path = "../agent-protocol", features = ["test-support"] }
 ring.workspace = true

@@ -14,11 +14,11 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let field_ref = connection.composer_ref;
     let file_pick = signal(0_u64);
     let file_target = stored(None::<(String, agent_core::state::DraftKey)>);
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(dictation)]
     let dictation = crate::dictation::Dictation::new();
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(dictation)]
     let (recording, requesting) = (dictation.active, dictation.requesting);
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(not(dictation))]
     let (recording, requesting) = (signal(false), signal(false));
     let composer = connection.composer;
     let controls = computed(move || composer.with(|c| c.controls.clone()));
@@ -105,7 +105,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         if !enabled() {
             return;
         }
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(dictation)]
         if dictation.active.get_untracked() {
             following.set(true);
             dictation.finish(connection.client.get(), true);
@@ -222,11 +222,11 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             .h(move || if collapsed() { px(36.0) } else { px(64.0) })
     };
     let dictation_button = move || {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(dictation)]
         {
             dictation.button()
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(dictation))]
         {
             view()
         }

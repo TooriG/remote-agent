@@ -14,6 +14,8 @@ pub mod persistence;
 pub mod presentation;
 pub mod privacy;
 pub mod questions;
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub mod recording;
 pub mod state;
 pub mod store;
 pub mod updates;

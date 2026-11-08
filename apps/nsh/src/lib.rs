@@ -16,7 +16,7 @@ mod desktop_workspace;
 mod details;
 #[cfg(desktop)]
 mod devices;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(dictation)]
 mod dictation;
 mod editor;
 mod environment;
