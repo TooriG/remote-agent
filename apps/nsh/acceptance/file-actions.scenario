@@ -27,6 +27,8 @@ press プレビュー・共有
 activate
 expect "Open with TextEdit" 10000
 screenshot quick-look
+# The panel takes the keyboard a moment after it shows.
+wait 500
 key escape
 expect_absent "Open with TextEdit" 10000
 expect "日本語のファイル" after 保存

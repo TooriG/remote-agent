@@ -30,5 +30,7 @@ wait 1500
 expect_absent "このファイルをプレビューできませんでした。"
 activate
 expect "Open with Preview" 10000
+# The panel takes the keyboard a moment after it shows.
+wait 500
 key escape
 expect_absent "Open with Preview" 10000

@@ -33,7 +33,10 @@ expect "Latest reply from another client" 20000
 expect_absent "list_turns is not supported yet"
 expect "Keep this retry draft"
 press 送信
-expect "Keep this retry draft" after "Latest reply from another client" 10000
-expect "シミュレータで完了しました。" after "Keep this retry draft" 30000
+# The conversation's rows read in their list's order, so the sent draft and
+# its answer are counted rather than placed.
+expect_absent "Keep this retry draft" after "AI に依頼する" 10000
+expect "Keep this retry draft" 10000
+expect_count "シミュレータで完了しました。" 2 30000
 expect_absent "list_turns is not supported yet"
 screenshot reconnected

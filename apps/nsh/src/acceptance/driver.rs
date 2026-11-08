@@ -240,6 +240,7 @@ fn limit(step: &Step) -> Duration {
         | Step::Menu(find)
         | Step::Expect(find)
         | Step::ExpectAbsent(find)
+        | Step::ExpectCount(find, _)
         | Step::ExpectEnabled(find, _)
         | Step::ExpectHeight(find, ..) => find.timeout,
         Step::Wait(duration)
@@ -276,9 +277,24 @@ fn attempt(
         Step::Dump(name) => artifact(dump(&Tree::read(mtm, menus), output, name)),
         Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
-        Step::ExpectEnabled(find, enabled) => enabled_as(&Tree::read(mtm, menus), find, *enabled),
+        Step::ExpectCount(find, count) => counted(&Tree::read(mtm, menus), find, *count),
+        Step::ExpectEnabled(find, enabled) => element_is(&Tree::read(mtm, menus), find, |object| {
+            let actual = !responds(object, sel!(isAccessibilityEnabled))
+                || unsafe { msg_send![object, isAccessibilityEnabled] };
+            (
+                actual == *enabled,
+                if actual { "enabled" } else { "disabled" }.into(),
+            )
+        }),
         Step::ExpectHeight(find, points, above) => {
-            height_beyond(&Tree::read(mtm, menus), find, *points, *above)
+            element_is(&Tree::read(mtm, menus), find, |object| {
+                let frame: NSRect = unsafe { msg_send![object, accessibilityFrame] };
+                let height = frame.size.height;
+                (
+                    (height > *points) == *above,
+                    format!("{height} points tall"),
+                )
+            })
         }
         Step::Press(find) => press(&Tree::read(mtm, menus), find),
         Step::Type(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
@@ -363,41 +379,24 @@ fn activate(mtm: MainThreadMarker) -> Attempt {
     Attempt::Pending("the app is not active yet".into())
 }
 
-/// Whether the element `press` would find takes presses as `enabled` says.
-fn enabled_as(tree: &Tree, find: &Find, enabled: bool) -> Attempt {
+/// Whether the element `press` would find is as `state` wants: it answers
+/// whether it is, and how it is (`enabled`, `64 points tall`).
+fn element_is(
+    tree: &Tree,
+    find: &Find,
+    state: impl FnOnce(&AnyObject) -> (bool, String),
+) -> Attempt {
     let index = match tree.labelled(find) {
         Ok(matches) => matches[0],
         Err(reason) => return Attempt::Pending(reason),
     };
     let node = &tree.nodes[index];
     let Target::Element(object) = &node.target else {
-        return Attempt::Failed(format!("{} has no enabled state", node.describe()));
+        return Attempt::Failed(format!("{} is no element", node.describe()));
     };
-    let actual = !responds(object, sel!(isAccessibilityEnabled))
-        || unsafe { msg_send![&**object, isAccessibilityEnabled] };
-    let state = if actual { "enabled" } else { "disabled" };
-    if actual == enabled {
-        Attempt::Passed(format!("{} is {state}", node.describe()), None)
-    } else {
-        Attempt::Pending(format!("{} is {state}", node.describe()))
-    }
-}
-
-/// Whether the element `press` would find is taller than `points`, or shorter
-/// when not `above`.
-fn height_beyond(tree: &Tree, find: &Find, points: f64, above: bool) -> Attempt {
-    let index = match tree.labelled(find) {
-        Ok(matches) => matches[0],
-        Err(reason) => return Attempt::Pending(reason),
-    };
-    let node = &tree.nodes[index];
-    let Target::Element(object) = &node.target else {
-        return Attempt::Failed(format!("{} has no frame", node.describe()));
-    };
-    let frame: NSRect = unsafe { msg_send![&**object, accessibilityFrame] };
-    let height = frame.size.height;
-    let message = format!("{} is {height} points tall", node.describe());
-    if (height > points) == above {
+    let (wanted, actual) = state(object);
+    let message = format!("{} is {actual}", node.describe());
+    if wanted {
         Attempt::Passed(message, None)
     } else {
         Attempt::Pending(message)
@@ -429,6 +428,28 @@ fn shown(tree: &Tree, find: &Find, present: bool) -> Attempt {
         // Without its anchor, nothing after it is shown.
         (Err(reason), true) => Attempt::Pending(reason),
         (Err(reason), false) => Attempt::Passed(reason, None),
+    }
+}
+
+/// Whether exactly `count` elements after `find`'s anchor show its text.
+fn counted(tree: &Tree, find: &Find, count: usize) -> Attempt {
+    let start = match tree.start(find) {
+        Ok(start) => start,
+        Err(reason) => return Attempt::Pending(reason),
+    };
+    let shown = (start..tree.nodes.len())
+        .filter(|&index| {
+            tree.nodes[index]
+                .texts
+                .iter()
+                .any(|(_, text)| text.contains(find.text.as_str()))
+        })
+        .count();
+    let message = format!("{shown} elements show {:?}", find.text);
+    if shown == count {
+        Attempt::Passed(message, None)
+    } else {
+        Attempt::Pending(message)
     }
 }
 

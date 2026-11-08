@@ -20,6 +20,9 @@
 //! - `key <name>`: a key with optional modifiers, as `return`, `escape` or `cmd+,`.
 //! - `expect <text> [after <anchor>] [timeout-ms]` / `expect_absent ...`: waits
 //!   until some element's text contains `<text>`, or none does.
+//! - `expect_count <text> <n> [after <anchor>] [timeout-ms]`: waits until
+//!   exactly `<n>` elements' text contains `<text>`, whatever their order (a
+//!   conversation's rows read in their list's order, not the screen's).
 //! - `expect_enabled <label> [after <anchor>] [timeout-ms]` / `expect_disabled
 //!   ...`: waits until the element `press` would find takes presses, or until it
 //!   does not.
@@ -74,6 +77,8 @@ pub(crate) enum Step {
     Key(Key),
     Expect(Find),
     ExpectAbsent(Find),
+    /// This many elements show the text.
+    ExpectCount(Find, usize),
     /// The element takes presses, or not.
     ExpectEnabled(Find, bool),
     /// The element is taller than this many points, or shorter when `false`.
@@ -203,6 +208,12 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("key", [name]) => Step::Key(key(name)?),
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
+        ("expect_count", [text, count, rest @ ..]) => Step::ExpectCount(
+            find(text, rest)?,
+            count
+                .parse()
+                .map_err(|_| format!("{count:?} is not a count"))?,
+        ),
         ("expect_enabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, true),
         ("expect_disabled", [label, rest @ ..]) => Step::ExpectEnabled(find(label, rest)?, false),
         ("expect_height", [target, side @ ("above" | "below"), points, rest @ ..]) => {
@@ -360,7 +371,7 @@ mod tests {
     fn steps_take_quoted_labels_and_optional_timeouts() {
         let lines = parse(
             "# Comment\nfixture /external-conversation\nhost without-codex\n\npress \"新しい チャット\"\n\
-             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
+             type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
              scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\nexpect_file $AGENT_STATE_DIR/saved.png 500\nclipboard \"a\\nb\"\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
@@ -395,6 +406,14 @@ mod tests {
                     after: None,
                     timeout: DEFAULT_TIMEOUT
                 }),
+                Step::ExpectCount(
+                    Find {
+                        text: "回答".into(),
+                        after: None,
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    2
+                ),
                 Step::ExpectEnabled(
                     Find {
                         text: "送信".into(),
