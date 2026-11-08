@@ -206,7 +206,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
                 .unwrap_or_default()
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", debug_assertions))]
         crate::acceptance::rows_ready(projected.len());
         Shared(std::sync::Arc::new(projected))
     });
@@ -234,15 +234,6 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             .context
             .with(|p| p.opening().is_none().then(|| p.history()).flatten())
     });
-    let read_older = move || {
-        following.set(false);
-        if let Some(thread_id) = connection
-            .context
-            .with_untracked(|p| p.navigation().thread_id)
-        {
-            connection.dispatch(Intent::ReadOlder { thread_id });
-        }
-    };
     view()
         .label(tr("会話の履歴"))
         .flex_1()
@@ -265,7 +256,15 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         .unwrap_or_default()
                                 }))
                             },
-                            read_older,
+                            move || {
+                                following.set(false);
+                                if let Some(thread_id) = connection
+                                    .context
+                                    .with_untracked(|p| p.navigation().thread_id)
+                                {
+                                    connection.dispatch(Intent::ReadOlder { thread_id });
+                                }
+                            },
                         )
                         .enabled(move || {
                             history.with(|history| {
@@ -466,13 +465,6 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 if dragging.get() {
                     following.set(event.offset.y + event.size.height >= event.content_size.height - px(FOLLOW_END_THRESHOLD));
                 }
-                let prefetch = history.with_untracked(|history| history.as_ref().is_some_and(|history| {
-                    agent_core::presentation::conversation::should_prefetch_history(
-                        history.has_more, history.loading, history.error.is_some(), following.get_untracked(),
-                        event.offset.y.0, event.size.height.0,
-                    )
-                }));
-                if prefetch { read_older(); }
             })
             .on_scroll_end(move |_: &Point<Points>| { dragging.replace(false); })
             .on_momentum_end(move |_: &Point<Points>| { dragging.replace(false); })

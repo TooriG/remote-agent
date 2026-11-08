@@ -32,7 +32,55 @@ final class MessageTests: XCTestCase {
             XCTAssertEqual(content.bounds, committed)
             XCTAssertEqual(text.visibleRect.height, 40, "glyphs must draw before the deferred NSView bounds commit")
             XCTAssertEqual(text.layer?.needsDisplay(), true, "layer scrolling must invalidate newly visible native glyphs")
+            text.layer?.displayIfNeeded()
+            content.layer?.sublayerTransform = CATransform3DMakeTranslation(0, -590, 0)
+            XCTAssertEqual(text.visibleRect.height, 40)
+            XCTAssertEqual(text.layer?.needsDisplay(), false, "moving a fully painted visible cell needs no redraw")
+            content.layer?.sublayerTransform = CATransform3DMakeTranslation(0, -200, 0)
+            XCTAssertTrue(text.visibleRect.isEmpty)
+            XCTAssertEqual(text.layer?.needsDisplay(), false, "an offscreen cell must not be invalidated")
         }
+
+        @MainActor func testExposureKeepsOverlappingPixelsForBothScrollDirectionsAndResize() {
+            let before = NSRect(x: 0, y: 0, width: 400, height: 200)
+            let after = NSRect(x: 0, y: 60, width: 400, height: 200)
+            XCTAssertEqual(MessageTextView.newlyExposedRects(previous: before, current: after),
+                           [NSRect(x: 0, y: 200, width: 400, height: 60)])
+            XCTAssertEqual(MessageTextView.newlyExposedRects(previous: after, current: before),
+                           [NSRect(x: 0, y: 0, width: 400, height: 60)])
+            XCTAssertEqual(MessageTextView.newlyExposedRects(previous: before, current: before), [])
+            XCTAssertEqual(MessageTextView.newlyExposedRects(previous: before, current: .zero), [])
+            XCTAssertEqual(MessageTextView.newlyExposedRects(previous: .zero, current: before), [before])
+            let outside = NSRect(x: 0, y: 300, width: 400, height: 200)
+            XCTAssertEqual(MessageTextView.newlyExposedRects(previous: before, current: outside), [outside])
+            let inside = NSRect(x: 20, y: 20, width: 360, height: 160)
+            XCTAssertEqual(MessageTextView.newlyExposedRects(previous: inside, current: before), [
+                NSRect(x: 0, y: 0, width: 400, height: 20),
+                NSRect(x: 0, y: 180, width: 400, height: 20),
+                NSRect(x: 0, y: 20, width: 20, height: 160),
+                NSRect(x: 380, y: 20, width: 20, height: 160),
+            ])
+        }
+
+        #if DEBUG
+            @MainActor func testStreamProbeRetainsFirstPaintAcrossAppendsAndClearsReplacedContent() {
+                var paints = RenderProbe.Paints()
+                paints.record("update 0", at: 10)
+                paints.update(previous: "update 0", current: "update 0\nupdate 1")
+                paints.record("update 0\nupdate 1", at: 20)
+                XCTAssertEqual(paints.first(for: "update 0"), 10)
+                XCTAssertEqual(paints.first(for: "update 1"), 20)
+                // A later refresh of the same text must not replace its first draw.
+                paints.update(previous: "update 0\nupdate 1", current: "update 0\nupdate 1")
+                paints.record("update 0\nupdate 1", at: 30)
+                XCTAssertEqual(paints.first(for: "update 1"), 20)
+                paints.update(previous: "update 0\nupdate 1", current: "replacement")
+                XCTAssertNil(paints.first(for: "update 0"))
+                paints.record("replacement", at: 40)
+                paints.clear()
+                XCTAssertNil(paints.first(for: "replacement"))
+            }
+        #endif
 
         @MainActor func testTextKitOwnsTheVisibleTextAndReflowsAtTheNativeWidth() throws {
             let url = try XCTUnwrap(Bundle.module.url(forResource: "message", withExtension: "json"))

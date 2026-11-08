@@ -38,26 +38,22 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         var action: (([String: Any]) -> Void)?
         var document = MessageDocument.empty
         private var geometryObservers: [NSKeyValueObservation] = []
+        private var lastVisibleRect: NSRect = .zero
 
         func watchScrollingGeometry() {
             geometryObservers.removeAll()
+            lastVisibleRect = .zero
             guard window != nil else { return }
             let redraw: @Sendable () -> Void = { [weak self] in
                 MainActor.assumeIsolated {
-                    // Layer-only scrolling does not invalidate native glyphs.
-                    // AppKit coalesces these redraws into the frame commit.
-                    self?.needsDisplay = true
+                    self?.invalidateNewlyVisibleText()
                 }
             }
             var ancestor = superview
             while let current = ancestor {
                 if let layer = current.layer {
-                    geometryObservers.append(layer.observe(\.bounds, options: [.old, .new]) { _, change in
-                        if change.oldValue != change.newValue { redraw() }
-                    })
-                    geometryObservers.append(layer.observe(\.position, options: [.old, .new]) { _, change in
-                        if change.oldValue != change.newValue { redraw() }
-                    })
+                    // NSView frame/bounds changes invalidate native views themselves.
+                    // NSH's layer-only scroll is the path that bypasses AppKit.
                     geometryObservers.append(layer.observe(\.sublayerTransform, options: [.old, .new]) { _, change in
                         if let old = change.oldValue, let new = change.newValue,
                            !CATransform3DEqualToTransform(old, new) { redraw() }
@@ -65,6 +61,42 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
                 }
                 ancestor = current.superview
             }
+            invalidateNewlyVisibleText()
+        }
+
+        private func invalidateNewlyVisibleText() {
+            let current = visibleRect
+            let previous = lastVisibleRect
+            lastVisibleRect = current
+            // Retain the overlapping glyph pixels. Layer-only scrolling only
+            // needs the exposed strips; moving a fully visible cell needs none.
+            for rect in Self.newlyExposedRects(previous: previous, current: current) {
+                setNeedsDisplay(rect)
+            }
+        }
+
+        static func newlyExposedRects(previous: NSRect, current: NSRect) -> [NSRect] {
+            guard !current.isEmpty else { return [] }
+            let overlap = previous.intersection(current)
+            guard !overlap.isEmpty else { return [current] }
+            var rects: [NSRect] = []
+            if current.minY < overlap.minY {
+                rects.append(NSRect(x: current.minX, y: current.minY, width: current.width,
+                                    height: overlap.minY - current.minY))
+            }
+            if overlap.maxY < current.maxY {
+                rects.append(NSRect(x: current.minX, y: overlap.maxY, width: current.width,
+                                    height: current.maxY - overlap.maxY))
+            }
+            if current.minX < overlap.minX {
+                rects.append(NSRect(x: current.minX, y: overlap.minY, width: overlap.minX - current.minX,
+                                    height: overlap.height))
+            }
+            if overlap.maxX < current.maxX {
+                rects.append(NSRect(x: overlap.maxX, y: overlap.minY, width: current.maxX - overlap.maxX,
+                                    height: overlap.height))
+            }
+            return rects
         }
 
         // NSH scrolls a container's sublayers before committing its NSView
@@ -84,9 +116,10 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             }
             return rect.isNull ? .zero : rect
         }
+        #if DEBUG
         // Acceptance observes completed native draws, rather than text merely
         // published to accessibility (which includes offscreen list cells).
-        private var paints: [(text: String, at: TimeInterval)] = []
+        private var paints = RenderProbe.Paints()
 
         @objc func bexPaintedAtForText(_ expected: String) -> Double {
             guard let manager = layoutManager, let container = textContainer,
@@ -94,10 +127,14 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let glyphs = manager.glyphRange(forBoundingRect: visibleRect, in: container)
             let range = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
             guard (string as NSString).substring(with: range).contains(expected) else { return 0 }
-            return paints.first { $0.text.contains(expected) }?.at ?? 0
+            return paints.first(for: expected) ?? 0
         }
 
-        func resetPaints() { paints.removeAll(keepingCapacity: true) }
+        func resetPaints() { paints.clear() }
+
+        func preparePaints(for content: String) {
+            paints.update(previous: string, current: content)
+        }
 
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
@@ -107,12 +144,11 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let glyphs = manager.glyphRange(forBoundingRect: rect, in: container)
             let range = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
             let painted = (string as NSString).substring(with: range)
-            if !paints.contains(where: { $0.text == painted }) {
-                if paints.count == 64 { paints.removeFirst() }
-                paints.append((painted, Date.timeIntervalSinceReferenceDate))
-            }
+            paints.record(painted, at: Date.timeIntervalSinceReferenceDate)
             RenderProbe.record("draw", self, painted: painted)
         }
+
+        #endif
 
         init() {
             let storage = NSTextStorage()
@@ -214,11 +250,16 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
 
         func update(_ document: MessageDocument) {
             guard text.document != document else { return }
-            text.resetPaints()
+            #if DEBUG
+            if document.target != text.document.target || document.role != text.document.role
+                || document.maxWidth != text.document.maxWidth { text.resetPaints() }
+            #endif
             text.document = document
             text.setAccessibilityIdentifier("message.\(document.role)-text")
             refresh()
+            #if DEBUG
             RenderProbe.record("update", text)
+            #endif
         }
 
         override func viewDidChangeEffectiveAppearance() {
@@ -241,6 +282,9 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
                 .count
                 && (text.string as NSString).substring(with: range) == (content.string as NSString)
                 .substring(with: range)
+            #if DEBUG
+            if RenderProbe.enabled { text.preparePaints(for: content.string) }
+            #endif
             text.textStorage?.setAttributedString(content)
             // The natural size comes from TextKit's own layout, whose glyphs the
             // wrapped layout below reuses, rather than a second typesetting pass.
@@ -269,7 +313,9 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let height = ceil(manager.usedRect(for: container).maxY)
             text.frame = CGRect(x: 0, y: 0, width: bounds.width, height: height)
             reportSize(CGSize(width: max(0, measuredSize.width), height: height))
+            #if DEBUG
             RenderProbe.record("layout", text)
+            #endif
         }
     }
 #else
