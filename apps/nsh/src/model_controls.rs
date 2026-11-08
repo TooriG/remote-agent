@@ -430,34 +430,6 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
             },
         )
     };
-    let permission_menu = move || {
-        ui::text_button(
-            move || {
-                let permissions = field("permissions")();
-                let selected = permissions["selected"].clone();
-                SharedString::from(tr_format(
-                    "アクセス権限: {0}",
-                    [&permissions["choices"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .find(|choice| choice["id"] == selected)
-                        .and_then(|choice| choice["title"].as_str())
-                        .unwrap_or(tr("未設定"))],
-                ))
-            },
-            move || {
-                let permissions = field("permissions")();
-                let items = permissions["choices"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|choice| json!({"id": choice["id"], "title": choice["title"], "selected": choice["id"] == permissions["selected"]}))
-                    .collect::<Vec<_>>();
-                ui::popup(&json!(items), move |value: &str| act("permission", value));
-            },
-        )
-    };
     let body = view()
         .flex_1()
         .min_w_0()
@@ -548,10 +520,6 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                         move || choice_menu("speed", tr("速度"), "speed"),
                     ))
             },
-        ))
-        .child(when(
-            move || !field("permissions")().is_null(),
-            permission_menu,
         ));
     view()
         .w(px(440.0))

@@ -23,6 +23,8 @@ mod media;
 mod model_controls;
 mod native;
 mod notices;
+#[cfg(target_os = "macos")]
+mod permissions;
 mod projects;
 mod requests;
 mod rich_text;

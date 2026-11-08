@@ -25,6 +25,8 @@ pub const PERMISSION_CHOICES: [(PermissionMode, &str, &str); 3] = [
 
 pub struct PermissionControl<'a> {
     pub provider: Option<ProviderKind>,
+    /// The menu's heading: whose approval mode it changes.
+    pub title: &'static str,
     pub load_request: Option<ReadPermissionSettings>,
     pub label: &'static str,
     pub mode: Option<PermissionMode>,
@@ -41,6 +43,12 @@ impl Snapshot {
         let mode = settings.and_then(|settings| settings.mode);
         PermissionControl {
             provider,
+            title: match provider {
+                Some(ProviderKind::Codex) => "Codex の承認方法",
+                Some(ProviderKind::Claude) => "Claude の承認方法",
+                Some(ProviderKind::DeepSeek) => "DeepSeek Harness の承認方法",
+                None => "エージェント未選択",
+            },
             load_request: provider
                 .filter(|_| self.connection.connected && state.is_none())
                 .map(|provider| ReadPermissionSettings { provider }),
@@ -205,6 +213,7 @@ mod tests {
         );
         let control = snapshot.permission_control(&crate::state::DraftKey::from("draft"));
         assert_eq!(control.provider, Some(ProviderKind::Claude));
+        assert_eq!(control.title, "Claude の承認方法");
         assert_eq!(control.label, "読み込み中…");
         assert_eq!(control.version, None);
         let session = crate::session::SessionRef {

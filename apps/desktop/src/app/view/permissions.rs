@@ -1,6 +1,6 @@
 use super::*;
 use agent_core::presentation::permissions::PERMISSION_CHOICES;
-use agent_protocol::{permissions::PermissionMode, session::ProviderKind};
+use agent_protocol::permissions::PermissionMode;
 
 impl Preferences {
     pub(super) fn permission_menu(
@@ -66,12 +66,7 @@ impl Preferences {
                 .text_xs()
                 .text_color(rgb(appearance::MUTED))
                 .pb_2()
-                .child(match provider {
-                    Some(ProviderKind::Codex) => language.text("Codex の承認方法"),
-                    Some(ProviderKind::Claude) => language.text("Claude の承認方法"),
-                    Some(ProviderKind::DeepSeek) => language.text("DeepSeek Harness の承認方法"),
-                    None => language.text("エージェント未選択"),
-                }),
+                .child(language.text(control.title)),
         );
         for (index, (mode, label, description)) in PERMISSION_CHOICES.into_iter().enumerate() {
             let version = control.version.map(str::to_owned);

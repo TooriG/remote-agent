@@ -345,6 +345,25 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         let inactive = move || {
             !enabled() || (composer.with(|c| c.draft.text.trim().is_empty()) && !stopping())
         };
+        let controls_row = view().flex_row().items_center().child(when(
+            move || answering.with(Option::is_none),
+            move || {
+                ui::icon_button_sized(
+                    Icon::PLUS,
+                    tr("ファイルを添付"),
+                    40.0,
+                    24.0,
+                    move || {
+                        let host = connection.host.get_untracked();
+                        let key = controls.with_untracked(|c| c.navigation.draft_key.clone());
+                        pick_files(connection.application.get(), host, connection.pane, key);
+                    },
+                )
+                .enabled(attach_enabled)
+            },
+        ));
+        #[cfg(target_os = "macos")]
+        let controls_row = controls_row.child(crate::permissions::control());
         view()
             .w_full()
             .p(px(7.0))
@@ -361,32 +380,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     .child(field().w_full().h(px(40.0))),
             )
             .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .child(when(
-                        move || answering.with(Option::is_none),
-                        move || {
-                            ui::icon_button_sized(
-                                Icon::PLUS,
-                                tr("ファイルを添付"),
-                                40.0,
-                                24.0,
-                                move || {
-                                    let host = connection.host.get_untracked();
-                                    let key =
-                                        controls.with_untracked(|c| c.navigation.draft_key.clone());
-                                    pick_files(
-                                        connection.application.get(),
-                                        host,
-                                        connection.pane,
-                                        key,
-                                    );
-                                },
-                            )
-                            .enabled(attach_enabled)
-                        },
-                    ))
+                controls_row
                     .child(view().flex_1())
                     .child(crate::model_controls::controls())
                     .child(when(
