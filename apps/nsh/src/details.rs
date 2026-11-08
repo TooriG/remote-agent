@@ -200,6 +200,7 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
             return;
         }
         if let Some(path) = workspace.take_reveal(|reveal| match reveal {
+            #[cfg(desktop)]
             Reveal::DiffFile(path) => Some(path.clone()),
             Reveal::Page(_) => None,
         }) {

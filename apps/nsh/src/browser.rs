@@ -209,6 +209,7 @@ fn viewer(thread: SessionRef) -> impl IntoElement {
         }
         if let Some(url) = workspace.take_reveal(|reveal| match reveal {
             Reveal::Page(url) => Some(url.clone()),
+            #[cfg(desktop)]
             Reveal::DiffFile(_) => None,
         }) {
             send(BrowserAction::Navigate { url });

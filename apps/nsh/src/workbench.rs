@@ -18,6 +18,7 @@ pub(crate) struct Workbench {
 #[derive(Clone, PartialEq)]
 pub(crate) enum Reveal {
     /// The Diff panel's file, unfolded and scrolled to.
+    #[cfg(desktop)]
     DiffFile(String),
     /// The browser's page, loaded in it.
     Page(String),
@@ -44,6 +45,7 @@ impl Workbench {
     }
 
     /// Opens the Diff panel of `cwd`, scrolled to `file` when one is given.
+    #[cfg(desktop)]
     pub fn review(self, cwd: String, file: Option<String>) {
         self.open(PanelKind::Diff, Some(cwd), None);
         self.reveal.set(file.map(Reveal::DiffFile));
