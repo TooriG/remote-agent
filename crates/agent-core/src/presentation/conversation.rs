@@ -11,6 +11,8 @@ use std::{
     sync::Arc,
 };
 mod images;
+mod viewport;
+pub use viewport::{retained_row_index, should_prefetch_history};
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.

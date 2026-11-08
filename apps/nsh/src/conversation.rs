@@ -169,6 +169,10 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     let clock = signal(std::time::SystemTime::now());
     let top_row = signal(0_usize);
     let width = signal(0_f32);
+    let column_width = computed(move || {
+        let padding = if is_desktop() { 48.0 } else { 32.0 };
+        (width.get() - padding).clamp(0.0, CONTENT_WIDTH - 48.0)
+    });
     spawn(async move {
         loop {
             timer(std::time::Duration::from_secs(1)).await;
@@ -196,18 +200,20 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     });
     // Shared, so that a row reads it cheaply through `try_get`.
     let rows = computed(move || {
-        Shared(std::sync::Arc::new(connection.conversation.with(
-            |conversation| {
-                conversation
-                    .as_ref()
-                    .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
-                    .unwrap_or_default()
-            },
-        )))
+        let projected = connection.conversation.with(|conversation| {
+            conversation
+                .as_ref()
+                .map(|conversation| expanded.with(|expanded| project(conversation, expanded)))
+                .unwrap_or_default()
+        });
+        #[cfg(target_os = "macos")]
+        crate::acceptance::rows_ready(projected.len());
+        Shared(std::sync::Arc::new(projected))
     });
     effect(move || {
         target.get();
-        if rows.with(|rows| !rows.is_empty())
+        if column_width.get() > 0.0
+            && rows.with(|rows| !rows.is_empty())
             && following.get()
             && !dragging.get()
             && !scroll_pending.get()
@@ -228,7 +234,17 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             .context
             .with(|p| p.opening().is_none().then(|| p.history()).flatten())
     });
+    let read_older = move || {
+        following.set(false);
+        if let Some(thread_id) = connection
+            .context
+            .with_untracked(|p| p.navigation().thread_id)
+        {
+            connection.dispatch(Intent::ReadOlder { thread_id });
+        }
+    };
     view()
+        .label(tr("会話の履歴"))
         .flex_1()
         .min_h_0()
         .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
@@ -249,14 +265,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         .unwrap_or_default()
                                 }))
                             },
-                            move || {
-                                following.set(false);
-                                if let Some(thread_id) =
-                                    connection.context.with_untracked(|p| p.navigation().thread_id)
-                                {
-                                    connection.dispatch(Intent::ReadOlder { thread_id });
-                                }
-                            },
+                            read_older,
                         )
                         .enabled(move || {
                             history.with(|history| {
@@ -280,13 +289,29 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 .context
                 .with(|p| p.history_notice().map(localized).unwrap_or_default())
         }))
-        .child(
-            virtual_list(
+        .child(when(
+            move || column_width.get() > 0.0 && rows.with(|rows| !rows.is_empty()),
+            move || virtual_list(
                 move || rows.with(|rows| rows.len()),
                 move |at| {
-                    // The list's cells can outlive the list's own values while a
-                    // conversation closes: a row then reads as none.
-                    let row = computed(move || rows.try_get().and_then(|rows| rows.get(at.index()).cloned()));
+                    let binding = stored((target.get_untracked(), None::<(usize, String)>));
+                    let row = computed(move || {
+                        // A splice updates the data before the recycled slot's
+                        // Position. Resolve its retained key in this snapshot
+                        // so a live answer never briefly becomes another row.
+                        let rows = rows.try_get()?;
+                        let scope = target.get();
+                        let position = at.index();
+                        let (previous_scope, previous) = binding.get();
+                        let previous = previous.filter(|_| previous_scope == scope);
+                        let retained = previous.as_ref().and_then(|(_, id)| rows.iter().position(|row| &row.id == id));
+                        let index = agent_core::presentation::conversation::retained_row_index(
+                            previous.as_ref().map(|(position, _)| *position), position, retained, rows.len(),
+                        );
+                        let row = index.and_then(|index| rows.get(index)).cloned();
+                        binding.replace((scope, row.as_ref().map(|row| (position, row.id.clone()))));
+                        row
+                    });
                     let user =
                         move || row.with(|r| r.as_ref().is_some_and(|r| r.kind == Kind::User));
                     let kind = move || row.with(|r| r.as_ref().map_or(Kind::Response, |r| r.kind));
@@ -364,7 +389,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         )
                                     },
                                 ))
-                                .child(when(move || detail.get().is_some(), move || crate::activity::details(surroundings, detail, expanded_items, list, at, following)))
+                                .child(when(move || detail.get().is_some(), move || crate::activity::details(surroundings, detail, expanded_items, list, at, following, column_width)))
                                 .child(
                                     view()
                                         .max_w(relative(1.0))
@@ -388,6 +413,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                 surroundings,
                                                 move || label().map(|text| agent_core::presentation::markdown::markdown_blocks(text.to_string())).unwrap_or_default(),
                                                 kind,
+                                                move || if user() { (column_width.get() * 0.9 - 32.0).max(0.0) } else { column_width.get() },
                                             ),
                                         )),
                                 )
@@ -427,6 +453,10 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                         ))
                 },
             )
+            // Start with the latest row in the first layout. Creating an empty
+            // list and jumping after its first commit first mounts older cells
+            // at placeholder heights and measures content the reader never sees.
+            .initial_scroll_index(rows.with_untracked(|rows| rows.len().saturating_sub(1)))
             .keys(move || rows.with(|rows| rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>()))
             .element_ref(&list)
             .estimated_item_size(px(170.0))
@@ -436,6 +466,13 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                 if dragging.get() {
                     following.set(event.offset.y + event.size.height >= event.content_size.height - px(FOLLOW_END_THRESHOLD));
                 }
+                let prefetch = history.with_untracked(|history| history.as_ref().is_some_and(|history| {
+                    agent_core::presentation::conversation::should_prefetch_history(
+                        history.has_more, history.loading, history.error.is_some(), following.get_untracked(),
+                        event.offset.y.0, event.size.height.0,
+                    )
+                }));
+                if prefetch { read_older(); }
             })
             .on_scroll_end(move |_: &Point<Points>| { dragging.replace(false); })
             .on_momentum_end(move |_: &Point<Points>| { dragging.replace(false); })
@@ -446,7 +483,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             })
             .flex_1()
             .min_h_0(),
-        )
+        ))
         .child(when(is_desktop, move || {
             minimap(rows, top_row, list, following, move || {
                 agent_core::presentation::conversation::minimap_persistent(width.get(), CONTENT_WIDTH)

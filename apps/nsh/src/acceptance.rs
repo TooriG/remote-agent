@@ -8,6 +8,19 @@ mod script;
 #[cfg(target_os = "macos")]
 mod driver;
 
+/// Engine-side availability, before the native mount/measurement handshake.
+#[cfg(target_os = "macos")]
+pub(crate) fn rows_ready(count: usize) {
+    use std::io::Write;
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var_os("BEX_ACCEPTANCE_OUTPUT").is_some()) {
+        let fields = serde_json::json!({"at": objc2_foundation::NSDate::timeIntervalSinceReferenceDate_class(), "count":count});
+        let _ = std::io::stderr()
+            .lock()
+            .write_all(format!("render-rows {fields}\n").as_bytes());
+    }
+}
+
 /// Starts the scenario the environment names, if any. The flag says whether it
 /// passed once the app's event loop returns.
 #[cfg(target_os = "macos")]

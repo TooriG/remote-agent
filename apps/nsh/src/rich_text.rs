@@ -66,6 +66,7 @@ pub(crate) fn content(
     surroundings: Surroundings,
     blocks: impl Fn() -> Vec<MarkdownBlock> + 'static,
     kind: impl Fn() -> Kind + Copy + 'static,
+    max_width: impl Fn() -> f32 + Copy + 'static,
 ) -> nsh_core::element::View {
     let connection = surroundings.connection;
     let target = computed(move || {
@@ -85,7 +86,8 @@ pub(crate) fn content(
         .expect("display targets contain only serializable values")
     });
     let content = computed(move || parts(blocks()));
-    view_parts(surroundings, move || content.get(), target, kind)
+    let max_width = computed(max_width);
+    view_parts(surroundings, move || content.get(), target, kind, max_width)
 }
 
 fn view_parts(
@@ -93,6 +95,7 @@ fn view_parts(
     parts: impl Fn() -> Vec<Part> + 'static,
     target: Memo<String>,
     kind: impl Fn() -> Kind + Copy + 'static,
+    max_width: Memo<f32>,
 ) -> nsh_core::element::View {
     let Surroundings {
         connection, files, ..
@@ -119,7 +122,8 @@ fn view_parts(
                                 };
                                 json!({"blocks": blocks, "secondary": kind() == Kind::Activity,
                         "role": if kind() == Kind::User { "user" } else { "assistant" },
-                        "target": target.get(), "sideChat": connection.pane.is_none()})
+                        "target": target.get(), "sideChat": connection.pane.is_none(),
+                        "maxWidth": if is_code() && !wrap.get() { 1_000_000.0 } else { (max_width.get() - if is_code() { 34.0 } else { 0.0 }).max(0.0) }})
                             })
                         })
                         .on_native_event(move |event: &NativeEvent| {
@@ -296,7 +300,7 @@ fn view_parts(
                 );
             })
             .into_element(),
-            Part::Table { .. } => table(surroundings, part, target, kind).into_element(),
+            Part::Table { .. } => table(surroundings, part, target, kind, max_width).into_element(),
         },
     ))
 }
@@ -308,6 +312,7 @@ fn table(
     part: ReadSignal<(usize, Part)>,
     target: Memo<String>,
     kind: impl Fn() -> Kind + Copy + 'static,
+    max_width: Memo<f32>,
 ) -> impl IntoElement {
     use crate::ui::colors;
     let copy = move |markdown: bool| {
@@ -372,6 +377,18 @@ fn table(
                                         move || cell.with(|(_, parts)| parts.clone()),
                                         target,
                                         kind,
+                                        computed(move || {
+                                            let columns =
+                                                row.with(|(_, cells)| cells.len()).max(1) as f32;
+                                            if compact.get() {
+                                                1_000_000.0
+                                            } else {
+                                                ((max_width.get() - 2.0 - (columns - 1.0))
+                                                    / columns
+                                                    - 24.0)
+                                                    .max(0.0)
+                                            }
+                                        }),
                                     ))
                             },
                         ))
@@ -673,7 +690,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true}),
+            json!({"blocks": blocks, "secondary": false, "role": "user", "target": "opaque-native-menu-target", "sideChat": true, "maxWidth": 400}),
             expected
         );
     }

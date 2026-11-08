@@ -151,12 +151,14 @@ fn route(
         set_worktree_access(&root.join(format!("{name}-worktree")), readable)?;
         return Ok((204, Vec::new()));
     }
-    if let Some((kind @ ("/long-conversation" | "/viewport-conversation"), id)) =
-        path.rsplit_once('/')
+    if let Some((
+        kind @ ("/long-conversation" | "/viewport-conversation" | "/render-conversation"),
+        id,
+    )) = path.rsplit_once('/')
     {
         write_json(
             root.join("list-fixture.json"),
-            &json!([{"id":id,"fixtureHistory":if kind == "/viewport-conversation" { "viewport" } else { "long" },
+            &json!([{"id":id,"fixtureHistory":match kind { "/viewport-conversation" => "viewport", "/render-conversation" => "render", _ => "long" },
                 "cwd":root.join("project"),"name":"Long conversation",
                 "createdAt":10000,"updatedAt":10000,"status":{"type":"notLoaded"},"historyMode":"paginated"}]),
         )?;

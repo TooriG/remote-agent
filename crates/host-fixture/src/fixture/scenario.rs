@@ -275,7 +275,9 @@ impl ScenarioTurn {
             turn,
             json!({"id":final_id,"type":"agentMessage","text":"","phase":"final_answer"}),
         )?;
-        if prompt.contains("[long-markdown]") {
+        if prompt.contains("[render-stream]") {
+            render_stream(context, &thread_id, turn, index, stop).await?;
+        } else if prompt.contains("[long-markdown]") {
             let body = "Markdown stream fixture ".repeat(80) + "\n";
             let prose = (0..300)
             .map(|index| format!("Paragraph {index}. {}\n\n", "Long selectable prose retains its complete text while the reader edits a draft. ".repeat(4)))
@@ -380,6 +382,46 @@ impl ScenarioTurn {
         }
         Ok(content.text)
     }
+}
+
+/// Emission timestamps travel with the fixture text, allowing the native paint
+/// assertion to measure arrival without a polling or screenshot time floor.
+async fn render_stream(
+    context: &Context,
+    thread_id: &str,
+    turn: &Turn,
+    index: usize,
+    stop: &CancellationToken,
+) -> Result<()> {
+    for sequence in 0..8 {
+        if interrupted(stop, Duration::from_millis(125)).await {
+            return Ok(());
+        }
+        let prefix = if sequence == 0 {
+            "## Streaming rendering review\n\n".to_owned()
+                + &"The client retains the reading position while a response arrives. **Measured text** and `request_id` remain selectable.\n\n".repeat(40)
+                + "```rust\nfn render(text: &str) -> String {\n    text.to_owned()\n}\n```\n\n"
+        } else {
+            String::new()
+        };
+        let ready = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs_f64()
+            - 978_307_200.0;
+        let chunk = format!("{prefix}Render stream update {sequence}. Ready at {ready:.6}.\n\n");
+        let (turn_id, item_id) = {
+            let mut turn = turn.borrow_mut();
+            let item = &mut turn["items"][index];
+            let text = item["text"].as_str().unwrap().to_owned() + &chunk;
+            item["text"] = text.into();
+            (turn["id"].clone(), turn["items"][index]["id"].clone())
+        };
+        context.notify(
+            "item/agentMessage/delta",
+            &json!({"threadId":thread_id,"turnId":turn_id,"itemId":item_id,"delta":chunk}),
+        )?;
+    }
+    Ok(())
 }
 
 fn prepare_scenario_image(home: &Path, prompt: &str) -> Result<Option<(PathBuf, String)>> {

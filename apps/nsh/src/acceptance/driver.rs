@@ -32,8 +32,9 @@ use objc2_app_kit::{
 };
 use objc2_core_graphics::{CGEvent, CGScrollEventUnit};
 use objc2_foundation::{
-    NSArray, NSAttributedString, NSData, NSDictionary, NSNotification, NSNotificationCenter,
-    NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer, NSURL,
+    NSArray, NSAttributedString, NSData, NSDate, NSDictionary, NSNotification,
+    NSNotificationCenter, NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes,
+    NSString, NSTimer, NSURL,
 };
 use serde_json::{Value, json};
 use std::{
@@ -45,6 +46,16 @@ use std::{
 };
 
 const TICK: f64 = 0.2;
+
+// Darwin's per-thread CPU clock (time.h). Unlike wall time or sample counts,
+// this excludes time the main run loop slept waiting for events.
+fn main_thread_ms() -> f64 {
+    unsafe extern "C" {
+        fn clock_gettime_nsec_np(clock_id: u32) -> u64;
+    }
+    const CLOCK_THREAD_CPUTIME_ID: u32 = 16;
+    unsafe { clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) as f64 / 1_000_000.0 }
+}
 
 /// Schedules `lines` on the main run loop. The returned flag says whether every
 /// step passed once the app returns from its event loop.
@@ -64,6 +75,7 @@ pub(crate) fn start(
         lines,
         index: 0,
         since: Instant::now(),
+        action_at: NSDate::timeIntervalSinceReferenceDate_class(),
         ready: false,
         finished: false,
         steps: Vec::new(),
@@ -113,6 +125,7 @@ struct Driver {
     lines: Vec<Line>,
     index: usize,
     since: Instant,
+    action_at: f64,
     ready: bool,
     finished: bool,
     steps: Vec<Value>,
@@ -124,12 +137,17 @@ struct Driver {
 impl Driver {
     fn record(&mut self, status: &str, message: &str, artifact: Option<String>) {
         let line = &self.lines[self.index];
+        eprintln!(
+            "acceptance-step {}",
+            json!({"source": line.source, "at": NSDate::timeIntervalSinceReferenceDate_class(), "actionAt": self.action_at})
+        );
         self.steps.push(json!({
             "line": line.number,
             "source": line.source,
             "status": status,
             "message": message,
             "elapsedMs": self.since.elapsed().as_millis() as u64,
+            "mainThreadMs": main_thread_ms(),
             "artifact": artifact,
         }));
         self.index += 1;
@@ -162,7 +180,7 @@ enum Attempt {
 }
 
 fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
-    let (timeout, step, elapsed, menus, output, fixture) = {
+    let (timeout, step, elapsed, menus, output, fixture, action_at) = {
         let mut driver = driver.borrow_mut();
         if driver.finished {
             return;
@@ -185,9 +203,26 @@ fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
             driver.menus.clone(),
             driver.output.clone(),
             driver.fixture,
+            driver.action_at,
         )
     };
-    match attempt(&step, elapsed, &menus, &output, fixture, mtm) {
+    let started = NSDate::timeIntervalSinceReferenceDate_class();
+    let result = match &step {
+        Step::Paint(text, budget) => {
+            painted(&Tree::read(mtm, &menus), text, *budget, Some(action_at))
+        }
+        Step::PaintStream(text, budget) => painted(&Tree::read(mtm, &menus), text, *budget, None),
+        _ => attempt(&step, elapsed, &menus, &output, fixture, mtm),
+    };
+    if matches!(&result, Attempt::Passed(..) | Attempt::Press(..))
+        && matches!(
+            &step,
+            Step::Press(_) | Step::Scroll(..) | Step::Control(_) | Step::Key(_)
+        )
+    {
+        driver.borrow_mut().action_at = started;
+    }
+    match result {
         Attempt::Passed(message, artifact) => {
             driver.borrow_mut().record("passed", &message, artifact)
         }
@@ -283,7 +318,61 @@ fn attempt(
         Step::Key(key) => {
             done(post_key(key, mtm).map(|()| format!("posted key code {}", key.code)))
         }
+        Step::Paint(..) | Step::PaintStream(..) => {
+            unreachable!("paint uses the driver's last action time")
+        }
     }
+}
+
+fn painted(tree: &Tree, expected: &str, budget: Duration, action_at: Option<f64>) -> Attempt {
+    for node in &tree.nodes {
+        let Target::Element(object) = &node.target else {
+            continue;
+        };
+        if !responds(object, sel!(bexPaintedAtForText:)) {
+            continue;
+        }
+        let Some(text) = text(object, sel!(string)).filter(|text| text.contains(expected)) else {
+            continue;
+        };
+        let Some(view) = object.downcast_ref::<NSView>() else {
+            continue;
+        };
+        if view.visibleRect().size.height <= 0.0 || view.isHiddenOrHasHiddenAncestor() {
+            continue;
+        }
+        let source = action_at.or_else(|| {
+            text.split_once(expected)?
+                .1
+                .split_once("Ready at ")?
+                .1
+                .split_whitespace()
+                .next()?
+                .trim_end_matches('.')
+                .parse::<f64>()
+                .ok()
+        });
+        let Some(source) = source else {
+            return Attempt::Failed("stream fixture has no emission timestamp".into());
+        };
+        let at: f64 =
+            unsafe { msg_send![&**object, bexPaintedAtForText: &*NSString::from_str(expected)] };
+        if at == 0.0 {
+            continue;
+        }
+        let elapsed = (at - source).max(0.0);
+        let message = format!(
+            "{expected:?} drawn in {:.1} ms (budget {} ms)",
+            elapsed * 1000.0,
+            budget.as_millis()
+        );
+        return if elapsed <= budget.as_secs_f64() {
+            Attempt::Passed(message, None)
+        } else {
+            Attempt::Failed(message)
+        };
+    }
+    Attempt::Pending(format!("no visible native draw contains {expected:?}"))
 }
 
 fn done(result: Result<String, String>) -> Attempt {

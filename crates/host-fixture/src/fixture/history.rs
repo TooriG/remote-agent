@@ -16,7 +16,7 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
         .metadata
         .get("fixtureHistory")
         .and_then(Value::as_str);
-    let long_history = matches!(history_kind, Some("long" | "viewport"));
+    let long_history = matches!(history_kind, Some("long" | "viewport" | "render"));
     let viewport = history_kind == Some("viewport");
     if !long_history
         && !cwd.ends_with("large-history")
@@ -25,7 +25,9 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
     {
         return None;
     }
-    let mut turns = if long_history {
+    let mut turns = if history_kind == Some("render") {
+        render_history()
+    } else if long_history {
         // More turns than one ten-turn window, so older history pages remain.
         let sizes = [
             286, 6, 325, 393, 859, 424, 21, 609, 641, 154, 212, 37, 488, 95, 154,
@@ -123,6 +125,22 @@ pub(super) fn persisted(thread: &Thread) -> Option<Thread> {
         metadata: thread.metadata.clone(),
         turns,
     })
+}
+
+/// Many complete exchanges with prose, code and tools, spanning several Host
+/// pages. Each answer has identifiable paragraphs for native paint assertions.
+fn render_history() -> Vec<Rc<RefCell<Value>>> {
+    (0..60).map(|turn| {
+        let prose = (0..8).map(|paragraph| format!(
+            "Render turn {turn}, paragraph {paragraph}. **The reader keeps their place** while older history loads. We inspect the request, compare the response and retain the measured result. A [reference](https://example.com) and `request_id` stay selectable.\n\n"
+        )).collect::<String>();
+        let answer = format!("## Rendering review {turn}\n\n{prose}```rust\nfn apply_response(text: &str) -> String {{\n    format!(\"response: {{text}}\")\n}}\n```\n\nRender answer {turn} complete.");
+        Rc::new(RefCell::new(json!({"id":format!("render-turn-{turn}"),"status":"completed","items":[
+            {"id":format!("render-user-{turn}"),"type":"userMessage","content":[{"type":"text","text":format!("Review rendering turn {turn}.")}]},
+            {"id":format!("render-tool-{turn}"),"type":"commandExecution","command":"cargo nextest run -p renderer","status":"completed","aggregatedOutput":"running 24 tests\n24 passed","exitCode":0},
+            {"id":format!("render-answer-{turn}"),"type":"agentMessage","phase":"final_answer","text":answer}
+        ]})))
+    }).collect()
 }
 
 #[cfg(test)]

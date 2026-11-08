@@ -16,8 +16,12 @@
 //! - `key <name>`: a key with optional modifiers, as `return`, `escape` or `cmd+,`.
 //! - `expect <text> [after <anchor>] [timeout-ms]` / `expect_absent ...`: waits
 //!   until some element's text contains `<text>`, or none does.
+//! - `paint <text> <budget-ms>`: verifies that visible TextKit glyphs completed
+//!   drawing within the budget after the last press, scroll or fixture action.
 //! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
 //!   that element; positive lines move the content up, toward its end.
+//! - `paint_stream <text> <budget-ms>`: native drawing measured from the
+//!   timestamp sent with a `[render-stream]` fixture delta.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
@@ -49,6 +53,8 @@ pub(crate) enum Step {
     Key(Key),
     Expect(Find),
     ExpectAbsent(Find),
+    Paint(String, Duration),
+    PaintStream(String, Duration),
     /// A wheel of this many lines over the element.
     Scroll(Find, i32),
     Select(Find, String),
@@ -159,6 +165,10 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("key", [name]) => Step::Key(key(name)?),
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
+        ("paint", [text, budget]) => Step::Paint((*text).to_owned(), milliseconds(budget)?),
+        ("paint_stream", [text, budget]) => {
+            Step::PaintStream((*text).to_owned(), milliseconds(budget)?)
+        }
         ("scroll", [target, lines, rest @ ..]) => Step::Scroll(
             find(target, rest)?,
             lines
@@ -299,7 +309,7 @@ mod tests {
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
              scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
-             dump tree_1\n",
+             dump tree_1\npaint visible 100\npaint_stream delta 100\n",
         )
         .unwrap();
         let steps: Vec<_> = lines.iter().map(|line| line.step.clone()).collect();
@@ -358,6 +368,8 @@ mod tests {
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
                 Step::Dump("tree_1".into()),
+                Step::Paint("visible".into(), Duration::from_millis(100)),
+                Step::PaintStream("delta".into(), Duration::from_millis(100)),
             ]
         );
         assert_eq!(lines[0].number, 2);
