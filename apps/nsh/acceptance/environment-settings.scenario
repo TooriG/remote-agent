@@ -1,0 +1,13 @@
+# The environment settings show the connected Host and check pasted connection
+# info before adding a PC.
+# iOS: testSimulatorUsesNativeHostNavigationAndPairingDismissal
+expect "何に取り組みますか？" 30000
+press 設定を開く
+press 環境
+expect "検証 Host" 10000
+expect "接続済み"
+expect "PCを追加"
+type 接続情報 "not-a-connection"
+press 接続先を確認
+expect "接続情報を読み取れませんでした。" 10000
+screenshot checked

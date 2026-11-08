@@ -1,0 +1,11 @@
+# The new-chat hero picks the project a chat starts in, or starts it without one.
+expect "何に取り組みますか？" 30000
+expect プロジェクトなし
+press プロジェクトを選択
+press 検証プロジェクト
+expect "で何を作りますか？" 10000
+expect "プロジェクトなしで始める"
+screenshot project
+press プロジェクトなしで始める
+expect "何に取り組みますか？"
+expect_absent "で何を作りますか？"

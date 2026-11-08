@@ -1,0 +1,20 @@
+# A file chosen in the open panel attaches to the draft, can be removed, and is
+# sent with the message.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+press ファイルを添付
+choose $AGENT_STATE_DIR/project/hello.txt
+expect 添付を削除 10000
+expect hello.txt after "このプロジェクトで新しいチャット"
+press 添付を削除
+expect_absent 添付を削除
+press ファイルを添付
+choose $AGENT_STATE_DIR/project/hello.txt
+expect 添付を削除 10000
+screenshot attached
+type "AI に依頼する" "[immediate] 添付を送ります"
+press 送信
+expect "シミュレータで完了しました。" 30000
+expect_absent 添付を削除
+expect "添付: hello.txt"
+screenshot sent

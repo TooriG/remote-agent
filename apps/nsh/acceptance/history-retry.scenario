@@ -1,0 +1,16 @@
+# A conversation whose history read fails says so with a retry, keeps the
+# draft typed meanwhile, and opens once retried.
+# iOS: testSimulatorRetriesAFailedTaskOpenWithoutLosingItsDraft
+fixture /external-conversation
+fixture /fail-next-history-read
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "External conversation" 20000
+expect 再試行 10000
+expect_absent "で何を作りますか？"
+screenshot failed
+type "AI に依頼する" "失敗中の下書き"
+press 再試行
+expect "History for External conversation" 20000
+expect_absent 再試行
+expect "失敗中の下書き"

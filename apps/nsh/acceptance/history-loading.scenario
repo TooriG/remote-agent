@@ -1,0 +1,15 @@
+# Opening a conversation shows that its history loads, not the new-chat hero,
+# until the Host answers.
+# iOS: testSimulatorShowsHistoryLoadingBeforeHostReplies
+fixture /external-conversation
+fixture /hold-history-reads
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "External conversation" 20000
+expect "会話を読み込み中…" 10000
+expect_absent "で何を作りますか？"
+expect_absent "何に取り組みますか？"
+screenshot loading
+fixture /release-history-reads
+expect "History for External conversation" 20000
+expect_absent "会話を読み込み中…"

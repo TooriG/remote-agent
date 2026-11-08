@@ -1,0 +1,16 @@
+# The worktree settings edit the shared choices, which stay when the settings
+# open again.
+# iOS: testSimulatorEditsHostWorktreeSettingsFromTaskMenu
+expect "何に取り組みますか？" 30000
+press 設定を開く
+press ワークツリー
+expect "作成時にファイルをコピー" 10000
+type コピー対象 ".env" after 作成時にファイルをコピー
+press 作成時にファイルをコピー
+wait 1000
+press 閉じる
+expect_absent "作成時にファイルをコピー"
+press 設定を開く
+press ワークツリー
+expect ".env" after "作成時にファイルをコピー" 10000
+screenshot worktrees

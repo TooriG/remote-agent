@@ -1,0 +1,17 @@
+# An attachment the Host cannot store says why; once the storage recovers the
+# file attaches.
+# iOS: testSimulatorRetriesPhotoUploadAfterStorageRecovery (files on the Mac)
+fixture /uploads/unavailable
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+press ファイルを添付
+choose $AGENT_STATE_DIR/project/hello.txt
+expect "添付ファイルを追加できませんでした" 20000
+expect_absent 添付を削除
+screenshot failed
+press 閉じる after "添付ファイルを追加できませんでした"
+expect_absent "添付ファイルを追加できませんでした"
+fixture /uploads/restore
+press ファイルを添付
+choose $AGENT_STATE_DIR/project/hello.txt
+expect 添付を削除 20000

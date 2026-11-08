@@ -1,12 +1,15 @@
-# A long conversation opens at its latest turns, scrolls, and loads earlier turns on request.
+# A long conversation opens at its latest turns with its model, scrolls, loads
+# earlier turns on request, and sends while the reader is there.
 # Elements stay in the accessibility tree while scrolled out of view, so the
 # screenshots are the evidence of where the reader is.
-# iOS: testSimulatorOpensLongInterruptedHistoryAtLatestMessage, testSimulatorLoadsEarlierHistoryOnTapAtTheReadingPosition
+# iOS: testSimulatorOpensLongInterruptedHistoryAtLatestMessage, testSimulatorLoadsEarlierHistoryOnTapAtTheReadingPosition,
+# testSimulatorSendsWithOneTapWhileReadingHistory, testSimulatorAutomaticallyShowsModelControlsInExistingAndRunningConversations
 fixture /long-conversation/long-history
 expect "検証プロジェクト" 30000
 press 検証プロジェクト
 press "Long conversation" 20000
 expect "Review section 14, input 0." 20000
+expect "Fixture Model"
 expect_absent "Review section 2, input 0."
 screenshot latest
 scroll "Review section 14, input 0." -20
@@ -14,3 +17,7 @@ screenshot scrolled
 press 以前のターンを読み込む
 expect "Review section 2, input 0." 20000
 screenshot earlier
+# Sending while reading earlier turns takes one press.
+type "AI に依頼する" "[immediate] 履歴を読みながら送ります"
+press 送信
+expect "シミュレータで完了しました。" 30000

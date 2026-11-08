@@ -1,0 +1,15 @@
+# The composer offers the provider's skills for a slash, inserts the chosen one,
+# grows with a long draft and sends with Return.
+# iOS: testSimulatorSelectsPluginAndSkillFromComposer, testSimulatorComposerGrowsToFitWrappedDraft
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "/re"
+expect "Review fixture changes" 10000
+press fixture-review
+expect_absent "Review fixture changes"
+dump inserted
+type "AI に依頼する" " 一行目の説明です。この下書きは入力欄の幅を超えて折り返し、入力欄が下書きに合わせて高くなることを確かめます。さらに続けて、二行目以降まで届くように長く書いています。三行目にも届くように、同じ説明をもう一度繰り返します。この下書きは入力欄の幅を超えて折り返し、入力欄が下書きに合わせて高くなることを確かめます。四行目まで届けば、入力欄が伸びたことが画面で分かります。"
+screenshot grown
+key return
+expect "シミュレータで完了しました。" 30000
+expect "fixture-review" after 右パネルを切り替え

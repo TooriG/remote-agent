@@ -1,0 +1,12 @@
+# While the settings overlay shows, the content behind it is out of reach of
+# accessibility, as a modal is; it returns once the overlay closes.
+expect "何に取り組みますか？" 30000
+expect "AI に依頼する"
+press 設定を開く
+expect "この端末で使用するアプリの設定です。"
+expect_absent "何に取り組みますか？"
+expect_absent "AI に依頼する"
+expect_absent "新しいチャット"
+press 閉じる
+expect "何に取り組みますか？"
+expect "AI に依頼する"

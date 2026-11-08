@@ -1,0 +1,20 @@
+# Live work groups its commands between commentary while the turn runs, a
+# group expands on press, and the finished turn folds into one row.
+# iOS: testSimulatorGroupsLiveCommandsBetweenCommentaryAndExpandsOnTap
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[groups] ライブの作業を確認します"
+press 送信
+expect "最初の確認が終わりました。次のコマンドを確認します。" 20000
+expect "コマンドを実行しました"
+expect "作業中 · pwd"
+expect "Fixture Model"
+expect_absent "./gradlew test"
+screenshot live
+press コマンドを実行しました
+expect "./gradlew test"
+screenshot expanded
+fixture /release-inputs
+expect "シミュレータで完了しました。" 30000
+expect "作業しました"
+screenshot finished

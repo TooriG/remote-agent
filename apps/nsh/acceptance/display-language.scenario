@@ -1,11 +1,15 @@
 # The display language switches the whole UI to English and back.
+# The settings overlay hides the content behind it from accessibility, so the
+# hero is read once it closes.
 expect "何に取り組みますか？" 30000
 press 設定を開く
 press "日本語 ▾"
 press English
-expect "What should we work on?" 10000
-expect "Display language"
+expect "Display language" 10000
 screenshot english
+press Close
+expect "What should we work on?"
+press "Open settings"
 press "English ▾"
 press 日本語
 expect "表示言語"

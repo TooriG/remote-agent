@@ -1,0 +1,14 @@
+# A conversation working in its own worktree reviews that worktree's changes,
+# not the project folder's.
+# iOS: testSimulatorReviewsTheOpenSessionsWorktree
+fixture /worktree-conversation/review
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "Worktree conversation" 20000
+expect "History for Worktree conversation" 20000
+expect "1 件のファイルを変更"
+press レビューする
+expect "+Session worktree first" after ツールを閉じる 20000
+expect "-original" after ツールを閉じる
+expect_absent "Project-only change"
+screenshot review

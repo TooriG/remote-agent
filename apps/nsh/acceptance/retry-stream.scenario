@@ -1,0 +1,11 @@
+# A stream that disconnects says that it reconnects, then the turn recovers.
+# iOS: testSimulatorShowsRetryingStreamErrorThenRecovers
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[retry] 再接続を確認します"
+press 送信
+expect "サーバーが混み合っています。再接続しています" 20000
+expect "この応答"
+screenshot reconnecting
+expect "シミュレータで完了しました。" 30000
+expect_absent "サーバーが混み合っています。再接続しています"

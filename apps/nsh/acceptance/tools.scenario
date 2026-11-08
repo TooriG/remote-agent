@@ -1,0 +1,26 @@
+# The tool panel opens a browser, a terminal and the agents list as tabs of the
+# conversation, and closing one leaves the others.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] ツールを開きます"
+press 送信
+expect "シミュレータで完了しました。" 30000
+press 右パネルを切り替え
+press ツールを追加
+press ブラウザ
+expect "ブラウザの URL" after ツールを閉じる 10000
+expect "検索または URL を入力"
+screenshot browser
+press ツールを追加
+press ターミナル
+expect "/project" after ツールを閉じる 10000
+expect_absent "ブラウザの URL"
+press ツールを追加
+press エージェント
+expect "0 件が実行中" 10000
+expect "サブエージェントが起動するとここに表示されます。"
+press タブを閉じる after エージェント
+expect_absent "0 件が実行中"
+expect ターミナル
+press ツールを閉じる
+expect_absent "機能を開く"

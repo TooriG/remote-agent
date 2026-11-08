@@ -1,7 +1,6 @@
-# The model picker opens from the composer, lists the provider's models, applies
-# one to the composer and closes with Escape. As in the GPUI client, choosing a
-# model keeps the picker open.
-# iOS: testSimulatorModelPickerUsesNativeFormAndAgentPicker
+# The model picker opens from the composer, lists the provider's models and,
+# as T3 Code's picker, closes once a model is chosen, which the composer shows.
+# iOS: testSimulatorModelPickerUsesNativeFormAndAgentPicker, testSimulatorOpensAccountManagementFromSettingsAndModelPicker
 expect "何に取り組みますか？" 30000
 press モデル
 expect "Fixture Model" 20000
@@ -9,7 +8,16 @@ expect "モデルを検索"
 expect "Claude Code"
 screenshot picker
 press "Fixture Model"
-key escape
 expect_absent "モデルを検索"
 expect "Fixture Model"
 screenshot applied
+# Escape closes it without choosing.
+press "Fixture Model"
+expect "モデルを検索"
+key escape
+expect_absent "モデルを検索"
+# The picker's account row leads to the provider's accounts in the settings.
+press "Fixture Model"
+press アカウントと週間残量
+expect "選択した環境のプロバイダー・アカウント・更新を管理します。" 10000
+expect "desktop@example.invalid"

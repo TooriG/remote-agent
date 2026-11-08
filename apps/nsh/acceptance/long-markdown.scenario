@@ -1,0 +1,13 @@
+# A long Markdown answer streams in while the draft typed meanwhile stays, and
+# the whole answer shows once it is complete.
+# iOS: testSimulatorKeepsDraftDuringLongMarkdownStreamAndReopensFinalText
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[long-markdown] 長い回答を確認します"
+press 送信
+expect "Markdown stream fixture" 30000
+type "AI に依頼する" "書きかけの下書き"
+expect "MARKDOWN_STREAM_COMPLETE" 60000
+expect "Paragraph 299."
+expect "書きかけの下書き" after "AI に依頼する"
+screenshot complete

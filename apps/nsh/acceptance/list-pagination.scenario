@@ -1,0 +1,20 @@
+# Long lists show the latest projects and chats first and load more on request;
+# a project shows its latest conversations and more on request.
+# iOS: testSimulatorPaginatesRecentProjectsAndUnassignedChats, testSimulatorLoadsLatestFiveTitlesPerProjectAndExpandsOneProject
+fixture /title-fixture
+expect "Project 16" 30000
+expect "Chat 16"
+expect_absent "Project 11"
+press もっとプロジェクトを表示
+expect "Project 11" 10000
+expect_absent "Chat 11"
+press もっと表示する after "Chat 12"
+expect "Chat 11" 10000
+press "Project 16"
+expect "Project 16 conversation 16" 10000
+expect "Project 16 conversation 12"
+expect_absent "Project 16 conversation 11"
+press もっと表示する
+expect "Project 16 conversation 11" 10000
+expect_absent "Project 15 conversation"
+screenshot expanded

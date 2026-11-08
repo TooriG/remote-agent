@@ -1,0 +1,10 @@
+# A visualization answer offers its file, which opens in the tool panel.
+# iOS: testSimulatorRendersVisualizationAndReopensIt (the Mac opens the file)
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[visualize] [immediate] 図を表示します"
+press 送信
+expect "ファイルを開く" 30000
+press ファイルを開く
+expect "icon-options" after ツールを閉じる 20000
+screenshot opened

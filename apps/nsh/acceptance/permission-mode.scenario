@@ -1,6 +1,5 @@
-# The approval mode menu beside the composer lists the three modes, applies one
-# to the composer and closes with Escape. As in the GPUI client, choosing a mode
-# keeps the menu open.
+# The approval mode menu beside the composer lists the three modes and, as
+# T3 Code's menu, closes once a mode is chosen, which the composer shows.
 expect "何に取り組みますか？" 30000
 press 承認方法を変更
 expect "承認を求める"
@@ -8,8 +7,12 @@ expect "代わりに承認"
 expect "フルアクセス"
 screenshot modes
 press フルアクセス
-expect_absent "カスタム・未設定"
-key escape
 expect_absent "承認の確認なしで操作を実行します"
 expect "フルアクセス"
 screenshot applied
+# Escape closes it without choosing.
+press 承認方法を変更
+expect "承認の確認なしで操作を実行します"
+key escape
+expect_absent "承認の確認なしで操作を実行します"
+expect "フルアクセス"

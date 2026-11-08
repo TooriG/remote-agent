@@ -1,0 +1,14 @@
+# A message another client sends to the open conversation and its answer
+# appear, and the draft typed here stays.
+# iOS: testSimulatorUpdatesAnOpenConversationFromAnotherClient
+fixture /external-conversation
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "External conversation" 20000
+expect "History for External conversation" 20000
+type "AI に依頼する" "ここで書いた下書き"
+fixture /client-reply
+expect "Reply from another Bex client" 20000
+expect "シミュレータで完了しました。" 30000
+expect "ここで書いた下書き"
+screenshot replied

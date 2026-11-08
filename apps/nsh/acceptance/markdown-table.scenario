@@ -1,0 +1,24 @@
+# A Markdown table shows its cells, copies itself as Markdown or CSV, compacts
+# its cells, and shows again when the conversation is reopened.
+# iOS: testSimulatorRendersMarkdownTableAndReopensIt
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[markdown-table] [immediate] 表を表示します"
+press 送信
+expect "Codexハーネス＋Claude接続" 30000
+expect "両者の機能差をBexが吸収する必要"
+press Markdownをコピー
+expect_clipboard "| 構成 | 利点 | 負担 |"
+press CSVをコピー
+expect_clipboard "\"構成\",\"利点\",\"負担\""
+press セルをコンパクトに表示
+expect セルを折り返す
+screenshot compact
+press 新しいチャット
+expect_absent "Codexハーネス＋Claude接続"
+press 検証プロジェクト
+press "[markdown-table] [immediate] 表を表示します"
+expect "Codexハーネス＋Claude接続" 20000
+expect "作業しました"
+expect_absent "./gradlew test"
+screenshot reopened

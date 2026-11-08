@@ -1,0 +1,19 @@
+# A selection of an answer opens a side chat beside the conversation with the
+# selection quoted; the side chat answers on its own and the draft of the
+# conversation stays.
+# iOS: testSimulatorOpensSideChatWithoutLosingOriginalDraft
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[selection] [immediate] 横で質問します"
+press 送信
+expect "Needle Alpha Bravo." 30000
+type "AI に依頼する" "元の下書き"
+select "*Needle Alpha*" Bravo
+menu "*Needle Alpha*"
+press サイドチャットで質問
+expect "> Bravo" after ツールを閉じる 10000
+type "AI に依頼する" "[immediate] サイドで質問します" after ツールを閉じる
+press 送信 after ツールを閉じる
+expect "シミュレータで完了しました。" after ツールを閉じる 30000
+expect "元の下書き"
+screenshot side-chat

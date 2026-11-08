@@ -1,0 +1,12 @@
+# A message the Host accepts before the agent takes it shows at once, then the
+# turn answers it.
+# iOS: testSimulatorShowsAcceptedAdditionalInputBeforeCodexProcessesIt
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[delayed-input] 受け付けを確認します"
+press 送信
+expect "[delayed-input] 受け付けを確認します" after 右パネルを切り替え 5000
+expect_absent "シミュレータで確認しています…"
+screenshot accepted
+fixture /release-inputs
+expect "シミュレータで完了しました。" 30000

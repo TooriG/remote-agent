@@ -1,0 +1,25 @@
+# The providers settings show the Host's account with its limits; adding an
+# account starts a sign-in whose code copies, and stopping it returns to the
+# accounts.
+# iOS: testSimulatorOpensAccountManagementFromSettingsAndModelPicker, testSimulatorGoesBackFromAccountLoginAndCanStartAgain
+expect "何に取り組みますか？" 30000
+press 設定を開く
+press プロバイダー
+expect "desktop@example.invalid" 10000
+expect "週間枠 残り 86%"
+expect 選択中
+press アカウントを追加
+expect "TEST-CODE" 10000
+expect "ブラウザでの認証を待っています…"
+press コピー
+expect_clipboard "TEST-CODE"
+screenshot signing-in
+press サインインを中止
+expect_absent "TEST-CODE" 10000
+# It can start again after stopping.
+press アカウントを追加
+expect "TEST-CODE" 10000
+press サインインを中止
+expect_absent "TEST-CODE" 10000
+expect アカウントを追加
+expect "desktop@example.invalid"

@@ -1,0 +1,25 @@
+# A message's image and Markdown images (a Host file and an inline one) show,
+# and a generated answer's file link opens the file in the tool panel.
+# iOS: testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening, testSimulatorShowsGeneratedImagesAndOpensFileLinksAfterReopening
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[images] [immediate] 画像を表示します"
+press 送信
+expect "インライン画像です。" 30000
+expect "Hostの画像です。"
+expect 画像を拡大
+expect_absent "画像を読み込み中…" 20000
+expect_absent "画像を読み取れませんでした"
+expect_absent "見つかりません"
+screenshot images
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[generated-images] [immediate] 生成画像を表示します"
+press 送信
+expect "生成画像を表示しました。" 30000
+press ファイルを開く
+expect "編集を確認します。" after ツールを閉じる 20000
+screenshot file-link
+press 検証プロジェクト
+press "[images] [immediate] 画像を表示します"
+expect "インライン画像です。" 20000
+expect 画像を拡大

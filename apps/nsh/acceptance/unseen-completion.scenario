@@ -1,0 +1,15 @@
+# A turn that completes while another chat is open marks its conversation as
+# completed and unseen until it is opened.
+# iOS: testSimulatorMarksUnseenCompletionUntilOpened
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "未読の完了を確認します"
+press 送信
+expect "./gradlew test" 20000
+press 新しいチャット
+press 検証プロジェクト
+expect "完了・未確認" 20000
+screenshot unseen
+press "未読の完了を確認します"
+expect "シミュレータで完了しました。" 10000
+expect_absent "完了・未確認" 10000

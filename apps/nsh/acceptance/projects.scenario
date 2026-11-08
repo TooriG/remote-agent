@@ -1,0 +1,23 @@
+# A project is renamed from its menu, another is added from a folder, and a
+# project removed from the list can be put back.
+expect "検証プロジェクト" 30000
+press プロジェクトのメニュー
+press 編集
+expect "プロジェクトを編集" 10000
+type "検証プロジェクト" "改名したプロジェクト" after 表示名
+press 保存
+expect_absent "プロジェクトを編集"
+expect "改名したプロジェクト" 10000
+expect_absent "検証プロジェクト"
+press プロジェクトを追加
+choose $AGENT_STATE_DIR/project/nested
+expect nested after プロジェクトを追加 10000
+screenshot added
+press プロジェクトのメニュー after nested
+press プロジェクトを一覧から削除
+expect "一覧に戻す: nested" 10000
+expect_absent "このプロジェクトで新しいチャット" after nested
+expect "改名したプロジェクト"
+screenshot removed
+press "一覧に戻す: nested"
+expect "このプロジェクトで新しいチャット" after nested 10000

@@ -7,4 +7,12 @@ screenshot draft
 press 送信
 expect "シミュレータで完了しました。" 30000
 expect_absent "何に取り組みますか？"
+expect message.user-text
+expect message.assistant-text
 screenshot replied
+# It stays a chat without a project and opens again from the chats.
+press 新しいチャット
+expect "何に取り組みますか？"
+press "Mac から送信します" after チャット
+expect "シミュレータで完了しました。" 20000
+expect "チャット" after "Mac から送信します"

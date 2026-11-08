@@ -1,0 +1,21 @@
+# A message's actions: copying the user's and the answer's text, quoting only a
+# selection of the answer into the draft, and editing a message in the composer.
+# iOS: testSimulatorCopiesSelectedOrWholeUserMessageText, testSimulatorSelectsAssistantTextInPlaceAndAddsOnlySelectionToDraft
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[selection] [immediate] 回答を選択します"
+press 送信
+expect "Needle Alpha Bravo." 30000
+press 発言をコピー
+expect_clipboard "[selection] [immediate] 回答を選択します"
+press 回答をコピー
+expect_clipboard "Second paragraph stays unselected."
+select "*Needle Alpha*" Alpha
+menu "*Needle Alpha*"
+press チャットに追加
+expect "> Alpha" after "AI に依頼する"
+expect_absent "Needle" after "AI に依頼する"
+screenshot quoted
+press 入力欄で編集
+expect "回答を選択します" after "AI に依頼する"
+expect_absent "> Alpha"

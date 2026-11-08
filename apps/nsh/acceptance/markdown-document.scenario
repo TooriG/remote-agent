@@ -1,0 +1,16 @@
+# A Markdown document keeps its code in a frame whose wrapping toggles and whose
+# code copies; a missing image says so in place.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[markdown-document] [immediate] 文書を表示します"
+press 送信
+expect "見出し" 30000
+expect "| table | stays code |"
+expect "ファイルまたはフォルダが見つかりません。"
+press 折り返し
+expect 折り返し解除
+press 折り返し解除
+expect_absent 折り返し解除
+press コードをコピー
+expect_clipboard "![コード内](not-an-image.png)"
+screenshot document
