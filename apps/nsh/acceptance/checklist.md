@@ -32,7 +32,7 @@ first; the note says which), **n/a** (no Mac equivalent).
 | AttachmentsUITests.testSimulatorCanAddASecondPhoto | n/a | iOS photo picker; the Mac attaches files (attachments) |
 | AttachmentsUITests.testSimulatorCanAttachPhotosAndVideos | n/a | as above |
 | AttachmentsUITests.testSimulatorRetriesPhotoUploadAfterStorageRecovery | covered | upload-failure (a file; the Mac attaches again rather than retrying in place) |
-| AttachmentsUITests.testSimulatorCanAttachDownloadAndPrepareAIEdit | partial | attachments (attach, remove, send); the file viewer's download and AI edit not yet |
+| AttachmentsUITests.testSimulatorCanAttachDownloadAndPrepareAIEdit | covered | attachments (attach, remove, send), file-actions (the attachment survives `relaunch`; Quick Look from the editor, whose share and open buttons are the Mac's download; AI edit fills the composer). Quick Look's button titles follow the system language (English here), as in images |
 | DeviceNavigationUITests.testSimulatorWorkbenchStartsEmptyAndOwnsOnlyOpenedTabs | covered | tool-panel, tools |
 | DeviceNavigationUITests.testSimulatorBrowserUsesOneSharedImportMenu | covered | browser (a page from the fixture Host, typing into it, tabs and the data import from one menu); the Mac page takes typing itself, so the iPhone's input row is n/a |
 | DeviceNavigationUITests.testSimulatorNativeTerminalCopiesTextOnLongPress | n/a | long press |
