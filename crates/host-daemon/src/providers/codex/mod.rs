@@ -748,9 +748,17 @@ impl Agent for Codex {
                         next_cursor: page.next_cursor,
                     });
                 }
-                // `codex exec` runs are launched by other agents and scripts, not
-                // tasks a person opened; complete listings still see them.
                 SessionListScope::Roots => (&["cli", "vscode", "appServer", "unknown"], None),
+                SessionListScope::WithSubagents => (
+                    &[
+                        "cli",
+                        "vscode",
+                        "appServer",
+                        "unknown",
+                        "subAgentThreadSpawn",
+                    ],
+                    None,
+                ),
                 SessionListScope::All => (
                     &[
                         "cli",
@@ -1320,7 +1328,7 @@ rl.on('line', line => {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn task_listings_omit_exec_runs_that_complete_listings_keep() {
+    async fn only_complete_listings_include_exec_runs() {
         use std::{os::unix::fs::PermissionsExt, sync::Arc};
         let directory = tempfile::tempdir().unwrap();
         let program = directory.path().join("codex-fixture");
@@ -1329,7 +1337,11 @@ rl.on('line', line => {
             &program,
             r##"#!/usr/bin/env node
 const rl = require('node:readline').createInterface({ input: process.stdin });
-const threads = [{ id: 'task', source: 'vscode' }, { id: 'review', source: 'exec' }];
+const threads = [
+  { id: 'task', source: 'vscode' },
+  { id: 'review', source: 'exec' },
+  { id: 'helper', source: 'subAgentThreadSpawn' },
+];
 rl.on('line', line => {
   const message = JSON.parse(line);
   if (message.id === undefined) return;
@@ -1356,7 +1368,14 @@ rl.on('line', line => {
         let _events = super::Agent::event_stream(&agent).unwrap();
         for (scope, expected) in [
             (super::SessionListScope::Roots, vec!["task"]),
-            (super::SessionListScope::All, vec!["task", "review"]),
+            (
+                super::SessionListScope::WithSubagents,
+                vec!["task", "helper"],
+            ),
+            (
+                super::SessionListScope::All,
+                vec!["task", "review", "helper"],
+            ),
         ] {
             let page = super::Agent::list(&agent, "", None, scope, 10)
                 .await

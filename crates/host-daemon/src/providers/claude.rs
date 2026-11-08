@@ -1897,9 +1897,7 @@ impl Agent for Claude {
             });
             return Ok(SessionPage { data, next_cursor });
         }
-        // Complete listings keep print-mode runs so workspace removal still
-        // sees their unverifiable external activity.
-        let include_print_mode = !matches!(scope, SessionListScope::Roots);
+        let include_print_mode = matches!(scope, SessionListScope::All);
         Claude::list(self, search, cursor, include_print_mode, limit)
             .await
             .map_err(|e| Failure::new("session_list_failed", e))
@@ -2404,6 +2402,41 @@ mod execution_tests {
         );
         assert_eq!(recent.data[0].thread.id.as_ref().unwrap().id, expected[0]);
         assert_eq!(recent.data[0].thread.status, SessionStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn only_complete_listings_include_print_mode_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let project = root.join("native/projects/p");
+        std::fs::create_dir_all(&project).unwrap();
+        for (index, entrypoint) in [(1u128, "sdk-ts"), (2, "sdk-cli")] {
+            let id = Uuid::from_u128(index).to_string();
+            let row = serde_json::json!({"type":"user","sessionId":id,"cwd":"/fixture","entrypoint":entrypoint,"message":{"content":entrypoint}});
+            std::fs::write(project.join(format!("{id}.jsonl")), format!("{row}\n")).unwrap();
+        }
+        let claude = Claude::load(
+            root.join("unused"),
+            root.join("adapter"),
+            Some(root.join("native")),
+        )
+        .await
+        .unwrap();
+        for (scope, expected) in [
+            (SessionListScope::Roots, vec!["sdk-ts"]),
+            (SessionListScope::WithSubagents, vec!["sdk-ts"]),
+            (SessionListScope::All, vec!["sdk-cli", "sdk-ts"]),
+        ] {
+            let mut listed: Vec<_> = Agent::list(&claude, "sdk", None, scope, 10)
+                .await
+                .unwrap()
+                .data
+                .into_iter()
+                .map(|summary| summary.thread.preview.unwrap())
+                .collect();
+            listed.sort();
+            assert_eq!(listed, expected);
+        }
     }
 
     #[tokio::test]

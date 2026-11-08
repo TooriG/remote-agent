@@ -183,7 +183,7 @@ impl HostRpcService {
         let scope = if search.trim().is_empty() {
             SessionListScope::Roots
         } else {
-            SessionListScope::All
+            SessionListScope::WithSubagents
         };
         let ((snapshot, projects_elapsed), (mut first_pages, first_pages_elapsed)) = tokio::join!(
             async { (self.project_snapshot().await, started.elapsed()) },
