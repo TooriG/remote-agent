@@ -13,6 +13,8 @@ pub(crate) fn current_model<'a>(
     models.iter().find(|model| Some(&model.model) == selected)
 }
 
+/// Each provider's model failure as the error rule shows it: copy in the UI's
+/// language, then the provider's own words (`codex: ...`) as its details.
 pub(crate) fn error_messages(
     errors: &serde_json::Map<String, serde_json::Value>,
     provider: Option<ProviderKind>,
@@ -27,7 +29,7 @@ pub(crate) fn error_messages(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
                 .unwrap_or_else(|| error.to_string());
-            format!("{provider}: {message}")
+            super::error::error_text(&format!("{provider}: {message}")).to_string()
         })
         .collect()
 }
@@ -611,13 +613,32 @@ mod tests {
         };
         assert_eq!(
             snapshot.model_error_messages(Some(ProviderKind::Codex)),
-            ["codex: Codex catalog failed"]
+            ["エラーが発生しました。\ncodex: Codex catalog failed"]
         );
         assert_eq!(
             snapshot.model_error_messages(Some(ProviderKind::Claude)),
-            ["claude: Claude catalog failed"]
+            ["エラーが発生しました。\nclaude: Claude catalog failed"]
         );
         assert_eq!(snapshot.model_error_messages(None).len(), 2);
+    }
+
+    #[test]
+    fn a_provider_failure_reads_as_copy_with_the_providers_words_as_details() {
+        let messages = super::error_messages(
+            &serde_json::from_value(serde_json::json!({
+                "codex": {"message": "failed to resolve Codex executable /bin/missing: No such file or directory (os error 2)"},
+                "claude": {"message": "モデル一覧の取得がタイムアウトしました。もう一度お試しください。"}
+            }))
+            .unwrap(),
+            None,
+        );
+        assert_eq!(
+            messages,
+            [
+                "claude: モデル一覧の取得がタイムアウトしました。もう一度お試しください。",
+                "エラーが発生しました。\ncodex: failed to resolve Codex executable /bin/missing: No such file or directory (os error 2)",
+            ]
+        );
     }
 
     #[test]
