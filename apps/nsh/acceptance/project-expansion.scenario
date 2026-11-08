@@ -1,0 +1,25 @@
+# A project unfolded in the sidebar stays unfolded when the app starts again,
+# and one folded again stays folded, as the desktop client kept them: core
+# keeps the unfolded projects with its cached list. That copy waits ten seconds
+# after it last wrote, so the app stays open past that before quitting.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] 開いたままのプロジェクトです"
+press 送信
+expect "シミュレータで完了しました。" 30000
+press 新しいチャット
+expect_absent "シミュレータで完了しました。" 10000
+press 検証プロジェクト
+expect "[immediate] 開いたままのプロジェクトです" 10000
+wait 12000
+relaunch
+expect "検証プロジェクト" 30000
+expect "Simulator conversation" 20000
+screenshot unfolded
+press 検証プロジェクト
+expect_absent "Simulator conversation" 10000
+wait 12000
+relaunch
+expect "検証プロジェクト" 30000
+expect_absent "Simulator conversation" 10000
+expect "何に取り組みますか？"
