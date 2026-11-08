@@ -621,6 +621,10 @@ pub fn register(components: &Components) {
         "bex.preview",
         Rc::new(|cx| Box::new(super::preview_macos::Preview::new(cx))),
     );
+    components.register(
+        "bex.zoom",
+        Rc::new(|cx| Box::new(super::zoom_macos::ZoomArea::new(cx))),
+    );
     components.register("bex.button", Rc::new(|cx| Box::new(Button::new(cx))));
     components.register("bex.menu", Rc::new(|cx| Box::new(Menu::new(cx))));
     components.register("bex.search", Rc::new(|cx| Box::new(Search::new(cx))));

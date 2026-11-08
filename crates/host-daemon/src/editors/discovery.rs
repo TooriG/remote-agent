@@ -15,6 +15,8 @@ pub(super) struct SearchPaths {
     path: Vec<PathBuf>,
     extensions: Vec<OsString>,
     home: Option<PathBuf>,
+    /// The Mac's application folders.
+    applications: Vec<PathBuf>,
     roots: Vec<PathBuf>,
     local_app_data: Option<PathBuf>,
     data_home: Option<PathBuf>,
@@ -48,7 +50,8 @@ impl SearchPaths {
                 .filter_map(variable)
                 .map(PathBuf::from),
         );
-        Self {
+        let home = variable("HOME").map(PathBuf::from);
+        let search = Self {
             platform,
             path: path
                 .map(|path| std::env::split_paths(&path).collect())
@@ -59,7 +62,12 @@ impl SearchPaths {
                 .split(';')
                 .map(OsString::from)
                 .collect(),
-            home: variable("HOME").map(PathBuf::from),
+            applications: home
+                .iter()
+                .map(|home| home.join("Applications"))
+                .chain([PathBuf::from("/Applications")])
+                .collect(),
+            home,
             roots,
             local_app_data,
             data_home: variable("XDG_DATA_HOME").map(PathBuf::from),
@@ -67,6 +75,25 @@ impl SearchPaths {
                 variable(name).is_some_and(|value| !value.to_string_lossy().trim().is_empty())
             }),
             wsl,
+        };
+        // A Host that tests its clients looks for editors in one directory, so
+        // the machine's own editors stay out of its menus and launches.
+        match variable("AGENT_EDITOR_DIRECTORY") {
+            Some(directory) => search.only(PathBuf::from(directory)),
+            None => search,
+        }
+    }
+
+    /// Editors' commands, and on the Mac their applications, only in `directory`.
+    fn only(self, directory: PathBuf) -> Self {
+        Self {
+            path: vec![directory.clone()],
+            applications: vec![directory],
+            home: None,
+            roots: Vec::new(),
+            local_app_data: None,
+            data_home: None,
+            ..self
         }
     }
 
@@ -145,14 +172,8 @@ impl SearchPaths {
     }
 
     fn mac_candidates(&self, editor: EditorId) -> Vec<PathBuf> {
-        let roots = self
-            .home
-            .as_ref()
-            .map(|home| home.join("Applications"))
-            .into_iter()
-            .chain([PathBuf::from("/Applications")]);
         let mut candidates = Vec::new();
-        for root in roots {
+        for root in &self.applications {
             let mut bundles = install_names(editor)
                 .into_iter()
                 .map(|name| format!("{name}.app"))
@@ -421,6 +442,7 @@ mod tests {
             path: vec![root.join("bin")],
             extensions: vec![".EXE".into(), ".CMD".into()],
             home: Some(root.into()),
+            applications: vec![root.join("Applications")],
             roots: vec![root.join("Programs")],
             local_app_data: Some(root.join("Local")),
             data_home: None,
@@ -466,6 +488,28 @@ mod tests {
                 .command,
             app
         );
+    }
+
+    #[test]
+    fn a_host_confined_to_one_directory_finds_editors_only_there() {
+        let root = tempfile::tempdir().unwrap();
+        launcher(&root.path().join("bin/cursor"));
+        launcher(&root.path().join("Applications/Zed.app/Contents/MacOS/cli"));
+        let only = root.path().join("editors");
+        launcher(&only.join("code"));
+        launcher(&only.join("Kiro.app/Contents/Resources/app/bin/kiro"));
+        let search = search(root.path(), Platform::Mac).only(only.clone());
+        assert_eq!(
+            search.locate(EditorId::VsCode).unwrap().command,
+            only.join("code")
+        );
+        assert_eq!(
+            search.locate(EditorId::Kiro).unwrap().command,
+            only.join("Kiro.app/Contents/Resources/app/bin/kiro")
+        );
+        assert!(search.locate(EditorId::Cursor).is_none());
+        assert!(search.locate(EditorId::Zed).is_none());
+        assert_eq!(search.file_manager(), None);
     }
 
     #[test]

@@ -238,7 +238,7 @@ fn limit(step: &Step) -> Duration {
         | Step::Type(find, _)
         | Step::Paste(find)
         | Step::Undo(find)
-        | Step::Scroll(find, _)
+        | Step::Scroll(find, ..)
         | Step::Select(find, _)
         | Step::Menu(find)
         | Step::Drag(find, _)
@@ -250,7 +250,7 @@ fn limit(step: &Step) -> Duration {
         | Step::ExpectHeight(find, ..) => find.timeout,
         Step::Wait(duration)
         | Step::ExpectClipboard(_, duration)
-        | Step::ExpectFile(_, duration) => *duration,
+        | Step::ExpectFile(_, _, duration) => *duration,
         _ => super::script::DEFAULT_TIMEOUT,
     }
 }
@@ -318,14 +318,16 @@ fn attempt(
         Step::Undo(find) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             undo(tree, index).map(|()| format!("undid in {}", tree.nodes[index].describe()))
         }),
-        Step::Scroll(find, lines) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
-            scroll(tree, index, *lines, mtm).map(|()| {
-                format!(
-                    "scrolled {lines} lines over {}",
-                    tree.nodes[index].describe()
-                )
+        Step::Scroll(find, lines, held) => {
+            on_element(&Tree::read(mtm, menus), find, |tree, index| {
+                scroll(tree, index, *lines, held, mtm).map(|()| {
+                    format!(
+                        "scrolled {lines} lines over {}",
+                        tree.nodes[index].describe()
+                    )
+                })
             })
-        }),
+        }
         Step::Select(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             select(tree, index, text)
                 .map(|()| format!("selected {text:?} in {}", tree.nodes[index].describe()))
@@ -339,7 +341,7 @@ fn attempt(
         Step::Drag(from, to) => drag(&Tree::read(mtm, menus), from, to),
         Step::Drop => done(release()),
         Step::Choose(path) => choose(path, mtm),
-        Step::ExpectFile(path, _) => file_written(path),
+        Step::ExpectFile(path, contains, _) => file_written(path, contains.as_deref()),
         Step::ExpectClipboard(text, _) => {
             let copied = Clipboard::text();
             if copied.contains(text.as_str()) {
@@ -1057,7 +1059,13 @@ fn flags(held: &Modifiers) -> NSEventModifierFlags {
 
 /// A mouse wheel over the element's center, handed to its window without moving
 /// the pointer: NSH routes a wheel by where the event says it is.
-fn scroll(tree: &Tree, index: usize, lines: i32, mtm: MainThreadMarker) -> Result<(), String> {
+fn scroll(
+    tree: &Tree,
+    index: usize,
+    lines: i32,
+    held: &Modifiers,
+    mtm: MainThreadMarker,
+) -> Result<(), String> {
     let node = &tree.nodes[index];
     let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
         return Err(format!("{} cannot be scrolled", node.describe()));
@@ -1070,6 +1078,11 @@ fn scroll(tree: &Tree, index: usize, lines: i32, mtm: MainThreadMarker) -> Resul
     // Content follows the wheel, so content moving up is a negative delta.
     let event = CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Line, 1, -lines, 0, 0)
         .ok_or("CoreGraphics made no wheel event")?;
+    // AppKit's modifier flags are CoreGraphics' event flags.
+    CGEvent::set_flags(
+        Some(&event),
+        objc2_core_graphics::CGEventFlags(flags(held).0 as u64),
+    );
     // A window-less event's location in its window is its screen point, which
     // the window takes as its own: place it so that they match.
     CGEvent::set_location(
@@ -1533,16 +1546,19 @@ fn deny_microphone() -> Result<String, String> {
 }
 
 /// Whether the file at `path` exists and has content yet.
-fn file_written(path: &str) -> Attempt {
+fn file_written(path: &str, contains: Option<&str>) -> Attempt {
     let path = match resolve(path) {
         Ok(path) => path,
         Err(reason) => return Attempt::Failed(reason),
     };
-    match std::fs::metadata(&path) {
-        Ok(metadata) if metadata.len() > 0 => {
-            Attempt::Passed(format!("{path} has {} bytes", metadata.len()), None)
-        }
-        _ => Attempt::Pending(format!("{path} is not written")),
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Attempt::Pending(format!("{path} is not written"));
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    match contains {
+        _ if bytes.is_empty() => Attempt::Pending(format!("{path} is empty")),
+        Some(wanted) if !text.contains(wanted) => Attempt::Pending(format!("{path} has {text:?}")),
+        _ => Attempt::Passed(format!("{path} has {} bytes", bytes.len()), None),
     }
 }
 

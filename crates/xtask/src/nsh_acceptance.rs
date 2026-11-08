@@ -229,6 +229,25 @@ fn preparation(script: &str) -> Preparation {
 /// (`apps/nsh/src/application/onboarding.rs`).
 const SETUP_COMPLETED: &str = "nsh-client/onboarding.completed";
 
+/// The fixture Host's only editor, a `code` command in `<host>/editor` that
+/// appends what it is asked to open to `<host>/editor/opened`, which scenarios
+/// read as `$AGENT_STATE_DIR/editor/opened`.
+fn fake_editor(host: &Path) -> Result<PathBuf> {
+    let directory = host.join("editor");
+    fs::create_dir_all(&directory)?;
+    let command = directory.join("code");
+    fs::write(
+        &command,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"${0%/*}/opened\"\n",
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(directory)
+}
+
 async fn scenario(
     path: &Path,
     output: &Path,
@@ -238,6 +257,7 @@ async fn scenario(
     let preparation = preparation(&fs::read_to_string(path)?);
     let temporary = tempfile::Builder::new().prefix("bex-nsh-").tempdir()?;
     let host = temporary.path().join("host");
+    let editors = fake_editor(&host)?;
     let port = temporary.path().join("pairing.port");
     let log = File::create(output.join("host.log"))?;
     let mut command = Command::new(&tools.fixture);
@@ -255,6 +275,8 @@ async fn scenario(
         .arg(&tools.deepseek)
         // Publishes the Host where a client with the same isolated state finds it.
         .env("AGENT_FIXTURE_LOCAL_HOST", "1")
+        // Its only editor is the fake one: the Mac's own stay closed.
+        .env("AGENT_EDITOR_DIRECTORY", &editors)
         // DeepSeek counts a key in the environment or DSH's home as configured;
         // the user's own stay out of the fixture's.
         .env("DSH_HOME", temporary.path().join("dsh"))

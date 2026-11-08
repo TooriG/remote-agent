@@ -1,5 +1,6 @@
 # Paths in an answer show as file chips, an authored caption before its chip:
-# a chip's menu copies its path, and a press opens the file in the tool panel.
+# a chip's menu copies its path, Command-click opens the file in the editor,
+# and a press opens it in the tool panel.
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
 type "AI に依頼する" "[file-paths] [immediate] ファイルを確認します"
@@ -9,6 +10,9 @@ expect "hello.txt · L2"
 expect "子ファイル"
 expect "child.txt"
 screenshot chips
+# Command-click sends a chip's file to the editor, the fixture Host's fake one.
+click cmd "*hello.txt · L2"
+expect_file $AGENT_STATE_DIR/editor/opened contains "/project/hello.txt:2"
 select "*確認したファイルです。*" "hello.txt · L2"
 menu "*確認したファイルです。*"
 press フルパスをコピー

@@ -75,6 +75,8 @@ mod preview_macos;
 mod terminal;
 #[cfg(windows)]
 pub(crate) mod windows;
+#[cfg(target_os = "macos")]
+mod zoom_macos;
 
 /// A scroll over a [`wheel_area`], in its points: `dy` toward the content's
 /// end (down), as a scroll view would move.
@@ -100,6 +102,23 @@ pub(crate) fn wheel_area(scrolled: impl Fn(Scroll) + 'static) -> NativeView {
             && let Ok(scroll) = serde_json::from_value::<Scroll>(event.data.clone())
         {
             scrolled(scroll);
+        }
+    })
+}
+
+/// A transparent view over the image viewer's image that reports the zooms
+/// by hand over it: a pinch, and a wheel with Ctrl (⌘ on the Mac) held. Its
+/// other wheels scroll the image as they would without it. Windows' and the
+/// Mac's components report them (`windows.rs`, `zoom_macos.rs`).
+#[cfg(desktop)]
+pub(crate) fn zoom_area(
+    zoomed: impl Fn(agent_core::presentation::media::ZoomGesture) + 'static,
+) -> NativeView {
+    native("bex.zoom").on_native_event(move |event: &NativeEvent| {
+        if &*event.name == "zoom"
+            && let Ok(gesture) = serde_json::from_value(event.data.clone())
+        {
+            zoomed(gesture);
         }
     })
 }

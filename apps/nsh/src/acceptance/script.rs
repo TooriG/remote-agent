@@ -37,8 +37,9 @@
 //!   does not.
 //! - `expect_height <label> above|below <points> [after <anchor>] [timeout-ms]`:
 //!   waits until that element is taller, or shorter, than `<points>`.
-//! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
-//!   that element; positive lines move the content up, toward its end.
+//! - `scroll <label> <lines> [held <modifiers>] [after <anchor>] [timeout-ms]`:
+//!   a mouse wheel over that element, with `<modifiers>` held as `click` names
+//!   them; positive lines move the content up, toward its end.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
@@ -50,8 +51,9 @@
 //! - `choose <path>`: answers the open or save panel the app shows with
 //!   `<path>`, waiting for one to appear. A leading `$AGENT_STATE_DIR` is the
 //!   fixture Host's directory, whose `project` folder is the fixture's project.
-//! - `expect_file <path> [timeout-ms]`: waits until the file at `<path>` (as
-//!   `choose` reads it) exists and is not empty.
+//! - `expect_file <path> [contains <text>] [timeout-ms]`: waits until the file
+//!   at `<path>` (as `choose` reads it) exists and is not empty, or contains
+//!   `<text>`.
 //! - `expect_clipboard <text> [timeout-ms]`: waits until the clipboard's text
 //!   contains `<text>`. The driver restores the clipboard when the scenario ends.
 //! - `copy <text>` / `copy_image [text]`: puts `<text>` on the clipboard, or an
@@ -104,8 +106,8 @@ pub(crate) enum Step {
     ExpectEnabled(Find, bool),
     /// The element is taller than this many points, or shorter when `false`.
     ExpectHeight(Find, f64, bool),
-    /// A wheel of this many lines over the element.
-    Scroll(Find, i32),
+    /// A wheel of this many lines over the element, with the keys held.
+    Scroll(Find, i32, Modifiers),
     Select(Find, String),
     Menu(Find),
     /// A press on the first element, moved onto the second and held there.
@@ -114,7 +116,8 @@ pub(crate) enum Step {
     /// The held press of a drag, released where it is.
     Drop,
     Choose(String),
-    ExpectFile(String, Duration),
+    /// The file is written, with this text in it if one is named.
+    ExpectFile(String, Option<String>, Duration),
     ExpectClipboard(String, Duration),
     /// Text for the clipboard, with an image when `image`.
     Copy {
@@ -281,12 +284,7 @@ fn step(words: &[String]) -> Result<Step, String> {
                 *side == "above",
             )
         }
-        ("scroll", [target, lines, rest @ ..]) => Step::Scroll(
-            find(target, rest)?,
-            lines
-                .parse()
-                .map_err(|_| format!("{lines:?} is not a line count"))?,
-        ),
+        ("scroll", [target, lines, rest @ ..]) => wheel(target, lines, rest)?,
         ("select", [target, text, rest @ ..]) => {
             Step::Select(find(target, rest)?, (*text).to_owned())
         }
@@ -295,12 +293,7 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("drag", [from, to, rest @ ..]) => Step::Drag(find(from, rest)?, find(to, &[])?),
         ("drop", []) => Step::Drop,
         ("choose", [path]) if absolute(path) => Step::Choose((*path).to_owned()),
-        ("expect_file", [path]) if absolute(path) => {
-            Step::ExpectFile((*path).to_owned(), DEFAULT_TIMEOUT)
-        }
-        ("expect_file", [path, timeout]) if absolute(path) => {
-            Step::ExpectFile((*path).to_owned(), milliseconds(timeout)?)
-        }
+        ("expect_file", [path, rest @ ..]) if absolute(path) => written(path, rest)?,
         ("expect_clipboard", [text]) => Step::ExpectClipboard((*text).to_owned(), DEFAULT_TIMEOUT),
         ("expect_clipboard", [text, timeout]) => {
             Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
@@ -361,6 +354,32 @@ fn find(text: &str, rest: &[&str]) -> Result<Find, String> {
         after,
         timeout,
     })
+}
+
+/// An `expect_file` step: `contains <text>` comes before its timeout.
+fn written(path: &str, rest: &[&str]) -> Result<Step, String> {
+    let (contains, rest) = match rest {
+        ["contains", text, rest @ ..] => (Some((*text).to_owned()), rest),
+        _ => (None, rest),
+    };
+    let timeout = match rest {
+        [] => DEFAULT_TIMEOUT,
+        [value] => milliseconds(value)?,
+        _ => return Err("too many arguments".into()),
+    };
+    Ok(Step::ExpectFile(path.to_owned(), contains, timeout))
+}
+
+/// A `scroll` step: `held <modifiers>` comes before where it finds its element.
+fn wheel(target: &str, lines: &str, rest: &[&str]) -> Result<Step, String> {
+    let (held, rest) = match rest {
+        ["held", held, rest @ ..] => (modifiers(held.split('+'))?, rest),
+        _ => (Modifiers::default(), rest),
+    };
+    let lines = lines
+        .parse()
+        .map_err(|_| format!("{lines:?} is not a line count"))?;
+    Ok(Step::Scroll(find(target, rest)?, lines, held))
 }
 
 fn milliseconds(value: &str) -> Result<Duration, String> {
@@ -452,8 +471,8 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\nfirst-launch\nhost without-codex\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
-             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
-             expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png\n\
+             scroll 会話 -3\nscroll 画像 2 held cmd after 見出し\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png contains \"a.txt:2\"\n\
              expect_clipboard \"a b\" 500\ncopy \"a\\nb\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
              fixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\ndump tree_1\n",
         )
@@ -519,7 +538,20 @@ mod tests {
                         after: None,
                         timeout: DEFAULT_TIMEOUT
                     },
-                    -3
+                    -3,
+                    Modifiers::default()
+                ),
+                Step::Scroll(
+                    Find {
+                        text: "画像".into(),
+                        after: Some("見出し".into()),
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    2,
+                    Modifiers {
+                        command: true,
+                        ..Modifiers::default()
+                    }
                 ),
                 Step::Select(
                     Find {
@@ -551,9 +583,10 @@ mod tests {
                 Step::Choose("$AGENT_STATE_DIR/project".into()),
                 Step::ExpectFile(
                     "$AGENT_STATE_DIR/saved.png".into(),
+                    None,
                     Duration::from_millis(500)
                 ),
-                Step::ExpectFile("/tmp/b.png".into(), DEFAULT_TIMEOUT),
+                Step::ExpectFile("/tmp/b.png".into(), Some("a.txt:2".into()), DEFAULT_TIMEOUT),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
                 Step::Copy {
                     text: "a\nb".into(),

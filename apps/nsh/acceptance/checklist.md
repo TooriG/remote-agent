@@ -106,12 +106,12 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
 | Changed-files bar and review | covered | review-panel, worktree-review, diff-files (a file row opens the diff at that file) |
 | Diff: binary files, file menu, copying the diff | covered | diff-files |
-| Image viewer: zoom, reset, save, the conversation's generated images | covered | image-viewer |
+| Image viewer: zoom by steps, pinch and ⌘ + wheel, reset, save, the conversation's generated images | covered | image-viewer (⌘ + wheel; a trackpad pinch is not posted, and Core's `ImageZoom::gestured` tests both) |
 | An image's menu: save as | covered | image-save-as |
 | Command-click (Control-click on Windows) on a web link opens the in-app browser | covered | link-browser (the browser loads the fixture Host's page, whose title its tab menu lists) |
 | Tool panel: files, file preview, diff, close | covered | tool-panel |
 | File list beside an open file: workspace tree, drag into the composer, Shift+F10 menu, resizing, ⌘/Shift-click selection | partial | explorer, file-tree-selection (⌘-click adds rows, Shift-click extends to a row, and the selection drags together); the width surviving a relaunch is unit-tested, and the handle takes no arrow keys (NSH handles take only drags and VoiceOver steps) |
-| File chips: glyph, accent, caption, menu, opening, size tooltip, ⌘-click to the editor | partial | file-chips; the size tooltip is a text attribute that AppKit's link elements do not expose to accessibility (MessageTests checks it), and ⌘-click would open the Mac's own installed editor from the fixture Host (Core's `desktop_file_primary_action` tests choose the editor) |
+| File chips: glyph, accent, caption, menu, opening, size tooltip, ⌘-click to the editor | partial | file-chips (⌘-click opens the fixture Host's only editor, a fake one the runner gives it); the size tooltip is a text attribute that AppKit's link elements do not expose to accessibility (MessageTests checks it) |
 | Tool panel: layout, browser, terminal, agents, side chat | covered | review-panel (layout), tools, browser, terminal-paste, terminal-query, terminal-reopen, side-chat |
 | Settings: general, providers, environment, worktrees | covered | settings, environment-settings |
 | Settings: display language | covered | display-language |

@@ -1,6 +1,7 @@
 # A conversation's image opens in the app's viewer beside the conversation's
 # generated images, each of which it shows when pressed. The viewer magnifies
-# by steps and resets, saves the image where the user chooses, and closes.
+# by steps and by ⌘ + wheel and resets, saves the image where the user
+# chooses, and closes.
 # iOS: testSimulatorOpensOnlyTheTappedImageAndSavesIt (Quick Look there)
 expect "検証プロジェクト" 30000
 press このプロジェクトで新しいチャット
@@ -18,6 +19,18 @@ press 拡大
 expect 125%
 press 拡大
 expect 150%
+press 倍率をリセット
+expect 100%
+# ⌘ + wheel over the image zooms it a notch at a time, the label following;
+# the buttons go on from there to the quarter on either side.
+scroll プレビュー -1 held cmd
+expect 125%
+scroll プレビュー -1 held cmd
+expect 156%
+press 拡大
+expect 175%
+scroll プレビュー 1 held cmd
+expect 140%
 press 倍率をリセット
 expect 100%
 press 縮小

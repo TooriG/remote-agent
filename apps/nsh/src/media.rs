@@ -398,18 +398,30 @@ fn viewer(preview: Preview) -> impl Element {
                 .child(
                     scroll().flex_1().min_w_0().h_full().child(
                         scroll().horizontal().child(
-                            nsh_core::element::image(path)
-                                .w(move || px(fit().0 * zoom.get().scale()))
-                                .h(move || px(fit().1 * zoom.get().scale()))
-                                .object_fit(ResizeMode::Contain)
-                                .label(tr("プレビュー"))
-                                .on_error(move |_: &str| {
-                                    preview.close();
-                                    native::message(
-                                        tr("プレビュー"),
-                                        tr("このファイルをプレビューできませんでした。"),
-                                    );
-                                }),
+                            view()
+                                .child(
+                                    nsh_core::element::image(path)
+                                        .w(move || px(fit().0 * zoom.get().scale()))
+                                        .h(move || px(fit().1 * zoom.get().scale()))
+                                        .object_fit(ResizeMode::Contain)
+                                        .label(tr("プレビュー"))
+                                        .on_error(move |_: &str| {
+                                            preview.close();
+                                            native::message(
+                                                tr("プレビュー"),
+                                                tr("このファイルをプレビューできませんでした。"),
+                                            );
+                                        }),
+                                )
+                                // A pinch or a Ctrl (⌘) wheel over the image
+                                // zooms it as the buttons below do.
+                                .child(
+                                    native::zoom_area(move |gesture| {
+                                        zoom.update(|zoom| *zoom = zoom.gestured(gesture))
+                                    })
+                                    .absolute()
+                                    .inset_0(),
+                                ),
                         ),
                     ),
                 ),

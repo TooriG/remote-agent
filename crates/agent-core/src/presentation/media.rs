@@ -1,7 +1,7 @@
 //! The image viewer, as the desktop client's: its magnification, from a
 //! quarter to four times the size that fits the viewer, a quarter at a time,
-//! its reset titled with the percentage; and its gallery of the conversation's
-//! generated images.
+//! by a pinch or a Ctrl (⌘ on the Mac) wheel in between, its reset titled with
+//! the percentage; and its gallery of the conversation's generated images.
 use crate::client::SessionImage;
 
 /// A generated image's encoded data as a source the image views load, as the
@@ -40,14 +40,29 @@ pub fn gallery_title(sources: &[String], shown: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ImageZoom(f32);
 
+/// A zoom by hand over the viewer's image, as the platforms report it.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ZoomGesture {
+    /// A Ctrl (⌘ on the Mac) wheel of this many notches toward the content's
+    /// end (down, zooming out); a touchpad reports fractions of a notch.
+    Wheel { notches: f32 },
+    /// A pinch's change, as AppKit reports it: `0.1` is a tenth larger.
+    Pinch { magnification: f32 },
+}
+
 impl ImageZoom {
     pub const MIN: f32 = 0.25;
     pub const MAX: f32 = 4.0;
     const STEP: f32 = 0.25;
+    /// How much a wheel notch magnifies: a step's worth at the fitted size.
+    const NOTCH: f32 = 1.25;
+    /// How close a scale counts as on a step, so a step from it moves on.
+    const ON_STEP: f32 = 1e-3;
     /// The image fitted to the viewer, as it opens and after a reset.
     pub const FIT: Self = Self(1.0);
 
-    /// `scale` within the viewer's range, as a pinch reports it.
+    /// `scale` within the viewer's range.
     pub fn new(scale: f32) -> Self {
         if scale.is_nan() {
             Self::FIT
@@ -60,14 +75,31 @@ impl ImageZoom {
         self.0
     }
 
-    /// A step larger; `None` at the largest, whose button is then disabled.
+    /// The next step larger, from a pinched scale between steps too; `None`
+    /// at the largest, whose button is then disabled.
     pub fn zoomed_in(self) -> Option<Self> {
-        (self.0 < Self::MAX).then(|| Self::new(self.0 + Self::STEP))
+        let steps = (self.0 / Self::STEP + Self::ON_STEP).floor() + 1.0;
+        (self.0 < Self::MAX).then(|| Self::new(steps * Self::STEP))
     }
 
-    /// A step smaller; `None` at the smallest.
+    /// The next step smaller; `None` at the smallest.
     pub fn zoomed_out(self) -> Option<Self> {
-        (self.0 > Self::MIN).then(|| Self::new(self.0 - Self::STEP))
+        let steps = (self.0 / Self::STEP - Self::ON_STEP).ceil() - 1.0;
+        (self.0 > Self::MIN).then(|| Self::new(steps * Self::STEP))
+    }
+
+    /// After `gesture`, within the viewer's range; a gesture that reports no
+    /// usable change leaves it.
+    pub fn gestured(self, gesture: ZoomGesture) -> Self {
+        let factor = match gesture {
+            ZoomGesture::Wheel { notches } => Self::NOTCH.powf(-notches),
+            ZoomGesture::Pinch { magnification } => 1.0 + magnification,
+        };
+        if factor.is_finite() && factor > 0.0 {
+            Self::new(self.0 * factor)
+        } else {
+            self
+        }
     }
 
     /// The reset's title: the magnification in whole percent.
@@ -138,7 +170,70 @@ mod tests {
         assert_eq!(gallery_title(&[], "/tmp/one.png"), "画像");
     }
 
+    #[test]
+    fn wheels_and_pinches_scale_the_zoom_within_its_range_and_steps_return_to_quarters() {
+        let wheel = |notches| ZoomGesture::Wheel { notches };
+        let pinch = |magnification| ZoomGesture::Pinch { magnification };
+        // A notch away from the reader is a step at the fitted size.
+        let one = ImageZoom::FIT.gestured(wheel(-1.0));
+        assert_eq!(one.label(), "125%");
+        assert_eq!(one.gestured(wheel(1.0)), ImageZoom::FIT);
+        let two = one.gestured(wheel(-1.0));
+        assert_eq!(two.label(), "156%");
+        // Between steps, the buttons go to the quarters on either side.
+        assert_eq!(two.zoomed_in().map(ImageZoom::label), Some("175%".into()));
+        assert_eq!(two.zoomed_out().map(ImageZoom::label), Some("150%".into()));
+        assert_eq!(ImageZoom::FIT.gestured(pinch(0.5)).label(), "150%");
+        assert_eq!(ImageZoom::FIT.gestured(pinch(-0.5)).label(), "50%");
+        assert_eq!(
+            ImageZoom::FIT.gestured(wheel(-100.0)).scale(),
+            ImageZoom::MAX
+        );
+        assert_eq!(
+            ImageZoom::FIT.gestured(wheel(100.0)).scale(),
+            ImageZoom::MIN
+        );
+        assert_eq!(ImageZoom::FIT.gestured(pinch(-1.0)), ImageZoom::FIT);
+        assert_eq!(ImageZoom::FIT.gestured(pinch(f32::NAN)), ImageZoom::FIT);
+        assert_eq!(
+            ImageZoom::FIT.gestured(wheel(f32::INFINITY)),
+            ImageZoom::FIT
+        );
+        assert_eq!(
+            serde_json::from_str::<ZoomGesture>(r#"{"wheel":{"notches":-1.5}}"#).unwrap(),
+            wheel(-1.5)
+        );
+        assert_eq!(
+            serde_json::from_str::<ZoomGesture>(r#"{"pinch":{"magnification":0.2}}"#).unwrap(),
+            pinch(0.2)
+        );
+    }
+
     proptest! {
+        #[test]
+        fn gestures_keep_the_zoom_in_range_and_follow_their_direction(
+            scale in 0.25f32..4.0,
+            notches in -20.0f32..20.0,
+        ) {
+            let zoom = ImageZoom::new(scale);
+            let after = zoom.gestured(ZoomGesture::Wheel { notches });
+            prop_assert!((ImageZoom::MIN..=ImageZoom::MAX).contains(&after.scale()));
+            if notches < 0.0 {
+                prop_assert!(after.scale() >= zoom.scale());
+            } else {
+                prop_assert!(after.scale() <= zoom.scale());
+            }
+        }
+
+        #[test]
+        fn steps_land_on_quarters(scale in 0.25f32..4.0) {
+            let zoom = ImageZoom::new(scale);
+            for stepped in [zoom.zoomed_in(), zoom.zoomed_out()].into_iter().flatten() {
+                let quarters = stepped.scale() / 0.25;
+                prop_assert!((quarters - quarters.round()).abs() < 1e-4);
+            }
+        }
+
         #[test]
         fn stepping_stays_in_range_and_moves_toward_its_end(scale in -10.0f32..10.0) {
             let zoom = ImageZoom::new(scale);
