@@ -83,20 +83,6 @@ impl Preferences {
             }
         })
         .detach();
-        cx.spawn_in(window, async move |view, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(1))
-                    .await;
-                if view
-                    .update(cx, |view: &mut Self, cx| view.poll_account(cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
         let subscriptions = vec![
             cx.observe_global_in::<crate::localization::Language>(window, |view, window, cx| {
                 view.language_changed(window, cx)
@@ -178,7 +164,6 @@ impl Preferences {
         if self.metadata.connection_epoch != metadata.connection_epoch {
             self.epoch += 1;
             self.account.busy = false;
-            self.account.polling = false;
             self.worktrees.saving = false;
             self.worktrees.removing = false;
             self.worktrees.save_pending = false;
@@ -217,8 +202,6 @@ impl Preferences {
         if !same {
             self.epoch += 1;
             self.account.busy = false;
-            self.account.polling = false;
-            self.account.login_draft = None;
             self.account.sign_out = None;
             self.model_controls.provider = None;
             self.worktrees.removal = None;
@@ -259,25 +242,6 @@ impl Preferences {
             drop(pane.dispatch(intent));
         }
     }
-    fn poll_account(&mut self, cx: &mut Context<Self>) {
-        if self.account.polling
-            && !self.account.busy
-            && self.metadata.connected()
-            && let Some(login) = &self.metadata.login
-        {
-            let (provider, id) = (login.provider, login.login_id.clone());
-            self.account.busy = true;
-            self.perform(
-                Intent::ReadAccountLogin(op::ReadAccountLogin {
-                    provider,
-                    id,
-                    thread_id: self.account.login_draft.clone(),
-                }),
-                Completion::Account,
-            );
-            cx.notify();
-        }
-    }
     pub(super) fn completed(
         &mut self,
         epoch: u64,
@@ -291,12 +255,8 @@ impl Preferences {
         match completion {
             Completion::Account => {
                 self.account.busy = false;
-                self.account.polling = result.is_ok() && self.metadata.login.is_some();
                 if result.is_err() {
                     self.dispatch(Intent::ListAccounts(op::ListAccounts {}));
-                }
-                if self.metadata.login.is_none() {
-                    self.account.login_draft = None;
                 }
             }
             Completion::WorktreeSettings => {
@@ -589,7 +549,6 @@ mod tests {
                     .update(cx, |input, cx| input.set_value("/my/edits", window, cx));
                 view.worktrees.dirty = true;
                 view.account.busy = true;
-                view.account.polling = true;
                 view.worktrees.saving = true;
                 view.worktrees.removing = true;
                 view.worktrees.save_pending = true;
@@ -607,7 +566,7 @@ mod tests {
                     window,
                     cx,
                 );
-                assert!(!view.account.busy && !view.account.polling);
+                assert!(!view.account.busy);
                 assert!(!view.worktrees.saving && !view.worktrees.removing);
                 assert!(!view.worktrees.save_pending);
                 assert!(view.worktrees.dirty);
@@ -759,7 +718,6 @@ mod tests {
         window.update(|window, cx| {
             view.update(cx, |view, cx| {
                 assert!(!view.account.busy);
-                assert!(!view.account.polling);
                 let mut snapshot = Snapshot::default();
                 snapshot.connection.connected = true;
                 view.sync(
@@ -774,6 +732,7 @@ mod tests {
                 );
                 view.account_operation(Intent::StartAccountLogin(op::StartAccountLogin {
                     provider: agent_protocol::session::ProviderKind::Codex,
+                    thread_id: None,
                 }));
                 assert!(
                     view.account.busy,

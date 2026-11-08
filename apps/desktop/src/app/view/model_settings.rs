@@ -503,8 +503,10 @@ impl Preferences {
         if provider == ProviderKind::DeepSeek {
             self.account_operation(Intent::ReadDshCredentials(op::ReadDshCredentials {}));
         } else {
+            // Desktop logins adopt the new account in the draft that started them.
             self.account_operation(Intent::StartAccountLogin(op::StartAccountLogin {
                 provider,
+                thread_id: Some(self.metadata.draft_key()),
             }));
         }
     }
@@ -514,7 +516,6 @@ impl Preferences {
         }
         if let Intent::StartAccountLogin(start) = &intent {
             self.model_controls.provider = Some(start.provider);
-            self.account.login_draft = Some(self.metadata.draft_key());
         }
         self.account.busy = true;
         self.perform(intent, super::super::preferences::Completion::Account);
@@ -664,6 +665,7 @@ impl Preferences {
         let disabled = !self.metadata.connected() || self.account.busy || self.blocked;
         let url = login.verification_url.clone();
         let cancel_id = login.login_id.clone();
+        let retry_id = login.login_id.clone();
         let provider = login.provider;
         let cancel = button(
             "account-cancel-login",
@@ -761,21 +763,30 @@ impl Preferences {
                     .text_color(rgb(appearance::MUTED))
                     .child(language.text("ログインが完了すると、自動で接続されます。")),
             )
-            .when(!self.account.polling && !self.account.busy, |form| {
-                form.child(
-                    button(
-                        "account-retry-login",
-                        language.text("接続状態を再確認"),
-                        cx,
-                        |s, _, _| {
-                            s.account.polling = true;
-                        },
+            // Core confirms the login until a read fails; the user retries from here.
+            .when(
+                self.metadata.account_login_error(provider).is_some() && !self.account.busy,
+                |form| {
+                    form.child(
+                        button(
+                            "account-retry-login",
+                            language.text("接続状態を再確認"),
+                            cx,
+                            move |s, _, _| {
+                                s.account_operation(Intent::ReadAccountLogin(
+                                    op::ReadAccountLogin {
+                                        provider,
+                                        id: retry_id.clone(),
+                                    },
+                                ));
+                            },
+                        )
+                        .small()
+                        .ghost()
+                        .disabled(disabled),
                     )
-                    .small()
-                    .ghost()
-                    .disabled(disabled),
-                )
-            });
+                },
+            );
         match title {
             Some(title) => v_flex()
                 .gap_2()

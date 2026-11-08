@@ -174,6 +174,9 @@ pub struct AccountState {
     pub accounts: Option<Arc<agent_protocol::operations::Accounts>>,
     #[serde(skip)]
     pub login: Option<Arc<agent_protocol::operations::AccountLogin>>,
+    /// The draft that adopts the account the pending login adds.
+    #[serde(skip)]
+    pub login_draft: Option<DraftKey>,
     #[serde(skip)]
     pub dsh_credentials: Option<Arc<agent_protocol::dsh::Credentials>>,
 }
@@ -1451,6 +1454,7 @@ impl Snapshot {
         if self.catalog.account.accounts.is_none() {
             effects.push(Effect::execute(op::ListAccounts {}));
         }
+        effects.extend(op::poll_account_login(self));
         let panes: Vec<_> = self.panes.0.keys().cloned().collect();
         for id in panes {
             effects.extend(

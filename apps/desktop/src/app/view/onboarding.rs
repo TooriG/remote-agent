@@ -660,9 +660,6 @@ mod tests {
                 view.preferences.update(cx, |preferences, _| {
                     preferences.account.busy = false;
                 });
-                view.preferences.update(cx, |preferences, _| {
-                    preferences.account.polling = true;
-                });
                 view.edit_fixture(|snapshot| {
                     Arc::make_mut(&mut snapshot.catalog.account).login =
                         Some(Arc::new(agent_protocol::operations::AccountLogin {

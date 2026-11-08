@@ -209,7 +209,32 @@ impl Operation for SelectAccountForDraft {
     }
 }
 
-pub use agent_protocol::operations::{StartAccountLogin, SubmitAccountLogin};
+pub use agent_protocol::operations::SubmitAccountLogin;
+
+/// A pending login is confirmed by the Store; screens only start, answer, or cancel it.
+const LOGIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Reads the pending login after the poll interval, while one is pending.
+pub(in crate::state) fn poll_account_login(snapshot: &Snapshot) -> Option<Effect> {
+    let login = snapshot.catalog.account.login.as_ref()?;
+    Some(Effect::execute(PollAccountLogin(ReadAccountLogin {
+        provider: login.provider,
+        id: login.login_id.clone(),
+    })))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct StartAccountLogin {
+    pub provider: crate::session::ProviderKind,
+    /// The draft that adopts the new account; otherwise the provider's selection changes.
+    pub thread_id: Option<DraftKey>,
+}
+rpc::rpc_method!(StartAccountLogin, StartAccountLogin, |self| {
+    agent_protocol::operations::StartAccountLogin {
+        provider: self.provider,
+    }
+});
 
 impl Operation for StartAccountLogin {
     fn key(&self) -> Option<OperationKey> {
@@ -217,11 +242,15 @@ impl Operation for StartAccountLogin {
             provider: self.provider,
         })
     }
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, login: Self::Output) -> Vec<Effect> {
         let account = Arc::make_mut(&mut snapshot.catalog.account);
         account.login = Some(Arc::new(login));
-        Vec::new()
+        account.login_draft = self.thread_id;
+        poll_account_login(snapshot).into_iter().collect()
     }
 }
 
@@ -230,7 +259,6 @@ impl Operation for StartAccountLogin {
 pub struct ReadAccountLogin {
     pub provider: crate::session::ProviderKind,
     pub id: String,
-    pub thread_id: Option<DraftKey>,
 }
 rpc::rpc_method!(ReadAccountLogin, ReadAccountLogin, |self| {
     agent_protocol::operations::ReadAccountLogin {
@@ -245,34 +273,66 @@ impl Operation for ReadAccountLogin {
             provider: self.provider,
         })
     }
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, pane_id: &str, status: Self::Output) -> Vec<Effect> {
-        if status.completed {
-            Arc::make_mut(&mut snapshot.catalog.account).login = None;
-            if let Some(id) = status.account_id {
-                let intent = match self.thread_id {
-                    Some(thread_id) => Intent::SelectAccountForDraft(SelectAccountForDraft {
-                        provider: self.provider,
-                        id,
-                        thread_id,
-                    }),
-                    None => Intent::SelectAccount(SelectAccount {
-                        provider: self.provider,
-                        id,
-                    }),
-                };
-                let (updated, effects) = reduce(snapshot, pane_id, Event::Intent(intent));
-                *snapshot = updated;
-                return effects;
-            }
+        if !status.completed {
+            return poll_account_login(snapshot).into_iter().collect();
+        }
+        let account = Arc::make_mut(&mut snapshot.catalog.account);
+        account.login = None;
+        let draft = account.login_draft.take();
+        let Some(id) = status.account_id else {
             return vec![
                 Effect::execute(ListAccounts {}),
                 Effect::execute(LoadModels {
                     provider: self.provider,
                 }),
             ];
-        }
-        Vec::new()
+        };
+        let intent = match draft {
+            Some(thread_id) => Intent::SelectAccountForDraft(SelectAccountForDraft {
+                provider: self.provider,
+                id,
+                thread_id,
+            }),
+            None => Intent::SelectAccount(SelectAccount {
+                provider: self.provider,
+                id,
+            }),
+        };
+        let (updated, effects) = reduce(snapshot, pane_id, Event::Intent(intent));
+        *snapshot = updated;
+        effects
+    }
+}
+
+/// The Store's own confirmation of a pending login; it shares the login's key,
+/// so starting, answering, or cancelling the login supersedes it.
+#[derive(Debug)]
+pub(in crate::state) struct PollAccountLogin(ReadAccountLogin);
+
+impl Operation for PollAccountLogin {
+    fn key(&self) -> Option<OperationKey> {
+        self.0.key()
+    }
+    fn navigation_bound(&self) -> bool {
+        false
+    }
+    no_input!();
+    type Output = <ReadAccountLogin as rpc::RpcMethod>::Output;
+    async fn run(
+        &self,
+        _: Self::Input,
+        context: &mut Execution<'_>,
+    ) -> Result<Self::Output, PeerError> {
+        tokio::time::sleep(LOGIN_POLL_INTERVAL).await;
+        context.call(&self.0).await
+    }
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, status: Self::Output) -> Vec<Effect> {
+        self.0.apply(snapshot, pane_id, status)
     }
 }
 
@@ -284,10 +344,14 @@ impl Operation for CancelAccountLogin {
             provider: self.provider,
         })
     }
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         let account = Arc::make_mut(&mut snapshot.catalog.account);
         account.login = None;
+        account.login_draft = None;
         Vec::new()
     }
 }
@@ -324,7 +388,13 @@ impl Operation for SubmitAccountLogin {
             provider: self.provider,
         })
     }
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
+        poll_account_login(snapshot).into_iter().collect()
+    }
 }
 
 pub use agent_protocol::dsh::{

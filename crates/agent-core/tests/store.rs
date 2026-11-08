@@ -546,6 +546,14 @@ async fn read(reader: &mut host_fixture::Reader) -> host_fixture::Request {
         .unwrap()
         .unwrap()
 }
+/// The Store waits its poll interval before confirming a pending login.
+async fn read_login_poll(reader: &mut host_fixture::Reader) -> host_fixture::Request {
+    tokio::time::timeout(Duration::from_secs(5), reader.read_request())
+        .await
+        .expect("the Store polls a pending login")
+        .unwrap()
+        .unwrap()
+}
 async fn read_after_status(
     reader: &mut host_fixture::Reader,
     writer: &host_fixture::Writer,
@@ -2982,6 +2990,7 @@ async fn concurrent_account_listing_preserves_login_and_cancellation_ignores_lat
     let (store, mut reader, writer) = setup(Snapshot::default()).await;
     let starting = store.dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
         provider: ProviderKind::Codex,
+        thread_id: None,
     }));
     let request = read(&mut reader).await;
     let listing = store.dispatch(Intent::ListAccounts(op::ListAccounts {}));
@@ -3011,7 +3020,6 @@ async fn concurrent_account_listing_preserves_login_and_cancellation_ignores_lat
     let polling = store.dispatch(Intent::ReadAccountLogin(op::ReadAccountLogin {
         provider: agent_protocol::session::ProviderKind::Codex,
         id: "login".into(),
-        thread_id: None,
     }));
     let poll = read(&mut reader).await;
     let cancelling = store.dispatch(Intent::CancelAccountLogin(op::CancelAccountLogin {
@@ -3041,6 +3049,71 @@ async fn concurrent_account_listing_preserves_login_and_cancellation_ignores_lat
             .accounts
             .is_empty()
     );
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_store_confirms_a_pending_login_until_it_completes_and_stops_on_failure() {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let starting = store.dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
+        provider: ProviderKind::Codex,
+        thread_id: None,
+    }));
+    let request = read(&mut reader).await;
+    writer.reply(&request, json!({"result":{"provider":"codex","loginId":"login","userCode":"fixture-only","requiresCodeSubmission":false,"verificationUrl":"https://example.invalid"}})).await.unwrap();
+    starting.await.unwrap();
+    // Navigation does not end confirmation of a Host-owned login.
+    store.dispatch(Intent::ShowThreadList).await.unwrap();
+    let status = read_login_poll(&mut reader).await;
+    assert_eq!(status["method"], "host/account/login/status");
+    assert_eq!(
+        status["params"],
+        json!({"provider":"codex","loginId":"login"})
+    );
+    writer
+        .reply(&status, json!({"error":{"code":"request_failed","message":"login status unavailable","delivery":"notSent"}}))
+        .await
+        .unwrap();
+    wait_for(&store, |snapshot| {
+        snapshot
+            .operation_error(op::OperationKey::AccountLogin {
+                provider: ProviderKind::Codex,
+            })
+            .is_some()
+    })
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), reader.read_request())
+            .await
+            .is_err(),
+        "a failed confirmation waits for the user to retry"
+    );
+    let retrying = store.dispatch(Intent::ReadAccountLogin(op::ReadAccountLogin {
+        provider: ProviderKind::Codex,
+        id: "login".into(),
+    }));
+    let retry = read(&mut reader).await;
+    writer
+        .reply(&retry, json!({"result":{"completed":false}}))
+        .await
+        .unwrap();
+    retrying.await.unwrap();
+    let status = read_login_poll(&mut reader).await;
+    assert_eq!(status["method"], "host/account/login/status");
+    writer
+        .reply(
+            &status,
+            json!({"result":{"completed":true,"accountId":"added"}}),
+        )
+        .await
+        .unwrap();
+    let select = read_login_poll(&mut reader).await;
+    assert_eq!(select["method"], "host/account/select");
+    assert_eq!(
+        select["params"],
+        json!({"provider":"codex","accountId":"added"})
+    );
+    assert!(store.snapshot().catalog.account.login.is_none());
     store.close().await.unwrap();
 }
 
@@ -4250,12 +4323,14 @@ async fn completed_login_selects_its_account_before_refreshing_without_client_lo
             } else {
                 "gpt"
             };
-            let (store, mut reader, writer) = setup(Snapshot::default()).await;
+            // The draft is recorded when the login starts.
+            let mut initial = Snapshot::default();
+            Arc::make_mut(&mut initial.catalog.account).login_draft = thread_id.map(DraftKey::from);
+            let (store, mut reader, writer) = setup(initial).await;
             reader.script_model_catalog();
             let polling = store.dispatch(Intent::ReadAccountLogin(op::ReadAccountLogin {
                 provider: serde_json::from_value(json!(provider)).unwrap(),
                 id: "login".into(),
-                thread_id: thread_id.map(DraftKey::from),
             }));
             let request = read(&mut reader).await;
             assert_eq!(
