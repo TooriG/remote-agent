@@ -1,6 +1,7 @@
 use crate::l10n::{localized, tr, tr_format};
 use crate::{Connection, native};
 use agent_core::presentation::folder_menu::{FolderChoice, folder_choices};
+use agent_core::presentation::composer::footer;
 use agent_core::state::{Intent, operations as op};
 use nsh_core::{GlassEffect, element::input, prelude::*};
 use serde_json::json;
@@ -304,7 +305,11 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             )
             .child(when(
                 move || !collapsed(),
-                || crate::model_controls::controls().col_start(3).row_start(2),
+                || {
+                    crate::model_controls::controls(signal(0.0), || 0.0)
+                        .col_start(3)
+                        .row_start(2)
+                },
             ))
             .child(
                 view()
@@ -366,25 +371,92 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         let inactive = move || {
             !enabled() || (composer.with(|c| c.draft.text.trim().is_empty()) && !stopping())
         };
-        let controls_row = view().flex_row().items_center().child(when(
-            move || answering.with(Option::is_none),
-            move || {
-                ui::icon_button_sized(
-                    Icon::PLUS,
-                    tr("ファイルを添付"),
-                    40.0,
-                    24.0,
-                    move || {
-                        let host = connection.host.get_untracked();
-                        let key = controls.with_untracked(|c| c.navigation.draft_key.clone());
-                        pick_files(connection.application.get(), host, connection.pane, key);
-                    },
-                )
-                .enabled(can_attach)
-            },
-        ));
+        // T3 Code's footer: the controls between attaching and sending fit the
+        // room the row leaves them, as `footer::controls_layout` decides.
+        let row_width = signal(None::<f32>);
+        let attach_width = signal(0_f32);
+        let primary_width = signal(0_f32);
+        let model_width = signal(0_f32);
+        // The approval control is the one block after the model control, and
+        // as wide as the "more" control as its icon.
         #[cfg(desktop)]
-        let controls_row = controls_row.child(crate::permissions::control());
+        let approval_width = signal(0_f32);
+        #[cfg(desktop)]
+        let blocks = move || {
+            use crate::permissions::ICON_WIDTH;
+            (vec![approval_width.get()], vec![ICON_WIDTH], ICON_WIDTH)
+        };
+        #[cfg(not(desktop))]
+        let blocks = || (Vec::new(), Vec::new(), 0.0);
+        let room =
+            move || row_width.get().unwrap_or_default() - attach_width.get() - primary_width.get();
+        let measurement = move || {
+            let (blocks, icon_blocks, overflow) = blocks();
+            footer::ControlsMeasurement {
+                gap: 0.0,
+                model: model_width.get(),
+                blocks,
+                icon_blocks,
+                overflow,
+            }
+        };
+        let layout = signal(footer::ControlsLayout::default());
+        effect(move || {
+            if row_width.get().is_some() {
+                let previous = layout.get_untracked();
+                let next = footer::controls_layout(&measurement(), room(), Some(previous));
+                if next != previous {
+                    layout.set(next);
+                }
+            }
+        });
+        let shown = move || layout.with(|layout| layout.visible);
+        let controls_row = view()
+            .flex_row()
+            .items_center()
+            .on_layout(move |bounds: &Bounds<Points>| row_width.set(Some(bounds.size.width.0)))
+            .child(
+                view()
+                    .on_layout(move |bounds: &Bounds<Points>| attach_width.set(bounds.size.width.0))
+                    .child(when(
+                        move || answering.with(Option::is_none),
+                        move || {
+                            ui::icon_button_sized(
+                                Icon::PLUS,
+                                tr("ファイルを添付"),
+                                40.0,
+                                24.0,
+                                move || {
+                                    let host = connection.host.get_untracked();
+                                    let key =
+                                        controls.with_untracked(|c| c.navigation.draft_key.clone());
+                                    pick_files(
+                                        connection.application.get(),
+                                        host,
+                                        connection.pane,
+                                        key,
+                                    );
+                                },
+                            )
+                            .enabled(can_attach)
+                        },
+                    )),
+            );
+        #[cfg(desktop)]
+        let controls_row = controls_row.child(when(shown, move || {
+            use crate::permissions::Look;
+            crate::permissions::control(approval_width, move || {
+                layout.with(|layout| {
+                    if layout.hidden_at(0, 1) {
+                        Look::More
+                    } else if layout.icon_only_at(0, 1) {
+                        Look::Icon
+                    } else {
+                        Look::Labelled
+                    }
+                })
+            })
+        }));
         view()
             .element_ref(&connection.composer_box)
             .w_full()
@@ -404,58 +476,75 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             .child(
                 controls_row
                     .child(view().flex_1())
-                    .child(crate::model_controls::controls())
-                    .child(when(
-                        move || answering.with(Option::is_none),
-                        dictation_button,
-                    ))
-                    .child(when(
-                        move || answering.with(Option::is_some),
-                        move || {
-                            ui::text_button(
+                    .child(when(shown, move || {
+                        crate::model_controls::controls(model_width, move || {
+                            footer::model_width(&measurement(), room(), layout.get())
+                        })
+                    }))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .on_layout(move |bounds: &Bounds<Points>| {
+                                primary_width.set(bounds.size.width.0)
+                            })
+                            .child(when(
+                                move || answering.with(Option::is_none),
+                                dictation_button,
+                            ))
+                            .child(when(
+                                move || answering.with(Option::is_some),
                                 move || {
-                                    SharedString::from(answering.with(|q| {
-                                        q.as_ref().map(|q| q.action.clone()).unwrap_or_default()
-                                    }))
+                                    ui::text_button(
+                                        move || {
+                                            SharedString::from(answering.with(|q| {
+                                                q.as_ref()
+                                                    .map(|q| q.action.clone())
+                                                    .unwrap_or_default()
+                                            }))
+                                        },
+                                        submit,
+                                    )
+                                    .enabled(enabled)
                                 },
-                                submit,
-                            )
-                            .enabled(enabled)
-                        },
-                    ))
-                    .child(when(
-                        move || answering.with(Option::is_none),
-                        move || {
-                            view()
-                                .w(px(40.0))
-                                .h(px(40.0))
-                                .rounded_full()
-                                .items_center()
-                                .justify_center()
-                                .role(AccessibilityRole::Button)
-                                .label(move || primary_label.get())
-                                .bg(move || {
-                                    if inactive() {
-                                        colors::BORDER
-                                    } else {
-                                        rgb(0xffffff)
-                                    }
-                                })
-                                .text_color(move || {
-                                    if inactive() {
-                                        colors::MUTED
-                                    } else {
-                                        colors::SIDEBAR
-                                    }
-                                })
-                                .style_when(inactive, |s| s.opacity(0.5))
-                                // VoiceOver says so when it cannot send or stop.
-                                .disabled(move || !enabled())
-                                .on_press(submit)
-                                .child(when(move || !stopping(), || ui::icon(Icon::ARROW_UP, 24.0)))
-                                .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))
-                        },
-                    )),
+                            ))
+                            .child(when(
+                                move || answering.with(Option::is_none),
+                                move || {
+                                    view()
+                                        .w(px(40.0))
+                                        .h(px(40.0))
+                                        .rounded_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .role(AccessibilityRole::Button)
+                                        .label(move || primary_label.get())
+                                        .bg(move || {
+                                            if inactive() {
+                                                colors::BORDER
+                                            } else {
+                                                rgb(0xffffff)
+                                            }
+                                        })
+                                        .text_color(move || {
+                                            if inactive() {
+                                                colors::MUTED
+                                            } else {
+                                                colors::SIDEBAR
+                                            }
+                                        })
+                                        .style_when(inactive, |s| s.opacity(0.5))
+                                        // VoiceOver says so when it cannot send or stop.
+                                        .disabled(move || !enabled())
+                                        .on_press(submit)
+                                        .child(when(
+                                            move || !stopping(),
+                                            || ui::icon(Icon::ARROW_UP, 24.0),
+                                        ))
+                                        .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))
+                                },
+                            )),
+                    ),
             )
     };
     let desktop_context = move || {
@@ -527,11 +616,14 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             )
             .child(crate::connections::destination(hosts, connection.host))
     };
+    use agent_core::presentation::conversation::{LANE_WIDTH, lane_padding};
+    // The timeline's lane: the same width and padding beside it.
+    let padding = move || lane_padding(window().width.0);
     let column = view()
         .w_full()
-        .max_w(move || px(if is_desktop() { 828.0 } else { 780.0 }))
+        .max_w(move || px(LANE_WIDTH + 2.0 * padding()))
         .self_center()
-        .px(move || if is_desktop() { px(24.0) } else { px(12.0) })
+        .px(move || px(padding()))
         .pt(move || if is_desktop() { px(8.0) } else { px(12.0) })
         .pb(move || if is_desktop() { px(16.0) } else { px(12.0) })
         .gap(move || if is_desktop() { px(4.0) } else { px(8.0) });

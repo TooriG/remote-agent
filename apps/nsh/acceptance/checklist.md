@@ -98,11 +98,13 @@ first; the note says which), **n/a** (no Mac equivalent).
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork, claude-fork-while-running, fork-failure |
 | Conversation: a message the Host may not have received goes back to the composer or is discarded | covered | unresolved-submission |
 | Conversation: a turn's work that fails to load shows why under the opened row, with a retry | not yet | the Host reads turn details from its transcript database, which it holds open in one SQLite connection for its lifetime; making the file unreadable from outside (chmod, swapping it) does not fail the read, and the provider is asked only for conversations never saved. The core context test covers the state; the view was checked by hand with a temporary Host failure |
-| Conversation: steering a running turn, minimap | covered | steering, queued-input |
+| Conversation: steering a running turn, minimap beside the lane | covered | steering, queued-input, minimap |
 | Conversation: live Thinking and work rows (T3 Code's shimmer), expandable thoughts | covered | thinking, live-work; the shimmer itself is screenshot evidence only |
 | Composer: model picker | covered | model-picker |
 | Composer: DeepSeek's OpenRouter route, Flash 4.1 pick and models | covered | openrouter |
 | Composer: approval mode menu | covered | permission-mode |
+| Composer: controls fit narrow windows, none cut off | covered | composer-narrow |
+| Sidebar: a sheet over the content below 768 points, closing on its toggle, Escape or a choice | covered | composer-narrow |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer, dictation-denied; recording needs the system's microphone permission |
 | Composer: paste text at the selection and undo it, paste an image | partial | composer-paste; text copied with an image is pasted too (T3 Code leaves it out), since NSH settles a paste's text before the app hears of it |
 | Composer: Escape discards a recording | not yet | recording needs the system's microphone permission |

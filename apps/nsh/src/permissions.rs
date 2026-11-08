@@ -16,6 +16,22 @@ use nsh_core::{
 
 /// Full access reads as a warning wherever it is the mode.
 const FULL_ACCESS: Rgba = rgb(0xf58b42);
+/// The trigger's padding at each side, its icon, and the gap before its label.
+const PADDING: f32 = 8.0;
+const ICON: f32 = 16.0;
+const GAP: f32 = 8.0;
+const LABEL_FONT: &str = "14px system-ui";
+/// The trigger as its icon alone, and the "more" control's.
+pub(crate) const ICON_WIDTH: f32 = 2.0 * PADDING + ICON;
+
+/// How the control shows, as the composer's controls fit.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Look {
+    Labelled,
+    Icon,
+    /// T3 Code's "more" control, whose menu holds the modes.
+    More,
+}
 
 /// What the control and its menu show of the current draft's provider.
 #[derive(Clone, PartialEq)]
@@ -69,9 +85,14 @@ impl Permissions {
     }
 }
 
-pub(crate) fn control() -> View {
+/// The control, showing as `look` says; it sets `natural` to its width with
+/// its label.
+pub(crate) fn control(natural: Signal<f32>, look: impl Fn() -> Look + Copy + 'static) -> View {
     let connection = use_context::<Connection>().unwrap();
     let permissions = computed(move || connection.publication.with(|p| Permissions::of(p)));
+    let label = move || tr(permissions.with(|p| p.label)).to_owned();
+    effect(move || natural.set(ICON_WIDTH + GAP + measure_text(LABEL_FONT, &label()).0));
+    let more = move || look() == Look::More;
     let open = signal(false);
     let dispatch = move |intent: Option<Intent>| {
         if let Some(intent) = intent {
@@ -80,11 +101,20 @@ pub(crate) fn control() -> View {
     };
     let full_access = move || permissions.with(|p| p.mode == Some(PermissionMode::FullAccess));
     let trigger = nsh_base::button()
-        .accessibility_label(Some(SharedString::from(tr("承認方法を変更"))))
+        .accessibility_label(nsh_core::element::Prop::from(
+            (move || {
+                Some(SharedString::from(if more() {
+                    tr("その他")
+                } else {
+                    tr("承認方法を変更")
+                }))
+            })
+            .into_reactive(),
+        ))
         .disabled(move || !permissions.with(Permissions::enabled))
         .h(px(40.0))
-        .px_2()
-        .gap_2()
+        .px(px(PADDING))
+        .gap(px(GAP))
         .flex_row()
         .items_center()
         .rounded(px(ui::RADIUS))
@@ -97,12 +127,12 @@ pub(crate) fn control() -> View {
         })
         .hover(|s| s.bg(colors::GHOST_HOVER))
         .disabled_style(|s| s.opacity(0.5))
-        .child(ui::icon(Icon::SHIELD, 16.0))
-        .child(
-            text(move || tr(permissions.with(|p| p.label)).to_owned())
-                .text_size(px(14.0))
-                .number_of_lines(1),
-        );
+        .child(when(move || !more(), || ui::icon(Icon::SHIELD, ICON)))
+        .child(when(more, || ui::icon(Icon::ELLIPSIS, ICON)))
+        .child(when(
+            move || look() == Look::Labelled,
+            move || text(label).text_size(px(14.0)).number_of_lines(1),
+        ));
     view().flex_row().items_center().child(
         nsh_base::popover()
             .open(move || Some(open.get()))

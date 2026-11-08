@@ -326,18 +326,25 @@ pub(crate) fn review_card() -> impl IntoElement {
     };
     let open = move || review_file(None);
     let folded = move || review.with(|r| r.as_ref().and_then(|r| r.folded));
+    let width = signal(None::<f32>);
+    let labelled = move || {
+        width
+            .get()
+            .is_none_or(agent_core::presentation::composer::review_action_labelled)
+    };
     when(
         move || review.with(Option::is_some),
         move || {
             view()
                 .w_full()
+                .on_layout(move |bounds: &Bounds<Points>| width.set(Some(bounds.size.width.0)))
                 .rounded(px(12.0))
                 .border_1()
                 .border_color(colors::BORDER)
                 .overflow_hidden()
                 .bg(colors::RAISED)
                 .text_color(colors::FOREGROUND)
-                .child(review_summary(review, connected, open))
+                .child(review_summary(review, connected, open, labelled))
                 .child(review_files(review, review_file))
                 .child(when(
                     move || folded().is_some(),
@@ -352,6 +359,7 @@ fn review_summary(
     review: Memo<Option<ComposerReview>>,
     connected: impl Fn() -> bool + Copy + 'static,
     open: impl Fn() + Copy + 'static,
+    labelled: impl Fn() -> bool + Copy + 'static,
 ) -> nsh_base::ButtonElement {
     use crate::{
         l10n::tr_format,
@@ -384,11 +392,16 @@ fn review_summary(
                 )
                 .child(counts(total(|r| r.additions), total(|r| r.deletions))),
         )
-        .child(
+        .child(when(labelled, move || {
             ui::action_button(tr("レビューする"), ActionTone::Secondary, open)
                 .rounded(px(8.0))
-                .enabled(connected),
-        )
+                .enabled(connected)
+        }))
+        // In a narrow card, as T3 Code's, the action is its icon.
+        .child(when(
+            move || !labelled(),
+            move || ui::icon_button(Icon::DIFF, tr("レビューする"), open).enabled(connected),
+        ))
 }
 
 /// The listed files, each with its lines; each opens the diff at itself.

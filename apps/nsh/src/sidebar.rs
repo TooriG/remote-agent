@@ -11,7 +11,12 @@ use serde_json::json;
 pub(crate) const WIDTH: f32 = 272.0;
 pub(crate) const HEADER_HEIGHT: f32 = 44.0;
 
-pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> impl IntoElement {
+/// `sheet`: over the content in a narrow window, as wide as it is given.
+pub(crate) fn sidebar(
+    hosts: Memo<Vec<Host>>,
+    compose: impl Fn() + 'static,
+    sheet: bool,
+) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let query = signal(String::new());
     let navigate = move |action| {
@@ -20,13 +25,22 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
             .with(|application| application.navigate(action))
     };
     let connected = move || connection.settings.with(|p| p.connected());
-    view()
-        .w(px(WIDTH))
+    // Going somewhere from the sidebar closes its sheet, as T3 Code's.
+    let leave = move || navigate(Navigation::LeftSidebar(window().width.0));
+    let column = view();
+    let column = if sheet {
+        column.flex_1()
+    } else {
+        column.w(px(WIDTH))
+    };
+    column
         .flex_shrink_0()
         .bg(colors::SIDEBAR)
         .border_r_1()
         .border_r_color(colors::BORDER)
-        .child(header(true, move || navigate(Navigation::ToggleSidebar)))
+        .child(header(true, move || {
+            navigate(Navigation::ToggleSidebar(window().width.0))
+        }))
         .child(
             view()
                 .pt_3()
@@ -47,12 +61,19 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                         .gap_1()
                         .child(ui::search(query, tr("会話を検索")).flex_1().min_w_0())
                         .child(
-                            ui::icon_button(Icon::NEW_CHAT, tr("新しいチャット"), compose)
-                                .enabled(connected),
+                            ui::icon_button(
+                                Icon::NEW_CHAT,
+                                tr("新しいチャット"),
+                                move || {
+                                    leave();
+                                    compose();
+                                },
+                            )
+                            .enabled(connected),
                         ),
                 ),
         )
-        .child(crate::threads::list(query, || {}))
+        .child(crate::threads::list(query, leave))
         .child(
             view()
                 .flex_row()
@@ -64,7 +85,10 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                 .child(ui::icon_button(
                     Icon::SETTINGS,
                     tr("設定を開く"),
-                    move || navigate(Navigation::Settings(true)),
+                    move || {
+                        leave();
+                        navigate(Navigation::Settings(true));
+                    },
                 ))
                 .child(ui::icon_button(
                     Icon::REFRESH,
@@ -77,6 +101,51 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                 )),
         )
 }
+
+/// The sidebar over the content in a narrow window, as T3 Code's sheet: from the
+/// window's leading edge to 12 points short of its other, over a dimmed
+/// backdrop that, as Escape, closes it.
+pub(crate) fn sheet(
+    hosts: Memo<Vec<Host>>,
+    compose: impl Fn() + 'static,
+    dismiss: impl Fn() + Copy + 'static,
+) -> impl IntoElement {
+    on_key("escape", move |_| dismiss());
+    let width = move || px((window().width.0 - SHEET_INSET).max(0.0));
+    view()
+        .absolute()
+        .top(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
+        .flex_row()
+        .child(
+            view()
+                .w(width)
+                .flex_row()
+                .child(sidebar(hosts, compose, true)),
+        )
+        // T3's backdrop: the content dimmed to 60% and blurred by 4 points
+        // (`bg-background/60 backdrop-blur-xs`). The sheet hides the rest of
+        // it, so it lies beside the sheet, after it for assistive technologies.
+        .child(
+            view()
+                .absolute()
+                .top(px(0.0))
+                .left(width)
+                .right(px(0.0))
+                .bottom(px(0.0))
+                .bg(rgba(0x08080899))
+                .backdrop_blur(px(4.0))
+                .role(AccessibilityRole::Button)
+                .label(SharedString::from(tr("サイドバーを閉じる")))
+                .on_press(dismiss),
+        )
+}
+
+/// How far short of the window's other edge the sheet ends (T3's
+/// `calc(100vw - var(--spacing(3)))`).
+const SHEET_INSET: f32 = 12.0;
 
 /// The title bar's leading part: the app icon after the window controls, and the
 /// sidebar's toggle.

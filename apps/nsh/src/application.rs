@@ -41,7 +41,14 @@ impl Host {
 pub(crate) enum Navigation {
     Settings(bool),
     Provider(Option<agent_protocol::session::ProviderKind>),
-    ToggleSidebar,
+    /// The sidebar's toggle, in a window this wide.
+    ToggleSidebar(f32),
+    /// The reader went somewhere from the sidebar in a window this wide.
+    #[cfg(desktop)]
+    LeftSidebar(f32),
+    /// The sidebar's sheet was dismissed.
+    #[cfg(desktop)]
+    DismissSidebarSheet,
 }
 
 #[derive(Clone)]
@@ -65,7 +72,7 @@ pub(crate) struct State {
     pub settings: bool,
     pub provider: Option<agent_protocol::session::ProviderKind>,
     pub account_pending: bool,
-    pub sidebar: bool,
+    pub sidebar: agent_core::presentation::sidebar::SidebarState,
     pub file_line: Option<(u64, Option<u32>)>,
     pub side_chats: BTreeMap<u64, SideChat>,
     pub browser_renderer: String,
@@ -99,7 +106,7 @@ impl Default for State {
             settings: false,
             provider: None,
             account_pending: false,
-            sidebar: true,
+            sidebar: Default::default(),
             file_line: None,
             side_chats: BTreeMap::new(),
             browser_renderer: String::new(),
@@ -462,7 +469,13 @@ impl Application {
                     state.provider = None;
                 }
                 Navigation::Provider(provider) => state.provider = provider,
-                Navigation::ToggleSidebar => state.sidebar = !state.sidebar,
+                Navigation::ToggleSidebar(width) => state.sidebar = state.sidebar.toggled(width),
+                #[cfg(desktop)]
+                Navigation::LeftSidebar(width) => state.sidebar = state.sidebar.navigated(width),
+                #[cfg(desktop)]
+                Navigation::DismissSidebarSheet => {
+                    state.sidebar = state.sidebar.sheet_dismissed();
+                }
             }
         });
     }

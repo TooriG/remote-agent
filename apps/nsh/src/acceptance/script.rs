@@ -40,6 +40,14 @@
 //! - `scroll <label> <lines> [held <modifiers>] [after <anchor>] [timeout-ms]`:
 //!   a mouse wheel over that element, with `<modifiers>` held as `click` names
 //!   them; positive lines move the content up, toward its end.
+//! - `expect_apart <label> <other> [after <anchor>] [timeout-ms]`: waits until
+//!   elements labelled `<label>` (after the anchor) and `<other>` both show and
+//!   none of the first overlaps one of the others, as minimap marks and message
+//!   text must not.
+//! - `expect_inside <label> [after <anchor>] [timeout-ms]`: waits until some
+//!   element is labelled `<label>` and every one lies whole inside its window.
+//! - `window <width> <height>`: resizes the main window's content to that many
+//!   points.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
 //!   `<text>` inside that element's text, as a drag over it would.
 //! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
@@ -108,6 +116,12 @@ pub(crate) enum Step {
     ExpectHeight(Find, f64, bool),
     /// A wheel of this many lines over the element, with the keys held.
     Scroll(Find, i32, Modifiers),
+    /// No element `Find` names overlaps one labelled the text.
+    ExpectApart(Find, String),
+    /// Every element `Find` names lies inside its window.
+    ExpectInside(Find),
+    /// The main window's content size in points.
+    Window(f64, f64),
     Select(Find, String),
     Menu(Find),
     /// A press on the first element, moved onto the second and held there.
@@ -267,6 +281,11 @@ fn step(words: &[String]) -> Result<Step, String> {
         ),
         ("expect", [text, rest @ ..]) => Step::Expect(find(text, rest)?),
         ("expect_absent", [text, rest @ ..]) => Step::ExpectAbsent(find(text, rest)?),
+        ("expect_apart", [text, other, rest @ ..]) => {
+            Step::ExpectApart(find(text, rest)?, (*other).to_owned())
+        }
+        ("expect_inside", [text, rest @ ..]) => Step::ExpectInside(find(text, rest)?),
+        ("window", [width, height]) => Step::Window(points(width)?, points(height)?),
         ("expect_count", [text, count, rest @ ..]) => Step::ExpectCount(
             find(text, rest)?,
             count
@@ -382,6 +401,14 @@ fn wheel(target: &str, lines: &str, rest: &[&str]) -> Result<Step, String> {
     Ok(Step::Scroll(find(target, rest)?, lines, held))
 }
 
+fn points(value: &str) -> Result<f64, String> {
+    value
+        .parse()
+        .ok()
+        .filter(|points: &f64| points.is_finite() && *points > 0.0)
+        .ok_or_else(|| format!("{value:?} is not a size in points"))
+}
+
 fn milliseconds(value: &str) -> Result<Duration, String> {
     value
         .parse()
@@ -471,7 +498,7 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\nfirst-launch\nhost without-codex\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\nexpect_count 回答 2\nexpect_disabled 送信 2000\nexpect_height 入力 above 60\n\
-             scroll 会話 -3\nscroll 画像 2 held cmd after 見出し\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             scroll 会話 -3\nscroll 画像 2 held cmd after 見出し\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nexpect_inside 送信 1000\nselect 回答 Needle\nmenu 回答 after 見出し\ndrag nested \"AI に依頼する\" after 見出し\ndrop\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_file $AGENT_STATE_DIR/saved.png 500\nexpect_file /tmp/b.png contains \"a.txt:2\"\n\
              expect_clipboard \"a b\" 500\ncopy \"a\\nb\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\nundo 入力欄 500\n\
              fixture /release-inputs\nactivate\nmicrophone deny\nrelaunch\nwait 250\nscreenshot after-send\ndump tree_1\n",
@@ -553,6 +580,20 @@ mod tests {
                         ..Modifiers::default()
                     }
                 ),
+                Step::ExpectApart(
+                    Find {
+                        text: "移動:*".into(),
+                        after: None,
+                        timeout: Duration::from_millis(500)
+                    },
+                    "message.*".into()
+                ),
+                Step::Window(660.0, 700.0),
+                Step::ExpectInside(Find {
+                    text: "送信".into(),
+                    after: None,
+                    timeout: Duration::from_millis(1000)
+                }),
                 Step::Select(
                     Find {
                         text: "回答".into(),
@@ -702,6 +743,11 @@ mod tests {
             ("", "the scenario has no steps"),
             ("press", "line 1: unknown step or wrong arguments: press"),
             ("tap x", "line 1: unknown step or wrong arguments: tap"),
+            ("window 0 700", "line 1: \"0\" is not a size in points"),
+            (
+                "window wide 700",
+                "line 1: \"wide\" is not a size in points",
+            ),
             ("expect \"open", "line 1: unclosed quote"),
             (
                 "wait soon",

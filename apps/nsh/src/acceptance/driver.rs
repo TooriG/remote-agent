@@ -247,7 +247,9 @@ fn limit(step: &Step) -> Duration {
         | Step::ExpectAbsent(find)
         | Step::ExpectCount(find, _)
         | Step::ExpectEnabled(find, _)
-        | Step::ExpectHeight(find, ..) => find.timeout,
+        | Step::ExpectHeight(find, ..)
+        | Step::ExpectApart(find, _)
+        | Step::ExpectInside(find) => find.timeout,
         Step::Wait(duration)
         | Step::ExpectClipboard(_, duration)
         | Step::ExpectFile(_, _, duration) => *duration,
@@ -282,6 +284,16 @@ fn attempt(
         Step::Dump(name) => artifact(dump(&Tree::read(mtm, menus), output, name)),
         Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
+        Step::ExpectApart(find, other) => apart(&Tree::read(mtm, menus), find, other),
+        Step::ExpectInside(find) => inside(&Tree::read(mtm, menus), find),
+        Step::Window(width, height) => done(
+            main_window(mtm)
+                .ok_or_else(|| "no window to resize".to_owned())
+                .map(|window| {
+                    window.setContentSize(NSSize::new(*width, *height));
+                    format!("resized the window to {width}×{height}")
+                }),
+        ),
         Step::ExpectCount(find, count) => counted(&Tree::read(mtm, menus), find, *count),
         Step::ExpectEnabled(find, enabled) => element_is(&Tree::read(mtm, menus), find, |object| {
             let actual = !responds(object, sel!(isAccessibilityEnabled))
@@ -473,6 +485,79 @@ fn counted(tree: &Tree, find: &Find, count: usize) -> Attempt {
     }
 }
 
+/// Whether the elements `find` names and those labelled `other` all show apart.
+fn apart(tree: &Tree, find: &Find, other: &str) -> Attempt {
+    let (first, second) = match (
+        tree.labelled(find),
+        tree.labelled(&Find {
+            text: other.to_owned(),
+            after: None,
+            timeout: find.timeout,
+        }),
+    ) {
+        (Ok(first), Ok(second)) => (first, second),
+        (Err(reason), _) | (_, Err(reason)) => return Attempt::Pending(reason),
+    };
+    for &a in &first {
+        for &b in &second {
+            let (one, two) = (tree.frame(a), tree.frame(b));
+            let shared = |start: f64, length: f64, other: f64, other_length: f64| {
+                (start + length).min(other + other_length) - start.max(other)
+            };
+            // AppKit's buttons report a point of their bezel past their bounds.
+            if one.size.width > 0.0
+                && one.size.height > 0.0
+                && two.size.width > 0.0
+                && two.size.height > 0.0
+                && shared(one.origin.x, one.size.width, two.origin.x, two.size.width) > 1.0
+                && shared(one.origin.y, one.size.height, two.origin.y, two.size.height) > 1.0
+            {
+                return Attempt::Pending(format!(
+                    "{} ({one:?}) overlaps {} ({two:?})",
+                    tree.nodes[a].describe(),
+                    tree.nodes[b].describe()
+                ));
+            }
+        }
+    }
+    Attempt::Passed(
+        format!(
+            "{} elements apart from {} labelled {other:?}",
+            first.len(),
+            second.len()
+        ),
+        None,
+    )
+}
+
+/// Whether every element `find` names lies whole inside its window.
+fn inside(tree: &Tree, find: &Find) -> Attempt {
+    let found = match tree.labelled(find) {
+        Ok(found) => found,
+        Err(reason) => return Attempt::Pending(reason),
+    };
+    for &index in &found {
+        let Some(window) = &tree.nodes[index].window else {
+            continue;
+        };
+        let (frame, bounds) = (tree.frame(index), window.frame());
+        if frame.origin.x < bounds.origin.x
+            || frame.origin.y < bounds.origin.y
+            || frame.origin.x + frame.size.width > bounds.origin.x + bounds.size.width
+            || frame.origin.y + frame.size.height > bounds.origin.y + bounds.size.height
+        {
+            return Attempt::Pending(format!(
+                "{} reaches past its window ({frame:?} in {bounds:?})",
+                tree.nodes[index].describe()
+            ));
+        }
+    }
+    Attempt::Passed(
+        format!("{} elements inside their window", found.len()),
+        None,
+    )
+}
+
 fn press(tree: &Tree, find: &Find) -> Attempt {
     let matches = match tree.labelled(find) {
         Ok(matches) => matches,
@@ -536,6 +621,7 @@ fn fail(driver: &Rc<RefCell<Driver>>, reason: &str, mtm: MainThreadMarker) {
     let evidence: Vec<String> = [
         screenshot(mtm, &output, "failure"),
         dump(&Tree::read(mtm, &menus), &output, "failure-tree"),
+        windows(mtm, &output),
     ]
     .into_iter()
     .filter_map(|written| {
@@ -879,6 +965,16 @@ impl Tree {
         })
     }
 
+    /// Where `index` is on the screen.
+    fn frame(&self, index: usize) -> NSRect {
+        match &self.nodes[index].target {
+            Target::Element(object) if responds(object, sel!(accessibilityFrame)) => unsafe {
+                msg_send![&**object, accessibilityFrame]
+            },
+            _ => NSRect::ZERO,
+        }
+    }
+
     /// `index` and its ancestors, nearest first.
     fn lineage(&self, index: usize) -> Vec<usize> {
         std::iter::successors(Some(index), |&index| self.nodes[index].parent).collect()
@@ -1120,6 +1216,31 @@ fn dump(tree: &Tree, output: &Path, name: &str) -> Result<String, String> {
     let file = format!("{name}.txt");
     std::fs::write(output.join(&file), tree.text())
         .map_err(|reason| format!("{file}: {reason}"))?;
+    Ok(file)
+}
+
+/// The app's activation and its windows' states, which say why a tree came
+/// out empty: a hidden app's windows are not visible, nor are minimized ones.
+fn windows(mtm: MainThreadMarker, output: &Path) -> Result<String, String> {
+    let app = NSApplication::sharedApplication(mtm);
+    let mut text = format!(
+        "active={} hidden={} key={}\n",
+        app.isActive(),
+        app.isHidden(),
+        app.keyWindow().is_some()
+    );
+    for window in app.windows() {
+        text.push_str(&format!(
+            "{:?} visible={} miniaturized={} occlusion={:?} frame={:?}\n",
+            window.title().to_string(),
+            window.isVisible(),
+            window.isMiniaturized(),
+            window.occlusionState(),
+            window.frame()
+        ));
+    }
+    let file = "failure-windows.txt".to_owned();
+    std::fs::write(output.join(&file), text).map_err(|reason| format!("{file}: {reason}"))?;
     Ok(file)
 }
 
