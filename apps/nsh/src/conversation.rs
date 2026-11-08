@@ -1,4 +1,4 @@
-use crate::l10n::{localized, tr};
+use crate::l10n::{localized, tr, tr_format};
 use crate::ui::Enabled;
 use crate::{Connection, shared::Shared};
 use agent_core::{
@@ -494,9 +494,9 @@ fn minimap(
                     })
                     .child(
                         nsh_base::button()
-                            .accessibility_label(Some(SharedString::from(format!(
-                                "この発言へ移動: {}",
-                                exchange(marker.with_untracked(|m| m.row)).0
+                            .accessibility_label(Some(SharedString::from(tr_format(
+                                "この発言へ移動: {0}",
+                                [&exchange(marker.with_untracked(|m| m.row)).0],
                             ))))
                             .w(px(56.0))
                             .h(px(10.0))
