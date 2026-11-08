@@ -3473,6 +3473,22 @@
         }
       }
     },
+    "コンテキストを圧縮中…": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンテキストを圧縮中…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacting…"
+          }
+        }
+      }
+    },
     "コンテキストを圧縮しました": {
       "localizations": {
         "ja": {
@@ -8701,6 +8717,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Response"
+          }
+        }
+      }
+    },
+    "思考": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "思考"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thought"
+          }
+        }
+      }
+    },
+    "思考中": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "思考中"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thinking"
           }
         }
       }

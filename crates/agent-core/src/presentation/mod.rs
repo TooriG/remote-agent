@@ -45,6 +45,9 @@ pub enum GroupKind {
     Command,
     FileChange,
     Image,
+    /// Reasoning with text to read, which T3 Code's work log shows as its
+    /// thinking. Reasoning without any stays hidden, as in T3 Code.
+    Reasoning,
     #[default]
     Activity,
 }
@@ -67,6 +70,11 @@ impl<'a> From<&'a Item> for ItemMetadata<'a> {
                 ItemBody::CommandExecution { .. } => GroupKind::Command,
                 ItemBody::FileChange { .. } => GroupKind::FileChange,
                 ItemBody::ImageGeneration { .. } => GroupKind::Image,
+                ItemBody::Reasoning { content, summary }
+                    if body::reasoning_parts(content, summary).is_some() =>
+                {
+                    GroupKind::Reasoning
+                }
                 ItemBody::Reasoning { .. } | ItemBody::Review { .. } | ItemBody::Sleep {} => {
                     GroupKind::Hidden
                 }
@@ -242,11 +250,13 @@ fn project_items<'a>(
     })
 }
 fn activity_summary<'a>(items: impl Iterator<Item = ItemMetadata<'a>>) -> String {
-    let (mut commands, mut files, mut tools) = (false, false, false);
+    let (mut commands, mut files, mut tools, mut thought) = (false, false, false, false);
     for item in items {
         match item.kind {
             GroupKind::Command => commands = true,
             GroupKind::FileChange => files = true,
+            // As T3 Code's work groups: reasoning names only a group of its own.
+            GroupKind::Reasoning => thought = true,
             _ => tools = true,
         }
     }
@@ -259,7 +269,7 @@ fn activity_summary<'a>(items: impl Iterator<Item = ItemMetadata<'a>>) -> String
     .filter_map(|(present, label)| present.then_some(label))
     .collect();
     if labels.is_empty() {
-        "作業の詳細".into()
+        if thought { "思考" } else { "作業の詳細" }.into()
     } else {
         labels.join("、")
     }
@@ -406,7 +416,8 @@ pub fn item_presentation(
             ),
             false,
         ),
-        ItemBody::Reasoning { .. } => ("reasoning", Some("作業の詳細".into()), true),
+        // T3 Code's "Thought"; the live row reads "Thinking" (`work_row_label`).
+        ItemBody::Reasoning { .. } => ("reasoning", Some("思考".into()), true),
         ItemBody::CommandExecution { command, .. } => {
             ("command", Some(compact_title(command)), true)
         }
@@ -416,6 +427,10 @@ pub fn item_presentation(
             true,
         ),
         ItemBody::ImageGeneration { .. } => ("imageGeneration", None, false),
+        // As T3 Code's "Compacting…" while it runs.
+        ItemBody::Compaction {} if item.status == crate::models::ItemStatus::Running => {
+            ("unknown", Some("コンテキストを圧縮中…".into()), true)
+        }
         _ => ("unknown", Some(tool_title(item.body())), true),
     };
     ItemPresentation {

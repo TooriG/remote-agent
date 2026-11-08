@@ -33,6 +33,7 @@ mod rich_text;
 #[cfg(desktop)]
 mod settings;
 mod shared;
+mod shimmer;
 mod side_chat;
 #[cfg(desktop)]
 mod sidebar;

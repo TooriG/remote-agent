@@ -11,6 +11,8 @@ use std::{
     sync::Arc,
 };
 mod images;
+mod work;
+pub use work::{LiveActivity, WorkRowLabel};
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.
@@ -118,6 +120,8 @@ pub struct PreparationPresentation {
     pub text: String,
     /// Rendered like a running turn's working row, as T3 Code shows startup.
     pub in_progress: bool,
+    /// Setting up a worktree, which shimmers as T3 Code's "Setting up worktree…".
+    pub shimmer: bool,
     pub retry: Option<agent_protocol::operations::RetryPreparation>,
 }
 #[derive(Clone, PartialEq)]
@@ -206,15 +210,16 @@ impl RenderedTurn {
     }
 }
 
+/// A running turn's working row, as T3 Code's "Working for …": the time so
+/// far. What it is doing reads in its live row ([`RenderedTurn::live_activity`]).
 #[derive(Clone, PartialEq)]
 pub struct WorkProgress {
     started_at: Option<f64>,
-    action: Option<String>,
 }
 
 impl WorkProgress {
     pub fn label(&self, now_seconds: f64) -> String {
-        // As T3 Code's working row: the time so far, in the fold's units.
+        // The time so far, in the fold's units.
         let elapsed = self
             .started_at
             .map(|started| {
@@ -224,30 +229,18 @@ impl WorkProgress {
                 )
             })
             .unwrap_or_default();
-        match self.action.as_deref().filter(|action| !action.is_empty()) {
-            Some(action) => format!("{elapsed}作業中 · {action}"),
-            None => format!("{elapsed}作業中…"),
-        }
+        format!("{elapsed}作業中…")
     }
 }
 
 impl RenderedTurn {
-    pub fn work_progress(&self, include_action: bool) -> WorkProgress {
-        let action = if include_action {
-            self.rows.iter().rev().find_map(|row| match &row.content {
-                ConversationRowContent::Activity { item, .. } => item.data.title.as_deref(),
-                _ => None,
-            })
-        } else {
-            None
-        };
+    pub fn work_progress(&self) -> WorkProgress {
         WorkProgress {
             started_at: self.source.started_at.or_else(|| {
                 self.source
                     .started_at_ms
                     .map(|milliseconds| milliseconds as f64 / 1000.)
             }),
-            action: action.map(str::to_owned),
         }
     }
     fn items(&self) -> impl Iterator<Item = &Arc<RenderedItem>> {
@@ -339,6 +332,7 @@ impl RenderedItem {
                 image_sources: body.images,
                 image_placeholder,
                 deferred,
+                preview: body::reasoning_preview(item),
             },
         })
     }
@@ -366,6 +360,7 @@ impl RenderedItem {
                 image_sources: body.images,
                 image_placeholder: false,
                 deferred: false,
+                preview: None,
             },
         })
     }
@@ -678,6 +673,7 @@ fn preparation_presentation(
     PreparationPresentation {
         text,
         in_progress,
+        shimmer: in_progress && preparation.stage == PreparationStage::Worktree,
         retry: retry.then(|| RetryPreparation {
             thread_id: preparation.submission.thread_id.clone(),
         }),
@@ -1421,6 +1417,8 @@ pub struct ItemPresentation {
     pub kind: String,
     pub title: Option<String>,
     pub collapsible: bool,
+    /// Reasoning's trace on one line, provider text shown verbatim.
+    pub preview: Option<String>,
 }
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -1481,7 +1479,9 @@ mod tests {
     #[case::image(json!({"imageGeneration":{"savedPath":"/fixture/image.png"}}), true)]
     #[case::compaction(json!({"compaction":{}}), true)]
     #[case::sleep(json!({"sleep":{}}), false)]
-    #[case::reasoning(json!({"reasoning":{"content":["private"],"summary":[]}}), false)]
+    // As T3 Code, reasoning shows when it has text to read.
+    #[case::reasoning(json!({"reasoning":{"content":["private"],"summary":[]}}), true)]
+    #[case::blank_reasoning(json!({"reasoning":{"content":[""],"summary":[" "]}}), false)]
     #[case::review_entered(json!({"review":{"entering":true,"text":"Review"}}), false)]
     #[case::review_left(json!({"review":{"entering":false,"text":"Review"}}), false)]
     fn item_families_project_visible_content_without_exposing_state_only_events(
@@ -3173,7 +3173,7 @@ mod minimap_tests {
 mod progress_tests {
     use super::*;
     #[test]
-    fn elapsed_work_uses_provider_time_and_describes_the_current_tool() {
+    fn elapsed_work_uses_provider_time() {
         for value in [
             serde_json::json!({"id":"t","startedAt":100.5}),
             serde_json::json!({"id":"t","startedAtMs":100500}),
@@ -3187,38 +3187,19 @@ mod progress_tests {
                 requests: vec![],
                 rows: vec![],
             };
-            let mut progress = turn.work_progress(false);
-            progress.action = Some("cargo test".into());
-            assert_eq!(progress.label(108.5), "8秒 作業中 · cargo test");
-            assert_eq!(turn.work_progress(false).label(110.5), "10秒 作業中…");
-            assert_eq!(turn.work_progress(false).label(99.), "<1秒 作業中…");
+            assert_eq!(turn.work_progress().label(110.5), "10秒 作業中…");
+            assert_eq!(turn.work_progress().label(99.), "<1秒 作業中…");
             // The time so far reads in the fold's units, as T3 Code's working row.
-            assert_eq!(turn.work_progress(false).label(285.5), "3分 5秒 作業中…");
+            assert_eq!(turn.work_progress().label(285.5), "3分 5秒 作業中…");
         }
-        assert_eq!(
-            WorkProgress {
-                started_at: None,
-                action: None
-            }
-            .label(100.),
-            "作業中…"
-        );
-        assert_eq!(
-            WorkProgress {
-                started_at: None,
-                action: Some(String::new())
-            }
-            .label(100.),
-            "作業中…"
-        );
+        assert_eq!(WorkProgress { started_at: None }.label(100.), "作業中…");
     }
 
     #[test]
-    fn progress_retains_only_the_latest_action_and_start_time() {
+    fn progress_retains_its_start_time_without_the_conversation() {
         let source = Arc::new(serde_json::from_value(serde_json::json!({
             "id":{"provider":"codex", "id":"fixture"},
             "turns":[{"id":"turn", "status":"running", "startedAt":100.5, "items":[
-                {"id":"first", "body":{"inline":{"body":{"commandExecution":{"command":"first", "output":"", "exitCode":0}}}}},
                 {"id":"second", "status":"running", "body":{"inline":{"body":{"webSearch":{"query":"latest action"}}}}}
             ]}]
         })).unwrap());
@@ -3228,18 +3209,9 @@ mod progress_tests {
             source,
             &None,
         );
-        let turn = &conversation.turns[0];
-        assert_eq!(
-            turn.work_progress(true).label(108.5),
-            "8秒 作業中 · Webを検索: latest action"
-        );
-        assert_eq!(turn.work_progress(false).label(108.5), "8秒 作業中…");
-        let progress = turn.work_progress(true);
+        let progress = conversation.turns[0].work_progress();
         drop(conversation);
-        assert_eq!(
-            progress.label(110.5),
-            "10秒 作業中 · Webを検索: latest action"
-        );
+        assert_eq!(progress.label(110.5), "10秒 作業中…");
     }
 }
 
