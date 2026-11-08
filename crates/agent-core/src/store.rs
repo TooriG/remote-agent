@@ -18,7 +18,9 @@ use std::{
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+mod browser;
 mod pane;
+pub use browser::{BrowserSession, BrowserUpdate};
 pub use pane::Pane;
 
 const MAX_COMMANDS: usize = 256;

@@ -358,17 +358,12 @@ impl AgentStore {
         }
     }
 
-    pub async fn browser(
+    /// A native view of one Host browser tab for `thread`.
+    pub fn browser_session(
         &self,
-        request: crate::browser::BrowserRequest,
-    ) -> Result<crate::browser::BrowserFrame, AgentError> {
-        self.store
-            .browser(request)
-            .await
-            .map_err(|reason| match reason {
-                crate::peer::PeerError::InvalidMessage(reason) => error(reason),
-                reason => error(reason),
-            })
+        thread: crate::session::SessionRef,
+    ) -> Arc<crate::store::BrowserSession> {
+        crate::store::BrowserSession::new(self.store.clone(), thread)
     }
 
     /// Prepare network access without capturing or sending microphone audio.

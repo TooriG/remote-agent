@@ -1,11 +1,9 @@
 use crate::{Runtime, appearance};
 use agent_core::browser_view::{BrowserStatus, browser_status_label};
 use agent_core::localization::UiLanguage;
-use agent_core::store::Store;
+use agent_core::store::{BrowserSession, BrowserUpdate, Store};
 use agent_protocol::{
-    browser::{
-        BrowserAction, BrowserCredentials, BrowserFrame, BrowserKey, BrowserRequest, BrowserTab,
-    },
+    browser::{BrowserAction, BrowserCredentials, BrowserFrame, BrowserKey, BrowserTab},
     session::SessionRef,
 };
 use gpui_kit::{
@@ -20,7 +18,7 @@ use gpui_kit::{
     prelude::FluentBuilder,
     *,
 };
-use std::{collections::VecDeque, ops::Range, sync::Arc, time::Duration};
+use std::{ops::Range, sync::Arc};
 
 mod credentials;
 
@@ -30,9 +28,13 @@ pub(crate) mod native;
 pub(crate) struct BrowserTitle(pub(crate) String);
 
 pub(crate) struct Browser {
-    store: Arc<Store>,
+    /// Core orders actions and reads the Host page while this view is shown.
+    session: Arc<BrowserSession>,
+    /// Wakes the reader after it found nothing to send.
+    wake: async_channel::Sender<()>,
+    /// The native renderer's scope on macOS.
+    #[cfg(target_os = "macos")]
     thread: SessionRef,
-    runtime: Runtime,
     frame: BrowserFrame,
     image: Option<Arc<RenderImage>>,
     address: Entity<InputState>,
@@ -41,7 +43,6 @@ pub(crate) struct Browser {
     connection_error: Option<String>,
     notice: Option<BrowserStatus>,
     credentials: Option<BrowserCredentials>,
-    pending: VecDeque<BrowserRequest>,
     visible: bool,
     menu_open: bool,
     focus: FocusHandle,
@@ -60,6 +61,35 @@ fn tab_address<'a>(id: &str, tabs: &'a [BrowserTab]) -> &'a str {
         .map(|tab| tab.url.as_str())
         .filter(|url| *url != "about:blank")
         .unwrap_or_default()
+}
+
+/// A Host page with its decoded image, or why it could not be shown.
+type DecodedFrame = Result<(BrowserFrame, Option<Arc<RenderImage>>), String>;
+
+/// The UI uses decoded images; decoding stays off the window thread. The flag
+/// marks a page read, whose failure is a connection problem.
+fn decoded(update: BrowserUpdate) -> (DecodedFrame, bool) {
+    match update {
+        BrowserUpdate::Frame { frame, action } => {
+            let reading = matches!(action, BrowserAction::Read);
+            let image = if frame.image.is_empty() {
+                Ok(None)
+            } else {
+                image::load_from_memory(&frame.image)
+                    .map(|image| {
+                        let mut rgba = image.into_rgba8();
+                        for pixel in rgba.pixels_mut() {
+                            pixel.0.swap(0, 2);
+                        }
+                        Some(Arc::new(RenderImage::new(vec![image::Frame::new(rgba)])))
+                    })
+                    .map_err(|_| "ブラウザ画像を読み取れません。".to_owned())
+            };
+            (image.map(|image| (frame, image)), reading)
+        }
+        BrowserUpdate::ReadFailed { message } => (Err(message), true),
+        BrowserUpdate::ActionFailed { message, .. } => (Err(message), false),
+    }
 }
 
 impl Browser {
@@ -83,44 +113,34 @@ impl Browser {
                     view.navigate(window, cx);
                 }
             });
-            let poll = cx.spawn_in(window, async move |view, cx| {
-                loop {
-                    let Ok(job) = view.update_in(cx, |view, _, _cx| {
-                        let job = view.next_request();
+            let session = BrowserSession::new(store, thread.clone());
+            let (wake, woken) = async_channel::bounded(1);
+            let poll = cx.spawn_in(window, {
+                let session = session.clone();
+                async move |view, cx| {
+                    loop {
                         #[cfg(target_os = "macos")]
-                        let job = job.map(|(runtime, store, mut request)| {
-                            request.renderer_id = native::renderer_id(_cx);
-                            (runtime, store, request)
-                        });
-                        job
-                    }) else {
-                        break;
-                    };
-                    if let Some((runtime, store, request)) = job {
-                        let reading = matches!(request.action, BrowserAction::Read);
-                        let result = runtime
+                        if view
+                            .update(cx, |_, cx| session.set_renderer(native::renderer_id(cx)))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        let next = session.clone();
+                        let update = runtime
                             .handle
-                            .spawn(async move {
-                                let frame = store
-                                    .browser(request)
-                                    .await
-                                    .map_err(|error| error.to_string())?;
-                                let image = if frame.image.is_empty() {
-                                    None
-                                } else {
-                                    let mut rgba = image::load_from_memory(&frame.image)
-                                        .map_err(|_| "ブラウザ画像を読み取れません。")?
-                                        .into_rgba8();
-                                    for pixel in rgba.pixels_mut() {
-                                        pixel.0.swap(0, 2);
-                                    }
-                                    Some(Arc::new(RenderImage::new(vec![image::Frame::new(rgba)])))
-                                };
-                                Ok::<_, String>((frame, image))
-                            })
-                            .await;
-                        let result =
-                            result.unwrap_or_else(|_| Err("ブラウザとの接続が切れました。".into()));
+                            .spawn(async move { Some(decoded(next.next().await?)) })
+                            .await
+                            .unwrap_or_else(|_| {
+                                Some((Err("ブラウザとの接続が切れました。".into()), false))
+                            });
+                        let Some((result, reading)) = update else {
+                            // Hidden with nothing queued: wait for input or visibility.
+                            if woken.recv().await.is_err() {
+                                break;
+                            }
+                            continue;
+                        };
                         if view
                             .update_in(cx, |view, window, cx| {
                                 view.apply_result(result, reading, window, cx);
@@ -130,15 +150,13 @@ impl Browser {
                             break;
                         }
                     }
-                    cx.background_executor()
-                        .timer(Duration::from_millis(150))
-                        .await;
                 }
             });
             Self {
-                store,
+                session,
+                wake,
+                #[cfg(target_os = "macos")]
                 thread,
-                runtime,
                 frame: BrowserFrame::default(),
                 image: None,
                 address,
@@ -147,7 +165,6 @@ impl Browser {
                 connection_error: None,
                 notice: None,
                 credentials: None,
-                pending: VecDeque::new(),
                 visible: false,
                 menu_open: false,
                 focus,
@@ -177,7 +194,7 @@ impl Browser {
 
     fn apply_result(
         &mut self,
-        result: Result<(BrowserFrame, Option<Arc<RenderImage>>), String>,
+        result: DecodedFrame,
         reading: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -263,25 +280,6 @@ impl Browser {
         }
     }
 
-    fn next_request(&mut self) -> Option<(Runtime, Arc<Store>, BrowserRequest)> {
-        let request = self
-            .pending
-            .pop_front()
-            .or_else(|| self.visible.then(|| self.request(BrowserAction::Read)))?;
-        Some((self.runtime.clone(), self.store.clone(), request))
-    }
-
-    fn request(&self, action: BrowserAction) -> BrowserRequest {
-        BrowserRequest {
-            thread_id: self.thread.clone(),
-            generation: self.frame.generation,
-            tab_id: self.frame.tab_id.clone(),
-            image_id: self.frame.image_id.clone(),
-            renderer_id: String::new(),
-            action,
-        }
-    }
-
     fn send(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
         self.error = None;
         self.notice = None;
@@ -292,9 +290,8 @@ impl Browser {
             self.notice = Some(BrowserStatus::Importing { remote: false });
         }
         self.credentials = None;
-        if self.pending.len() < 64 {
-            self.pending.push_back(self.request(action));
-        }
+        self.session.send(action);
+        let _ = self.wake.try_send(());
         cx.notify();
     }
 
@@ -470,6 +467,10 @@ impl Browser {
 
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         self.visible = visible;
+        self.session.set_active(visible);
+        if visible {
+            let _ = self.wake.try_send(());
+        }
         #[cfg(target_os = "macos")]
         if !visible {
             native::hide(&self.thread.to_string(), cx);
@@ -931,7 +932,7 @@ mod tests {
                     window.focus(&input.focus_handle(cx), cx);
                 });
                 view.navigate(window, cx);
-                assert_eq!(view.pending.len(), 1);
+                assert_eq!(view.session.pending_actions(), 1);
                 assert!(!view.address.read(cx).focus_handle(cx).is_focused(window));
                 let mut frame = BrowserFrame {
                     tab_id: "page".into(),
@@ -962,7 +963,7 @@ mod tests {
                 view.apply_result(Ok((frame.clone(), None)), true, window, cx);
                 assert_eq!(view.address.read(cx).value().as_ref(), "unfinished.example");
                 assert_eq!(
-                    view.pending.len(),
+                    view.session.pending_actions(),
                     1,
                     "polling must never resubmit navigation"
                 );
@@ -984,7 +985,7 @@ mod tests {
                 view.navigate(window, cx);
                 assert!(view.error.is_some());
                 assert!(view.address.read(cx).focus_handle(cx).is_focused(window));
-                assert_eq!(view.pending.len(), 1);
+                assert_eq!(view.session.pending_actions(), 1);
                 view.apply_result(Ok((BrowserFrame::default(), None)), true, window, cx);
                 assert_eq!(view.address.read(cx).value().as_ref(), "");
             })
@@ -1048,11 +1049,6 @@ mod tests {
             0,
             "transport-only fields must not redraw"
         );
-        browser.read_with(window, |view, _| {
-            let request = view.request(BrowserAction::Read);
-            assert_eq!(request.generation, 42);
-            assert_eq!(request.image_id, "latest");
-        });
         frame.can_go_back = true;
         apply(window, Ok((frame.clone(), None)), true);
         assert_eq!(notifications.get(), 1);

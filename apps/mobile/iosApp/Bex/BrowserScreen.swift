@@ -4,8 +4,8 @@ import UIKit
 
 struct WorkspaceBrowserScreen: View {
     @Environment(\.locale) private var locale
-    let store: AgentStore
-    let thread: SessionRef
+    /// Core orders actions and reads the Host page while this view is shown.
+    @State private var session: BrowserSession
     @Environment(\.scenePhase) private var scenePhase
     @State private var frame: BrowserFrame?
     @State private var image: UIImage?
@@ -15,14 +15,15 @@ struct WorkspaceBrowserScreen: View {
     @State private var notice: BrowserStatus?
     @State private var error: String?
     @State private var connectionError: String?
-    @State private var commands: [BrowserRequest] = []
     @FocusState private var addressFocused: Bool
     @FocusState private var textFocused: Bool
     @State private var showKeyboard = false
     @State private var dialogText = ""
-    /// Suppress stale polling frames only while the answer is queued or in flight.
-    @State private var answeringDialog = false
     @State private var viewportSize = CGSize.zero
+
+    init(store: AgentStore, thread: SessionRef) {
+        _session = State(initialValue: store.browserSession(thread: thread))
+    }
 
     private var acceptsInput: Bool {
         frame != nil && scenePhase == .active && connectionError == nil
@@ -85,7 +86,7 @@ struct WorkspaceBrowserScreen: View {
             }
         }
         .alert(Text(verbatim: frame?.dialog?.message ?? ""), isPresented: Binding(
-            get: { frame?.dialog != nil && !answeringDialog }, set: { _ in }
+            get: { frame?.dialog != nil }, set: { _ in }
         )) {
             if frame?.dialog?.prompt == true {
                 TextField("入力", text: $dialogText)
@@ -104,13 +105,18 @@ struct WorkspaceBrowserScreen: View {
         }
         .task(id: scenePhase == .active) {
             guard scenePhase == .active else { return }
-            while !Task.isCancelled {
-                let request = commands.isEmpty ? request(.read) : commands.removeFirst()
-                await perform(request)
-                do { try await Task.sleep(for: .milliseconds(connectionError == nil ? 150 : 1500)) } catch { return }
+            let session = session
+            session.setActive(active: true)
+            await withTaskCancellationHandler {
+                while let update = await session.next() {
+                    guard !Task.isCancelled else { return }
+                    apply(update)
+                }
+            } onCancel: {
+                session.setActive(active: false)
             }
         }
-        .onDisappear { commands.removeAll(); text = ""; answeringDialog = false }
+        .onDisappear { session.clear(); text = "" }
     }
 
     /// Keys for the Host page's focused field, above the keyboard.
@@ -162,23 +168,26 @@ struct WorkspaceBrowserScreen: View {
     }
 
     private func send(_ action: BrowserAction) {
-        guard commands.count < 64 else { return }
         error = nil
         credentials = nil
         switch action {
         case .importCookies, .importPasswords: notice = .importing(remote: true)
         case .dialog:
-            answeringDialog = true
+            // The answer closes the dialog; core keeps earlier reads from reopening it.
+            frame?.dialog = nil
             dialogText = ""
             notice = nil
         default: notice = nil
         }
-        commands.append(request(action))
+        session.send(action: action)
     }
 
-    private func request(_ action: BrowserAction) -> BrowserRequest {
-        BrowserRequest(threadId: thread, tabId: frame?.tabId ?? "", imageId: frame?.imageId ?? "",
-                       generation: frame?.generation ?? 0, action: action, rendererId: "")
+    private func apply(_ update: BrowserUpdate) {
+        switch update {
+        case let .frame(frame, action): apply(frame, action: action)
+        case let .readFailed(message): connectionError = message
+        case let .actionFailed(_, message): error = message
+        }
     }
 
     private func apply(_ result: BrowserFrame, action: BrowserAction) {
@@ -210,31 +219,6 @@ struct WorkspaceBrowserScreen: View {
             address = url == "about:blank" ? "" : (url ?? "")
         }
         connectionError = nil
-    }
-
-    private func perform(_ request: BrowserRequest) async {
-        defer {
-            if case .dialog = request.action {
-                answeringDialog = false
-            }
-        }
-        do {
-            let result = try await store.browser(request: request)
-            guard !Task.isCancelled, scenePhase == .active else { return }
-            apply(result, action: request.action)
-        } catch {
-            guard !Task.isCancelled else { return }
-            let message: String = if case let AgentError.Failed(reason) = error {
-                reason
-            } else {
-                error.localizedDescription
-            }
-            if case .read = request.action {
-                connectionError = message
-            } else {
-                self.error = message
-            }
-        }
     }
 }
 

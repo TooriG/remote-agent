@@ -431,6 +431,133 @@ async fn browser_frames_are_ephemeral_and_pending_reads_end_with_the_connection(
     );
 }
 
+#[tokio::test]
+async fn a_browser_session_orders_actions_reads_while_shown_and_slows_after_failures() {
+    use agent_core::store::{BrowserSession, BrowserUpdate};
+    use agent_protocol::browser::{BrowserAction, BrowserDialog, BrowserFrame};
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    let thread = SessionRef {
+        provider: ProviderKind::Codex,
+        id: "browser-thread".into(),
+    };
+    let session = BrowserSession::new(store.clone(), thread.clone());
+    let frame = |generation: u64, dialog: Option<BrowserDialog>| BrowserFrame {
+        tab_id: "tab".into(),
+        image_id: format!("image-{generation}"),
+        generation,
+        dialog,
+        ..Default::default()
+    };
+    // A hidden view has nothing to send until the user acts.
+    assert!(session.next().await.is_none());
+    session.send(BrowserAction::Navigate {
+        url: "https://example.com/".into(),
+    });
+    let next = tokio::spawn({
+        let session = session.clone();
+        async move { session.next().await }
+    });
+    let navigate = read(&mut reader).await;
+    assert_eq!(navigate["method"], "host/browser");
+    assert!(navigate["params"]["action"].get("Navigate").is_some());
+    assert_eq!(navigate["params"]["generation"], 0);
+    writer
+        .reply(&navigate, json!({"result":frame(1, None)}))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next.await.unwrap(),
+        Some(BrowserUpdate::Frame { frame, action: BrowserAction::Navigate { .. } }) if frame.generation == 1
+    ));
+
+    // A shown view reads the page it last saw; actions keep the page the user acted on.
+    session.set_active(true);
+    let next = tokio::spawn({
+        let session = session.clone();
+        async move { session.next().await }
+    });
+    let reading = read(&mut reader).await;
+    assert_eq!(reading["params"]["action"], "Read");
+    assert_eq!(reading["params"]["image_id"], "image-1");
+    session.send(BrowserAction::Dialog {
+        accept: true,
+        text: String::new(),
+    });
+    writer
+        .reply(
+            &reading,
+            json!({"result":frame(2, Some(BrowserDialog { message: "Leave?".into(), prompt: false }))}),
+        )
+        .await
+        .unwrap();
+    let Some(BrowserUpdate::Frame {
+        frame: read_frame, ..
+    }) = next.await.unwrap()
+    else {
+        panic!("the page was read")
+    };
+    assert!(
+        read_frame.dialog.is_none(),
+        "a queued answer keeps an earlier read from reopening the dialog"
+    );
+    let next = tokio::spawn({
+        let session = session.clone();
+        async move { session.next().await }
+    });
+    let answer = read(&mut reader).await;
+    assert!(answer["params"]["action"].get("Dialog").is_some());
+    assert_eq!(answer["params"]["generation"], 1);
+    writer
+        .reply(&answer, json!({"result":frame(3, None)}))
+        .await
+        .unwrap();
+    next.await.unwrap();
+
+    // A failed read is reported and retried after the slower interval.
+    let next = tokio::spawn({
+        let session = session.clone();
+        async move { session.next().await }
+    });
+    let reading = read(&mut reader).await;
+    writer
+        .reply(&reading, json!({"error":{"code":"request_failed","message":"browser unavailable","delivery":"notSent"}}))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next.await.unwrap(),
+        Some(BrowserUpdate::ReadFailed { .. })
+    ));
+    let started = std::time::Instant::now();
+    let retry = tokio::spawn({
+        let session = session.clone();
+        async move { session.next().await }
+    });
+    let reading = read(&mut reader).await;
+    assert!(started.elapsed() >= Duration::from_millis(1400));
+    writer
+        .reply(&reading, json!({"result":frame(4, None)}))
+        .await
+        .unwrap();
+    assert!(matches!(
+        retry.await.unwrap(),
+        Some(BrowserUpdate::Frame { .. })
+    ));
+    session.set_active(false);
+    assert!(
+        session.next().await.is_none(),
+        "a hidden view stops reading"
+    );
+
+    // The backlog is bounded and can be dropped.
+    for _ in 0..70 {
+        session.send(BrowserAction::Reload);
+    }
+    assert_eq!(session.pending_actions(), 64);
+    session.clear();
+    assert_eq!(session.pending_actions(), 0);
+    store.close().await.unwrap();
+}
+
 fn authenticated_snapshot() -> Snapshot {
     Snapshot {
         catalog: agent_core::state::Catalog {

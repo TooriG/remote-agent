@@ -57,22 +57,19 @@ import dev.remoteagent.core.BrowserCredentials
 import dev.remoteagent.core.BrowserFrame
 import dev.remoteagent.core.BrowserInputKind
 import dev.remoteagent.core.BrowserKey
-import dev.remoteagent.core.BrowserRequest
+import dev.remoteagent.core.BrowserUpdate
 import dev.remoteagent.core.BrowserStatus
 import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.browserFitAction
 import dev.remoteagent.core.browserInputFocus
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 @Composable
 internal fun BrowserLauncher(
     thread: SessionRef?,
     profile: String?,
-    browser: suspend (String?, BrowserRequest) -> BrowserFrame,
+    browser: (SessionRef) -> dev.remoteagent.core.BrowserSession?,
 ) {
     val language = LocalUiLanguage.current
     var visible by remember { mutableStateOf(false) }
@@ -84,13 +81,10 @@ internal fun BrowserLauncher(
     }
 }
 
-private const val BROWSER_POLL_MS = 150L
-private const val BROWSER_RETRY_MS = 1500L
-private const val BROWSER_QUEUE_LIMIT = 64
 private const val BROWSER_MAX_SCROLL = 4096f
 
-private class BrowserSession(private val thread: SessionRef) {
-    private val commands = ArrayDeque<BrowserRequest>()
+/** What the pane shows; core orders the actions and reads the Host page. */
+private class BrowserViewState(private val session: dev.remoteagent.core.BrowserSession?) {
     var frame by mutableStateOf<BrowserFrame?>(null)
         private set
 
@@ -120,9 +114,6 @@ private class BrowserSession(private val thread: SessionRef) {
         viewportHeight = height
     }
 
-    private fun request(action: BrowserAction) =
-        BrowserRequest(thread, frame?.tabId ?: "", frame?.imageId ?: "", frame?.generation ?: 0uL, action, "")
-
     fun send(action: BrowserAction) {
         error = null
         credentials = null
@@ -130,24 +121,7 @@ private class BrowserSession(private val thread: SessionRef) {
             if (action is BrowserAction.ImportCookies || action is BrowserAction.ImportPasswords)
                 BrowserStatus.Importing(remote = true)
             else null
-        if (commands.size < BROWSER_QUEUE_LIMIT) {
-            commands.addLast(request(action))
-        }
-    }
-
-    private fun nextRequest(): BrowserRequest {
-        commands.removeFirstOrNull()?.let {
-            return it
-        }
-        return request(BrowserAction.Read)
-    }
-
-    private fun failed(message: String?, reading: Boolean) {
-        if (reading) connectionError = message
-        else {
-            error = message
-            notice = null
-        }
+        session?.send(action)
     }
 
     private suspend fun apply(result: BrowserFrame, action: BrowserAction) {
@@ -165,24 +139,23 @@ private class BrowserSession(private val thread: SessionRef) {
         }
     }
 
-    suspend fun run(profile: String?, browser: suspend (String?, BrowserRequest) -> BrowserFrame) {
+    suspend fun run() {
+        val session = session ?: return run { connectionError = "ホストに接続してください。" }
+        session.setActive(true)
         try {
-            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
-                val request = nextRequest()
-                val reading = request.action == BrowserAction.Read
-                try {
-                    apply(browser(profile, request), request.action)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: dev.remoteagent.core.AgentException) {
-                    failed(failure.displayMessage(), reading)
-                } catch (failure: IllegalStateException) {
-                    failed(failure.displayMessage(), reading)
+            while (true) {
+                when (val update = session.next() ?: break) {
+                    is BrowserUpdate.Frame -> apply(update.frame, update.action)
+                    is BrowserUpdate.ReadFailed -> connectionError = update.message
+                    is BrowserUpdate.ActionFailed -> {
+                        error = update.message
+                        notice = null
+                    }
                 }
-                delay(if (connectionError == null) BROWSER_POLL_MS else BROWSER_RETRY_MS)
             }
         } finally {
-            commands.clear()
+            session.setActive(false)
+            session.clear()
         }
     }
 }
@@ -198,10 +171,11 @@ private suspend fun decodeBrowserImage(bytes: ByteArray): ImageBitmap? =
 private fun BrowserPane(
     thread: SessionRef,
     profile: String?,
-    browser: suspend (String?, BrowserRequest) -> BrowserFrame,
+    browser: (SessionRef) -> dev.remoteagent.core.BrowserSession?,
     dismiss: () -> Unit,
 ) {
-    val session = remember(thread) { BrowserSession(thread) }
+    // Each Host owns its browser; a pane for another Host starts its own session.
+    val session = remember(thread, profile) { BrowserViewState(browser(thread)) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var active by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
     DisposableEffect(lifecycle) {
@@ -218,7 +192,7 @@ private fun BrowserPane(
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(thread, active) { if (active) session.run(profile, browser) }
+    LaunchedEffect(session, active) { if (active) session.run() }
     session.credentials?.let { BrowserCredentialsDialog(it, session::send) { session.credentials = null } }
     val frame = session.frame
     val enabled = frame != null && active && session.connectionError == null

@@ -46,7 +46,6 @@ import dev.remoteagent.core.ticketIdentity
 import java.io.File
 import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -193,16 +192,9 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         }
     }
 
-    suspend fun browser(
-        expectedProfile: String?,
-        request: dev.remoteagent.core.BrowserRequest,
-    ): dev.remoteagent.core.BrowserFrame {
-        val store = owner ?: error("ホストに接続してください。")
-        check(connectionSelection.hostId == expectedProfile)
-        val frame = store.browser(request)
-        if (owner !== store || connectionSelection.hostId != expectedProfile) throw CancellationException()
-        return frame
-    }
+    /** A view of [thread]'s browser on the selected Host. */
+    fun browserSession(thread: dev.remoteagent.core.SessionRef): dev.remoteagent.core.BrowserSession? =
+        owner?.browserSession(thread)
 
     fun perform(intent: Intent, complete: (Result<Outcome>) -> Unit = {}) {
         val store = session
@@ -716,7 +708,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ConversationPane(mode
             BrowserLauncher(
                 model.conversationContext.navigation().threadId,
                 model.connectionSelection.hostId,
-                model::browser,
+                model::browserSession,
             )
         }
         ThreadDetailScreen(
