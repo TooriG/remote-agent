@@ -34,6 +34,8 @@ if [[ ! -e $agent_root/target/CACHEDIR.TAG && ! -L $agent_root/target/CACHEDIR.T
     (set -o noclobber; printf '%s\n' 'Signature: 8a477f597d28d172789f06886806bc55' > "$agent_root/target/CACHEDIR.TAG") ||
         [[ -f $agent_root/target/CACHEDIR.TAG && ! -L $agent_root/target/CACHEDIR.TAG ]]
 fi
+# scripts/prune-idle-builds.ts keeps outputs whose worktree used them recently.
+touch "$agent_root/target/.last-used"
 agent_cargo_home=${CARGO_HOME:-${agent_build_root:-$HOME}/.cargo}
 export XDG_CACHE_HOME="$agent_root/target/tool-cache"
 agent_env_key=$({ git hash-object flake.nix flake.lock tools/github-release-binary.nix tools/cccc/package.nix tools/cargo/package.nix tools/node-runtime/package.nix; uname -sm; printf '%s\n' "$agent_env_shell"; } | git hash-object --stdin)

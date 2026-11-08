@@ -56,6 +56,10 @@ nsh-acceptance *scenarios:
     cargo build --locked -p host-fixture -p agent-process --bins --target aarch64-apple-darwin
     cargo xtask nsh-acceptance "$@"
 
+# List worktrees whose build outputs went unused for three days; --delete removes those outputs.
+prune-idle-builds *args:
+    node scripts/prune-idle-builds.ts "$@"
+
 # Build the NSH preview app for an iPhone simulator.
 nsh-ios-simulator:
     bash apps/nsh/build-native.sh ios-simulator
