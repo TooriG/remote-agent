@@ -10,6 +10,7 @@ use crate::{
 };
 use std::sync::{Arc, OnceLock};
 
+pub mod footer;
 #[cfg(test)]
 mod tests;
 

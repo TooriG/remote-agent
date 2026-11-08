@@ -1,5 +1,7 @@
 use crate::l10n::{localized, tr};
 use crate::{Connection, native};
+#[cfg(desktop)]
+use agent_core::presentation::composer::footer;
 use agent_core::state::{Intent, operations as op};
 use nsh_core::{GlassEffect, element::input, prelude::*};
 use serde_json::json;
@@ -349,25 +351,76 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         let inactive = move || {
             !enabled() || (composer.with(|c| c.draft.text.trim().is_empty()) && !stopping())
         };
-        let controls_row = view().flex_row().items_center().child(when(
-            move || answering.with(Option::is_none),
+        // What the row and the controls that always show measure, so that the
+        // approval control drops its label as T3 Code's does and the window keeps
+        // room for the narrowest row. The row is measured with the window's
+        // width in the same layout.
+        let row = signal(None::<(f32, f32)>);
+        let attach_width = signal(0_f32);
+        let trailing_width = signal(0_f32);
+        #[cfg(desktop)]
+        let widths = move |approval: f32| footer::FooterWidths {
+            row: row.get().map_or(0.0, |(row, _)| row),
+            fixed: attach_width.get() + trailing_width.get(),
+            approval,
+            approval_icon: crate::permissions::ICON_WIDTH,
+        };
+        let controls_row = view()
+            .flex_row()
+            .items_center()
+            .on_layout(move |bounds: &Bounds<Points>| {
+                row.set(Some((bounds.size.width.0, window().width.0)))
+            })
+            .child(
+                view()
+                    .on_layout(move |bounds: &Bounds<Points>| attach_width.set(bounds.size.width.0))
+                    .child(when(
+                        move || answering.with(Option::is_none),
+                        move || {
+                            ui::icon_button_sized(
+                                Icon::PLUS,
+                                tr("ファイルを添付"),
+                                40.0,
+                                24.0,
+                                move || {
+                                    let host = connection.host.get_untracked();
+                                    let key =
+                                        controls.with_untracked(|c| c.navigation.draft_key.clone());
+                                    pick_files(
+                                        connection.application.get(),
+                                        host,
+                                        connection.pane,
+                                        key,
+                                    );
+                                },
+                            )
+                            .enabled(attach_enabled)
+                        },
+                    )),
+            );
+        #[cfg(desktop)]
+        let controls_row = controls_row.child(crate::permissions::control(move |approval| {
+            // With its label until the row is laid out.
+            if row.get().is_some() {
+                footer::approval_placement(widths(approval))
+            } else {
+                footer::ApprovalPlacement::Labelled
+            }
+        }));
+        #[cfg(target_os = "macos")]
+        let controls_row = controls_row.child(when(
+            move || connection.pane.is_none() && row.get().is_some(),
             move || {
-                ui::icon_button_sized(
-                    Icon::PLUS,
-                    tr("ファイルを添付"),
-                    40.0,
-                    24.0,
-                    move || {
-                        let host = connection.host.get_untracked();
-                        let key = controls.with_untracked(|c| c.navigation.draft_key.clone());
-                        pick_files(connection.application.get(), host, connection.pane, key);
-                    },
-                )
-                .enabled(attach_enabled)
+                native("bex.windowMinimum").prop("width", move || {
+                    let (row, window) = row.get().unwrap_or_default();
+                    json!(footer::minimum_window_width(
+                        window,
+                        row,
+                        footer::minimum_row_width(widths(0.0)),
+                    ))
+                })
             },
         ));
-        #[cfg(desktop)]
-        let controls_row = controls_row.child(crate::permissions::control());
         view()
             .w_full()
             .p(px(7.0))
@@ -384,58 +437,67 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     .child(field().w_full().h(px(40.0))),
             )
             .child(
-                controls_row
-                    .child(view().flex_1())
-                    .child(crate::model_controls::controls())
-                    .child(when(
-                        move || answering.with(Option::is_none),
-                        dictation_button,
-                    ))
-                    .child(when(
-                        move || answering.with(Option::is_some),
-                        move || {
-                            ui::text_button(
-                                move || {
-                                    SharedString::from(answering.with(|q| {
-                                        q.as_ref().map(|q| q.action.clone()).unwrap_or_default()
-                                    }))
-                                },
-                                submit,
-                            )
-                            .enabled(enabled)
-                        },
-                    ))
-                    .child(when(
-                        move || answering.with(Option::is_none),
-                        move || {
-                            view()
-                                .w(px(40.0))
-                                .h(px(40.0))
-                                .rounded_full()
-                                .items_center()
-                                .justify_center()
-                                .role(AccessibilityRole::Button)
-                                .label(move || primary_label.get())
-                                .bg(move || {
-                                    if inactive() {
-                                        colors::BORDER
-                                    } else {
-                                        rgb(0xffffff)
-                                    }
-                                })
-                                .text_color(move || {
-                                    if inactive() {
-                                        colors::MUTED
-                                    } else {
-                                        colors::SIDEBAR
-                                    }
-                                })
-                                .style_when(inactive, |s| s.opacity(0.5))
-                                .on_press(submit)
-                                .child(when(move || !stopping(), || ui::icon(Icon::ARROW_UP, 24.0)))
-                                .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))
-                        },
-                    )),
+                controls_row.child(view().flex_1()).child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .on_layout(move |bounds: &Bounds<Points>| {
+                            trailing_width.set(bounds.size.width.0)
+                        })
+                        .child(crate::model_controls::controls())
+                        .child(when(
+                            move || answering.with(Option::is_none),
+                            dictation_button,
+                        ))
+                        .child(when(
+                            move || answering.with(Option::is_some),
+                            move || {
+                                ui::text_button(
+                                    move || {
+                                        SharedString::from(answering.with(|q| {
+                                            q.as_ref().map(|q| q.action.clone()).unwrap_or_default()
+                                        }))
+                                    },
+                                    submit,
+                                )
+                                .enabled(enabled)
+                            },
+                        ))
+                        .child(when(
+                            move || answering.with(Option::is_none),
+                            move || {
+                                view()
+                                    .w(px(40.0))
+                                    .h(px(40.0))
+                                    .rounded_full()
+                                    .items_center()
+                                    .justify_center()
+                                    .role(AccessibilityRole::Button)
+                                    .label(move || primary_label.get())
+                                    .bg(move || {
+                                        if inactive() {
+                                            colors::BORDER
+                                        } else {
+                                            rgb(0xffffff)
+                                        }
+                                    })
+                                    .text_color(move || {
+                                        if inactive() {
+                                            colors::MUTED
+                                        } else {
+                                            colors::SIDEBAR
+                                        }
+                                    })
+                                    .style_when(inactive, |s| s.opacity(0.5))
+                                    .on_press(submit)
+                                    .child(when(
+                                        move || !stopping(),
+                                        || ui::icon(Icon::ARROW_UP, 24.0),
+                                    ))
+                                    .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))
+                            },
+                        )),
+                ),
             )
     };
     let desktop_context = move || {

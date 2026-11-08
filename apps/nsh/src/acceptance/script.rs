@@ -22,6 +22,8 @@
 //!   elements labelled `<label>` (after the anchor) and `<other>` both show and
 //!   none of the first overlaps one of the others, as minimap marks and message
 //!   text must not.
+//! - `expect_inside <label> [after <anchor>] [timeout-ms]`: waits until some
+//!   element is labelled `<label>` and every one lies whole inside its window.
 //! - `window <width> <height>`: resizes the main window's content to that many
 //!   points.
 //! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
@@ -57,6 +59,8 @@ pub(crate) enum Step {
     ExpectAbsent(Find),
     /// No element `Find` names overlaps one labelled the text.
     ExpectApart(Find, String),
+    /// Every element `Find` names lies inside its window.
+    ExpectInside(Find),
     /// The main window's content size in points.
     Window(f64, f64),
     /// A wheel of this many lines over the element.
@@ -172,6 +176,7 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("expect_apart", [text, other, rest @ ..]) => {
             Step::ExpectApart(find(text, rest)?, (*other).to_owned())
         }
+        ("expect_inside", [text, rest @ ..]) => Step::ExpectInside(find(text, rest)?),
         ("window", [width, height]) => Step::Window(points(width)?, points(height)?),
         ("scroll", [target, lines, rest @ ..]) => Step::Scroll(
             find(target, rest)?,
@@ -319,7 +324,7 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             scroll 会話 -3\nexpect_apart \"移動:*\" \"message.*\" 500\nwindow 660 700\nexpect_inside 送信 1000\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
              expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
              dump tree_1\n",
         )
@@ -369,6 +374,11 @@ mod tests {
                     "message.*".into()
                 ),
                 Step::Window(660.0, 700.0),
+                Step::ExpectInside(Find {
+                    text: "送信".into(),
+                    after: None,
+                    timeout: Duration::from_millis(1000)
+                }),
                 Step::Select(
                     Find {
                         text: "回答".into(),

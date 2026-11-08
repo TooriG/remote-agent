@@ -97,6 +97,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Conversation: steering a running turn, minimap beside the lane | covered | steering, queued-input, minimap |
 | Composer: model picker | covered | model-picker |
 | Composer: approval mode menu | covered | permission-mode |
+| Composer: controls fit narrow windows, none cut off | covered | composer-narrow |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
 | Changed-files bar and review | covered | review-panel, worktree-review |

@@ -1,0 +1,35 @@
+# As the window narrows, the approval control drops its label as T3 Code's
+# footer does, and no composer control is ever cut off: the window keeps room
+# for the narrowest row and grows back to it when made narrower.
+fixture /long-conversation/composer-narrow
+expect "検証プロジェクト" 30000
+press 検証プロジェクト
+press "Long conversation" 20000
+expect "Review section 14, input 0." 20000
+expect "カスタム・未設定"
+window 660 760
+expect_absent "カスタム・未設定"
+expect_inside 送信
+expect_inside ファイルを添付
+expect_inside 承認方法を変更
+expect_inside "Fixture Model"
+expect_inside 音声をCodexで文字起こし
+expect_inside "AI に依頼する"
+screenshot just-wider-than-640
+press 承認方法を変更
+expect "承認を求める"
+expect "フルアクセス"
+key escape
+expect_absent "承認を求める"
+# Narrower than the narrowest row: the window grows back to it.
+window 300 760
+expect_inside 送信
+expect_inside ファイルを添付
+expect_inside 承認方法を変更
+expect_inside "Fixture Model"
+expect_inside 音声をCodexで文字起こし
+expect_inside "AI に依頼する"
+screenshot narrowest
+# Wide again, the label comes back.
+window 1200 760
+expect "カスタム・未設定"

@@ -224,7 +224,8 @@ fn limit(step: &Step) -> Duration {
         | Step::Menu(find)
         | Step::Expect(find)
         | Step::ExpectAbsent(find)
-        | Step::ExpectApart(find, _) => find.timeout,
+        | Step::ExpectApart(find, _)
+        | Step::ExpectInside(find) => find.timeout,
         Step::Wait(duration) | Step::ExpectClipboard(_, duration) => *duration,
         _ => super::script::DEFAULT_TIMEOUT,
     }
@@ -256,6 +257,7 @@ fn attempt(
         Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
         Step::ExpectApart(find, other) => apart(&Tree::read(mtm, menus), find, other),
+        Step::ExpectInside(find) => inside(&Tree::read(mtm, menus), find),
         Step::Window(width, height) => done(
             main_window(mtm)
                 .ok_or_else(|| "no window to resize".to_owned())
@@ -364,6 +366,34 @@ fn apart(tree: &Tree, find: &Find, other: &str) -> Attempt {
             first.len(),
             second.len()
         ),
+        None,
+    )
+}
+
+/// Whether every element `find` names lies whole inside its window.
+fn inside(tree: &Tree, find: &Find) -> Attempt {
+    let found = match tree.labelled(find) {
+        Ok(found) => found,
+        Err(reason) => return Attempt::Pending(reason),
+    };
+    for &index in &found {
+        let Some(window) = &tree.nodes[index].window else {
+            continue;
+        };
+        let (frame, bounds) = (tree.frame(index), window.frame());
+        if frame.origin.x < bounds.origin.x
+            || frame.origin.y < bounds.origin.y
+            || frame.origin.x + frame.size.width > bounds.origin.x + bounds.size.width
+            || frame.origin.y + frame.size.height > bounds.origin.y + bounds.size.height
+        {
+            return Attempt::Pending(format!(
+                "{} reaches past its window ({frame:?} in {bounds:?})",
+                tree.nodes[index].describe()
+            ));
+        }
+    }
+    Attempt::Passed(
+        format!("{} elements inside their window", found.len()),
         None,
     )
 }

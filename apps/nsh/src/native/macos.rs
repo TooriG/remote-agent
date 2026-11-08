@@ -604,7 +604,76 @@ impl NativeComponent for Toolbar {
     }
 }
 
+define_class!(
+    /// Keeps its window's content at least `width` points wide while it is in
+    /// it, growing a narrower window; the window narrows freely once it leaves.
+    #[unsafe(super(NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = Cell<f64>]
+    struct WindowMinimumView;
+    unsafe impl NSObjectProtocol for WindowMinimumView {}
+    impl WindowMinimumView {
+        #[unsafe(method(viewWillMoveToWindow:))]
+        fn will_move(&self, window: Option<&NSWindow>) {
+            let _: () = unsafe { msg_send![super(self), viewWillMoveToWindow: window] };
+            if let Some(old) = self.window() {
+                minimum_width(&old, 0.0);
+            }
+        }
+        #[unsafe(method(viewDidMoveToWindow))]
+        fn moved(&self) {
+            let _: () = unsafe { msg_send![super(self), viewDidMoveToWindow] };
+            self.apply();
+        }
+    }
+);
+impl WindowMinimumView {
+    fn apply(&self) {
+        if let Some(window) = self.window() {
+            minimum_width(&window, self.ivars().get());
+        }
+    }
+}
+fn minimum_width(window: &NSWindow, width: f64) {
+    let mut minimum = window.contentMinSize();
+    minimum.width = width;
+    window.setContentMinSize(minimum);
+    let content = window.contentRectForFrameRect(window.frame()).size;
+    if content.width < width {
+        window.setContentSize(objc2_foundation::NSSize::new(width, content.height));
+    }
+}
+struct WindowMinimum(Retained<WindowMinimumView>);
+impl NativeComponent for WindowMinimum {
+    fn view(&self) -> Retained<NSView> {
+        self.0.clone().into_super()
+    }
+    fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        if name == "width" {
+            self.0.ivars().set(
+                value
+                    .and_then(JsonValue::as_f64)
+                    .unwrap_or_default()
+                    .max(0.0)
+                    .ceil(),
+            );
+            self.0.apply();
+        }
+    }
+}
+
 pub fn register(components: &Components) {
+    components.register(
+        "bex.windowMinimum",
+        Rc::new(|cx| {
+            cx.set_size(0.0, 0.0);
+            let mtm = MainThreadMarker::new().unwrap();
+            let view = WindowMinimumView::alloc(mtm).set_ivars(Cell::new(0.0));
+            Box::new(WindowMinimum(unsafe {
+                msg_send![super(view), initWithFrame: CGRect::ZERO]
+            }))
+        }),
+    );
     super::hosted::register(components, "bex.details", "bex_nsh_details");
     super::hosted::register(components, "bex.messageText", "bex_nsh_message_text");
     super::hosted::register(components, "bex.browser.remote", "bex_nsh_browser");
