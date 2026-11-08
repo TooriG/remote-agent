@@ -394,7 +394,20 @@ fn app_content(
                                 |s| s.flex_1(),
                             )
                             .min_w_0()
-                            .child(workbench::screen())
+                            .child(workbench::screen(Some(
+                                when(
+                                    move || {
+                                        layout() == agent_core::panels::PanelLayout::Expanded
+                                            && !sidebar.get()
+                                    },
+                                    move || {
+                                        sidebar::header(false, move || {
+                                            navigate(Navigation::ToggleSidebar)
+                                        })
+                                    },
+                                )
+                                .into_element(),
+                            )))
                     }))
             };
             return view()
@@ -454,7 +467,7 @@ fn app_content(
                             tr("その他"),
                             move || {
                                 let mut entries = vec![json!({"id": "refresh", "title": tr("更新"), "symbol": "arrow.clockwise"})];
-                                entries.extend(workbench::tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "symbol": workbench::symbol(tool.kind), "enabled": tool.enabled})));
+                                entries.extend(workbench::tool_items());
                                 entries.push(json!({"id": "settings", "title": tr("環境"), "symbol": "gearshape"}));
                                 entries.push(json!({"id": "worktrees", "title": tr("ワークツリー設定"), "symbol": "arrow.triangle.branch", "enabled": connection.settings.with(|p| p.connected())}));
                                 json!(entries)
@@ -501,7 +514,7 @@ fn app_content(
                 3 => nsh_base::nav_page()
                     .title(workbench::title)
                     .child(notices())
-                    .child(workbench::screen()),
+                    .child(workbench::screen(None)),
                 _ => nsh_base::nav_page()
                     .title("Bex")
                     .header_back_title(tr("戻る"))

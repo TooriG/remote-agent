@@ -1,8 +1,0 @@
-{
-  "agents": {
-    "rows": [
-      { "key": "root/active", "title": "日本語の確認 👋", "status": "実行中", "active": true, "unread": true, "model": "fixture-model", "detail": "進捗 1/2", "depth": 2 },
-      { "key": "root/complete", "title": "Finished", "status": "完了", "active": false, "unread": false, "model": null, "detail": null, "depth": 0 }
-    ]
-  }
-}

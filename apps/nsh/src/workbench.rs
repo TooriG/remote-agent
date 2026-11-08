@@ -1,8 +1,8 @@
 use crate::l10n::{localized, tr};
-use crate::{Connection, application::Application, native, shared::Shared};
-use agent_core::panels::{PanelKind, PanelLayout, PanelScope, PanelState};
+use crate::{Connection, application::Application, shared::Shared, ui};
+use agent_core::panels::{PanelKind, PanelLayout, PanelScope, PanelState, PanelSurface, PanelTool};
 use nsh_core::prelude::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -41,12 +41,14 @@ impl Workbench {
             .with(|application| application.activate_panel(self.scope.get_untracked(), id));
     }
 
-    pub fn close_selected(self) {
-        let Some(surface) = self.state.with_untracked(|state| state.selected().cloned()) else {
-            return;
-        };
+    fn close(self, id: u64) {
         self.application
-            .with(|application| application.close_panel(self.scope.get_untracked(), surface.id));
+            .with(|application| application.close_panel(self.scope.get_untracked(), id));
+    }
+
+    fn set_layout(self, layout: PanelLayout) {
+        self.application
+            .with(|application| application.set_panel_layout(self.scope.get_untracked(), layout));
     }
 
     pub fn terminal_handle(self, id: u64) -> String {
@@ -75,7 +77,8 @@ fn surface_title(kind: PanelKind, path: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn symbol(kind: PanelKind) -> &'static str {
+/// A tool's SF Symbol in the system's menus.
+fn symbol(kind: PanelKind) -> &'static str {
     match kind {
         PanelKind::Browser => "globe",
         PanelKind::Terminal => "terminal",
@@ -87,7 +90,31 @@ pub(crate) fn symbol(kind: PanelKind) -> &'static str {
     }
 }
 
-pub(crate) fn tools() -> Vec<agent_core::panels::PanelTool> {
+/// A tool's icon in the panel, as the desktop client's.
+fn tool_icon(kind: PanelKind) -> ui::Icon {
+    use ui::Icon;
+    match kind {
+        PanelKind::Browser => Icon::GLOBE,
+        PanelKind::Terminal => Icon::TERMINAL,
+        PanelKind::Files | PanelKind::File => Icon::FOLDER,
+        PanelKind::Diff => Icon::REPLACE,
+        PanelKind::SideChat => Icon::BOT,
+        PanelKind::Agents => Icon::NETWORK,
+        PanelKind::Home => Icon::PLUS,
+    }
+}
+
+/// The tools as menu items, each with its symbol for the system's menus.
+pub(crate) fn tool_items() -> Vec<Value> {
+    tools()
+        .into_iter()
+        .map(|tool| {
+            json!({"id": tool.key, "title": tool.label, "symbol": symbol(tool.kind), "enabled": tool.enabled})
+        })
+        .collect()
+}
+
+fn tools() -> Vec<PanelTool> {
     let connection = use_context::<Connection>().unwrap();
     connection
         .publication
@@ -98,18 +125,7 @@ pub(crate) fn tools() -> Vec<agent_core::panels::PanelTool> {
             )
         })
         .into_iter()
-        .filter(|tool| {
-            matches!(
-                tool.kind,
-                PanelKind::Files
-                    | PanelKind::Browser
-                    | PanelKind::Terminal
-                    | PanelKind::Diff
-                    | PanelKind::Agents
-                    | PanelKind::SideChat
-            )
-        })
-        .map(|tool| agent_core::panels::PanelTool {
+        .map(|tool| PanelTool {
             label: localized(tool.label),
             ..tool
         })
@@ -149,45 +165,237 @@ pub(crate) fn open_tool(key: &str) {
     }
 }
 
-pub(crate) fn screen() -> impl IntoElement {
+/// The panel, as T3 Code's: its tab bar over the selected surface, or the tool
+/// picker while none is selected. `leading` starts the tab bar: the window's
+/// title bar controls while the panel has taken the conversation's place.
+pub(crate) fn screen(leading: Option<AnyElement>) -> impl IntoElement {
     let workspace = use_context::<Workbench>().unwrap();
-    let browser = use_context::<crate::files::Browser>().unwrap();
-    view().flex_1().min_h_0().pb_keyboard()
-        .child(view().flex_row().gap_2().items_center().p_2()
-            .child(when(is_desktop, move || native::button("xmark", tr("ツールを閉じる"), move || browser.close()).w(px(44.0)).h(px(44.0))))
-            .child(native::menu("rectangle.stack", tr("タブ"), move || workspace.state.with(|state| json!(state.surfaces.iter().map(|surface| json!({
-                "id": surface.id.to_string(), "title": surface_title(surface.kind, surface.path.as_deref()), "symbol": symbol(surface.kind), "selected": state.active == Some(surface.id)
-            })).collect::<Vec<_>>())), move |id| { if let Ok(id) = id.parse() { workspace.activate(id); } })
-                .prop("symbol", move || json!(workspace.state.with(|state| symbol(state.kind()))))
-                .prop("title", move || json!(title())).min_h(px(44.0)).flex_1())
-            .child(native::menu("plus", tr("ツールを追加"), move || json!(tools().into_iter().map(|tool| json!({"id": tool.key, "title": tool.label, "symbol": symbol(tool.kind), "enabled": tool.enabled})).collect::<Vec<_>>()), open_tool).w(px(44.0)).h(px(44.0)))
-            .child(when(is_desktop, move || native::menu("rectangle.split.2x1", tr("表示位置"), move || {
-                let selected = workspace.state.with(|s| s.layout);
-                json!([(PanelLayout::Right, "right", tr("右に表示"), "rectangle.righthalf.inset.filled"), (PanelLayout::Bottom, "bottom", tr("下に表示"), "rectangle.bottomhalf.inset.filled"), (PanelLayout::Expanded, "expanded", tr("拡大表示"), "arrow.up.left.and.arrow.down.right")].into_iter().map(|(layout, id, title, symbol)| json!({"id": id, "title": title, "symbol": symbol, "selected": layout == selected})).collect::<Vec<_>>())
-            }, move |id| {
-                let layout = match id { "right" => PanelLayout::Right, "bottom" => PanelLayout::Bottom, "expanded" => PanelLayout::Expanded, _ => return };
-                workspace.application.with(|app| app.set_panel_layout(workspace.scope.get_untracked(), layout));
-            }).w(px(44.0)).h(px(44.0))))
-            .child(native::button("xmark.square", tr("タブを閉じる"), move || workspace.close_selected()).prop("enabled", move || json!(workspace.state.with(|s| s.active.is_some()))).w(px(44.0)).h(px(44.0))))
-        .child(each(move || workspace.state.with(|s| s.selected().cloned().into_iter().collect::<Vec<_>>()),
-            |surface: &agent_core::panels::PanelSurface| surface.id,
+    view()
+        .flex_1()
+        .min_h_0()
+        .pb_keyboard()
+        .child(header(workspace, leading))
+        .child(each(
+            move || {
+                workspace
+                    .state
+                    .with(|s| s.selected().cloned().into_iter().collect::<Vec<_>>())
+            },
+            |surface: &PanelSurface| surface.id,
             move |surface, _| {
-                match surface.with_untracked(|surface| surface.kind) {
-                    PanelKind::Files => crate::files::screen(surface.with_untracked(|s| s.id)).into_element(),
+                let host = workspace.scope.get_untracked().host;
+                let PanelSurface { id, kind, path } = surface.get_untracked();
+                match kind {
+                    PanelKind::Files => crate::files::screen(id).into_element(),
                     PanelKind::File => crate::editor::editors().into_element(),
-                    PanelKind::Terminal => crate::terminal::screen(surface.get_untracked(), workspace.scope.get_untracked().host).into_element(),
-                    PanelKind::Diff => crate::details::diff(surface.with_untracked(|s| s.path.clone().unwrap_or_default()), workspace.scope.get_untracked().host).into_element(),
-                    PanelKind::Agents => crate::details::agents(workspace.scope.get_untracked().host).into_element(),
-                    PanelKind::SideChat => crate::side_chat::screen(surface.with_untracked(|s| s.id), workspace.scope.get_untracked().host).into_element(),
+                    PanelKind::Terminal => {
+                        crate::terminal::screen(surface.get_untracked(), host).into_element()
+                    }
+                    PanelKind::Diff => {
+                        crate::details::diff(path.unwrap_or_default(), host).into_element()
+                    }
+                    PanelKind::Agents => crate::details::agents(host).into_element(),
+                    PanelKind::SideChat => crate::side_chat::screen(id, host).into_element(),
                     PanelKind::Browser => crate::browser::screen().into_element(),
-                    _ => view().into_element(),
+                    PanelKind::Home => view().into_element(),
                 }
-            }))
-        .child(when(move || workspace.state.with(|s| s.selected().is_none()), move || {
-            view().p_4().gap_3().child(each(tools, |tool: &agent_core::panels::PanelTool| tool.key.clone(), move |tool, _| {
-                native::text_button(move || json!(tool.with(|t| t.label.clone())), move || open_tool(&tool.with_untracked(|t| t.key.clone())))
-                    .prop("symbol", move || json!(tool.with(|t| symbol(t.kind))))
-                    .prop("enabled", move || json!(tool.with(|t| t.enabled)))
-            }))
+            },
+        ))
+        .child(when(
+            move || workspace.state.with(|s| s.selected().is_none()),
+            picker,
+        ))
+}
+
+/// The panel bar's height: the conversation header's beside it.
+const HEADER_HEIGHT: f32 = 44.0;
+
+/// T3 Code's panel tab bar: a tab for each open surface and the add-tool menu,
+/// then the layout menu and closing the panel.
+fn header(workspace: Workbench, leading: Option<AnyElement>) -> View {
+    use ui::Icon;
+    let browser = use_context::<crate::files::Browser>().unwrap();
+    view()
+        .h(px(HEADER_HEIGHT))
+        .flex_shrink_0()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .pl_2()
+        .pr_3()
+        .window_drag(true)
+        .child(leading)
+        .child(
+            scroll().horizontal().flex_1().min_w_0().child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(each(
+                        move || workspace.state.with(|s| s.surfaces.clone()),
+                        |surface: &PanelSurface| surface.id,
+                        move |surface, _| tab(workspace, surface),
+                    ))
+                    .child(view().window_drag(false).child(add_tool())),
+            ),
+        )
+        .child(when(is_desktop, move || {
+            view()
+                .flex_row()
+                .gap_1()
+                .window_drag(false)
+                .child(ui::icon_button(
+                    Icon::LAYOUT,
+                    tr("表示位置"),
+                    move || layout_menu(workspace),
+                ))
+                .child(ui::icon_button(
+                    Icon::PANEL_RIGHT,
+                    tr("ツールを閉じる"),
+                    move || browser.close(),
+                ))
         }))
+}
+
+/// The add-tool menu: a popup from a small button on the desktop; the system's
+/// menu button on a phone, which shows no popups.
+fn add_tool() -> AnyElement {
+    if is_desktop() {
+        ui::icon_button(ui::Icon::PLUS, tr("ツールを追加"), || {
+            ui::popup(&json!(tool_items()), open_tool)
+        })
+        .into_element()
+    } else {
+        crate::native::menu(
+            "plus",
+            tr("ツールを追加"),
+            || json!(tool_items()),
+            open_tool,
+        )
+        .w(px(44.0))
+        .h(px(44.0))
+        .into_element()
+    }
+}
+
+/// A surface's tab: its tool's icon and title, filled while it is selected, with
+/// its close button while it is selected or under the pointer.
+fn tab(workspace: Workbench, surface: ReadSignal<PanelSurface>) -> View {
+    use ui::{Icon, colors};
+    let (id, kind) = surface.with_untracked(|s| (s.id, s.kind));
+    let title = move || surface.with(|s| surface_title(s.kind, s.path.as_deref()));
+    let active = move || workspace.state.with(|s| s.active == Some(id));
+    view()
+        .group()
+        .flex_row()
+        .items_center()
+        .flex_shrink_0()
+        .h(px(24.0))
+        .max_w(px(180.0))
+        .pr_1()
+        .rounded(px(ui::RADIUS))
+        .text_color(colors::MUTED)
+        .hover(|s| s.bg(colors::GHOST_HOVER).text_color(colors::FOREGROUND))
+        .style_when(active, |s| {
+            s.bg(colors::SELECTED).text_color(colors::FOREGROUND)
+        })
+        .child(
+            nsh_base::button()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .min_w_0()
+                .h_full()
+                .pl(px(6.0))
+                .pr_1()
+                .accessibility_label(move || Some(SharedString::from(title())))
+                .on_press(move || workspace.activate(id))
+                .child(ui::icon(tool_icon(kind), 12.0))
+                .child(text(title).text_size(px(12.0)).number_of_lines(1).min_w_0()),
+        )
+        .child(
+            view()
+                .window_drag(false)
+                .opacity(0.0)
+                .group_hover(|s| s.opacity(1.0))
+                .style_when(active, |s| s.opacity(1.0))
+                .child(ui::small_icon_button(
+                    Icon::CLOSE,
+                    tr("タブを閉じる"),
+                    move || workspace.close(id),
+                )),
+        )
+}
+
+/// The panel's place, right of, below or instead of the conversation; the
+/// current one checked.
+fn layout_menu(workspace: Workbench) {
+    let layouts = [
+        (PanelLayout::Right, "right", tr("右に表示")),
+        (PanelLayout::Bottom, "bottom", tr("下に表示")),
+        (PanelLayout::Expanded, "expanded", tr("拡大表示")),
+    ];
+    let current = workspace.state.with_untracked(|s| s.layout);
+    let items = layouts
+        .iter()
+        .map(
+            |(layout, id, title)| json!({"id": id, "title": title, "selected": *layout == current}),
+        )
+        .collect::<Vec<_>>();
+    ui::popup(&json!(items), move |id| {
+        if let Some((layout, ..)) = layouts.iter().find(|(_, key, _)| *key == id) {
+            workspace.set_layout(*layout);
+        }
+    });
+}
+
+/// T3 Code's empty panel: the tools as rows under a heading.
+fn picker() -> impl IntoElement {
+    use ui::colors;
+    view()
+        .flex_1()
+        .min_h_0()
+        .items_center()
+        .justify_center()
+        .px_6()
+        .child(
+            view()
+                .w_full()
+                .max_w(px(320.0))
+                .gap(px(2.0))
+                .child(
+                    text(tr("機能を開く"))
+                        .mb_3()
+                        .text_center()
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::MEDIUM),
+                )
+                .child(each(
+                    tools,
+                    |tool: &PanelTool| tool.key.clone(),
+                    move |tool, _| {
+                        let PanelTool { kind, label, .. } = tool.get_untracked();
+                        nsh_base::button()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(10.0))
+                            .h(px(32.0))
+                            .px(px(10.0))
+                            .rounded(px(ui::RADIUS))
+                            .text_color(colors::FOREGROUND)
+                            .hover(|s| s.bg(colors::GHOST_HOVER))
+                            .disabled_style(|s| s.opacity(0.5))
+                            .disabled(move || !tool.with(|t| t.enabled))
+                            .on_press(move || open_tool(&tool.with_untracked(|t| t.key.clone())))
+                            .child(ui::icon(tool_icon(kind), 16.0))
+                            .child(
+                                text(label)
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(14.0))
+                                    .number_of_lines(1),
+                            )
+                    },
+                )),
+        )
 }

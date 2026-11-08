@@ -59,7 +59,6 @@ impl Icon {
     pub(crate) const CHECK: Self = icon!(Check, "checkmark");
     pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown, "chevron.down");
     pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight, "chevron.right");
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub(crate) const CLOSE: Self = icon!(X, "xmark");
     pub(crate) const COPY: Self = icon!(Copy, "doc.on.doc");
     #[cfg(target_os = "macos")]
@@ -70,7 +69,6 @@ impl Icon {
     pub(crate) const TERMINAL: Self = icon!(SquareTerminal, "apple.terminal");
     pub(crate) const FILE_PEN: Self = icon!(FilePen, "square.and.pencil");
     pub(crate) const BRAIN: Self = icon!(Brain, "brain");
-    #[cfg(target_os = "macos")]
     pub(crate) const REPLACE: Self = icon!(Replace, "arrow.left.arrow.right");
     #[cfg(target_os = "macos")]
     pub(crate) const FOLDER_OPEN: Self = icon!(FolderOpen, "folder");
@@ -79,6 +77,9 @@ impl Icon {
     #[cfg(target_os = "macos")]
     pub(crate) const EXTERNAL_LINK: Self = icon!(ExternalLink, "arrow.up.right.square");
     pub(crate) const FOLDER: Self = icon!(Folder, "folder");
+    pub(crate) const GLOBE: Self = icon!(Globe, "globe");
+    pub(crate) const NETWORK: Self = icon!(Network, "network");
+    pub(crate) const LAYOUT: Self = icon!(PanelsRightBottom, "rectangle.split.2x1");
     pub(crate) const FOLDER_PLUS: Self = icon!(FolderPlus, "folder.badge.plus");
     pub(crate) const LOADER: Self = icon!(Loader, "progress.indicator");
     pub(crate) const MERGE: Self = icon!(GitMerge, "arrow.triangle.merge");
@@ -92,7 +93,6 @@ impl Icon {
     pub(crate) const PANEL_LEFT_CLOSE: Self = icon!(PanelLeftClose, "sidebar.left");
     #[cfg(target_os = "macos")]
     pub(crate) const PANEL_LEFT_OPEN: Self = icon!(PanelLeftOpen, "sidebar.left");
-    #[cfg(target_os = "macos")]
     pub(crate) const PANEL_RIGHT: Self = icon!(PanelRight, "sidebar.right");
     pub(crate) const PLUS: Self = icon!(Plus, "plus");
     #[cfg(target_os = "macos")]
@@ -105,7 +105,6 @@ impl Icon {
     pub(crate) const FOLDER_TREE: Self = icon!(FolderTree, "folder");
     #[cfg(target_os = "macos")]
     pub(crate) const SERVER: Self = icon!(Server, "server.rack");
-    #[cfg(target_os = "macos")]
     pub(crate) const BOT: Self = icon!(Bot, "cpu");
     pub(crate) const STEER: Self = icon!(Redo2, "arrow.uturn.forward");
     /// A filled square, which Lucide's outlined `square` is not.

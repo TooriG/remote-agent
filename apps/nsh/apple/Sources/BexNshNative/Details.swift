@@ -6,7 +6,7 @@ import SwiftUI
     import UIKit
 #endif
 
-/// These are Core's projected display values; no diff parsing or agent decisions live here.
+/// These are Core's projected display values; no diff parsing lives here.
 struct DiffRow: Decodable {
     let text: String
     let old: UInt64?
@@ -21,22 +21,11 @@ struct DiffFile: Decodable {
     let rows: [DiffRow]
 }
 
-struct Agent: Decodable {
-    let key: String
-    let title: String
-    let status: String
-    let active: Bool
-    let model: String?
-    let detail: String?
-    let depth: UInt32
-}
-
 enum DetailsContent: Decodable {
     case separator
     case loading
     case sideChatLoading
     case diff(files: [DiffFile])
-    case agents(rows: [Agent])
     case error(message: String)
     case welcome(directory: String)
     case projectEditor(editor: ProjectEditorData?)
@@ -79,36 +68,6 @@ private struct DetailsView: View {
                         LazyVStack(spacing: 16) {
                             ForEach(files, id: \.path) { file in DiffCard(file: file) }
                         }.padding(12)
-                    }
-                }
-            case let .agents(rows):
-                if rows.isEmpty {
-                    ContentUnavailableView("サブエージェントが起動するとここに表示されます。", systemImage: "network")
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(rows, id: \.key) { agent in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        if agent.active {
-                                            ProgressView().controlSize(.small)
-                                        }
-                                        Text(verbatim: agent.title)
-                                        Spacer()
-                                        Text(verbatim: agent.status).foregroundStyle(.secondary)
-                                    }
-                                    if let detail = agent.detail {
-                                        Text(verbatim: detail).foregroundStyle(.secondary)
-                                    }
-                                    if let model = agent
-                                        .model {
-                                        Text(verbatim: model).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                                .padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                                .padding(.leading, CGFloat(agent.depth) * 16)
-                            }
-                        }.font(.subheadline).padding(16).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             case let .error(message):

@@ -1,4 +1,4 @@
-use crate::l10n::{localized, tr};
+use crate::l10n::{localized, tr, tr_format};
 use crate::{Connection, native, shared::Shared};
 use agent_core::{
     presentation::{
@@ -10,13 +10,9 @@ use agent_core::{
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
 
-// The Swift decoder and these encoders share fixtures to guard the native boundary.
+// The Swift decoder and this encoder share a fixture to guard the native boundary.
 fn diff_data(files: &[WorkspaceDiffFile]) -> Value {
     json!({"diff": {"files": files}})
-}
-
-fn agent_data(rows: &[AgentSummary]) -> Value {
-    json!({"agents": {"rows": rows}})
 }
 
 /// The desktop workspace card's content: the folder, its editors, review and sources.
@@ -42,7 +38,6 @@ pub(crate) fn workspace_summary(
     p: &agent_core::presentation::view::Presentation,
     local: bool,
 ) -> WorkspaceSummary {
-    use crate::l10n::tr_format;
     use agent_core::presentation::{editors, markdown::file_basename};
     use agent_protocol::editors::FileManagerRevealKind;
     let cwd = &p.composer.controls.navigation.cwd;
@@ -204,19 +199,112 @@ pub(crate) fn agents(host: String) -> impl IntoElement {
         })
     });
     let agents = computed(move || connection.publication.with(|p| Shared(p.agents.clone())));
-    native("bex.details")
-        .prop("data", move || {
-            agents.with(|rows| {
-                let rows = rows.iter().cloned().map(|row| AgentSummary {
-                    status: localized(row.status),
-                    detail: row.detail.map(localized),
-                    ..row
-                });
-                agent_data(&rows.collect::<Vec<_>>())
-            })
-        })
+    agents_panel(agents)
+}
+
+/// The desktop client's agents panel: a heading with how many work, then each
+/// agent indented under the one that started it.
+fn agents_panel(agents: Memo<Shared<Vec<AgentSummary>>>) -> impl IntoElement {
+    use crate::ui::{self, Icon, colors};
+    view()
         .flex_1()
         .min_h_0()
+        .gap_3()
+        .p_4()
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(ui::icon(Icon::NETWORK, 16.0))
+                .child(
+                    text(tr("エージェント"))
+                        .flex_1()
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::SEMIBOLD),
+                )
+                .child(
+                    text(move || {
+                        let working = agents.with(|rows| rows.iter().filter(|a| a.active).count());
+                        tr_format("{0} 件が実行中", [&working])
+                    })
+                    .text_size(px(13.0))
+                    .text_color(colors::MUTED),
+                ),
+        )
+        .child(when(
+            move || agents.with(|rows| rows.is_empty()),
+            || {
+                text(tr("サブエージェントが起動するとここに表示されます。"))
+                    .text_size(px(13.0))
+                    .text_color(colors::MUTED)
+            },
+        ))
+        .child(scroll().flex_1().min_h_0().child(view().gap_2().child(each(
+            move || agents.with(|rows| rows.to_vec()),
+            |agent: &AgentSummary| agent.key.clone(),
+            |agent, _| agent_row(agent),
+        ))))
+}
+
+/// An agent: its title, activity and status, then what it is doing and its model.
+fn agent_row(agent: ReadSignal<AgentSummary>) -> impl IntoElement {
+    use crate::ui::{self, colors};
+    let field = move |read: fn(&AgentSummary) -> Option<String>| {
+        move || agent.with(|a| read(a).unwrap_or_default())
+    };
+    view()
+        .ml(move || px(agent.with(|a| a.depth) as f32 * 16.0))
+        .gap_1()
+        .p_3()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(colors::BORDER)
+        .bg(colors::RAISED)
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .h(px(20.0))
+                .gap_2()
+                .child(when(move || agent.with(|a| a.active), ui::spinner))
+                .child(
+                    text(move || agent.with(|a| a.title.clone()))
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(13.0))
+                        .number_of_lines(1),
+                )
+                .child(when(
+                    move || agent.with(|a| a.unread),
+                    || {
+                        view()
+                            .w(px(6.0))
+                            .h(px(6.0))
+                            .rounded(px(3.0))
+                            .bg(colors::FOREGROUND)
+                    },
+                ))
+                .child(
+                    text(move || agent.with(|a| localized(a.status.clone())))
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED),
+                ),
+        )
+        .child(
+            text(field(|a| a.detail.clone().map(localized)))
+                .h(px(20.0))
+                .text_size(px(13.0))
+                .text_color(colors::MUTED)
+                .number_of_lines(1),
+        )
+        .child(
+            text(field(|a| a.model.clone()))
+                .h(px(16.0))
+                .text_size(px(12.0))
+                .text_color(colors::MUTED)
+                .number_of_lines(1),
+        )
 }
 
 #[cfg(test)]
@@ -281,37 +369,6 @@ mod tests {
             }
         );
         assert!(workspace_summary(&p, false).editors.is_empty());
-    }
-
-    #[test]
-    fn agents_match_the_native_display_contract() {
-        let rows = [
-            AgentSummary {
-                key: "root/active".into(),
-                title: "日本語の確認 👋".into(),
-                status: "実行中".into(),
-                active: true,
-                unread: true,
-                model: Some("fixture-model".into()),
-                detail: Some("進捗 1/2".into()),
-                depth: 2,
-            },
-            AgentSummary {
-                key: "root/complete".into(),
-                title: "Finished".into(),
-                status: "完了".into(),
-                active: false,
-                unread: false,
-                model: None,
-                detail: None,
-                depth: 0,
-            },
-        ];
-        let expected: Value = serde_json::from_str(include_str!(
-            "../apple/Tests/BexNshNativeTests/Fixtures/agents.json"
-        ))
-        .unwrap();
-        assert_eq!(agent_data(&rows), expected);
     }
 
     #[test]

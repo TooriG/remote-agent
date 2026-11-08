@@ -107,21 +107,6 @@ final class DisplayTests: XCTestCase {
         return try JSONDecoder().decode(DetailsContent.self, from: Data(contentsOf: url))
     }
 
-    func testAgentsPreserveIdentityProgressHierarchyAndOptionalDetails() throws {
-        guard case let .agents(rows) = try content("agents") else { return XCTFail("Expected agent rows") }
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertEqual(rows[0].key, "root/active")
-        XCTAssertEqual(rows[0].title, "日本語の確認 👋")
-        XCTAssertEqual(rows[0].status, "実行中")
-        XCTAssertTrue(rows[0].active)
-        XCTAssertEqual(rows[0].depth, 2)
-        XCTAssertEqual(rows[0].model, "fixture-model")
-        XCTAssertEqual(rows[0].detail, "進捗 1/2")
-        XCTAssertFalse(rows[1].active)
-        XCTAssertNil(rows[1].model)
-        XCTAssertNil(rows[1].detail)
-    }
-
     func testDiffPreservesOldAndNewLineNumbersAndBinaryFiles() throws {
         guard case let .diff(files) = try content("diff") else { return XCTFail("Expected diff files") }
         XCTAssertEqual(files.count, 2)
