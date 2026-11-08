@@ -584,6 +584,12 @@ impl Threads {
     }
 
     fn fork(&mut self, context: &Context, id: &Value, params: &Value) -> Result<()> {
+        let failure = context.home.join("fail-next-fork");
+        if failure.exists() {
+            fs::remove_file(failure)?;
+            context.error(id, -32603, "fixture fork storage is unavailable")?;
+            return Ok(());
+        }
         let Some(source) = self.require_thread(context, id, thread_id(params))? else {
             return Ok(());
         };
