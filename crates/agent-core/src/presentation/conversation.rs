@@ -1378,10 +1378,7 @@ fn render_turn(
         for index in responses(segment) {
             let item = render(index);
             let terminal = Some(index) == terminal;
-            // A provider message can end while the response is still running.
-            // Commentary that ends a turn stopped before its answer has them.
-            let show_actions = source.status != models::TurnStatus::Running
-                && (item.data.kind == "agent" || terminal && item.data.kind == "commentary");
+            let show_actions = shows_actions(source.status, &item.data.kind, terminal);
             let can_fork = supports_fork && show_actions && terminal;
             if item.data.deferred {
                 push(Activity {
@@ -1646,6 +1643,14 @@ pub fn request_input_default(body: agent_protocol::requests::RequestBody) -> Str
     };
     serde_json::to_string_pretty(&value).expect("request defaults serialize")
 }
+/// Whether a turn's message of `kind` shows its actions: an answer once its
+/// turn settles (a provider message can end while the response still runs),
+/// and commentary that is the `terminal` message of a turn stopped before
+/// its answer.
+fn shows_actions(status: models::TurnStatus, kind: &str, terminal: bool) -> bool {
+    status != models::TurnStatus::Running && (kind == "agent" || terminal && kind == "commentary")
+}
+
 /// A turn's error, titled as T3 Code's work log titles a provider's error:
 /// its retry, a usage limit, or a provider error, which the message explains.
 fn turn_error(language: UiLanguage, error: &models::ExecutionError) -> TurnErrorPresentation {

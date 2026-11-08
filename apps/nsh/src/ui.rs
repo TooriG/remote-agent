@@ -113,7 +113,6 @@ impl Icon {
     pub(crate) const PUZZLE: Self = icon!(Puzzle);
     pub(crate) const SHIELD: Self = icon!(Shield);
     pub(crate) const SPARKLES: Self = icon!(Sparkles);
-    #[cfg(desktop)]
     pub(crate) const QUESTION: Self = icon!(MessageCircleQuestionMark);
     #[cfg(desktop)]
     pub(crate) const QUOTE: Self = icon!(Quote);
