@@ -1166,9 +1166,9 @@ fn editor(tree: &Tree, index: usize) -> Result<Retained<objc2_app_kit::NSRespond
         None if responds(object, sel!(controlView)) => unsafe { msg_send![&**object, controlView] },
         None => None,
     };
-    // Focusing a field that has the focus would end its composition, as
-    // leaving it does.
-    let focused = view.is_some_and(|view| holds_focus(window, &view) || focus(window, &view));
+    // Focusing a field again would end its composition, as leaving it does;
+    // otherwise focusing selects the field's text, which typing replaces.
+    let focused = view.is_some_and(|view| composing(window, &view) || focus(window, &view));
     if !focused {
         return Err(format!(
             "{} could not take the keyboard focus",
@@ -1186,12 +1186,17 @@ fn editor(tree: &Tree, index: usize) -> Result<Retained<objc2_app_kit::NSRespond
     Ok(responder)
 }
 
-/// Whether `view`, or a view inside it (a field's editor), has the focus.
-fn holds_focus(window: &NSWindow, view: &NSView) -> bool {
+/// Whether `view`, or a view inside it (a field's editor), has the focus
+/// with an input method's composition in it.
+fn composing(window: &NSWindow, view: &NSView) -> bool {
     window
         .firstResponder()
         .and_then(|responder| responder.downcast::<NSView>().ok())
-        .is_some_and(|focused| focused.isDescendantOf(view))
+        .is_some_and(|focused| {
+            focused.isDescendantOf(view)
+                && responds(&focused, sel!(hasMarkedText))
+                && unsafe { msg_send![&*focused, hasMarkedText] }
+        })
 }
 
 /// Focuses `view`, or the first view inside it that takes the focus (a field in
