@@ -145,9 +145,9 @@ pub fn expanded_body(language: UiLanguage, item: &Item) -> String {
         WireBody::UserMessage { text, content } => message(language, text.as_deref(), content),
         WireBody::AssistantText { text, .. } => text.clone(),
         WireBody::Plan { text } => text.clone(),
-        WireBody::Reasoning { content, summary } => {
-            if summary.is_empty() { content } else { summary }.join("\n")
-        }
+        WireBody::Reasoning { content, summary } => reasoning_parts(content, summary)
+            .unwrap_or_default()
+            .join("\n"),
         WireBody::CommandExecution { cwd, output, .. } => match cwd {
             Some(cwd) => {
                 if output.is_empty() {
@@ -188,6 +188,51 @@ pub fn expanded_body(language: UiLanguage, item: &Item) -> String {
     }
 }
 
+/// The parts of a reasoning trace to read: its summary when the provider gave
+/// one, else its own text; none when neither has any.
+pub(super) fn reasoning_parts<'a>(
+    content: &'a [String],
+    summary: &'a [String],
+) -> Option<&'a [String]> {
+    let readable = |parts: &'a [String]| {
+        Some(parts).filter(|parts| parts.iter().any(|part| !part.trim().is_empty()))
+    };
+    readable(summary).or_else(|| readable(content))
+}
+
+/// A reasoning trace as Markdown, its parts as paragraphs (T3 Code reads them
+/// expanded, with the Thinking heading).
+fn reasoning_trace(item: &Item) -> Option<String> {
+    match item.body() {
+        WireBody::Reasoning { content, summary } => {
+            reasoning_parts(content, summary).map(|parts| parts.join("\n\n"))
+        }
+        _ => None,
+    }
+}
+
+/// A reasoning trace on one line, as T3 Code's collapsed Thinking row: its
+/// Markdown read as plain text with each run of whitespace one space.
+pub(super) fn reasoning_preview(item: &Item) -> Option<String> {
+    use super::markdown::MarkdownBlock;
+    let mut text = String::new();
+    let mut append = |runs: &[super::markdown::MarkdownRun]| {
+        text.push(' ');
+        text.extend(runs.iter().map(|run| run.text.as_str()));
+    };
+    for block in super::markdown::markdown_blocks(reasoning_trace(item)?) {
+        match &block {
+            MarkdownBlock::Paragraph { runs, .. } => append(runs),
+            MarkdownBlock::Table { rows, .. } => {
+                rows.iter().flatten().for_each(|cell| append(&cell.runs))
+            }
+            MarkdownBlock::Visualization { .. } => {}
+        }
+    }
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!line.is_empty()).then_some(line)
+}
+
 /// Native detail views consume typed Markdown blocks; output never becomes executable markup.
 pub(super) fn detail_blocks(
     language: UiLanguage,
@@ -206,6 +251,9 @@ pub(super) fn detail_blocks(
             markdown_blocks(message(language, text.as_deref(), content))
         }
         WireBody::AssistantText { text, .. } => markdown_blocks(text.clone()),
+        WireBody::Reasoning { .. } => reasoning_trace(item)
+            .map(markdown_blocks)
+            .unwrap_or_default(),
         WireBody::CommandExecution {
             command,
             cwd,

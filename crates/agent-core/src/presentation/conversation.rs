@@ -13,6 +13,8 @@ use std::{
 };
 mod images;
 pub mod rows;
+mod work;
+pub use work::{LiveActivity, WorkRowLabel};
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.
@@ -132,6 +134,8 @@ pub struct PreparationPresentation {
     pub text: String,
     /// Rendered like a running turn's working row, as T3 Code shows startup.
     pub in_progress: bool,
+    /// Setting up a worktree, which shimmers as T3 Code's "Setting up worktree…".
+    pub shimmer: bool,
     pub retry: Option<agent_protocol::operations::RetryPreparation>,
 }
 #[derive(Clone, PartialEq)]
@@ -232,6 +236,9 @@ impl RenderedConversation {
     }
 }
 
+/// A running turn's working row, as T3 Code's "Working for …": the time so
+/// far and, when asked for, the current work. Clients that show a live row
+/// ([`RenderedTurn::live_activity`]) read what it is doing there instead.
 #[derive(Clone, PartialEq)]
 pub struct WorkProgress {
     started_at: Option<f64>,
@@ -403,6 +410,7 @@ impl RenderedItem {
                 image_sources: body.images,
                 image_placeholder,
                 deferred,
+                preview: body::reasoning_preview(item),
             },
         })
     }
@@ -437,6 +445,7 @@ impl RenderedItem {
                 image_sources: body.images,
                 image_placeholder: false,
                 deferred: false,
+                preview: None,
             },
         })
     }
@@ -772,6 +781,7 @@ fn preparation_presentation(
     PreparationPresentation {
         text,
         in_progress,
+        shimmer: in_progress && preparation.stage == PreparationStage::Worktree,
         retry: retry.then(|| RetryPreparation {
             thread_id: preparation.submission.thread_id.clone(),
         }),
@@ -1538,6 +1548,8 @@ pub struct ItemPresentation {
     pub kind: String,
     pub title: Option<String>,
     pub collapsible: bool,
+    /// Reasoning's trace on one line, provider text shown verbatim.
+    pub preview: Option<String>,
 }
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -1598,7 +1610,9 @@ mod tests {
     #[case::image(json!({"imageGeneration":{"savedPath":"/fixture/image.png"}}), true)]
     #[case::compaction(json!({"compaction":{}}), true)]
     #[case::sleep(json!({"sleep":{}}), false)]
-    #[case::reasoning(json!({"reasoning":{"content":["private"],"summary":[]}}), false)]
+    // As T3 Code, reasoning shows when it has text to read.
+    #[case::reasoning(json!({"reasoning":{"content":["private"],"summary":[]}}), true)]
+    #[case::blank_reasoning(json!({"reasoning":{"content":[""],"summary":[" "]}}), false)]
     #[case::review_entered(json!({"review":{"entering":true,"text":"Review"}}), false)]
     #[case::review_left(json!({"review":{"entering":false,"text":"Review"}}), false)]
     fn item_families_project_visible_content_without_exposing_state_only_events(

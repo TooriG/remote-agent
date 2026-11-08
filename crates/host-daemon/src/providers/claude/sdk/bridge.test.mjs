@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runBridge, probeOptions } from "./bridge.ts";
+import { runBridge, probeOptions, thinkingEnabledSetting, thinkingOptions } from "./bridge.ts";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtemp, symlink, rm, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +51,11 @@ test("catalog probes cannot run user hooks, tools or automatic IDE connections",
       assert.equal(options.env.CLAUDE_CODE_AUTO_CONNECT_IDE, "0");
       assert.equal(options.env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, "1");
     } else {
-      assert.equal(options.settings, undefined);
+      // The session's thinking follows the user's setting (tested below).
+      const thinking = thinkingOptions(thinkingEnabledSetting("/fixture", process.env));
+      assert.deepEqual(options.settings, thinking.settings);
+      assert.deepEqual(options.thinking, thinking.thinking);
+      assert.deepEqual(options.extraArgs, { "replay-user-messages": null, ...thinking.extraArgs });
       assert.equal(options.allowedTools, undefined);
     }
   }
@@ -193,4 +197,40 @@ test("managed MCP policy retains probe isolation without the incompatible strict
   assert.equal(managed.strictMcpConfig, undefined);
   assert.deepEqual(isolated, managed);
   assert.equal(managed.env.PATH, "/fixture/bin");
+});
+
+test("sessions request thinking summaries as T3 Code does unless the user turned thinking off", () => {
+  const summarized = {
+    thinking: { type: "adaptive", display: "summarized" },
+    settings: { showThinkingSummaries: true },
+    extraArgs: { "thinking-display": "summarized" },
+  };
+  assert.deepEqual(thinkingOptions(undefined), summarized);
+  assert.deepEqual(thinkingOptions(true), summarized);
+  assert.deepEqual(thinkingOptions(false), {});
+});
+
+test("the thinking setting follows user, project and local settings in that order", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bridge-thinking-"));
+  try {
+    const home = join(root, "home");
+    const project = join(root, "project");
+    await mkdir(home, { recursive: true });
+    await mkdir(join(project, ".claude"), { recursive: true });
+    const environment = { CLAUDE_CONFIG_DIR: home };
+    assert.equal(thinkingEnabledSetting(project, environment), undefined);
+    await writeFile(join(home, "settings.json"), JSON.stringify({ alwaysThinkingEnabled: false }));
+    assert.equal(thinkingEnabledSetting(project, environment), false);
+    await writeFile(join(project, ".claude", "settings.json"), JSON.stringify({ alwaysThinkingEnabled: true }));
+    assert.equal(thinkingEnabledSetting(project, environment), true);
+    await writeFile(join(project, ".claude", "settings.local.json"), JSON.stringify({ alwaysThinkingEnabled: false }));
+    assert.equal(thinkingEnabledSetting(project, environment), false);
+    // A file that does not parse, or a value that is not a boolean, sets nothing.
+    await writeFile(join(project, ".claude", "settings.local.json"), "{");
+    assert.equal(thinkingEnabledSetting(project, environment), true);
+    await writeFile(join(project, ".claude", "settings.json"), JSON.stringify({ alwaysThinkingEnabled: "no" }));
+    assert.equal(thinkingEnabledSetting(project, environment), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

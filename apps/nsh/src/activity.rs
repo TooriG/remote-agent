@@ -13,6 +13,8 @@ use std::collections::HashSet;
 pub(crate) struct Item {
     pub source: Shared<RenderedItem>,
     pub turn: TurnId,
+    /// Its turn's live row (`RenderedTurn::live_activity`), which shimmers.
+    pub live: bool,
 }
 
 pub(crate) fn details(
@@ -83,18 +85,44 @@ pub(crate) fn details(
             crate::conversation::reveal_row(list, at.index() as u32);
         }
     };
+    let label = computed(move || {
+        item.with(|item| {
+            item.as_ref()
+                .map(|item| item.source.work_row_label(item.live))
+        })
+    });
+    let heading = move || {
+        label.with(|label| {
+            label
+                .as_ref()
+                .map(|label| localized(label.heading.clone()))
+                .unwrap_or_default()
+        })
+    };
+    // As T3 Code's work log: reasoning reads as its trace on one line, and
+    // expanded as Thinking above the whole of it.
+    let preview = move || {
+        label
+            .with(|label| label.as_ref().and_then(|l| l.preview.clone()))
+            .filter(|_| !open())
+    };
+    let summary = move || preview().unwrap_or_else(heading);
+    let accessible = move || {
+        SharedString::from(match preview() {
+            Some(preview) => format!("{}: {preview}", heading()),
+            None => heading(),
+        })
+    };
+    let live = move || item.with(|item| item.as_ref().is_some_and(|item| item.live));
     view()
         .w_full()
         .gap_1()
         // As T3 Code's work log: the tool's icon and a one-line summary.
         .child(
             nsh_base::button()
-                .accessibility_label(Some(SharedString::from(item.with_untracked(|item| {
-                    item.as_ref()
-                        .and_then(|item| item.source.data.title.clone())
-                        .map(localized)
-                        .unwrap_or_default()
-                }))))
+                .accessibility_label(nsh_core::element::Prop::from(
+                    accessible.into_reactive().map(Some),
+                ))
                 .flex_row()
                 .items_center()
                 .gap_3()
@@ -111,20 +139,20 @@ pub(crate) fn details(
                     }),
                     16.0,
                 ))
-                .child(
-                    text(move || {
-                        item.with(|item| {
-                            item.as_ref()
-                                .and_then(|item| item.source.data.title.clone())
-                                .map(localized)
-                                .unwrap_or_default()
-                        })
-                    })
-                    .flex_1()
-                    .min_w_0()
-                    .number_of_lines(1)
-                    .text_size(px(14.0)),
-                ),
+                .child(when(live, move || {
+                    // As T3's `live-tool-shine`, over the label alone.
+                    crate::shimmer::line(None, summary, crate::shimmer::Sweep::Shine, 14.0)
+                }))
+                .child(when(
+                    move || !live(),
+                    move || {
+                        text(summary)
+                            .flex_1()
+                            .min_w_0()
+                            .number_of_lines(1)
+                            .text_size(px(14.0))
+                    },
+                )),
         )
         .child(when(open, move || {
             view()
@@ -173,4 +201,36 @@ pub(crate) fn details(
                     || crate::conversation::Kind::Response,
                 ))
         }))
+}
+
+/// A live status line that is not a work row: T3 Code's Thinking row, with
+/// its brain icon, and setting up a worktree, which its body names. Both
+/// sweep as T3 Code's `ActivityShimmerOverlay`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Status {
+    /// The turn works with nothing else live.
+    Thinking,
+    SettingUp,
+}
+
+/// A row keeps its status: it is made for the one it shows.
+pub(crate) fn status(status: Memo<Option<Status>>, body: impl Fn() -> String + 'static) -> View {
+    let thinking = status.get_untracked() == Some(Status::Thinking);
+    view()
+        .w_full()
+        .h(px(24.0))
+        .flex_row()
+        .items_center()
+        .child(crate::shimmer::line(
+            thinking.then(|| crate::ui::Icon::work("reasoning")),
+            move || {
+                if thinking {
+                    tr("思考中").to_owned()
+                } else {
+                    body()
+                }
+            },
+            crate::shimmer::Sweep::Focus,
+            14.0,
+        ))
 }

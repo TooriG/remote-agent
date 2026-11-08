@@ -20,6 +20,10 @@ use codex_app_server::{CodexAppServer, Error as AppServerError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Every turn asks for reasoning summaries, resumed threads included: model
+/// catalogues can default them to "none", and clients show them as Thinking.
+const REASONING_SUMMARY: &str = "detailed";
+
 impl From<AppServerError> for Failure {
     fn from(error: AppServerError) -> Self {
         Self::unknown("provider_unavailable", error)
@@ -1002,6 +1006,7 @@ impl Agent for Codex {
                 params["model"] = serde_json::json!(input.model.as_ref().map(|model| &model.id));
                 params["effort"] = serde_json::json!(input.effort);
                 params["serviceTierForTurn"] = serde_json::json!(input.service_tier);
+                params["summary"] = REASONING_SUMMARY.into();
                 let reply: Value = self.request("turn/start", &params).await?;
                 Some(native_turn_id(reply["turn"]["id"].as_str())?)
             }
@@ -1016,7 +1021,7 @@ impl Agent for Codex {
         service_tier: Option<&str>,
     ) -> Result<op::SubmissionReceipt, Failure> {
         let reply: Value = self
-            .request("turn/start", &serde_json::json!({"threadId":id,"input":[],"model":model,"effort":effort,"serviceTierForTurn":service_tier}))
+            .request("turn/start", &serde_json::json!({"threadId":id,"input":[],"model":model,"effort":effort,"serviceTierForTurn":service_tier,"summary":REASONING_SUMMARY}))
             .await?;
         Ok(op::SubmissionReceipt {
             turn_id: Some(native_turn_id(reply["turn"]["id"].as_str())?),

@@ -3,8 +3,8 @@ use crate::ui::Enabled;
 use crate::{Connection, shared::Shared};
 use agent_core::{
     presentation::conversation::{
-        ActivityPresentation, ConversationRowContent, RenderedConversation, TurnErrorPresentation,
-        WorkProgress, activity_is_expanded,
+        ActivityPresentation, ConversationRowContent, LiveActivity, RenderedConversation,
+        TurnErrorPresentation, WorkProgress, activity_is_expanded,
     },
     state::{Intent, operations as op},
 };
@@ -42,6 +42,8 @@ struct Row {
     retry: Option<agent_protocol::operations::RetryPreparation>,
     images: Vec<String>,
     detail: Option<crate::activity::Item>,
+    /// A live status line in place of its body: thinking, setting up.
+    status: Option<crate::activity::Status>,
     progress: Option<WorkProgress>,
     /// The local time it was sent or answered (`HH:MM`).
     time: Option<String>,
@@ -63,21 +65,28 @@ fn project(
         .flat_map(|turn| {
             let mut expanded = false;
             let progress_shown = turn.rows.iter().any(|row| matches!(&row.content, ConversationRowContent::ActivityHeader { activity } if activity.is_in_progress));
+            // As T3 Code's live row: shown while the work is folded.
+            let live_activity = turn.live_activity();
             turn.conversation_rows().into_iter().filter_map(move |row| {
+                let live = match &row.content {
+                    ConversationRowContent::Activity { .. } => live_activity == Some(LiveActivity::Row(row.id.clone())),
+                    ConversationRowContent::InProgress { .. } => live_activity == Some(LiveActivity::Thinking),
+                    _ => false,
+                };
                 match &row.content {
                     ConversationRowContent::ActivityHeader { activity } => {
                         expanded = activity_is_expanded(&activity.status, expanded_work.get(&activity.id).cloned());
                     }
-                    ConversationRowContent::Activity { .. } if !expanded => return None,
-                    ConversationRowContent::InProgress { .. } if progress_shown => return None,
+                    ConversationRowContent::Activity { .. } if !expanded && !live => return None,
+                    ConversationRowContent::InProgress { .. } if progress_shown && !live => return None,
                     _ => {}
                 }
                 let progress = match &row.content {
-                    ConversationRowContent::ActivityHeader { activity } if activity.is_in_progress => Some(turn.work_progress(!expanded)),
-                    ConversationRowContent::InProgress { .. } => Some(turn.work_progress(false)),
+                    ConversationRowContent::ActivityHeader { activity } if activity.is_in_progress => Some(turn.work_progress(false)),
+                    ConversationRowContent::InProgress { .. } if !live => Some(turn.work_progress(false)),
                     _ => None,
                 };
-                Some((row, progress))
+                Some((row, progress, live))
             })
         })
         .chain(conversation.queued.iter().map(|item| {
@@ -86,10 +95,10 @@ fn project(
                 content: ConversationRowContent::User { item: item.clone() },
                 timestamp_ms: item.data.timestamp_ms,
                 steer: false,
-            }, None)
+            }, None, false)
         }))
-        .chain(conversation.session_rows.iter().cloned().map(|row| (row, None)))
-        .filter_map(|(row, progress)| {
+        .chain(conversation.session_rows.iter().cloned().map(|row| (row, None, false)))
+        .filter_map(|(row, progress, live)| {
             let images = match &row.content {
                 ConversationRowContent::User { item }
                 | ConversationRowContent::Activity { item, .. }
@@ -110,8 +119,13 @@ fn project(
             let unresolved = match &row.content { ConversationRowContent::User { item } => item.unknown_submission_id(), _ => None };
             let detail = match &row.content {
                 ConversationRowContent::Activity { item, turn_id } if item.data.collapsible => {
-                    Some(crate::activity::Item { source: Shared(item.clone()), turn: turn_id.clone() })
+                    Some(crate::activity::Item { source: Shared(item.clone()), turn: turn_id.clone(), live })
                 }
+                _ => None,
+            };
+            let status = match &row.content {
+                ConversationRowContent::InProgress { .. } if live => Some(crate::activity::Status::Thinking),
+                ConversationRowContent::Preparation { preparation } if preparation.shimmer => Some(crate::activity::Status::SettingUp),
                 _ => None,
             };
             let (kind, body) = match row.content {
@@ -145,6 +159,7 @@ fn project(
                 retry,
                 images,
                 detail,
+                status,
                 progress,
                 time,
                 steer,
@@ -306,6 +321,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                         computed(move || row.with(|r| r.as_ref().and_then(|r| r.detail.clone())));
                     let error =
                         computed(move || row.with(|r| r.as_ref().and_then(|r| r.error.clone())));
+                    let status = computed(move || row.with(|r| r.as_ref().and_then(|r| r.status)));
                     let label = move || {
                         row.with(|row| {
                             row.as_ref().map(|row| {
@@ -424,6 +440,14 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         )
                                     },
                                 ))
+                                .child(when(
+                                    move || status.get().is_some(),
+                                    move || {
+                                        crate::activity::status(status, move || {
+                                            label().unwrap_or_default().to_string()
+                                        })
+                                    },
+                                ))
                                 .child(
                                     view()
                                         .max_w(relative(1.0))
@@ -449,6 +473,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                             },
                                                         ) && row.detail.is_none()
                                                             && row.error.is_none()
+                                                            && row.status.is_none()
                                                     })
                                                 })
                                             },
@@ -1111,12 +1136,22 @@ mod tests {
         );
         assert!(expanded.iter().any(|row| row.detail.is_some()));
         assert!(expanded.iter().any(|row| row.body.as_ref() == "answer"));
+        // The header and the command; as T3 Code, a Thinking row below the
+        // answer, which no longer streams, says the turn still works.
         assert_eq!(
             expanded
                 .iter()
-                .filter(|row| row.kind == Kind::Activity)
+                .filter(|row| row.kind == Kind::Activity && row.status.is_none())
                 .count(),
             2
+        );
+        assert_eq!(
+            expanded.iter().filter(|row| row.progress.is_some()).count(),
+            1
+        );
+        assert_eq!(
+            expanded.last().and_then(|row| row.status),
+            Some(crate::activity::Status::Thinking)
         );
     }
 }

@@ -1,4 +1,4 @@
-use super::server::{Context, SharedThread, Turn};
+use super::server::{Context, SharedThread, Turn, remove_if_present};
 use crate::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -165,6 +165,9 @@ impl ScenarioTurn {
         turn,
         json!({"id":format!("fixture-reasoning-{suffix}"),"type":"reasoning","summary":["確認中"]}),
     )?;
+        if prompt.contains("[thinking]") && !self.think(&thread_id, &turn_id).await? {
+            return context.finish(thread, turn, "interrupted", None);
+        }
         let command_index = turn.borrow()["items"].as_array().unwrap().len();
         context.stream_item(&thread_id, turn, json!({"id":format!("fixture-command-{suffix}"),"type":"commandExecution",
         "command":"./gradlew test","cwd":thread.borrow().metadata["cwd"],"aggregatedOutput":"running","status":"inProgress"}))?;
@@ -316,6 +319,34 @@ impl ScenarioTurn {
             {"id":"duplicate-history-old","type":"agentMessage","phase":"final_answer","text":"Older AI response must remain visible."}]}))));
         }
         Ok(())
+    }
+
+    /// Codex's live reasoning: an empty item, a summary part streamed into it,
+    /// the item completed once the scenario releases it. False if interrupted.
+    async fn think(&self, thread_id: &str, turn_id: &str) -> Result<bool> {
+        const SUMMARY: &str =
+            "**フィクスチャの確認を計画しています**\n\nコマンドの順序を決めます。";
+        let id = format!("fixture-thinking-{}", self.suffix);
+        let index = self.turn.borrow()["items"].as_array().unwrap().len();
+        self.context.stream_item(
+            thread_id,
+            &self.turn,
+            json!({"id":id,"type":"reasoning","summary":[],"content":[]}),
+        )?;
+        let at = json!({"threadId":thread_id,"turnId":turn_id,"itemId":id,"summaryIndex":0});
+        self.context
+            .notify("item/reasoning/summaryPartAdded", &at)?;
+        let mut delta = at;
+        delta["delta"] = SUMMARY.into();
+        self.context
+            .notify("item/reasoning/summaryTextDelta", &delta)?;
+        self.turn.borrow_mut()["items"][index]["summary"] = json!([SUMMARY]);
+        if !wait_for_release(&self.context.home, &self.stop).await {
+            return Ok(false);
+        }
+        remove_if_present(&self.context.home.join("release-inputs"))?;
+        complete(&self.context, thread_id, &self.turn, index)?;
+        Ok(true)
     }
 
     async fn request_outcome(

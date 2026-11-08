@@ -7,7 +7,8 @@ type "AI に依頼する" "[groups] ライブの作業を確認します"
 press 送信
 expect "最初の確認が終わりました。次のコマンドを確認します。" 20000
 expect "コマンドを実行しました"
-expect "作業中 · pwd"
+# As T3 Code, the live row names the current work, apart from the timer.
+expect "pwd"
 expect "Fixture Model"
 expect_absent "./gradlew test"
 screenshot live

@@ -1,0 +1,18 @@
+# As T3 Code, reasoning reads as a live Thinking row, its trace on one line,
+# shown while the work is folded; once the turn ends it is a Thought row in
+# the folded work that expands to the whole trace.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[thinking] 考えてから答えます"
+press 送信
+expect "思考中: フィクスチャの確認を計画しています コマンドの順序を決めます。" 20000
+screenshot thinking
+fixture /release-inputs
+expect "シミュレータで完了しました。" 30000
+expect_absent "思考中"
+expect_absent "フィクスチャの確認を計画しています"
+press "*作業しました"
+press "思考: フィクスチャの確認を計画しています コマンドの順序を決めます。"
+expect "コマンドの順序を決めます。"
+expect_absent "計画しています コマンドの順序"
+screenshot thought

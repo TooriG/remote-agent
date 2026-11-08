@@ -1,6 +1,8 @@
 import { forkSession, query } from "@anthropic-ai/claude-agent-sdk";
 import { spawnClaudeCodeProcess } from "./session-state.ts";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Options, SDKUserMessage, PermissionResult, ElicitationResult, McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 
 type Initialize = { type: "initialize"; cwd: string; program: string; model?: string;
@@ -30,6 +32,37 @@ export function probeOptions(managedMcpConfig: boolean, environment: NodeJS.Proc
       CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
       CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",
     },
+  };
+}
+
+/**
+ * The user's `alwaysThinkingEnabled` in the Claude settings the session reads
+ * (user, then project, then local; the last that sets it wins). Unreadable
+ * files set nothing, as Claude ignores them too.
+ */
+export function thinkingEnabledSetting(cwd: string, environment: NodeJS.ProcessEnv): boolean | undefined {
+  const home = environment.CLAUDE_CONFIG_DIR ?? join(environment.HOME ?? homedir(), ".claude");
+  let enabled: boolean | undefined;
+  for (const path of [join(home, "settings.json"), join(cwd, ".claude", "settings.json"), join(cwd, ".claude", "settings.local.json")]) {
+    try {
+      const value = (JSON.parse(readFileSync(path, "utf8")) as { alwaysThinkingEnabled?: unknown }).alwaysThinkingEnabled;
+      if (typeof value === "boolean") enabled = value;
+    } catch { /* absent or unreadable */ }
+  }
+  return enabled;
+}
+
+/**
+ * As T3 Code: current models send thinking text only when summaries are
+ * requested, so a session asks for them unless the user turned thinking off.
+ * Bex passes Claude no launch arguments, so none chooses another display.
+ */
+export function thinkingOptions(alwaysThinkingEnabled: boolean | undefined): Partial<Options> {
+  if (alwaysThinkingEnabled === false) return {};
+  return {
+    thinking: { type: "adaptive", display: "summarized" },
+    settings: { showThinkingSummaries: true },
+    extraArgs: { "thinking-display": "summarized" },
   };
 }
 
@@ -73,6 +106,7 @@ export async function runBridge(lines: AsyncIterable<string>, emit: (event: Reco
       emit({ type: "request", requestId: id, request: body });
     });
   }
+  const thinking = thinkingOptions(thinkingEnabledSetting(config.cwd, process.env));
   const options: Options = {
     cwd: config.cwd,
     pathToClaudeCodeExecutable: config.program,
@@ -80,9 +114,10 @@ export async function runBridge(lines: AsyncIterable<string>, emit: (event: Reco
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.browser ? { mcpServers: { agent_browser: config.browser } } : {}),
     settingSources: ["user", "project", "local"],
+    ...thinking,
     systemPrompt: { type: "preset", preset: "claude_code" },
     includePartialMessages: true,
-    extraArgs: { "replay-user-messages": null },
+    extraArgs: { "replay-user-messages": null, ...thinking.extraArgs },
     spawnClaudeCodeProcess,
     ...(config.sessionId ? config.resume ? { resume: config.sessionId } : { sessionId: config.sessionId } : {}),
     canUseTool: (toolName, input, context) => request<PermissionResult>(context.requestId, {

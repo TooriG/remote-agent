@@ -714,7 +714,11 @@ impl Threads {
             std::process::exit(17);
         }
         let delayed = prompt.contains("[delayed-input]") || prompt.contains("[deferred-steer]");
-        if delayed || prompt.contains("[workspace-edit]") || prompt.contains("[groups]") {
+        if delayed
+            || ["[workspace-edit]", "[groups]", "[thinking]"]
+                .iter()
+                .any(|tag| prompt.contains(tag))
+        {
             remove_if_present(&context.home.join("release-inputs"))?;
         }
         let stop = CancellationToken::new();
