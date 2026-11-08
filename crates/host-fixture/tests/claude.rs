@@ -2224,7 +2224,13 @@ async fn claude_forks_a_completed_turn_while_a_later_turn_runs() {
         .unwrap();
     store
         .dispatch(Intent::SelectModel {
-            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
+            thread_id: store
+                .snapshot()
+                .panes
+                .primary()
+                .navigation
+                .draft_key
+                .clone(),
             model: models::ModelRef {
                 provider: ProviderKind::Claude,
                 id: "default".into(),

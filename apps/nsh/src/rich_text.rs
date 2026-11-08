@@ -2,13 +2,13 @@
 use crate::Connection;
 use crate::conversation::Kind;
 use crate::l10n::tr;
+#[cfg(any(desktop, target_os = "ios"))]
+use agent_core::{panels::PanelScope, state::Intent, store::SideChatStart};
 use agent_core::{
-    panels::PanelScope,
     presentation::markdown::{
         MarkdownAlignment, MarkdownBlock, MarkdownFileReference, MarkdownRun, MarkdownStyle,
     },
-    state::{DraftKey, Intent},
-    store::SideChatStart,
+    state::DraftKey,
 };
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::{Value, json};
@@ -265,6 +265,7 @@ fn target(connection: Connection) -> Memo<String> {
 
 /// What message text asks for: a selection quoted, explained or asked about
 /// in a side chat, a link pressed, or an item of a file chip's menu chosen.
+#[cfg(any(desktop, target_os = "ios"))]
 fn action(surroundings: Surroundings, data: &Value) {
     let Surroundings {
         connection, files, ..
