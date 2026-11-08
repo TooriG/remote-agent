@@ -60,6 +60,9 @@ enum RequestOutcome {
 fn expected_question_answer(prompt: &str) -> Option<Value> {
     if prompt.contains("[choice]") {
         Some(json!({"answers":{"continue":{"answers":["続ける"]}}}))
+    } else if prompt.contains("[back]") {
+        // The first answer is changed after going back to it from the second.
+        Some(json!({"answers":{"continue":{"answers":["見直す"]},"scope":{"answers":["全部"]}}}))
     } else if prompt.contains("[skip]") {
         Some(json!({"answers":{}}))
     } else {
@@ -326,6 +329,10 @@ impl ScenarioTurn {
         let method = if scenario == "request" {
             params["questions"] = json!([{"id":"continue","header":"継続","question":"このまま続けますか？",
                     "options":[{"label":"続ける","description":"作業を進めます"},{"label":"見直す","description":"方針を見直します"}],"isOther":true,"isSecret":false}]);
+            if prompt.contains("[back]") {
+                params["questions"].as_array_mut().unwrap().push(json!({"id":"scope","header":"範囲","question":"どこまで進めますか？",
+                    "options":[{"label":"全部","description":"すべて進めます"},{"label":"一部","description":"一部だけ進めます"}],"isOther":false,"isSecret":false}));
+            }
             "item/tool/requestUserInput"
         } else {
             params["command"] = "echo fixture".into();
@@ -524,6 +531,18 @@ mod tests {
         assert_eq!(
             request_result("[request]", "request", &skip, false),
             RequestOutcome::Continue
+        );
+        let revised =
+            json!({"answers":{"continue":{"answers":["見直す"]},"scope":{"answers":["全部"]}}});
+        let first =
+            json!({"answers":{"continue":{"answers":["続ける"]},"scope":{"answers":["全部"]}}});
+        assert_eq!(
+            request_result("[request] [back]", "request", &revised, false),
+            RequestOutcome::Continue
+        );
+        assert_eq!(
+            request_result("[request] [back]", "request", &first, false),
+            failed
         );
         assert_eq!(
             request_result("[request] [choice]", "request", &choice, true),
