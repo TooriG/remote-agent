@@ -194,6 +194,14 @@ impl Map {
             if seen.insert(element.id.as_str(), ()).is_some() {
                 return Err(format!("element {} is defined twice", element.id));
             }
+            if let Some(Up::Named(name)) = &element.nsh.up
+                && name != "background"
+            {
+                return Err(format!(
+                    "element {}: up = {name:?} is not \"background\" or a number",
+                    element.id
+                ));
+            }
         }
         for state in &self.states {
             if let Some(column) = &state.column
@@ -404,6 +412,11 @@ gpui = { x = 20, height = 14, glyph_dy = 0, source = "sidebar.rs:744" }
         assert_eq!(
             Map::parse(&columnless).unwrap_err(),
             "state turn measures from composer, which it does not compare"
+        );
+        let unknown_up = MAP.replace("up = \"background\"", "up = \"parent\"");
+        assert_eq!(
+            Map::parse(&unknown_up).unwrap_err(),
+            "element composer: up = \"parent\" is not \"background\" or a number"
         );
     }
 
