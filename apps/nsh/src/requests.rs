@@ -1,12 +1,13 @@
-//! Requests wait above the composer as T3 Code's cards: an approval's
-//! decisions in Core's tones, an input request's answer, and the question the
-//! composer answers, with its choices.
-use crate::l10n::{localized, tr};
+//! Requests wait on the composer's top edge as T3 Code's attached banners
+//! (`ComposerBanner`): an approval's label, reason and decisions, an input
+//! request's answer, and the question the composer answers, with its choices.
+use crate::l10n::{language, localized, tr};
 use crate::ui::{self, Enabled, Icon, colors};
 use crate::{Connection, native};
 use agent_core::{
     presentation::conversation::{
-        ActionTone, Request, answer_from_json, choice_tone, request_input_default,
+        ActionTone, ApprovalAction, Request, answer_from_json, approval_actions,
+        request_input_default,
     },
     questions::{QuestionAction, QuestionPrompt},
     state::{Intent, operations as op},
@@ -21,11 +22,28 @@ use nsh_core::{
 };
 
 const ERROR: Rgba = rgb(0xff8e86);
+/// How far the banner runs under the composer, which is drawn over it (T3's
+/// `--chat-composer-attachment-overlap`, 1rem and a pixel).
+const OVERLAP: f32 = 17.0;
+/// How far in from the composer's sides the banner stands (T3's 1.375rem
+/// `--chat-composer-drawer-inset`, measured from inside the composer's outline).
+const INSET: f32 = 21.0;
+/// The banner's fill: T3's raised surface at its glass opacity over the page.
+const SURFACE: Rgba = rgb(0x101010);
+/// A waiting approval's fill: the surface under 8% of T3's warning.
+const WARNING_SURFACE: Rgba = rgb(0x231b0f);
+const WARNING_OUTLINE: Rgba = rgba(0xfe9a0047);
+const NEUTRAL_OUTLINE: Rgba = rgba(0xffffff0d);
+/// T3's `--composer-banner-icon-column` beside a row's content.
+const ICON_COLUMN: f32 = 24.0;
 
+/// The banner waiting on the composer: an approval or input request first, as
+/// T3 Code's top drawer, else the question the composer answers. Placed right
+/// above the composer, which overlaps its foot.
 pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
+    let docked = move || connection.context.with(|p| p.docked_request().is_some());
     view()
-        .gap_2()
         .child(each(
             move || {
                 connection
@@ -33,17 +51,32 @@ pub(crate) fn panels(following: Signal<bool>) -> impl IntoElement {
                     .with(|p| p.docked_request().into_iter().collect::<Vec<_>>())
             },
             |request: &Request| request.id.clone(),
-            move |request, _| request_card(connection, following, request),
+            move |request, _| request_banner(connection, following, request),
         ))
         .child(each(
             move || {
+                if docked() {
+                    return Vec::new();
+                }
                 connection
                     .composer
                     .with(|p| p.controls.question.clone().into_iter().collect::<Vec<_>>())
             },
             |prompt: &QuestionPrompt| (prompt.request_id.clone(), prompt.question.id.clone()),
-            move |prompt, _| question_card(connection, following, prompt),
+            move |prompt, _| question_banner(connection, following, prompt),
         ))
+}
+
+/// T3's attached banner surface: inset from the composer's sides, rounded
+/// above, with its foot under the composer.
+fn attached(fill: Rgba, outline: Rgba) -> View {
+    view()
+        .mx(px(INSET))
+        .mb(px(-OVERLAP))
+        .rounded_t(px(18.0))
+        .border_1()
+        .border_color(outline)
+        .bg(fill)
 }
 
 /// Whether the request's answer is being sent.
@@ -56,21 +89,32 @@ fn sending(connection: Connection, id: RequestId) -> bool {
     })
 }
 
-/// The failure of the request's last answer, below its card.
-fn request_error(connection: Connection, id: impl Fn() -> RequestId + 'static) -> impl IntoElement {
-    text(move || {
-        connection.context.with(|p| {
-            p.request_error(id())
-                .map(|error| error.to_string())
-                .unwrap_or_default()
-        })
-    })
-    .selectable(true)
-    .text_size(px(12.0))
-    .text_color(ERROR)
+/// The failure of the request's last answer, below its banner's row while
+/// there is one.
+fn request_error(
+    connection: Connection,
+    id: impl Fn() -> RequestId + Copy + 'static,
+) -> impl IntoElement {
+    let error = computed(move || {
+        connection
+            .context
+            .with(|p| p.request_error(id()).map(|error| error.to_string()))
+    });
+    when(
+        move || error.with(Option::is_some),
+        move || {
+            text(move || error.get().unwrap_or_default())
+                .selectable(true)
+                .text_size(px(12.0))
+                .text_color(ERROR)
+        },
+    )
 }
 
-fn request_card(
+/// T3 Code's approval row (`ComposerPendingApprovalPanel` in a spacious
+/// warning banner): the shield, the request's label over its one-line
+/// summary, and its decisions; an input request's answer below.
+fn request_banner(
     connection: Connection,
     following: Signal<bool>,
     request: ReadSignal<Request>,
@@ -109,108 +153,172 @@ fn request_card(
             )
         })
     };
-    ui::card(vec![
-        view()
-            .px_5()
-            .py_4()
-            .gap_3()
-            .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .text_color(colors::MUTED)
-                    .child(ui::icon(Icon::SHIELD, 14.0))
-                    .child(text(move || request.with(|r| r.title.clone())).text_size(px(13.0))),
-            )
-            .child(
-                text(move || request.with(|r| r.body.clone()))
+    attached(WARNING_SURFACE, WARNING_OUTLINE)
+        .px_3()
+        .pt_3()
+        .pb(px(12.0 + OVERLAP))
+        .gap_3()
+        .child(
+            view()
+                .flex_row()
+                .items_start()
+                .gap_2()
+                .child(
+                    view()
+                        .w(px(ICON_COLUMN))
+                        .pt(px(2.0))
+                        .items_center()
+                        .text_color(colors::WARNING)
+                        .child(ui::icon(Icon::SHIELD, 16.0)),
+                )
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            text(move || request.with(|r| r.title.clone()))
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(colors::WARNING)
+                                .number_of_lines(1),
+                        )
+                        .child(
+                            scroll().max_h(px(80.0)).child(
+                                text(move || request.with(|r| r.summary().to_owned()))
+                                    .selectable(true)
+                                    .font_family(SharedString::from("monospace"))
+                                    .text_size(px(12.0))
+                                    .line_height(px(16.0))
+                                    .text_color(colors::T3_FOREGROUND),
+                            ),
+                        ),
+                )
+                .child(decisions(request, enabled, respond)),
+        )
+        .child(when(answered, move || {
+            answer_form(request, response, enabled, submit, respond)
+        }))
+        .child(when(
+            move || error.get().is_some(),
+            move || {
+                text(move || error.get().unwrap_or_default())
                     .selectable(true)
-                    .text_size(px(14.0)),
-            )
-            .child(when(
-                move || request.with(|r| !r.details.is_empty()),
-                move || {
-                    text(move || request.with(|r| r.details.clone()))
-                        .selectable(true)
-                        .text_size(px(12.0))
-                        .text_color(colors::MUTED)
-                        .p_3()
-                        .rounded(px(ui::RADIUS))
-                        .bg(colors::RAISED)
-                },
-            ))
-            .child(decisions(request, enabled, respond))
-            .child(when(answered, move || {
-                answer_form(request, response, enabled, submit, respond)
-            }))
-            .child(when(
-                move || error.get().is_some(),
-                move || {
-                    text(move || error.get().unwrap_or_default())
-                        .selectable(true)
-                        .text_size(px(12.0))
-                        .text_color(ERROR)
-                },
-            ))
-            .child(request_error(connection, move || {
-                request.with(|request| request.id.clone())
-            })),
-    ])
+                    .text_size(px(12.0))
+                    .text_color(ERROR)
+            },
+        ))
+        .child(request_error(connection, move || {
+            request.with(|request| request.id.clone())
+        }))
 }
 
-/// An approval's or a permission's choices: their descriptions, then the
-/// decisions in the tones Core ranks them with.
+/// An approval's or a permission's decisions as T3 Code lays them out:
+/// declining outlined, approving once filled, the rest in a menu after them.
 fn decisions(
     request: ReadSignal<Request>,
     enabled: impl Fn() -> bool + Copy + 'static,
     respond: impl Fn(Answer) + Copy + 'static,
 ) -> impl IntoElement {
-    let choices = move || request.with(|r| r.request_body.choices().to_vec());
-    view()
-        .gap_3()
-        .child(each(
-            choices,
-            |choice: &agent_protocol::requests::Choice| choice.id.clone(),
-            move |choice, _| {
-                when(
-                    move || choice.with(|c| !c.description.is_empty()),
-                    move || {
-                        text(move || choice.with(|c| c.description.clone()))
-                            .text_size(px(13.0))
-                            .text_color(colors::MUTED)
-                    },
-                )
+    let actions =
+        computed(move || request.with(|r| approval_actions(language(), r.request_body.choices())));
+    let answer = move |choice_id: String| {
+        respond(
+            if request.with_untracked(|r| matches!(r.request_body, RequestBody::Permission { .. }))
+            {
+                Answer::Permission { choice_id }
+            } else {
+                Answer::Approval { choice_id }
             },
-        ))
-        .child(view().flex_row().flex_wrap().gap_2().child(each(
-            choices,
-            |choice: &agent_protocol::requests::Choice| choice.id.clone(),
-            move |choice, _| {
-                let choice = choice.get_untracked();
-                let id = choice.id.clone();
-                ui::action_button(
-                    localized(choice.label),
-                    choice_tone(choice.effect),
+        )
+    };
+    let button = move |action: Option<ApprovalAction>, tone| {
+        action.map(|action| {
+            let ApprovalAction { choice_id, label } = action;
+            small_button(label, tone, move || answer(choice_id.clone())).enabled(enabled)
+        })
+    };
+    view()
+        .self_center()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .child(dynamic(move || {
+            button(
+                actions.with(|a| a.decline.clone()),
+                ActionTone::Secondary,
+            )
+        }))
+        .child(dynamic(move || {
+            button(actions.with(|a| a.approve.clone()), ActionTone::Primary)
+        }))
+        .child(when(
+            move || actions.with(|a| !a.more.is_empty()),
+            move || {
+                outlined(
+                    tr("その他の承認方法"),
+                    view().child(ui::icon(Icon::ELLIPSIS, 14.0)),
                     move || {
-                        respond(
-                            if request.with_untracked(|r| {
-                                matches!(r.request_body, RequestBody::Permission { .. })
-                            }) {
-                                Answer::Permission {
-                                    choice_id: id.clone(),
-                                }
-                            } else {
-                                Answer::Approval {
-                                    choice_id: id.clone(),
-                                }
-                            },
-                        )
+                        let items = actions.with_untracked(|a| {
+                            serde_json::json!(
+                                a.more
+                                    .iter()
+                                    .map(|action| serde_json::json!({"id": action.choice_id, "title": action.label}))
+                                    .collect::<Vec<_>>()
+                            )
+                        });
+                        ui::popup(&items, move |id| answer(id.to_owned()));
                     },
                 )
+                .w(px(24.0))
                 .enabled(enabled)
             },
-        )))
+        ))
+}
+
+/// T3 Code's extra-small button (`Button size="xs"`): 24 points, 12-point
+/// medium text, filled in the primary colour or outlined.
+fn small_button(
+    title: String,
+    tone: ActionTone,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
+    let label = text(title.clone())
+        .text_size(px(12.0))
+        .line_height(px(16.0))
+        .font_weight(FontWeight::MEDIUM)
+        .number_of_lines(1);
+    if tone == ActionTone::Primary {
+        return ui::bare_button(SharedString::from(title), press)
+            .h(px(24.0))
+            .px(px(7.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(colors::ACCENT)
+            .bg(colors::ACCENT)
+            .text_color(rgb(0xffffff))
+            .hover(|s| s.opacity(0.9))
+            .child(label);
+    }
+    outlined(SharedString::from(title), view().child(label), press).px(px(7.0))
+}
+
+/// T3 Code's outlined control: a faint fill inside its input-coloured edge.
+fn outlined(
+    label: impl IntoReactive<SharedString>,
+    content: View,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
+    ui::bare_button(label, press)
+        .h(px(24.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(colors::T3_INPUT)
+        .bg(rgba(0xffffff07))
+        .text_color(colors::T3_FOREGROUND)
+        .hover(|s| s.bg(rgba(0xffffff14)))
+        .child(content)
 }
 
 /// An input request's answer: its link or field, then sending, declining or
@@ -242,6 +350,7 @@ fn answer_form(
         .enabled(enabled)
     };
     view()
+        .pl(px(ICON_COLUMN + 8.0))
         .gap_3()
         .child(when(
             move || url.get().is_some(),
@@ -301,9 +410,10 @@ fn answer_form(
         )
 }
 
-/// The question the composer answers: its header and progress, the prompt,
-/// its choices, and going back or skipping.
-fn question_card(
+/// T3 Code's pending question (`ComposerPendingUserInputPanel`): its header,
+/// which folds the rest away, and dismissing it unanswered; the prompt and
+/// its numbered choices below. The composer answers it.
+fn question_banner(
     connection: Connection,
     following: Signal<bool>,
     prompt: ReadSignal<QuestionPrompt>,
@@ -315,111 +425,212 @@ fn question_card(
             && prompt.with(|p| p.can_respond)
             && !busy()
     };
-    let answer = move |action| {
-        connection.dispatch(Intent::AnswerQuestion {
-            request_id: prompt.with_untracked(|p| p.request_id.clone()),
-            action,
-        })
-    };
-    ui::card(vec![
-        view()
-            .px_5()
-            .py_4()
-            .gap_3()
-            .child(
+    let collapsed = signal(false);
+    attached(SURFACE, NEUTRAL_OUTLINE)
+        .p_1()
+        .pb(px(4.0 + OVERLAP))
+        .child(question_header(prompt, collapsed, busy, move || {
+            following.set(true);
+            connection.dispatch(Intent::Respond(op::Respond {
+                request_id: prompt.with_untracked(|p| p.request_id.clone()),
+                answer: Answer::SkipQuestions,
+            }));
+        }))
+        .child(when(
+            move || !collapsed.get(),
+            move || {
                 view()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
+                    .pl(px(28.0))
+                    .pr_1()
+                    .pb_1()
                     .child(
-                        view()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .flex_shrink_0()
-                            .text_color(colors::MUTED)
-                            .child(ui::icon(Icon::QUESTION, 14.0))
-                            .child(
-                                text(move || {
-                                    prompt.with(|p| {
-                                        p.status
-                                            .clone()
-                                            .map(localized)
-                                            .unwrap_or_else(|| tr("質問").into())
-                                    })
-                                })
-                                .text_size(px(13.0)),
-                            ),
+                        text(move || prompt.with(|p| p.question.prompt.clone()))
+                            .selectable(true)
+                            .text_size(px(14.0))
+                            .line_height(px(20.0))
+                            .text_color(colors::T3_FOREGROUND.opacity(0.85)),
                     )
-                    .child(
-                        text(move || prompt.with(|p| p.question.header.clone()))
-                            .text_size(px(13.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .truncate()
-                            .min_w_0(),
-                    )
-                    .child(view().flex_1())
-                    .child(
-                        text(move || {
-                            prompt.with(|p| p.progress.clone().map(localized).unwrap_or_default())
-                        })
-                        .text_size(px(12.0))
-                        .text_color(colors::MUTED),
-                    )
-                    .child(when(busy, ui::spinner)),
-            )
-            .child(
-                text(move || prompt.with(|p| p.question.prompt.clone()))
-                    .selectable(true)
-                    .text_size(px(14.0)),
-            )
-            .child(when(
-                move || prompt.with(|p| p.question.multiple),
-                || {
-                    text(tr("複数選択できます"))
-                        .text_size(px(12.0))
-                        .text_color(colors::MUTED)
-                },
-            ))
-            .child(choices(prompt, enabled, move |choice_id| {
-                following.set(true);
-                answer(QuestionAction::Choose { choice_id });
-            }))
-            .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .justify_end()
-                    .gap_2()
                     .child(when(
-                        move || prompt.with(|p| p.can_go_back),
-                        move || {
-                            ui::text_button(tr("前の質問へ"), move || {
-                                answer(QuestionAction::Back)
-                            })
-                            .enabled(enabled)
+                        move || prompt.with(|p| p.question.multiple),
+                        || {
+                            text(tr("複数選択できます"))
+                                .mt_1()
+                                .text_size(px(12.0))
+                                .line_height(px(16.0))
+                                .text_color(colors::T3_MUTED)
                         },
                     ))
-                    .child(
-                        ui::action_button(
-                            tr("スキップする"),
-                            ActionTone::Secondary,
-                            move || {
-                                following.set(true);
-                                connection.dispatch(Intent::Respond(op::Respond {
-                                    request_id: prompt.with_untracked(|p| p.request_id.clone()),
-                                    answer: Answer::SkipQuestions,
-                                }));
-                            },
-                        )
-                        .enabled(enabled),
-                    ),
-            )
-            .child(request_error(connection, request_id)),
-    ])
+                    .child(view().mt_2().gap(px(2.0)).child(choices(
+                        prompt,
+                        enabled,
+                        move |choice_id| {
+                            following.set(true);
+                            connection.dispatch(Intent::AnswerQuestion {
+                                request_id: prompt.with_untracked(|p| p.request_id.clone()),
+                                action: QuestionAction::Choose { choice_id },
+                            })
+                        },
+                    )))
+            },
+        ))
+        .child(request_error(connection, request_id))
 }
 
-/// The question's choices as rows divided by rules, each marked when chosen.
+/// The composer's actions while it answers a question, as T3 Code's: going
+/// back to the previous question (outlined), then the pill that moves on or
+/// sends the answers.
+pub(crate) fn question_actions(
+    answering: Memo<Option<QuestionPrompt>>,
+    enabled: impl Fn() -> bool + Copy + 'static,
+    submit: impl Fn() + 'static,
+) -> impl IntoElement {
+    let connection = use_context::<Connection>().unwrap();
+    let action = move || {
+        SharedString::from(
+            answering.with(|q| q.as_ref().map(|q| q.action.clone()).unwrap_or_default()),
+        )
+    };
+    view()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(when(
+            move || answering.with(|q| q.as_ref().is_some_and(|q| q.can_go_back)),
+            move || {
+                outlined(
+                    tr("前の質問へ"),
+                    view().child(
+                        text(tr("前の質問へ"))
+                            .text_size(px(14.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .number_of_lines(1),
+                    ),
+                    move || {
+                        if let Some(question) = answering.get_untracked() {
+                            connection.dispatch(Intent::AnswerQuestion {
+                                request_id: question.request_id,
+                                action: QuestionAction::Back,
+                            });
+                        }
+                    },
+                )
+                .h(px(28.0))
+                .px(px(9.0))
+            },
+        ))
+        .child(
+            ui::bare_button(action, submit)
+                .h(px(28.0))
+                .px_3()
+                .rounded_full()
+                .bg(colors::ACCENT)
+                .text_color(rgb(0xffffff))
+                .hover(|s| s.opacity(0.9))
+                .enabled(enabled)
+                .child(
+                    text(action)
+                        .text_size(px(14.0))
+                        .line_height(px(20.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .number_of_lines(1),
+                ),
+        )
+}
+
+/// The question's header row: its title (and, folded, its prompt), how far
+/// through the request it is, folding, and dismissing it unanswered.
+fn question_header(
+    prompt: ReadSignal<QuestionPrompt>,
+    collapsed: Signal<bool>,
+    busy: impl Fn() -> bool + Copy + 'static,
+    dismiss: impl Fn() + 'static,
+) -> impl IntoElement {
+    let fold_label = move || {
+        SharedString::from(if collapsed.get() {
+            tr("質問と選択肢を表示")
+        } else {
+            tr("質問と選択肢を隠す")
+        })
+    };
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .min_h(px(ICON_COLUMN))
+        .child(
+            ui::bare_button(fold_label, move || collapsed.update(|c| *c = !*c))
+                .flex_1()
+                .min_w_0()
+                .justify_start()
+                .items_center()
+                .gap_1()
+                .pl(px(ICON_COLUMN + 4.0))
+                .min_h(px(ICON_COLUMN))
+                .rounded(px(6.0))
+                .child(
+                    text(move || {
+                        prompt.with(|p| {
+                            p.status
+                                .clone()
+                                .unwrap_or_else(|| p.question.header.clone())
+                        })
+                    })
+                    .flex_shrink_0()
+                    .text_size(px(12.0))
+                    .line_height(px(16.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(colors::T3_MUTED),
+                )
+                .child(when(
+                    move || collapsed.get(),
+                    move || {
+                        text(move || prompt.with(|p| p.question.prompt.clone()))
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(12.0))
+                            .line_height(px(16.0))
+                            .text_color(colors::T3_MUTED)
+                    },
+                )),
+        )
+        .child(when(
+            move || prompt.with(|p| p.progress.is_some()),
+            move || {
+                text(move || prompt.with(|p| p.progress.clone().unwrap_or_default()))
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(colors::T3_MUTED)
+            },
+        ))
+        .child(when(busy, ui::spinner))
+        .child(
+            view()
+                .w(px(24.0))
+                .h(px(24.0))
+                .items_center()
+                .justify_center()
+                .text_color(colors::T3_MUTED)
+                .child(dynamic(move || {
+                    ui::icon(
+                        if collapsed.get() {
+                            Icon::CHEVRON_UP
+                        } else {
+                            Icon::CHEVRON_DOWN
+                        },
+                        14.0,
+                    )
+                })),
+        )
+        .child(
+            ui::icon_button(Icon::CLOSE, tr("回答せずに閉じる"), dismiss)
+                .text_color(colors::T3_MUTED)
+                .enabled(move || !busy()),
+        )
+}
+
+/// The question's choices as T3 Code's rows: label over description, the
+/// number that picks it, or a check once chosen.
 fn choices(
     prompt: ReadSignal<QuestionPrompt>,
     enabled: impl Fn() -> bool + Copy + 'static,
@@ -432,70 +643,72 @@ fn choices(
             let chosen = move || {
                 prompt.with(|p| p.chosen_choice_ids.contains(&choice.with(|c| c.id.clone())))
             };
-            nsh_base::button()
-                .accessibility_label(move || {
-                    Some(SharedString::from(choice.with(|c| c.label.clone())))
-                })
-                .flex_row()
-                .items_center()
-                .gap_3()
-                .w_full()
-                .px_2()
-                .py_2()
-                .rounded(px(ui::RADIUS))
-                .text_color(colors::FOREGROUND)
-                .hover(|s| s.bg(colors::GHOST_HOVER))
-                .disabled_style(|s| s.opacity(0.5))
-                .style_when(
-                    move || index.get() > 0,
-                    |s| s.border_t_1().border_t_color(colors::BORDER),
-                )
-                .on_press(move || choose(choice.with_untracked(|c| c.id.clone())))
-                .enabled(enabled)
-                .child(mark(chosen))
-                .child(
+            ui::bare_button(
+                move || SharedString::from(choice.with(|c| c.label.clone())),
+                move || choose(choice.with_untracked(|c| c.id.clone())),
+            )
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .px(px(10.0))
+            .py_2()
+            .rounded(px(8.0))
+            .text_color(move || {
+                if chosen() {
+                    colors::T3_FOREGROUND
+                } else {
+                    colors::T3_FOREGROUND.opacity(0.85)
+                }
+            })
+            .style_when(chosen, |s| s.bg(rgba(0xffffff04)))
+            .hover(|s| s.bg(rgba(0xffffff02)))
+            .disabled_style(|s| s.opacity(0.5))
+            .enabled(enabled)
+            .child(
+                view()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.0))
+                    .child(
+                        text(move || choice.with(|c| c.label.clone()))
+                            .text_size(px(14.0))
+                            .line_height(px(20.0))
+                            .font_weight(FontWeight::MEDIUM),
+                    )
+                    .child(when(
+                        move || {
+                            choice.with(|c| !c.description.is_empty() && c.description != c.label)
+                        },
+                        move || {
+                            text(move || choice.with(|c| c.description.clone()))
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(colors::T3_MUTED)
+                        },
+                    )),
+            )
+            .child(dynamic(move || {
+                if chosen() {
                     view()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_1()
-                        .child(text(move || choice.with(|c| c.label.clone())).text_size(px(14.0)))
-                        .child(when(
-                            move || choice.with(|c| !c.description.is_empty()),
-                            move || {
-                                text(move || choice.with(|c| c.description.clone()))
-                                    .text_size(px(12.0))
-                                    .text_color(colors::MUTED)
-                            },
-                        )),
-                )
+                        .text_color(colors::ACCENT)
+                        .child(ui::icon(Icon::CHECK, 14.0))
+                        .into_element()
+                } else {
+                    view()
+                        .w(px(20.0))
+                        .h(px(20.0))
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            text((index.get() + 1).to_string())
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(colors::T3_MUTED),
+                        )
+                        .into_element()
+                }
+            }))
         },
     )
-}
-
-/// A chosen choice's filled check, else an empty ring.
-fn mark(chosen: impl Fn() -> bool + Copy + 'static) -> impl IntoElement {
-    view()
-        .w(px(20.0))
-        .h(px(20.0))
-        .flex_shrink_0()
-        .rounded_full()
-        .items_center()
-        .justify_center()
-        .border_2()
-        .border_color(move || {
-            if chosen() {
-                colors::FOREGROUND
-            } else {
-                colors::BORDER
-            }
-        })
-        .bg(move || {
-            if chosen() {
-                colors::FOREGROUND
-            } else {
-                rgba(0x00000000)
-            }
-        })
-        .text_color(colors::SURFACE)
-        .child(when(chosen, || ui::icon(Icon::CHECK, 12.0)))
 }

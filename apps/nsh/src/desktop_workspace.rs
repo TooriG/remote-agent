@@ -553,16 +553,12 @@ pub(crate) fn draft_hero() -> View {
         })
     });
     let project = move || {
-        let directory = directory.get();
-        projects.with(|projects| {
-            projects
-                .iter()
-                .find(|(_, root)| *root == directory)
-                .map(|(name, _)| name.clone())
-                .unwrap_or_else(|| {
-                    agent_core::presentation::markdown::file_basename(&directory).to_owned()
-                })
-        })
+        connection
+            .context
+            .with(|p| p.workspace_project().map(|project| project.name))
+            .unwrap_or_else(|| {
+                agent_core::presentation::markdown::file_basename(&directory.get()).to_owned()
+            })
     };
     let choose = move || {
         let selected = directory.get_untracked();

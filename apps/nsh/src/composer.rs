@@ -693,17 +693,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                             .child(when(
                                 move || answering.with(Option::is_some),
                                 move || {
-                                    ui::text_button(
-                                        move || {
-                                            SharedString::from(answering.with(|q| {
-                                                q.as_ref()
-                                                    .map(|q| q.action.clone())
-                                                    .unwrap_or_default()
-                                            }))
-                                        },
-                                        submit,
-                                    )
-                                    .enabled(enabled)
+                                    crate::requests::question_actions(answering, enabled, submit)
                                 },
                             ))
                             .child(when(
@@ -878,7 +868,6 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     ));
     column
         .child(crate::background_work::strip())
-        .child(crate::requests::panels(following))
         .child(when(
             move || {
                 composition.with(Option::is_none)
@@ -977,18 +966,24 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             move || follow_up.with(|f| !f.queue.is_empty()),
             move || crate::queue::queued(connection),
         ))
-        .child(when(is_desktop, desktop_box))
-        .child(when(
-            move || !is_desktop(),
-            move || {
-                view()
-                    .p_2()
-                    .gap_1()
-                    .rounded(px(26.0))
-                    .glass_effect(GlassEffect::Regular)
-                    .child(actions())
-            },
-        ))
+        // A waiting request's banner sits on the composer's top edge, its foot
+        // under the composer drawn after it.
+        .child(
+            view()
+                .child(crate::requests::panels(following))
+                .child(when(is_desktop, desktop_box))
+                .child(when(
+                    move || !is_desktop(),
+                    move || {
+                        view()
+                            .p_2()
+                            .gap_1()
+                            .rounded(px(26.0))
+                            .glass_effect(GlassEffect::Regular)
+                            .child(actions())
+                    },
+                )),
+        )
         .child(when(
             move || controls.with(|c| !c.connected),
             move || {

@@ -1371,10 +1371,11 @@ pub fn request(language: UiLanguage, source: &WireRequest) -> Request {
             details,
             ..
         } => {
+            // T3 Code's approval labels.
             let title = match kind {
-                ApprovalKind::Command => "コマンドの承認待ち",
-                ApprovalKind::FileChange => "ファイル変更の承認待ち",
-                ApprovalKind::Tool => "ツールの承認待ち",
+                ApprovalKind::Command => "コマンドの承認",
+                ApprovalKind::FileChange => "ファイル変更の承認",
+                ApprovalKind::Tool => "ツールの承認",
             };
             (title, description.clone(), details.clone())
         }
@@ -1382,7 +1383,7 @@ pub fn request(language: UiLanguage, source: &WireRequest) -> Request {
             description,
             details,
             ..
-        } => ("権限の承認待ち", description.clone(), details.clone()),
+        } => ("権限の承認", description.clone(), details.clone()),
         RequestBody::Question { questions } => (
             "回答待ち",
             questions
@@ -1432,15 +1433,55 @@ pub enum ActionTone {
     Danger,
 }
 
-/// T3 Code leads with a one-time grant and marks denial; broader grants stay
-/// secondary.
-#[cfg_attr(feature = "bindings", uniffi::export)]
-pub fn choice_tone(effect: agent_protocol::requests::ChoiceEffect) -> ActionTone {
+impl Request {
+    /// The one line T3 Code shows under an approval's label: the provider's
+    /// reason, else what it would run, else the label itself.
+    pub fn summary(&self) -> &str {
+        [&self.body, &self.details, &self.title]
+            .into_iter()
+            .find(|text| !text.is_empty())
+            .map_or("", String::as_str)
+    }
+}
+
+/// A decision an approval offers, labelled in the UI language.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ApprovalAction {
+    pub choice_id: String,
+    pub label: String,
+}
+
+/// An approval's decisions as T3 Code lays them out: declining (outlined)
+/// and approving once (filled) as buttons, every other decision (a lasting
+/// grant, a rule) in a menu after them, in the provider's order.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ApprovalActions {
+    pub decline: Option<ApprovalAction>,
+    pub approve: Option<ApprovalAction>,
+    pub more: Vec<ApprovalAction>,
+}
+
+pub fn approval_actions(
+    language: UiLanguage,
+    choices: &[agent_protocol::requests::Choice],
+) -> ApprovalActions {
     use agent_protocol::requests::ChoiceEffect;
-    match effect {
-        ChoiceEffect::Allow => ActionTone::Primary,
-        ChoiceEffect::Deny => ActionTone::Danger,
-        ChoiceEffect::AllowLasting => ActionTone::Secondary,
+    let action = |choice: &agent_protocol::requests::Choice| ApprovalAction {
+        choice_id: choice.id.clone(),
+        label: language.text(&choice.label).into(),
+    };
+    let first = |effect| choices.iter().position(|choice| choice.effect == effect);
+    let decline = first(ChoiceEffect::Deny);
+    let approve = first(ChoiceEffect::Allow);
+    ApprovalActions {
+        decline: decline.map(|index| action(&choices[index])),
+        approve: approve.map(|index| action(&choices[index])),
+        more: choices
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| Some(*index) != decline && Some(*index) != approve)
+            .map(|(_, choice)| action(choice))
+            .collect(),
     }
 }
 
@@ -2353,15 +2394,67 @@ mod tests {
     }
 
     #[test]
-    fn request_choices_rank_as_t3_ranks_approval_decisions() {
-        use agent_protocol::requests::ChoiceEffect;
-        for (effect, tone) in [
-            (ChoiceEffect::Allow, ActionTone::Primary),
-            (ChoiceEffect::AllowLasting, ActionTone::Secondary),
-            (ChoiceEffect::Deny, ActionTone::Danger),
-        ] {
-            assert_eq!(choice_tone(effect), tone);
-        }
+    fn approvals_offer_declining_and_approving_once_with_the_rest_in_a_menu_as_t3() {
+        use agent_protocol::requests::{Choice, ChoiceEffect};
+        let choice = |id: &str, label: &str, effect| Choice {
+            id: id.into(),
+            label: label.into(),
+            description: String::new(),
+            effect,
+        };
+        let action = |id: &str, label: &str| ApprovalAction {
+            choice_id: id.into(),
+            label: label.into(),
+        };
+        // Codex's order: approving, then the lasting grants, then declining.
+        let choices = [
+            choice("allow", "承認", ChoiceEffect::Allow),
+            choice(
+                "session",
+                "このセッションで承認",
+                ChoiceEffect::AllowLasting,
+            ),
+            choice("rule", "ネットワーク拒否ルールを追加", ChoiceEffect::Deny),
+            choice("deny", "拒否", ChoiceEffect::Deny),
+        ];
+        assert_eq!(
+            approval_actions(UiLanguage::English, &choices),
+            ApprovalActions {
+                // The first denial is the one declining.
+                decline: Some(action("rule", "Add a network deny rule")),
+                approve: Some(action("allow", "Approve")),
+                more: vec![
+                    action("session", "Always allow this session"),
+                    action("deny", "Decline"),
+                ],
+            }
+        );
+        // A request without a one-time grant has no approve button.
+        assert_eq!(
+            approval_actions(UiLanguage::Japanese, &choices[1..2]),
+            ApprovalActions {
+                decline: None,
+                approve: None,
+                more: vec![action("session", "このセッションで承認")],
+            }
+        );
+    }
+
+    #[test]
+    fn an_approval_summarises_its_reason_else_what_it_runs_else_its_label() {
+        let request = |body: &str, details: &str| Request {
+            id: "1".into(),
+            title: "Command approval".into(),
+            body: body.into(),
+            can_respond: true,
+            details: details.into(),
+            request_body: agent_protocol::requests::RequestBody::Question {
+                questions: Vec::new(),
+            },
+        };
+        assert_eq!(request("why", "echo").summary(), "why");
+        assert_eq!(request("", "echo").summary(), "echo");
+        assert_eq!(request("", "").summary(), "Command approval");
     }
 
     #[test]
@@ -3557,7 +3650,7 @@ mod tests {
             .collect();
         assert_eq!(done.len(), 1);
         assert_eq!(done[0].id.as_str(), "1");
-        assert_eq!(done[0].title, "コマンドの承認待ち");
+        assert_eq!(done[0].title, "コマンドの承認");
         assert_eq!(done[0].body, "run command");
         assert_eq!(
             done[0]

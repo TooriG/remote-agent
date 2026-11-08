@@ -1,6 +1,214 @@
 {
   "sourceLanguage": "ja",
   "strings": {
+    "ターミナルを切り替え": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle terminal drawer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルを切り替え"
+          }
+        }
+      }
+    },
+    "その他の承認方法": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More approval options"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "その他の承認方法"
+          }
+        }
+      }
+    },
+    "質問と選択肢を表示": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show the question and its options"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "質問と選択肢を表示"
+          }
+        }
+      }
+    },
+    "質問と選択肢を隠す": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide the question and its options"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "質問と選択肢を隠す"
+          }
+        }
+      }
+    },
+    "回答せずに閉じる": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss question without answering"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回答せずに閉じる"
+          }
+        }
+      }
+    },
+    "承認": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approve"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "承認"
+          }
+        }
+      }
+    },
+    "拒否": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decline"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拒否"
+          }
+        }
+      }
+    },
+    "このセッションで承認": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always allow this session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このセッションで承認"
+          }
+        }
+      }
+    },
+    "このターンで許可": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow for this turn"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このターンで許可"
+          }
+        }
+      }
+    },
+    "このセッションで許可": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow for this session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このセッションで許可"
+          }
+        }
+      }
+    },
+    "実行ルールを追加して承認": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approve and add an execution rule"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "実行ルールを追加して承認"
+          }
+        }
+      }
+    },
+    "ネットワーク許可ルールを追加": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add a network allow rule"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ネットワーク許可ルールを追加"
+          }
+        }
+      }
+    },
+    "ネットワーク拒否ルールを追加": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add a network deny rule"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ネットワーク拒否ルールを追加"
+          }
+        }
+      }
+    },
     "すべての接続先": {
       "localizations": {
         "en": {
@@ -2945,18 +3153,18 @@
         }
       }
     },
-    "コマンドの承認待ち": {
+    "コマンドの承認": {
       "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "コマンドの承認待ち"
-          }
-        },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Waiting for command approval"
+            "value": "Command approval"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コマンドの承認"
           }
         }
       }
@@ -3857,18 +4065,18 @@
         }
       }
     },
-    "ツールの承認待ち": {
+    "ツールの承認": {
       "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ツールの承認待ち"
-          }
-        },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Waiting for tool approval"
+            "value": "Tool approval"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ツールの承認"
           }
         }
       }
@@ -4241,18 +4449,18 @@
         }
       }
     },
-    "ファイル変更の承認待ち": {
+    "ファイル変更の承認": {
       "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ファイル変更の承認待ち"
-          }
-        },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Waiting for file change approval"
+            "value": "File change approval"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイル変更の承認"
           }
         }
       }
@@ -7571,16 +7779,16 @@
     },
     "回答を送信": {
       "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submit"
+          }
+        },
         "ja": {
           "stringUnit": {
             "state": "translated",
             "value": "回答を送信"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Send answer"
           }
         }
       }
@@ -9473,18 +9681,18 @@
         }
       }
     },
-    "権限の承認待ち": {
+    "権限の承認": {
       "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "権限の承認待ち"
-          }
-        },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Waiting for permission approval"
+            "value": "App permission approval"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "権限の承認"
           }
         }
       }
@@ -9539,16 +9747,16 @@
     },
     "次の質問": {
       "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next"
+          }
+        },
         "ja": {
           "stringUnit": {
             "state": "translated",
             "value": "次の質問"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Next question"
           }
         }
       }
@@ -10547,16 +10755,16 @@
     },
     "複数選択できます": {
       "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select one or more options."
+          }
+        },
         "ja": {
           "stringUnit": {
             "state": "translated",
             "value": "複数選択できます"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Multiple selections allowed"
           }
         }
       }
@@ -15030,7 +15238,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Previous question"
+            "value": "Previous"
           }
         },
         "ja": {

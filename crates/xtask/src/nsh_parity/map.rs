@@ -176,6 +176,10 @@ pub struct NshMatch {
     /// ancestor (or itself) whose layer fills a background.
     #[serde(default)]
     pub up: Option<Up>,
+    /// Then that view's child at this index, from 0: a part no text names
+    /// (a field's icon).
+    #[serde(default)]
+    pub child: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]

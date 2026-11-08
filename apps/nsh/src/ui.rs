@@ -18,8 +18,21 @@ pub(crate) mod colors {
     pub(crate) const BORDER: Rgba = rgb(0x303030);
     pub(crate) const FOREGROUND: Rgba = rgb(0xe6e6e6);
     pub(crate) const MUTED: Rgba = rgb(0xa6a6a6);
-    #[cfg(not(target_os = "ios"))]
+    /// T3 Code's `--primary`.
     pub(crate) const ACCENT: Rgba = rgb(0x346bf1);
+    // T3 Code's dark theme, for the conversation's header and the banners
+    // over its timeline and composer.
+    /// `--foreground` (neutral-100).
+    pub(crate) const T3_FOREGROUND: Rgba = rgb(0xf5f5f5);
+    /// `--muted-foreground`: neutral-500 with a tenth of white.
+    pub(crate) const T3_MUTED: Rgba = rgb(0x818181);
+    /// `--accent`: a pressed or hovered ghost control, white at 4%.
+    #[cfg(desktop)]
+    pub(crate) const T3_ACCENT: Rgba = rgba(0xffffff0a);
+    /// `--input`: an outlined control's edge, white at 8%.
+    pub(crate) const T3_INPUT: Rgba = rgba(0xffffff14);
+    /// `--warning` (amber-500).
+    pub(crate) const WARNING: Rgba = rgb(0xfe9a00);
     /// A ghost control under the pointer: the selection fill at half opacity.
     pub(crate) const GHOST_HOVER: Rgba = rgba(0x28282880);
     /// A sidebar row under the pointer.
@@ -91,10 +104,13 @@ impl Icon {
     #[cfg(desktop)]
     pub(crate) const PANEL_LEFT_OPEN: Self = icon!(PanelLeftOpen);
     pub(crate) const PANEL_RIGHT: Self = icon!(PanelRight);
+    #[cfg(desktop)]
+    pub(crate) const PANEL_BOTTOM: Self = icon!(PanelBottom);
     pub(crate) const PLUS: Self = icon!(Plus);
     pub(crate) const PUZZLE: Self = icon!(Puzzle);
     pub(crate) const SHIELD: Self = icon!(Shield);
     pub(crate) const SPARKLES: Self = icon!(Sparkles);
+    #[cfg(desktop)]
     pub(crate) const QUESTION: Self = icon!(MessageCircleQuestionMark);
     #[cfg(desktop)]
     pub(crate) const QUOTE: Self = icon!(Quote);
@@ -137,7 +153,7 @@ impl Icon {
     const NOTIFY_EYE: Self = icon!(Eye);
     const NOTIFY_ZAP: Self = icon!(Zap);
     /// Lucide 1 names circle-alert circle-exclamation-point.
-    const NOTIFY_ALERT: Self = icon!(CircleExclamationPoint);
+    pub(crate) const ALERT: Self = icon!(CircleExclamationPoint);
 
     /// A notification row's icon, as T3 Code's work log draws it.
     pub(crate) fn notification(
@@ -149,7 +165,7 @@ impl Icon {
             Terminal => Self::NOTIFY_TERMINAL,
             Eye => Self::NOTIFY_EYE,
             Zap => Self::NOTIFY_ZAP,
-            CircleAlert => Self::NOTIFY_ALERT,
+            CircleAlert => Self::ALERT,
         }
     }
 
@@ -292,6 +308,45 @@ pub(crate) fn spinner() -> impl IntoElement {
 /// AppKit's own on the Mac.
 #[cfg(not(target_os = "macos"))]
 pub(crate) type Control = nsh_base::ButtonElement;
+
+/// nsh-base's button (focus, keys, accessibility) with no look of its own,
+/// for a control drawn in T3 Code's.
+pub(crate) fn bare_button(
+    label: impl IntoReactive<SharedString>,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
+    nsh_base::button()
+        .accessibility_label(nsh_core::element::Prop::from(
+            label.into_reactive().map(Some),
+        ))
+        .flex_shrink_0()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .disabled_style(|s| s.opacity(0.64))
+        .on_press(press)
+}
+
+/// T3 Code's ghost toggle (`Toggle variant="ghost" size="sm"`): 28 points,
+/// rounded by 10, a 16-point icon at 80%, filled while pressed or hovered.
+#[cfg(desktop)]
+pub(crate) fn toggle(
+    glyph: Icon,
+    label: impl IntoReactive<SharedString>,
+    pressed: impl Fn() -> bool + Copy + 'static,
+    press: impl Fn() + 'static,
+) -> nsh_base::ButtonElement {
+    let label = label.into_reactive();
+    bare_button(label.clone(), press)
+        .w(px(28.0))
+        .h(px(28.0))
+        .rounded(px(10.0))
+        .text_color(colors::T3_FOREGROUND.opacity(0.8))
+        .hover(|s| s.bg(colors::T3_ACCENT))
+        .selected(pressed)
+        .selected_style(|s| s.bg(colors::T3_ACCENT))
+        .child(view().tooltip(tooltip(label)).child(icon(glyph, 16.0)))
+}
 
 /// nsh-base's button (focus, keys, accessibility) in the desktop client's
 /// ghost look, its content filling it.

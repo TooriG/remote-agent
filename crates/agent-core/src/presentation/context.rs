@@ -41,6 +41,21 @@ impl ConversationOpening {
     }
 }
 
+/// T3 Code's thread error banner over the timeline: the latest turn's failure
+/// while it stands, unless it is a usage limit, which the timeline's row
+/// already explains.
+fn thread_error(
+    language: crate::localization::UiLanguage,
+    thread: &crate::models::Thread,
+) -> Option<String> {
+    use agent_protocol::execution::{ErrorCategory, TurnStatus};
+    let turn = thread.turns.as_ref()?.last()?;
+    let error = turn.error.as_ref().filter(|error| {
+        turn.status == TurnStatus::Failed && error.category != ErrorCategory::UsageLimit
+    })?;
+    Some(language.text(&error.message).into())
+}
+
 #[derive(Clone, Default, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct ConversationContext {
@@ -51,6 +66,8 @@ pub struct ConversationContext {
     title: Option<String>,
     pub home: Option<String>,
     directory: String,
+    project: Option<super::list::ProjectSummary>,
+    thread_error: Option<String>,
     pub history: Option<HistoryControl>,
     pub docked: Vec<super::conversation::Request>,
     notices: Vec<ErrorNotice>,
@@ -66,6 +83,7 @@ impl ConversationContext {
         previous: Option<&Arc<Self>>,
     ) -> Arc<Self> {
         let session = pane.navigation.thread_id.as_ref();
+        let directory = snapshot.selected_directory(pane);
         let next = Self {
             workspace_error: snapshot.operation_error(OperationKey::WorkspaceReview {
                 pane: (pane_id).to_owned(),
@@ -98,7 +116,11 @@ impl ConversationContext {
                     })
             }),
             home: snapshot.connection.host_home_directory.clone(),
-            directory: snapshot.selected_directory(pane),
+            project: snapshot.directory_project(&directory),
+            directory,
+            thread_error: session
+                .and_then(|id| snapshot.sessions.conversations.get(id))
+                .and_then(|thread| thread_error(snapshot.catalog.ui_language, thread)),
             history: session.and_then(|id| snapshot.history_control(id.clone())),
             notices: snapshot.error_notices(
                 pane_id,
@@ -162,6 +184,13 @@ impl ConversationContext {
     }
     pub fn title(&self) -> Option<String> {
         self.title.clone()
+    }
+    /// The listed project the conversation works in.
+    pub fn workspace_project(&self) -> Option<super::list::ProjectSummary> {
+        self.project.clone()
+    }
+    pub fn thread_error(&self) -> Option<String> {
+        self.thread_error.clone()
     }
     pub fn workspace_error(&self) -> Option<super::error::ErrorText> {
         self.workspace_error.clone()
@@ -375,6 +404,101 @@ mod tests {
         for key in [&fork, &turn_items, &item, &request] {
             assert!(empty.operation_error(key).is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::*;
+    use crate::{
+        models,
+        session::{ProviderKind, SessionRef},
+    };
+    use agent_protocol::execution::{ErrorCategory, ExecutionError, RetryEvidence, TurnStatus};
+
+    fn context(snapshot: &Snapshot) -> Arc<ConversationContext> {
+        ConversationContext::project(snapshot, snapshot.panes.primary(), "", None)
+    }
+
+    #[test]
+    fn the_header_names_the_listed_project_of_the_selected_folder() {
+        let mut snapshot = Snapshot::default();
+        snapshot.lists.threads = Some(Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "limit": 20, "data": [], "hasMore": false, "hasMoreProjects": false, "projectPages": {},
+                "projects": [{"id": "p", "name": "Bex app", "roots": [{"path": "/work/bex"}, {"path": "/work/other"}], "icon": null}],
+            }))
+            .unwrap(),
+        ));
+        let select = |snapshot: &mut Snapshot, cwd: &str| {
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).cwd =
+                cwd.into();
+        };
+        select(&mut snapshot, "/work/bex");
+        let project = context(&snapshot).workspace_project().unwrap();
+        assert_eq!(
+            (project.name.as_str(), project.monogram.as_str()),
+            ("Bex app", "BA")
+        );
+        // Only a project's first folder is its own; a chat without a folder has none.
+        for cwd in ["/work/other", "/work", ""] {
+            select(&mut snapshot, cwd);
+            assert!(context(&snapshot).workspace_project().is_none(), "{cwd}");
+        }
+    }
+
+    #[test]
+    fn the_banner_shows_the_latest_turn_failure_unless_retrying_or_a_usage_limit() {
+        let session = SessionRef::new(ProviderKind::Codex, "failed".into()).unwrap();
+        let mut snapshot = Snapshot::default();
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
+            Some(session.clone());
+        let mut show = |turns: Vec<models::Turn>| {
+            Arc::make_mut(&mut snapshot.sessions.conversations).insert(
+                session.clone(),
+                Arc::new(models::Thread {
+                    turns: Some(turns.into_iter().map(Arc::new).collect()),
+                    ..Default::default()
+                }),
+            );
+            context(&snapshot).thread_error()
+        };
+        let failure = |category, retrying: bool| ExecutionError {
+            category,
+            message: "context is full".into(),
+            retry: retrying.then_some(RetryEvidence {
+                retrying: true,
+                overloaded: false,
+            }),
+            ..Default::default()
+        };
+        let turn = |status, error| models::Turn {
+            status,
+            error,
+            ..Default::default()
+        };
+        let failed = turn(
+            TurnStatus::Failed,
+            Some(failure(ErrorCategory::ContextLimit, false)),
+        );
+        assert_eq!(show(vec![failed.clone()]), Some("context is full".into()));
+        // A later turn that did not fail takes the banner away.
+        assert_eq!(show(vec![failed, turn(TurnStatus::Completed, None)]), None);
+        assert_eq!(
+            show(vec![turn(
+                TurnStatus::Running,
+                Some(failure(ErrorCategory::Network, true))
+            )]),
+            None
+        );
+        assert_eq!(
+            show(vec![turn(
+                TurnStatus::Failed,
+                Some(failure(ErrorCategory::UsageLimit, false))
+            )]),
+            None
+        );
+        assert_eq!(show(Vec::new()), None);
     }
 }
 

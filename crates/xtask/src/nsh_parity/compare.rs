@@ -201,13 +201,14 @@ fn descends(views: &[NshView], mut view: usize, ancestor: usize) -> bool {
     false
 }
 
-/// The `nth` shown view `matcher` names, then the ancestor it asks for. An
-/// empty matcher names none: NSH draws no counterpart.
+/// The `nth` shown view `matcher` names, then the ancestor and the child it
+/// asks for. An empty matcher names none: NSH draws no counterpart.
 pub fn find(views: &[NshView], matcher: &NshMatch) -> Option<usize> {
     if *matcher
         == (NshMatch {
             up: matcher.up.clone(),
             nth: matcher.nth,
+            child: matcher.child,
             ..NshMatch::default()
         })
     {
@@ -219,7 +220,7 @@ pub fn find(views: &[NshView], matcher: &NshMatch) -> Option<usize> {
         .filter(|(_, view)| shown(view) && matches(view, matcher))
         .map(|(index, _)| index)
         .nth(matcher.nth)?;
-    match &matcher.up {
+    let ancestor = match &matcher.up {
         None => Some(index),
         Some(Up::Levels(levels)) => (0..*levels).try_fold(index, |view, _| views[view].parent),
         Some(Up::Named(name)) if name == "background" => {
@@ -227,6 +228,15 @@ pub fn find(views: &[NshView], matcher: &NshMatch) -> Option<usize> {
                 .find(|&view| fills(&views[view]))
         }
         Some(Up::Named(_)) => None,
+    }?;
+    match matcher.child {
+        None => Some(ancestor),
+        Some(child) => views
+            .iter()
+            .enumerate()
+            .filter(|(_, view)| view.parent == Some(ancestor))
+            .map(|(index, _)| index)
+            .nth(child),
     }
 }
 
@@ -778,6 +788,19 @@ gpui = { x = 14, y = 14, width = 16, height = 16, glyph_dx = -20, glyph_dy = 0, 
                 0
             ),
             Some(3)
+        );
+        // A part no text names: the named view's parent's child.
+        assert_eq!(
+            find(
+                NshMatch {
+                    text: Some("Copy".into()),
+                    up: Some(Up::Levels(2)),
+                    child: Some(2),
+                    ..NshMatch::default()
+                },
+                0
+            ),
+            Some(5)
         );
         assert_eq!(
             find(
