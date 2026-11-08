@@ -6641,6 +6641,22 @@
         }
       }
     },
+    "プロジェクトのアイコンと変更状態を読み込めませんでした": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not load project icons and change status"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロジェクトのアイコンと変更状態を読み込めませんでした"
+          }
+        }
+      }
+    },
     "会話一覧を読み込めませんでした": {
       "localizations": {
         "ja": {
@@ -15501,6 +15517,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "何に取り組みますか？"
+          }
+        }
+      }
+    },
+    "プロジェクトのアイコン": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project icon"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロジェクトのアイコン"
           }
         }
       }
