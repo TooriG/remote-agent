@@ -52,8 +52,8 @@ pub enum ZoomGesture {
 }
 
 impl ImageZoom {
-    pub const MIN: f32 = 0.25;
-    pub const MAX: f32 = 4.0;
+    const MIN: f32 = 0.25;
+    const MAX: f32 = 4.0;
     const STEP: f32 = 0.25;
     /// How much a wheel notch magnifies: a step's worth at the fitted size.
     const NOTCH: f32 = 1.25;
@@ -63,7 +63,7 @@ impl ImageZoom {
     pub const FIT: Self = Self(1.0);
 
     /// `scale` within the viewer's range.
-    pub fn new(scale: f32) -> Self {
+    fn new(scale: f32) -> Self {
         if scale.is_nan() {
             Self::FIT
         } else {
