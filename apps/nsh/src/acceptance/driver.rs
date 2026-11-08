@@ -8,26 +8,32 @@
 //! returns only when it closes, so the step is recorded before pressing and the
 //! press runs in a callout of its own, inside which the next ticks run.
 //!
+//! The driver posts mid-scenario `fixture` steps to the fixture Host's control
+//! server, whose port the runner passes as `BEX_ACCEPTANCE_FIXTURE`. It keeps
+//! the clipboard's items from the start and puts them back at the end, since
+//! the app's copy actions write the user's clipboard.
+//!
 //! The runner reads `result.json` from the output directory: `passed` (null while
 //! running) and one entry per step with `line`, `source`, `status` (`passed`,
 //! `failed` or `skipped`), `message`, `elapsedMs` and the step's `artifact` file;
 //! `evidence` names the screenshot and tree written when a step fails.
 use super::script::{Find, Key, Line, Step};
 use objc2::{
-    MainThreadMarker, msg_send,
+    MainThreadMarker, Message, msg_send,
     rc::Retained,
-    runtime::{AnyObject, Sel},
+    runtime::{AnyObject, ProtocolObject, Sel},
     sel,
 };
 use objc2_app_kit::{
     NSApplication, NSBitmapImageFileType, NSEvent, NSEventModifierFlags, NSEventType, NSMenu,
-    NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification, NSScreen, NSView,
-    NSWindow,
+    NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification, NSModalResponseOK,
+    NSOpenPanel, NSPasteboard, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting,
+    NSScreen, NSView, NSWindow,
 };
 use objc2_core_graphics::{CGEvent, CGScrollEventUnit};
 use objc2_foundation::{
-    NSAttributedString, NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSPoint,
-    NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer,
+    NSArray, NSAttributedString, NSData, NSDictionary, NSNotification, NSNotificationCenter,
+    NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer, NSURL,
 };
 use serde_json::{Value, json};
 use std::{
@@ -46,12 +52,15 @@ pub(crate) fn start(
     scenario: PathBuf,
     lines: Vec<Line>,
     output: PathBuf,
+    fixture: Option<u16>,
     mtm: MainThreadMarker,
 ) -> Rc<Cell<bool>> {
     let passed = Rc::new(Cell::new(false));
     let driver = Rc::new(RefCell::new(Driver {
         scenario,
         output,
+        fixture,
+        clipboard: Clipboard::save(),
         lines,
         index: 0,
         since: Instant::now(),
@@ -98,6 +107,9 @@ pub(crate) fn start(
 struct Driver {
     scenario: PathBuf,
     output: PathBuf,
+    /// The fixture Host's control port.
+    fixture: Option<u16>,
+    clipboard: Clipboard,
     lines: Vec<Line>,
     index: usize,
     since: Instant,
@@ -150,7 +162,7 @@ enum Attempt {
 }
 
 fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
-    let (timeout, step, elapsed, menus, output) = {
+    let (timeout, step, elapsed, menus, output, fixture) = {
         let mut driver = driver.borrow_mut();
         if driver.finished {
             return;
@@ -172,9 +184,16 @@ fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
             driver.since.elapsed(),
             driver.menus.clone(),
             driver.output.clone(),
+            driver.fixture,
         )
     };
-    match attempt(&step, elapsed, &menus, &output, mtm) {
+    let place = Place {
+        menus: &menus,
+        output: &output,
+        fixture,
+        mtm,
+    };
+    match attempt(&step, elapsed, &place) {
         Attempt::Passed(message, artifact) => {
             driver.borrow_mut().record("passed", &message, artifact)
         }
@@ -206,22 +225,38 @@ fn limit(step: &Step) -> Duration {
         Step::Press(find)
         | Step::Type(find, _)
         | Step::Scroll(find, _)
+        | Step::Select(find, _)
+        | Step::Menu(find)
         | Step::Expect(find)
         | Step::ExpectAbsent(find) => find.timeout,
-        Step::Wait(duration) => *duration,
+        Step::Wait(duration) | Step::ExpectClipboard(_, duration) => *duration,
         _ => super::script::DEFAULT_TIMEOUT,
     }
 }
 
-fn attempt(
-    step: &Step,
-    elapsed: Duration,
-    menus: &[Retained<NSMenu>],
-    output: &Path,
+/// What a step acts within.
+struct Place<'a> {
+    menus: &'a [Retained<NSMenu>],
+    output: &'a Path,
+    fixture: Option<u16>,
     mtm: MainThreadMarker,
-) -> Attempt {
+}
+
+fn attempt(step: &Step, elapsed: Duration, place: &Place) -> Attempt {
+    let &Place {
+        menus,
+        output,
+        fixture,
+        mtm,
+    } = place;
     match step {
         Step::Fixture(_) => Attempt::Passed("prepared by the runner".into(), None),
+        Step::Control(path) => done(
+            fixture
+                .ok_or_else(|| "the runner gave no fixture control port".to_owned())
+                .and_then(|port| post(port, path))
+                .map(|()| format!("posted {path}")),
+        ),
         Step::Wait(duration) if elapsed >= *duration => {
             Attempt::Passed(format!("waited {} ms", duration.as_millis()), None)
         }
@@ -243,6 +278,20 @@ fn attempt(
                 )
             })
         }),
+        Step::Select(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
+            select(tree, index, text)
+                .map(|()| format!("selected {text:?} in {}", tree.nodes[index].describe()))
+        }),
+        Step::Menu(find) => context_menu(&Tree::read(mtm, menus), find),
+        Step::Choose(path) => choose(path, mtm),
+        Step::ExpectClipboard(text, _) => {
+            let copied = Clipboard::text();
+            if copied.contains(text.as_str()) {
+                Attempt::Passed(format!("the clipboard has {copied:?}"), None)
+            } else {
+                Attempt::Pending(format!("the clipboard has {copied:?}"))
+            }
+        }
         Step::Key(key) => {
             done(post_key(key, mtm).map(|()| format!("posted key code {}", key.code)))
         }
@@ -282,6 +331,12 @@ fn press(tree: &Tree, find: &Find) -> Attempt {
         Ok(matches) => matches,
         Err(reason) => return Attempt::Pending(reason),
     };
+    if let Some(target) = matches.iter().find_map(|&index| tree.link(index)) {
+        return Attempt::Press(
+            format!("clicked {}", tree.nodes[matches[0]].describe()),
+            target,
+        );
+    }
     // An element that takes no press (a label in a row) passes it to the
     // nearest ancestor that does.
     match matches
@@ -352,6 +407,7 @@ fn finish(driver: &Rc<RefCell<Driver>>, passed: bool) {
         driver.finished = true;
         driver.passed.set(passed);
         driver.write(Some(passed));
+        driver.clipboard.restore();
         std::mem::take(&mut driver.menus)
     };
     for menu in menus {
@@ -381,6 +437,17 @@ enum Target {
         index: isize,
         root: Retained<NSMenu>,
     },
+    /// A right click on a view at a point of its window.
+    ContextMenu {
+        view: Retained<NSView>,
+        point: NSPoint,
+    },
+    /// A link of a text view at a character, which offers no press of its own.
+    Link {
+        view: Retained<AnyObject>,
+        link: Retained<AnyObject>,
+        index: usize,
+    },
 }
 
 impl Target {
@@ -400,6 +467,7 @@ impl Target {
             Self::MenuItem { menu, index, .. } => menu
                 .itemAtIndex(*index)
                 .is_some_and(|item| item.isEnabled()),
+            Self::ContextMenu { .. } | Self::Link { .. } => true,
         }
     }
 
@@ -412,6 +480,22 @@ impl Target {
                 // As a click on the item: its action, then the menu closes.
                 menu.performActionForItemAtIndex(*index);
                 root.cancelTracking();
+            }
+            Self::Link { view, link, index } => {
+                let _: () = unsafe { msg_send![&**view, clickedOnLink: &**link, atIndex: *index] };
+            }
+            Self::ContextMenu { view, point } => {
+                let Some(window) = view.window() else {
+                    return;
+                };
+                let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                    NSEventType::RightMouseDown, *point, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 1, 1.0,
+                );
+                if let Some(event) = event
+                    && let Some(menu) = view.menuForEvent(&event)
+                {
+                    NSMenu::popUpContextMenu_withEvent_forView(&menu, &event, view);
+                }
             }
         }
     }
@@ -489,7 +573,7 @@ impl Tree {
             }
         }
         let index = self.nodes.len();
-        let children: Option<Retained<objc2_foundation::NSArray<AnyObject>>> =
+        let children: Option<Retained<NSArray<AnyObject>>> =
             if responds(&object, sel!(accessibilityChildren)) {
                 unsafe { msg_send![&*object, accessibilityChildren] }
             } else {
@@ -584,6 +668,33 @@ impl Tree {
         Ok(found)
     }
 
+    /// A click on the link `index` is, as its text view takes one: AppKit's
+    /// links in text answer no press.
+    fn link(&self, index: usize) -> Option<Target> {
+        let node = &self.nodes[index];
+        let label = node.texts.first().map(|(_, text)| text)?;
+        let Target::Element(view) = &self.nodes[node.parent?].target else {
+            return None;
+        };
+        if node.role != "AXLink" || !responds(view, sel!(clickedOnLink:atIndex:)) {
+            return None;
+        }
+        let string = text(view, sel!(string))?;
+        let index = string[..string.find(label.as_str())?]
+            .encode_utf16()
+            .count();
+        let storage: Retained<AnyObject> = unsafe { msg_send![&**view, textStorage] };
+        let name = NSString::from_str("NSLink");
+        let link: Option<Retained<AnyObject>> = unsafe {
+            msg_send![&*storage, attribute: &*name, atIndex: index, effectiveRange: std::ptr::null_mut::<NSRange>()]
+        };
+        Some(Target::Link {
+            view: view.clone(),
+            link: link?,
+            index,
+        })
+    }
+
     /// `index` and its ancestors, nearest first.
     fn lineage(&self, index: usize) -> Vec<usize> {
         std::iter::successors(Some(index), |&index| self.nodes[index].parent).collect()
@@ -653,9 +764,13 @@ fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
     let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
         return Err(format!("{} takes no text", node.describe()));
     };
-    let focused = object
-        .downcast_ref::<NSView>()
-        .is_some_and(|view| focus(window, view));
+    // A control's cell (a search field's) stands for it in accessibility.
+    let view: Option<Retained<NSView>> = match object.downcast_ref::<NSView>() {
+        Some(view) => Some(view.retain()),
+        None if responds(object, sel!(controlView)) => unsafe { msg_send![&**object, controlView] },
+        None => None,
+    };
+    let focused = view.is_some_and(|view| focus(window, &view));
     if !focused {
         return Err(format!(
             "{} could not take the keyboard focus",
@@ -768,4 +883,182 @@ fn dump(tree: &Tree, output: &Path, name: &str) -> Result<String, String> {
     std::fs::write(output.join(&file), tree.text())
         .map_err(|reason| format!("{file}: {reason}"))?;
     Ok(file)
+}
+
+/// Posts `path` to the fixture Host's loopback control server.
+fn post(port: u16, path: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let failed = |reason: std::io::Error| format!("fixture control: {reason}");
+    let mut stream =
+        std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).map_err(failed)?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(failed)?;
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(failed)?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(failed)?;
+    let status = response.split_whitespace().nth(1).unwrap_or_default();
+    if status.starts_with('2') {
+        Ok(())
+    } else {
+        Err(format!("fixture {path} answered {status:?}"))
+    }
+}
+
+/// Selects the first `text` in the element's text through its accessibility.
+fn select(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
+    let node = &tree.nodes[index];
+    let Target::Element(object) = &node.target else {
+        return Err(format!("{} has no text to select", node.describe()));
+    };
+    if !responds(object, sel!(setAccessibilitySelectedTextRange:)) {
+        return Err(format!("{} takes no selection", node.describe()));
+    }
+    let value = self::text(object, sel!(accessibilityValue)).unwrap_or_default();
+    let start = value
+        .find(text)
+        .ok_or_else(|| format!("{} does not contain {text:?}", node.describe()))?;
+    let range = NSRange::new(
+        value[..start].encode_utf16().count(),
+        text.encode_utf16().count(),
+    );
+    let _: () = unsafe { msg_send![&**object, setAccessibilitySelectedTextRange: range] };
+    Ok(())
+}
+
+/// A right click on the first element `find` names: on its selected text, if
+/// it has some, as the selection's own menu shows there.
+fn context_menu(tree: &Tree, find: &Find) -> Attempt {
+    let index = match tree.labelled(find) {
+        Ok(matches) => matches[0],
+        Err(reason) => return Attempt::Pending(reason),
+    };
+    let node = &tree.nodes[index];
+    let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
+        return Attempt::Failed(format!("{} shows no context menu", node.describe()));
+    };
+    let Some(view) = object.downcast_ref::<NSView>() else {
+        return Attempt::Failed(format!("{} is not a view", node.describe()));
+    };
+    let selected = responds(object, sel!(accessibilitySelectedTextRange))
+        .then(|| -> NSRange { unsafe { msg_send![&**object, accessibilitySelectedTextRange] } })
+        .filter(|range| range.length > 0);
+    let frame: NSRect = match selected {
+        Some(range) => unsafe { msg_send![&**object, accessibilityFrameForRange: range] },
+        None => unsafe { msg_send![&**object, accessibilityFrame] },
+    };
+    let frame = window.convertRectFromScreen(frame);
+    Attempt::Press(
+        format!("opened the context menu of {}", node.describe()),
+        Target::ContextMenu {
+            view: view.retain(),
+            point: NSPoint::new(
+                frame.origin.x + frame.size.width / 2.0,
+                frame.origin.y + frame.size.height / 2.0,
+            ),
+        },
+    )
+}
+
+thread_local! {
+    /// What the open panel answers once `choose` ends it.
+    static CHOSEN: RefCell<Option<Retained<NSArray<NSURL>>>> =
+        const { RefCell::new(None) };
+}
+
+/// The open panel's `URLs` while the driver chooses: AppKit offers no way to
+/// select a file in it, and its view runs in another process.
+unsafe extern "C-unwind" fn chosen_urls(_: *mut AnyObject, _: Sel) -> *mut NSArray<NSURL> {
+    Retained::autorelease_return(CHOSEN.with_borrow(|urls| urls.clone().unwrap_or_default()))
+}
+
+/// Picks `path` in the app's open panel once it shows: the panel answers it as
+/// the user's choice and closes as its Open button would.
+fn choose(path: &str, mtm: MainThreadMarker) -> Attempt {
+    let path = match path.strip_prefix(super::script::STATE_DIRECTORY) {
+        Some(rest) => match std::env::var("AGENT_STATE_DIR") {
+            Ok(directory) => format!("{directory}{rest}"),
+            Err(_) => return Attempt::Failed("AGENT_STATE_DIR is not set".into()),
+        },
+        None => path.to_owned(),
+    };
+    if !std::path::Path::new(&path).exists() {
+        return Attempt::Failed(format!("{path} does not exist"));
+    }
+    let Some((panel, parent)) = NSApplication::sharedApplication(mtm)
+        .windows()
+        .iter()
+        .filter(|window| window.isVisible())
+        .filter_map(|window| window.downcast::<NSOpenPanel>().ok())
+        .find_map(|panel| panel.sheetParent().map(|parent| (panel, parent)))
+    else {
+        return Attempt::Pending("no open panel shows".into());
+    };
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path));
+    CHOSEN.set(Some(NSArray::from_retained_slice(&[url])));
+    let Some(method) = panel.class().instance_method(sel!(URLs)) else {
+        return Attempt::Failed("the open panel has no URLs".into());
+    };
+    // SAFETY: the replacement takes and returns what `URLs` does.
+    unsafe {
+        method.set_implementation(std::mem::transmute::<
+            unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut NSArray<NSURL>,
+            objc2::runtime::Imp,
+        >(chosen_urls));
+    }
+    parent.endSheet_returnCode(&panel, NSModalResponseOK);
+    Attempt::Passed(format!("chose {path}"), None)
+}
+
+/// The clipboard's items, each as its data by type.
+struct Clipboard(Vec<Vec<(Retained<NSString>, Retained<NSData>)>>);
+
+impl Clipboard {
+    fn save() -> Self {
+        let items = NSPasteboard::generalPasteboard()
+            .pasteboardItems()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| {
+                        item.types()
+                            .iter()
+                            .filter_map(|kind| item.dataForType(&kind).map(|data| (kind, data)))
+                            .collect()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self(items)
+    }
+
+    fn restore(&self) {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = self
+            .0
+            .iter()
+            .map(|kinds| {
+                let item = NSPasteboardItem::new();
+                for (kind, data) in kinds {
+                    item.setData_forType(data, kind);
+                }
+                ProtocolObject::from_retained(item)
+            })
+            .collect();
+        if !items.is_empty() {
+            pasteboard.writeObjects(&NSArray::from_retained_slice(&items));
+        }
+    }
+
+    fn text() -> String {
+        NSPasteboard::generalPasteboard()
+            .stringForType(unsafe { NSPasteboardTypeString })
+            .map(|text| text.to_string())
+            .unwrap_or_default()
+    }
 }

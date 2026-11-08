@@ -1,11 +1,13 @@
 //! The step language of an acceptance scenario: one step per line, `#` starts a
 //! comment, and an argument with spaces is quoted (`"..."`, with `\"` and `\\`).
 //!
-//! - `fixture <path>`: the runner posts `<path>` to the fixture Host's control
-//!   server before the app starts, so only leading lines may use it.
+//! - `fixture <path>`: posts `<path>` to the fixture Host's control server
+//!   (`crates/host-fixture/src/pairing.rs`). The runner posts leading ones before
+//!   the app starts; the driver posts later ones when it reaches them
+//!   (`/release-inputs` while a turn waits).
 //! - `press <label> [after <anchor>] [timeout-ms]`: presses the first element
 //!   whose label, title, value, identifier or placeholder is `<label>`, or an item
-//!   of an open menu. A `*` at either end of `<label>` matches any text there
+//!   of an open menu; a link in text is clicked. A `*` at either end of `<label>` matches any text there
 //!   (`"*作業しました"`). With `after`, only elements after the first one labelled
 //!   `<anchor>` in reading order count (a file row below a panel's header, not the
 //!   same name in the conversation).
@@ -16,17 +18,32 @@
 //!   until some element's text contains `<text>`, or none does.
 //! - `scroll <label> <lines> [after <anchor>] [timeout-ms]`: a mouse wheel over
 //!   that element; positive lines move the content up, toward its end.
+//! - `select <label> <text> [after <anchor>] [timeout-ms]`: selects the first
+//!   `<text>` inside that element's text, as a drag over it would.
+//! - `menu <label> [after <anchor>] [timeout-ms]`: opens that element's context
+//!   menu, as a right click on it; `press` then chooses its items.
+//! - `choose <path>`: answers the open panel the app shows with `<path>`,
+//!   waiting for one to appear. A leading `$AGENT_STATE_DIR` is the fixture Host's
+//!   directory, whose `project` folder is the fixture's project.
+//! - `expect_clipboard <text> [timeout-ms]`: waits until the clipboard's text
+//!   contains `<text>`. The driver restores the clipboard when the scenario ends.
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 use std::time::Duration;
+
+/// What a `choose` path may begin with: the fixture Host's directory.
+pub(crate) const STATE_DIRECTORY: &str = "$AGENT_STATE_DIR";
 
 /// How long a step waits for its element or text unless the line says otherwise.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Step {
+    /// A control path the runner posted before the app started.
     Fixture(String),
+    /// A control path the driver posts when it reaches the step.
+    Control(String),
     Press(Find),
     Type(Find, String),
     Key(Key),
@@ -34,6 +51,10 @@ pub(crate) enum Step {
     ExpectAbsent(Find),
     /// A wheel of this many lines over the element.
     Scroll(Find, i32),
+    Select(Find, String),
+    Menu(Find),
+    Choose(String),
+    ExpectClipboard(String, Duration),
     Wait(Duration),
     Screenshot(String),
     Dump(String),
@@ -74,17 +95,15 @@ pub(crate) fn parse(script: &str) -> Result<Vec<Line>, String> {
         if source.is_empty() || source.starts_with('#') {
             continue;
         }
-        let step = words(source)
+        let mut step = words(source)
             .and_then(|words| step(&words))
             .map_err(|reason| format!("line {number}: {reason}"))?;
-        if matches!(step, Step::Fixture(_))
+        if let Step::Fixture(path) = &step
             && lines
                 .iter()
                 .any(|line: &Line| !matches!(line.step, Step::Fixture(_)))
         {
-            return Err(format!(
-                "line {number}: fixture steps run before the app starts, so they must come first"
-            ));
+            step = Step::Control(path.clone());
         }
         lines.push(Line {
             number,
@@ -146,6 +165,17 @@ fn step(words: &[String]) -> Result<Step, String> {
                 .parse()
                 .map_err(|_| format!("{lines:?} is not a line count"))?,
         ),
+        ("select", [target, text, rest @ ..]) => {
+            Step::Select(find(target, rest)?, (*text).to_owned())
+        }
+        ("menu", [target, rest @ ..]) => Step::Menu(find(target, rest)?),
+        ("choose", [path]) if path.starts_with('/') || path.starts_with(STATE_DIRECTORY) => {
+            Step::Choose((*path).to_owned())
+        }
+        ("expect_clipboard", [text]) => Step::ExpectClipboard((*text).to_owned(), DEFAULT_TIMEOUT),
+        ("expect_clipboard", [text, timeout]) => {
+            Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
+        }
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
@@ -267,7 +297,9 @@ mod tests {
         let lines = parse(
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
-             scroll 会話 -3\nwait 250\nscreenshot after-send\ndump tree_1\n",
+             scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
+             expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
+             dump tree_1\n",
         )
         .unwrap();
         let steps: Vec<_> = lines.iter().map(|line| line.step.clone()).collect();
@@ -306,6 +338,23 @@ mod tests {
                     },
                     -3
                 ),
+                Step::Select(
+                    Find {
+                        text: "回答".into(),
+                        after: None,
+                        timeout: DEFAULT_TIMEOUT
+                    },
+                    "Needle".into()
+                ),
+                Step::Menu(Find {
+                    text: "回答".into(),
+                    after: Some("見出し".into()),
+                    timeout: DEFAULT_TIMEOUT
+                }),
+                Step::Choose("/tmp/a.txt".into()),
+                Step::Choose("$AGENT_STATE_DIR/project".into()),
+                Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
+                Step::Control("/release-inputs".into()),
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
                 Step::Dump("tree_1".into()),
@@ -375,8 +424,12 @@ mod tests {
                 "line 1: \"../escape\" must be letters, digits, '-' or '_' to name a file",
             ),
             (
-                "wait 1\nfixture /release-inputs",
-                "line 2: fixture steps run before the app starts, so they must come first",
+                "choose a.txt",
+                "line 1: unknown step or wrong arguments: choose",
+            ),
+            (
+                "expect_clipboard a b c",
+                "line 1: unknown step or wrong arguments: expect_clipboard",
             ),
             (
                 "fixture release-inputs",

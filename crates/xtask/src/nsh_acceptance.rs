@@ -76,7 +76,12 @@ pub async fn run(filters: &[String]) -> Result<()> {
             Ok(result) => Outcome {
                 name,
                 result,
-                error: None,
+                // A panic on a thread of its own leaves the app running: its
+                // steps can pass.
+                error: fs::read_to_string(output.join("app.log"))
+                    .ok()
+                    .and_then(|log| panic(&log).map(str::to_owned))
+                    .map(|panic| format!("the app panicked: {panic} (see app.log)")),
                 seconds: started.elapsed().as_secs_f64(),
             },
             Err(error) => Outcome {
@@ -174,11 +179,14 @@ fn select(mut scenarios: Vec<PathBuf>, filters: &[String]) -> Result<Vec<PathBuf
     Ok(scenarios)
 }
 
-/// The control paths a scenario's leading `fixture` lines post before the app starts.
+/// The control paths a scenario's leading `fixture` lines post before the app
+/// starts; the app's driver posts the later ones.
 fn fixture_paths(script: &str) -> Vec<String> {
     script
         .lines()
-        .filter_map(|line| line.trim().strip_prefix("fixture "))
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map_while(|line| line.strip_prefix("fixture "))
         .map(|path| path.trim().trim_matches('"').to_owned())
         .collect()
 }
@@ -229,6 +237,7 @@ async fn scenario(
             .env("AGENT_ISOLATED_HOST", "1")
             .env("BEX_ACCEPTANCE", path)
             .env("BEX_ACCEPTANCE_OUTPUT", output)
+            .env("BEX_ACCEPTANCE_FIXTURE", port.to_string())
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);
@@ -267,6 +276,13 @@ async fn scenario(
     let report = result?;
     stopped?;
     Ok(report)
+}
+
+/// The first panic an app log reports.
+fn panic(log: &str) -> Option<&str> {
+    log.lines()
+        .find(|line| line.contains("panicked at"))
+        .map(str::trim)
 }
 
 /// Posts to the fixture Host's loopback control server.
@@ -387,13 +403,24 @@ mod tests {
     }
 
     #[test]
-    fn only_fixture_lines_reach_the_control_server() {
+    fn only_leading_fixture_lines_are_posted_before_the_app_starts() {
         assert_eq!(
             fixture_paths(
-                "# fixture /comment\nfixture /external-conversation\n  fixture \"/list-fixture\"\nexpect fixture\n"
+                "# fixture /comment\nfixture /external-conversation\n\n  fixture \"/list-fixture\"\nexpect fixture\nfixture /release-inputs\n"
             ),
             ["/external-conversation", "/list-fixture"]
         );
+    }
+
+    #[test]
+    fn a_panic_in_the_app_log_is_found() {
+        assert_eq!(
+            panic(
+                "started\nthread 'nsh-engine' (1) panicked at apps/nsh/src/terminal.rs:71:20:\nboom\n"
+            ),
+            Some("thread 'nsh-engine' (1) panicked at apps/nsh/src/terminal.rs:71:20:")
+        );
+        assert_eq!(panic("started\nquit\n"), None);
     }
 
     #[test]
