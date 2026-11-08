@@ -228,6 +228,9 @@ impl ClientSession {
             let persistence = self.persistence.clone();
             let (complete, result) = oneshot::channel();
             runtime.spawn(async move {
+                if observing {
+                    persistence.flush_copies().await;
+                }
                 let closed = store.shutdown().await;
                 let saved = if observing {
                     match persistence.finish(store.snapshot()) {
@@ -398,7 +401,7 @@ impl ClientSession {
     fn save(&self) -> Result<Completion<()>, AgentError> {
         let phase = self.phase.lock().unwrap();
         match &*phase {
-            Phase::Ready { store, .. } => self.persistence.enqueue(store.snapshot()),
+            Phase::Ready { store, .. } => self.persistence.flush(store.snapshot()),
             _ => Err(error("session closed")),
         }
     }
