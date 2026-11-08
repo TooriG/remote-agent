@@ -14,6 +14,8 @@ use nsh_core::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 const FOLLOW_END_THRESHOLD: f32 = 60.0;
+/// A message column and its padding, which the minimap must not overlap.
+const CONTENT_WIDTH: f32 = 780.0 + 2.0 * 24.0;
 
 pub(crate) fn reveal_row(list: ElementRef, index: u32) {
     after_answer(move || {
@@ -162,6 +164,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     let scroll_pending = stored(false);
     let clock = signal(std::time::SystemTime::now());
     let top_row = signal(0_usize);
+    let width = signal(0_f32);
     spawn(async move {
         loop {
             timer(std::time::Duration::from_secs(1)).await;
@@ -216,6 +219,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
     view()
         .flex_1()
         .min_h_0()
+        .on_layout(move |bounds: &Bounds<Points>| width.set(bounds.size.width.0))
         .child(when(
             move || history.get().is_some(),
             move || {
@@ -285,7 +289,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                             view()
                                 .group()
                                 .w_full()
-                                .max_w(px(780.0))
+                                .max_w(px(CONTENT_WIDTH - 48.0))
                                 .items_start()
                                 .style_when(user, |s| s.items_end())
                                 .child(when(
@@ -424,7 +428,11 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
             .flex_1()
             .min_h_0(),
         )
-        .child(when(is_desktop, move || minimap(rows, top_row, list, following)))
+        .child(when(is_desktop, move || {
+            minimap(rows, top_row, list, following, move || {
+                agent_core::presentation::conversation::minimap_persistent(width.get(), CONTENT_WIDTH)
+            })
+        }))
         .child(when(move || !following.get(), move || {
             crate::ui::icon_button_sized(crate::ui::Icon::ARROW_DOWN, tr("最新のメッセージへ"), 32.0, 16.0, move || following.set(true))
                 .bg(crate::ui::colors::RAISED)
@@ -442,10 +450,12 @@ fn minimap(
     top_row: Signal<usize>,
     list: ElementRef,
     following: Signal<bool>,
+    persistent: impl Fn() -> bool + 'static,
 ) -> View {
     use crate::ui::colors;
     use agent_core::presentation::conversation::{minimap_marker_width, minimap_markers};
     let hovered = signal(None::<usize>);
+    let over = signal(false);
     let user_rows = computed(move || {
         rows.with(|rows| {
             rows.iter()
@@ -479,6 +489,15 @@ fn minimap(
         .bottom(px(0.0))
         .w(px(56.0))
         .justify_center()
+        .on_mouse_enter(move |_: &MouseEvent| over.set(true))
+        .on_mouse_leave(move |_: &MouseEvent| over.set(false))
+        .opacity(move || {
+            if persistent() || over.get() {
+                1.0_f32
+            } else {
+                0.0_f32
+            }
+        })
         .child(each(
             move || markers.get(),
             |marker: &agent_core::presentation::conversation::MinimapMarker| marker.row,

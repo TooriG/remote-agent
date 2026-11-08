@@ -140,9 +140,13 @@ pub struct MinimapMarker {
 }
 
 /// The minimap marks at most eight user messages, spaced evenly from the
-/// first to the last, and the one the scroll top has reached is current.
+/// first to the last, and the one the scroll top has reached is current. A
+/// single message needs no map.
 pub fn minimap_markers(user_rows: &[usize], top_row: usize) -> Vec<MinimapMarker> {
     const MAX: usize = 8;
+    if user_rows.len() < 2 {
+        return Vec::new();
+    }
     let count = user_rows.len().min(MAX);
     let sample = |position: usize| position * (user_rows.len() - 1) / (count - 1).max(1);
     (0..count)
@@ -155,6 +159,13 @@ pub fn minimap_markers(user_rows: &[usize], top_row: usize) -> Vec<MinimapMarker
             }
         })
         .collect()
+}
+
+/// The minimap stays shown only beside a gutter wide enough for it; over
+/// narrower timelines it shows while the pointer is on it.
+pub fn minimap_persistent(viewport_width: f32, content_width: f32) -> bool {
+    const GUTTER: f32 = 48.;
+    (viewport_width - viewport_width.min(content_width)) / 2. >= GUTTER
 }
 
 /// A mark's line widens toward the hovered one.
@@ -3139,7 +3150,15 @@ mod minimap_tests {
         assert!(minimap_markers(&[3, 6], 40)[1].current);
         assert!(minimap_markers(&[3, 6], 1).iter().all(|m| !m.current));
         assert!(minimap_markers(&[], 0).is_empty());
-        assert!(minimap_markers(&[2], 2)[0].current);
+        assert!(minimap_markers(&[2], 2).is_empty());
+    }
+
+    #[test]
+    fn the_map_stays_only_beside_a_wide_gutter() {
+        assert!(minimap_persistent(1000., 828.));
+        assert!(!minimap_persistent(900., 828.));
+        assert!(!minimap_persistent(600., 828.));
+        assert!(!minimap_persistent(0., 828.));
     }
 
     #[test]
