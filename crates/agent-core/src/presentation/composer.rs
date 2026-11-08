@@ -24,6 +24,10 @@ pub struct RequestControl {
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ComposerControls {
     pub navigation: Navigation,
+    /// The selected conversation's history is here, or the draft starts a new
+    /// one. One still opening, or whose read failed, takes typing but nothing
+    /// that would send into it: no message, recording or attachment.
+    pub opened: bool,
     pub connected: bool,
     pub provider: Option<ProviderKind>,
     pub selected_model: Option<ModelRef>,
@@ -72,6 +76,7 @@ impl ComposerPresentation {
             .unwrap_or_default();
         let controls = ComposerControls {
             navigation: snapshot.pane.navigation.as_ref().clone(),
+            opened: session.is_none() || thread.is_some(),
             connected: snapshot.connection.connected,
             provider,
             selected_model: draft.model.clone().or_else(|| {
@@ -233,7 +238,8 @@ impl ComposerPresentation {
     /// Recording is native UI state; all Host and draft readiness is owned here.
     pub fn can_submit(&self, recording: bool) -> bool {
         let controls = &self.controls;
-        controls.connected
+        controls.opened
+            && controls.connected
             && controls.provider.is_some()
             && !controls.sending
             && !controls.transferring

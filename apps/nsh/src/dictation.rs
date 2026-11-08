@@ -298,7 +298,8 @@ impl Dictation {
                     !self.requesting.get()
                         && !connection.uploading()
                         && connection.composer.with(|p| {
-                            p.controls.connected
+                            p.controls.opened
+                                && p.controls.connected
                                 && !p.controls.sending
                                 && !p.controls.transferring
                                 && !p.controls.transcribing

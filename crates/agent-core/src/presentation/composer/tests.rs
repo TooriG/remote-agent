@@ -64,6 +64,29 @@ fn submission_needs_content_or_recording_and_an_available_provider() {
 }
 
 #[test]
+fn a_conversation_still_opening_or_failed_to_open_keeps_its_draft_but_sends_nothing() {
+    let mut snapshot = snapshot();
+    crate::state::set_draft_text(&mut snapshot, session().into(), "下書き".into());
+    assert!(presentation(&snapshot).controls.opened);
+    assert!(presentation(&snapshot).can_submit(false));
+
+    Arc::make_mut(&mut snapshot.sessions.conversations).remove(&session());
+    let opening = presentation(&snapshot);
+    assert!(!opening.controls.opened);
+    assert_eq!(opening.draft.text, "下書き");
+    assert!(!opening.can_submit(false));
+    assert!(!opening.can_submit(true), "a recording would send too");
+
+    // A new chat has no conversation to wait for.
+    Arc::make_mut(&mut snapshot.pane).navigation = Arc::new(Navigation {
+        thread_id: None,
+        draft_key: session().into(),
+        cwd: "/project".into(),
+    });
+    assert!(presentation(&snapshot).controls.opened);
+}
+
+#[test]
 fn active_draft_operations_block_submission_until_completion_or_retry() {
     let mut snapshot = snapshot();
     crate::state::set_draft_text(&mut snapshot, session().into(), "送信".into());

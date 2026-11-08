@@ -340,8 +340,9 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let desktop_box = move || {
         use crate::ui::{self, Enabled, Icon, colors};
         let attach_enabled = move || {
-            controls.with(|c| c.connected && !c.sending && !c.transcribing && !c.transferring)
-                && !recording.get()
+            controls.with(|c| {
+                c.opened && c.connected && !c.sending && !c.transcribing && !c.transferring
+            }) && !recording.get()
                 && !requesting.get()
                 && !connection.uploading()
                 && answering.with(Option::is_none)
@@ -431,6 +432,8 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                     }
                                 })
                                 .style_when(inactive, |s| s.opacity(0.5))
+                                // VoiceOver says so when it cannot send or stop.
+                                .disabled(move || !enabled())
                                 .on_press(submit)
                                 .child(when(move || !stopping(), || ui::icon(Icon::ARROW_UP, 24.0)))
                                 .child(when(stopping, || ui::icon(Icon::STOP, 24.0)))

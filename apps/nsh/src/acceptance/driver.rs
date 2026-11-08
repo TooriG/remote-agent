@@ -239,7 +239,8 @@ fn limit(step: &Step) -> Duration {
         | Step::Select(find, _)
         | Step::Menu(find)
         | Step::Expect(find)
-        | Step::ExpectAbsent(find) => find.timeout,
+        | Step::ExpectAbsent(find)
+        | Step::ExpectEnabled(find, _) => find.timeout,
         Step::Wait(duration)
         | Step::ExpectClipboard(_, duration)
         | Step::ExpectFile(_, duration) => *duration,
@@ -274,6 +275,7 @@ fn attempt(
         Step::Dump(name) => artifact(dump(&Tree::read(mtm, menus), output, name)),
         Step::Expect(find) => shown(&Tree::read(mtm, menus), find, true),
         Step::ExpectAbsent(find) => shown(&Tree::read(mtm, menus), find, false),
+        Step::ExpectEnabled(find, enabled) => enabled_as(&Tree::read(mtm, menus), find, *enabled),
         Step::Press(find) => press(&Tree::read(mtm, menus), find),
         Step::Type(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             let origin = fixture.map(|port| format!("http://127.0.0.1:{port}"));
@@ -355,6 +357,26 @@ fn activate(mtm: MainThreadMarker) -> Attempt {
         }
     }
     Attempt::Pending("the app is not active yet".into())
+}
+
+/// Whether the element `press` would find takes presses as `enabled` says.
+fn enabled_as(tree: &Tree, find: &Find, enabled: bool) -> Attempt {
+    let index = match tree.labelled(find) {
+        Ok(matches) => matches[0],
+        Err(reason) => return Attempt::Pending(reason),
+    };
+    let node = &tree.nodes[index];
+    let Target::Element(object) = &node.target else {
+        return Attempt::Failed(format!("{} has no enabled state", node.describe()));
+    };
+    let actual = !responds(object, sel!(isAccessibilityEnabled))
+        || unsafe { msg_send![&**object, isAccessibilityEnabled] };
+    let state = if actual { "enabled" } else { "disabled" };
+    if actual == enabled {
+        Attempt::Passed(format!("{} is {state}", node.describe()), None)
+    } else {
+        Attempt::Pending(format!("{} is {state}", node.describe()))
+    }
 }
 
 fn done(result: Result<String, String>) -> Attempt {
