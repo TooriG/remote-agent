@@ -135,7 +135,7 @@ impl Browser {
                                 Some((Err("ブラウザとの接続が切れました。".into()), false))
                             });
                         let Some((result, reading)) = update else {
-                            // Hidden with nothing queued: wait for input or visibility.
+                            // Hidden: wait for input or visibility.
                             if woken.recv().await.is_err() {
                                 break;
                             }

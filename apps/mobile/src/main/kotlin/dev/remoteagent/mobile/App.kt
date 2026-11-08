@@ -452,7 +452,8 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         connectionStates[host] = HostConnectionState(current.connectionEnabled(), current.connected())
         updateProfile(current, host)
         if (connectionSelection.hostId == host) {
-            owner = session?.store()
+            // Each read returns a new binding wrapper; take the Store once it is ready.
+            if (owner == null) owner = session?.store()
             publish(next)
         } else if (connectionSelection.all && listChanged) updateTaskList()
     }

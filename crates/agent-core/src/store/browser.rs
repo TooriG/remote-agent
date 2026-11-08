@@ -153,7 +153,8 @@ impl BrowserSession {
         }
     }
 
-    /// Reads the page only while the view is shown; queued actions are sent either way.
+    /// Reads the page only while the view is shown. Hiding ends a waiting call;
+    /// the next call sends the queued actions.
     pub fn set_active(&self, active: bool) {
         self.state.lock().unwrap().active = active;
         if !active {
@@ -172,8 +173,9 @@ impl BrowserSession {
     }
 
     /// Sends the next action, or a read while shown, after the interval and
-    /// returns its result. Nothing remains once the view is hidden and every
-    /// action is sent. One caller drives a session at a time.
+    /// returns its result. Returns nothing while the view is hidden, either
+    /// because hiding ended the wait or because no action is queued. Calls run
+    /// one at a time.
     pub async fn next(&self) -> Option<BrowserUpdate> {
         let _driving = self.driving.lock().await;
         let wait = self.state.lock().unwrap().wait;
