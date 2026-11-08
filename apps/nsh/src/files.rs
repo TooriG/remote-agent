@@ -275,11 +275,12 @@ pub(crate) fn screen(id: u64) -> impl Element {
             );
         }
     });
-    // A clicked tree takes the keys an outline view would, while no field
-    // edits text; Core decides what each key does to the focused row.
+    // The focused tree takes the keys an outline view would; Core decides
+    // what each key does to the focused row.
     let engaged = signal(false);
     let keyed = stored(false);
     let list = element_ref();
+    let area = element_ref();
     for (keystroke, key, shift) in [
         ("up", "up", false),
         ("down", "down", false),
@@ -293,7 +294,7 @@ pub(crate) fn screen(id: u64) -> impl Element {
         ("shift+down", "down", true),
     ] {
         let options = KeyOptions {
-            when: nsh_core::keymap::When::NotEditing,
+            when: nsh_core::keymap::When::Always,
             repeat: true,
         };
         on_key_with(keystroke, options, move |_| {
@@ -436,50 +437,61 @@ pub(crate) fn screen(id: u64) -> impl Element {
             },
         ))
         .child(
-            virtual_list(
-                move || tree.with(|tree| tree.rows.len()),
-                move |at| {
-                    tree_row(
-                        computed(move || {
-                            tree.with(|tree| {
-                                let row = tree.rows.get(at.index())?;
-                                Some((row.clone(), tree.is_search_match(row)))
-                            })
-                        }),
-                        move || {
-                            engaged.get()
-                                && tree.with(|tree| {
-                                    tree.rows.get(at.index()).map(|row| &row.path)
-                                        == tree.focused_path.as_ref()
-                                })
-                        },
-                        move |path| {
-                            engaged.set(true);
-                            send(FileTreeAction::Click {
-                                path,
-                                additive: false,
-                                range: false,
-                            })
+            // The tree's area, not its scrolling list, holds the keyboard focus,
+            // so the keymap gets the arrows.
+            view()
+                .flex_1()
+                .min_h_0()
+                .element_ref(&area)
+                .focusable(true)
+                .on_focus(move || engaged.set(true))
+                .on_blur(move || engaged.set(false))
+                .child(
+                    virtual_list(
+                        move || tree.with(|tree| tree.rows.len()),
+                        move |at| {
+                            tree_row(
+                                computed(move || {
+                                    tree.with(|tree| {
+                                        let row = tree.rows.get(at.index())?;
+                                        Some((row.clone(), tree.is_search_match(row)))
+                                    })
+                                }),
+                                move || {
+                                    engaged.get()
+                                        && tree.with(|tree| {
+                                            tree.rows.get(at.index()).map(|row| &row.path)
+                                                == tree.focused_path.as_ref()
+                                        })
+                                },
+                                move |path| {
+                                    area.focus();
+                                    send(FileTreeAction::Click {
+                                        path,
+                                        additive: false,
+                                        range: false,
+                                    })
+                                },
+                            )
                         },
                     )
-                },
-            )
-            .keys(move || {
-                tree.with(|tree| {
-                    tree.rows
-                        .iter()
-                        .map(|row| row.path.clone())
-                        .collect::<Vec<_>>()
-                })
-            })
-            .element_ref(&list)
-            .on_viewable_items_change(move |items: &ViewableItems| {
-                viewable.replace(items.viewable);
-            })
-            .estimated_item_size(px(24.0))
-            .content_padding_x(px(8.0))
-            .flex_1()
-            .min_h_0(),
+                    .keys(move || {
+                        tree.with(|tree| {
+                            tree.rows
+                                .iter()
+                                .map(|row| row.path.clone())
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .element_ref(&list)
+                    .on_viewable_items_change(move |items: &ViewableItems| {
+                        viewable.replace(items.viewable);
+                    })
+                    .estimated_item_size(px(24.0))
+                    .content_padding_x(px(8.0))
+                    .flex_1()
+                    .min_h_0(),
+                ),
         )
 }
 
