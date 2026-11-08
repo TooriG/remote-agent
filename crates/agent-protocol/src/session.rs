@@ -139,6 +139,10 @@ pub enum SessionChange {
     Status {
         status: SessionStatus,
     },
+    /// The running turn answered and waits on this work; empty otherwise.
+    Background {
+        tasks: Vec<crate::execution::BackgroundTask>,
+    },
     Turn {
         turn: Turn,
         completed: bool,
@@ -238,6 +242,7 @@ pub struct Timeline {
     pub submissions: std::collections::BTreeMap<crate::ids::ClientInputId, SubmissionDelivery>,
     /// None means no observation; Some(None) explicitly clears preparation.
     pub preparation: Option<Option<SessionPreparation>>,
+    pub background: Vec<crate::execution::BackgroundTask>,
 }
 
 /// Locate an item within the newest occurrence that actually contains it.
@@ -306,6 +311,7 @@ impl SessionChange {
             | Self::ReasoningPart { turn_id, .. }
             | Self::Error { turn_id, .. } => Some(turn_id),
             Self::Status { .. }
+            | Self::Background { .. }
             | Self::Workspace { .. }
             | Self::Preparation { .. }
             | Self::Submission { .. }
@@ -324,6 +330,7 @@ impl SessionChange {
             requests: next.requests,
             submissions: next.submissions,
             preparation: Some(next.preparation),
+            background: next.background,
         });
         result?;
         Ok(Thread {
@@ -333,6 +340,7 @@ impl SessionChange {
             requests: timeline.requests,
             submissions: timeline.submissions,
             preparation: timeline.preparation.flatten(),
+            background: timeline.background,
             ..next
         })
     }
@@ -373,6 +381,10 @@ impl SessionChange {
                     next.requests.remove(request_id);
                     return Ok(());
                 }
+                Self::Background { tasks } => {
+                    next.background = tasks.clone();
+                    return Ok(());
+                }
                 _ => {}
             }
             if let Self::Status { status } = self {
@@ -399,6 +411,8 @@ impl SessionChange {
                 next.status = if active {
                     SessionStatus::Running
                 } else {
+                    // Nothing waits on background work without a running turn.
+                    next.background.clear();
                     SessionStatus::Idle
                 };
                 return Ok(());
@@ -500,6 +514,7 @@ impl SessionChange {
                 | Self::Preparation { .. }
                 | Self::Submission { .. }
                 | Self::Status { .. }
+                | Self::Background { .. }
                 | Self::Turn { .. }
                 | Self::Request { .. }
                 | Self::RequestDelivery { .. }
@@ -568,6 +583,50 @@ fn merge_turn(previous: Option<&Turn>, incoming: &Turn, completed: bool) -> Opti
 mod update_tests {
     use super::*;
     use crate::execution::{ExecutionError, RetryEvidence};
+
+    #[test]
+    fn a_waiting_roster_lasts_only_while_its_turn_runs() {
+        let roster = vec![crate::execution::BackgroundTask {
+            id: "shell".into(),
+            kind: crate::execution::BackgroundTaskKind::Command,
+            description: Some("dev server".into()),
+        }];
+        let turn = |completed| SessionChange::Turn {
+            turn: Turn {
+                id: "turn".into(),
+                status: if completed {
+                    TurnStatus::Completed
+                } else {
+                    TurnStatus::Running
+                },
+                ..Default::default()
+            },
+            completed,
+        };
+        let thread = turn(false).apply(&Thread::default()).unwrap();
+        let waiting = SessionChange::Background {
+            tasks: roster.clone(),
+        }
+        .apply(&thread)
+        .unwrap();
+        assert_eq!(waiting.background, roster);
+        assert_eq!(waiting.status, SessionStatus::Running);
+        let roundtrip: Thread =
+            serde_json::from_value(serde_json::to_value(&waiting).unwrap()).unwrap();
+        assert_eq!(roundtrip.background, roster);
+        assert!(
+            SessionChange::Background { tasks: Vec::new() }
+                .apply(&waiting)
+                .unwrap()
+                .background
+                .is_empty()
+        );
+        let finished = turn(true).apply(&waiting).unwrap();
+        assert!(
+            finished.background.is_empty(),
+            "a finished turn waits on nothing"
+        );
+    }
 
     #[test]
     fn item_positions_require_both_ids_and_prefer_the_latest_matching_occurrence() {

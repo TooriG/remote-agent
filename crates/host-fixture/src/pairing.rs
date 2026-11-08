@@ -176,6 +176,10 @@ fn route(
         | "/merge-worktree/dirty" | "/merge-worktree/clean" => {
             merge_worktree(root, path)?
         }
+        // The Claude fixture's background work finishes, and Claude reports on it.
+        "/claude-background/release" => {
+            fs::write(root.join("project/claude-background-release"), [])?;
+        }
         "/release-inputs" => {
             OpenOptions::new()
                 .create(true)

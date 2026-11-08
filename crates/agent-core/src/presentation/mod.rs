@@ -9,6 +9,7 @@
 //! and identities instead of independently guessing finality or grouping.
 
 pub mod agents;
+pub mod background_work;
 pub mod connection_list;
 pub mod connections;
 pub mod diff;

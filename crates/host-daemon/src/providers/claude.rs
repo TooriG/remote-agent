@@ -138,7 +138,14 @@ struct Running {
     turn_id: agent_protocol::ids::TurnId,
     input: mpsc::Sender<Command>,
     interrupt: watch::Receiver<Option<Result<(), String>>>,
+    effort: Option<String>,
+    /// Whether Claude runs background work that a new process would end.
+    background: watch::Receiver<bool>,
 }
+
+/// T3 Code's ClaudeBackgroundWorkBlocksQueryReplacementError: Claude applies a
+/// model or effort only to a new process, which ends its background work.
+const BACKGROUND_BLOCKS_CHANGE: &str = "Claudeのバックグラウンドのエージェントやコマンドが実行中のため、モデルや設定を変更するとそれらが終了します。完了を待つか停止してから、もう一度送信してください。: Claude is still running background agents or commands, and this model or setting change would end them. Wait for them to finish, or press Stop, then send the message again.";
 
 pub(crate) struct Command {
     pub(crate) value: SdkInput,
@@ -558,20 +565,30 @@ impl Claude {
 
     async fn additional_input(
         &self,
-        id: &str,
-        input: &[op::Input],
-        client_id: &str,
+        params: &op::Submission,
     ) -> Result<Option<agent_protocol::ids::TurnId>, OperationError> {
         if self.stop.is_cancelled() {
             return Err("Host is shutting down".into());
         }
-        let record = self.record(id).await?;
+        let (input, client_id) = (&params.input, params.client_user_message_id.as_str());
+        let record = self.record(&params.thread_id.id).await?;
         let content = input_content(input).await?;
         let state = record.lock().await;
         let running = state
             .running
             .as_ref()
             .ok_or("Claudeは実行中ではありません。")?;
+        let changes_process = params
+            .model
+            .as_ref()
+            .is_some_and(|model| model.id != state.model)
+            || params
+                .effort
+                .as_deref()
+                .is_some_and(|effort| Some(effort) != running.effort.as_deref());
+        if changes_process && *running.background.borrow() {
+            return Err(BACKGROUND_BLOCKS_CHANGE.into());
+        }
         let sender = running.input.clone();
         drop(state);
         let id = client_id.to_owned();
@@ -727,10 +744,13 @@ impl Claude {
         state.model = model.clone();
         let (input, receiver) = mpsc::channel(32);
         let (interrupt, interrupted) = watch::channel(None);
+        let (background, background_observed) = watch::channel(false);
         state.running = Some(Running {
             turn_id: turn_id.clone(),
             input: input.clone(),
             interrupt: interrupted,
+            effort: effort.map(str::to_owned),
+            background: background_observed,
         });
         drop(state);
         let target = SessionRef {
@@ -751,6 +771,8 @@ impl Claude {
             stop: self.stop.child_token(),
             stream: None,
             interrupt,
+            background,
+            waiting: Vec::new(),
             model,
             effort: effort.map(str::to_owned),
             auth_revision,
@@ -777,11 +799,27 @@ struct Worker {
     stop: CancellationToken,
     stream: Option<String>,
     interrupt: watch::Sender<Option<Result<(), String>>>,
+    background: watch::Sender<bool>,
+    /// The roster last published as the conversation's Waiting state.
+    waiting: Vec<BackgroundTask>,
     model: String,
     effort: Option<String>,
 }
 
 impl Worker {
+    /// Publishes what the answered response waits on, as T3 Code's Waiting roster.
+    async fn publish_waiting(&mut self, response: &ResponseState) -> Result<(), String> {
+        self.background.send_replace(response.has_background());
+        if response.waiting() == self.waiting.as_slice() {
+            return Ok(());
+        }
+        self.waiting = response.waiting().to_vec();
+        self.change(SessionChange::Background {
+            tasks: self.waiting.clone(),
+        })
+        .await
+    }
+
     fn current_turn(&self) -> Option<&Turn> {
         self.live
             .turns
@@ -911,6 +949,7 @@ impl Worker {
                         if stops {
                             response.interrupt();
                         }
+                        self.publish_waiting(&response).await?;
                         continue;
                     }
                 };
@@ -953,6 +992,7 @@ impl Worker {
                     MessageDisposition::Failed => return self.fail_turn(&message).await,
                     MessageDisposition::Interrupted => return Ok(()),
                 }
+                self.publish_waiting(&response).await?;
                 // A result ends a response. SDK idle covers background agents,
                 // but not background shells and monitors, which Claude answers
                 // after they finish; accepted input must be consumed before idle.
@@ -2000,14 +2040,7 @@ impl Agent for Claude {
                     "this provider accepts queued input",
                 ));
             }
-            SubmissionTarget::Queue => {
-                self.additional_input(
-                    &input.thread_id.id,
-                    &input.input,
-                    &input.client_user_message_id,
-                )
-                .await?
-            }
+            SubmissionTarget::Queue => self.additional_input(input).await?,
             SubmissionTarget::Start { .. } => Some(self.start_turn(input, browser).await?),
         };
         Ok(op::SubmissionReceipt { turn_id })
@@ -2267,6 +2300,8 @@ mod execution_tests {
                 turn_id: "owned-turn".into(),
                 input,
                 interrupt,
+                effort: None,
+                background: watch::channel(false).1,
             });
         }
         let state = Agent::state(&claude, &session.id).await.unwrap();
@@ -2337,6 +2372,8 @@ mod execution_tests {
             turn_id: "turn".into(),
             input,
             interrupt,
+            effort: None,
+            background: watch::channel(false).1,
         });
         let mut cursor = None;
         let mut observed = Vec::new();
@@ -2420,23 +2457,29 @@ mod execution_tests {
                 turn_id: "turn".into(),
                 input,
                 interrupt,
+                effort: None,
+                background: watch::channel(false).1,
             });
             if !enqueued {
                 receiver.close();
             }
-            let parts = [op::Input::Text {
-                text: "additional input".into(),
-            }];
-            let (result, ()) = tokio::join!(
-                claude.additional_input(&session.id, &parts, "input"),
-                async move {
-                    if enqueued {
-                        // Once accepted by the worker queue, closing the receipt
-                        // does not establish whether the native write happened.
-                        drop(receiver.recv().await.unwrap());
-                    }
-                },
-            );
+            let submission = op::Submission {
+                thread_id: session.clone(),
+                client_user_message_id: "input".into(),
+                input: vec![op::Input::Text {
+                    text: "additional input".into(),
+                }],
+                model: None,
+                effort: None,
+                service_tier: None,
+            };
+            let (result, ()) = tokio::join!(claude.additional_input(&submission), async move {
+                if enqueued {
+                    // Once accepted by the worker queue, closing the receipt
+                    // does not establish whether the native write happened.
+                    drop(receiver.recv().await.unwrap());
+                }
+            },);
             assert_eq!(
                 result.unwrap_err().delivery,
                 if enqueued {
@@ -2445,6 +2488,71 @@ mod execution_tests {
                     agent_transport::peer::Delivery::NotSent
                 }
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_model_or_effort_change_is_refused_while_claude_runs_background_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let claude = Claude::load(
+            root.join("unused"),
+            root.join("adapter"),
+            Some(root.join("native")),
+        )
+        .await
+        .unwrap();
+        let session = Claude::create(&claude, root.to_str().unwrap(), "default")
+            .await
+            .unwrap()
+            .thread
+            .id
+            .unwrap();
+        let record = claude.record(&session.id).await.unwrap();
+        let submission = |model: &str, effort: Option<&str>| op::Submission {
+            thread_id: session.clone(),
+            client_user_message_id: "input".into(),
+            input: vec![op::Input::Text {
+                text: "next".into(),
+            }],
+            model: Some(agent_protocol::models::ModelRef {
+                provider: ProviderKind::Claude,
+                id: model.into(),
+            }),
+            effort: effort.map(str::to_owned),
+            service_tier: None,
+        };
+        for (background, model, effort, refused) in [
+            (true, "sonnet", None, true),
+            (true, "default", Some("low"), true),
+            (true, "default", Some("high"), false),
+            (false, "sonnet", None, false),
+        ] {
+            let (input, mut receiver) = mpsc::channel::<Command>(1);
+            let (_interrupt, interrupt) = watch::channel(None);
+            record.lock().await.running = Some(Running {
+                turn_id: "turn".into(),
+                input,
+                interrupt,
+                effort: Some("high".into()),
+                background: watch::channel(background).1,
+            });
+            // A forwarded input reaches the worker queue, which drops it unwritten.
+            let worker = tokio::spawn(async move { receiver.recv().await.is_some() });
+            let error = claude
+                .additional_input(&submission(model, effort))
+                .await
+                .unwrap_err();
+            record.lock().await.running = None;
+            let forwarded = worker.await.unwrap();
+            assert_eq!(forwarded, !refused, "{model} {effort:?} {background}");
+            if refused {
+                assert_eq!(error.message, BACKGROUND_BLOCKS_CHANGE);
+                assert_eq!(error.delivery, agent_transport::peer::Delivery::NotSent);
+                assert!(error.message.ends_with(
+                    ": Claude is still running background agents or commands, and this model or setting change would end them. Wait for them to finish, or press Stop, then send the message again."
+                ));
+            }
         }
     }
 
@@ -2548,6 +2656,8 @@ mod execution_tests {
                     turn_id: "turn".into(),
                     input: input.clone(),
                     interrupt: interrupted,
+                    effort: None,
+                    background: watch::channel(false).1,
                 }),
                 idle: None,
             })),
@@ -2565,6 +2675,8 @@ mod execution_tests {
             stop: CancellationToken::new(),
             stream: None,
             interrupt,
+            background: watch::channel(false).0,
+            waiting: Vec::new(),
             model: "default".into(),
             effort: None,
         };
@@ -2842,6 +2954,121 @@ for await (const line of createInterface({input: process.stdin})) {
                 .as_str(),
             "next"
         );
+    }
+
+    #[tokio::test]
+    async fn an_answered_turn_waits_on_its_background_roster_until_stop_ends_it() {
+        let path = std::env::var_os("PATH");
+        let node = process::executable(Path::new("node"), path.as_deref()).unwrap();
+        // Claude answers while a background command, a Monitor and a subagent
+        // run. The subagent keeps the SDK from reporting idle until the stop.
+        let script = r#"
+import { createInterface } from 'node:readline';
+const event = message => ({ type: 'message', message });
+const emit = events => process.stdout.write(events.map(event => JSON.stringify(event)).join('\n') + '\n');
+emit([
+  { type: 'ready', initialized: {} },
+  event({ type: 'assistant', message: { id: 'calls', content: [
+    { type: 'tool_use', id: 'watch-call', name: 'Monitor', input: { command: 'tail -f build.log' } }] } }),
+  event({ type: 'system', subtype: 'task_started', task_id: 'shell', task_type: 'local_bash', description: 'Start the dev server' }),
+  event({ type: 'system', subtype: 'task_started', task_id: 'watch', task_type: 'local_bash', tool_use_id: 'watch-call', description: 'Watch the build' }),
+  event({ type: 'system', subtype: 'task_started', task_id: 'agent', task_type: 'local_agent', description: 'Review src/math.ts' }),
+  event({ type: 'result', is_error: false }),
+]);
+for await (const line of createInterface({input: process.stdin})) {
+  const { type, requestId } = JSON.parse(line);
+  if (type !== 'interrupt') continue;
+  emit([{ type: 'interrupted', requestId },
+    event({ type: 'system', subtype: 'session_state_changed', state: 'idle' })]);
+}
+"#;
+        let mut command = tokio::process::Command::new(&node);
+        command
+            .arg("--input-type=module")
+            .arg("-e")
+            .arg(script)
+            .kill_on_drop(true);
+        let mut process = Process::spawn_command(command).unwrap();
+        assert!(matches!(
+            process.read().await.unwrap(),
+            Some(SdkEvent::Ready { .. })
+        ));
+        let (router, session, mut worker) = routed_worker();
+        let (input, receiver) = mpsc::channel(2);
+        worker.input = input.clone();
+        let record = worker.record.clone();
+        let background = {
+            let mut record = record.lock().await;
+            let running = record.running.as_mut().unwrap();
+            running.input = input.clone();
+            let (sender, observed) = watch::channel(false);
+            running.background = observed.clone();
+            worker.background = sender;
+            observed
+        };
+        let run = tokio::spawn(worker.run(process, receiver));
+        let roster = |router: &crate::host_rpc::routing::SessionRouter| {
+            router
+                .overlay_execution(&session, agent_protocol::models::Thread::default())
+                .background
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while roster(&router).len() < 3 {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            roster(&router),
+            [
+                BackgroundTask {
+                    id: "shell".into(),
+                    kind: BackgroundTaskKind::Command,
+                    description: Some("Start the dev server".into()),
+                },
+                BackgroundTask {
+                    id: "watch".into(),
+                    kind: BackgroundTaskKind::Monitor,
+                    description: Some("Watch the build".into()),
+                },
+                BackgroundTask {
+                    id: "agent".into(),
+                    kind: BackgroundTaskKind::Subagent,
+                    description: Some("Review src/math.ts".into()),
+                },
+            ]
+        );
+        assert_eq!(
+            router.current_turn(&session, "turn").unwrap().status,
+            TurnStatus::Running,
+            "Claude reports on its work in the turn that waits on it"
+        );
+        assert!(
+            *background.borrow(),
+            "a new process would end the work, so changes are refused"
+        );
+        input
+            .send(Command {
+                value: SdkInput::Interrupt {
+                    request_id: "interrupt".into(),
+                },
+                user: None,
+                delivered: None,
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), run)
+            .await
+            .unwrap()
+            .unwrap();
+        // The Host retains only live turns, so the stopped one may be gone.
+        assert!(
+            router
+                .current_turn(&session, "turn")
+                .is_none_or(|turn| turn.status == TurnStatus::Interrupted)
+        );
+        assert!(roster(&router).is_empty(), "Stop ends the wait");
     }
 
     #[tokio::test]

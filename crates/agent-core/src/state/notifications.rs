@@ -899,6 +899,7 @@ mod tests {
                 waiting: Vec::new(),
                 display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
                 statuses: Vec::new(),
+                background: Vec::new(),
                 unread: turn
                     .map(|turn| (id.clone(), turn.into()))
                     .into_iter()
@@ -985,6 +986,7 @@ mod tests {
                 .map_or(1, |state| state.revision + 1),
             display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
             statuses: Vec::new(),
+            background: Vec::new(),
             unread: if unread {
                 vec![(id.clone(), "turn".into())]
             } else {
@@ -1576,6 +1578,7 @@ mod tests {
                         state: TaskActivityState {
                             revision: 1,
                             waiting: vec![],
+                            background: Vec::new(),
                             unread: vec![],
                             display: TaskActivitySummary::default().display(),
                             statuses: vec![(id.clone(), status)],
@@ -1611,6 +1614,7 @@ mod tests {
                 state: TaskActivityState {
                     revision: 1,
                     waiting: vec![],
+                    background: Vec::new(),
                     unread: vec![],
                     display: TaskActivitySummary::default().display(),
                     statuses: vec![
@@ -1670,6 +1674,7 @@ mod tests {
                 revision: 1,
                 waiting: vec![],
                 display: TaskActivitySummary::default().display(),
+                background: Vec::new(),
                 unread: vec![],
                 statuses: vec![
                     (codex.clone(), SessionStatus::Running),
@@ -1764,6 +1769,7 @@ mod tests {
                     ..Default::default()
                 }
                 .display(),
+                background: Vec::new(),
                 unread: vec![],
                 statuses: vec![],
             };

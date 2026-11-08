@@ -371,6 +371,16 @@ impl RenderedItem {
     }
 }
 
+fn waiting_turn_settled(turn: &Arc<models::Turn>) -> Arc<models::Turn> {
+    if turn.status != models::TurnStatus::Running {
+        return turn.clone();
+    }
+    Arc::new(models::Turn {
+        status: models::TurnStatus::Completed,
+        ..turn.as_ref().clone()
+    })
+}
+
 /// Pass the previous projection to retain native render identities across deltas.
 pub fn project_conversation(
     draft_key: &crate::state::DraftKey,
@@ -432,7 +442,16 @@ pub fn project_conversation(
         .flat_map(|old| &old.turns)
         .map(|turn| ((turn.source.id.as_str(), turn.occurrence), turn))
         .collect();
-    let native = source.turns.as_deref().unwrap_or_default();
+    let settled: Vec<_>;
+    let native = match source.turns.as_deref().unwrap_or_default() {
+        // As T3 Code's settled run, a turn that answered and waits on its
+        // background work reads as finished until the agent reports on it.
+        turns if !source.background.is_empty() => {
+            settled = turns.iter().map(waiting_turn_settled).collect();
+            &settled
+        }
+        turns => turns,
+    };
     let preparation_echoed = preparation.is_some_and(|preparation| {
         native
             .iter()
@@ -1462,6 +1481,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_turn_waiting_on_background_work_reads_as_finished_until_its_report() {
+        let thread = |background| {
+            Arc::new(models::Thread {
+                turns: Some(vec![Arc::new(models::Turn {
+                    id: "work".into(),
+                    status: models::TurnStatus::Running,
+                    items: Some(vec![
+                        Arc::new(models::Item::new(
+                            "shell".into(),
+                            models::ItemStatus::Completed,
+                            models::ItemBody::CommandExecution {
+                                command: "npm run dev".into(),
+                                cwd: None,
+                                output: String::new(),
+                                exit_code: None,
+                            },
+                        )),
+                        Arc::new(models::Item::new(
+                            "answer".into(),
+                            models::ItemStatus::Completed,
+                            models::ItemBody::AssistantText {
+                                text: "The server is starting.".into(),
+                                phase: models::AssistantPhase::Final,
+                            },
+                        )),
+                    ]),
+                    ..Default::default()
+                })]),
+                background,
+                ..Default::default()
+            })
+        };
+        let rows = |background| {
+            let snapshot = Snapshot::default();
+            project_conversation(
+                &snapshot.pane.navigation.draft_key,
+                &snapshot.sessions.pending_submissions,
+                thread(background),
+                &None,
+            )
+            .turns[0]
+                .rows
+                .clone()
+        };
+        let in_progress = |rows: &[ConversationRow]| {
+            rows.iter()
+                .any(|row| matches!(row.content, ConversationRowContent::InProgress { .. }))
+        };
+        let actions = |rows: &[ConversationRow]| {
+            rows.iter().any(|row| {
+                matches!(
+                    row.content,
+                    ConversationRowContent::Response {
+                        show_actions: true,
+                        ..
+                    }
+                )
+            })
+        };
+        let working = rows(Vec::new());
+        assert!(in_progress(&working) && !actions(&working));
+        let waiting = rows(vec![agent_protocol::execution::BackgroundTask {
+            id: "shell".into(),
+            kind: agent_protocol::execution::BackgroundTaskKind::Command,
+            description: Some("npm run dev".into()),
+        }]);
+        assert!(!in_progress(&waiting), "the work's own strip names it");
+        assert!(actions(&waiting), "the answer is complete");
     }
 
     #[test]

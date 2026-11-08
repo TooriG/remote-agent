@@ -294,7 +294,9 @@ private struct ThreadListRow: View {
     }
 
     var body: some View {
-        let activity = threadActivity(waiting: thread.waiting, active: thread.active, unread: thread.unread)
+        let activity = threadActivity(
+            waiting: thread.waiting, active: thread.active, background: thread.background, unread: thread.unread
+        )
         Button(action: open) {
             HStack(spacing: 10) {
                 Text(thread.title).font(.title3).foregroundColor(.primary).lineLimit(1)
@@ -311,6 +313,10 @@ private struct ThreadListRow: View {
                         RunningIndicator().controlSize(.small)
                             .accessibilityLabel(label)
                             .accessibilityIdentifier("tasks.running.\(accessibilityID)")
+                    case .background:
+                        Circle().fill(Color.secondary).frame(width: 8, height: 8)
+                            .accessibilityLabel(label)
+                            .accessibilityIdentifier("tasks.background.\(accessibilityID)")
                     case .unread:
                         Circle().fill(Color.primary).frame(width: 8, height: 8)
                             .accessibilityLabel(label)

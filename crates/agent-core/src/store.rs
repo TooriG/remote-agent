@@ -2637,6 +2637,7 @@ mod tests {
                 snapshot.lists.task_activity =
                     Some(Arc::new(agent_protocol::live_activity::TaskActivityState {
                         waiting: Vec::new(),
+                        background: Vec::new(),
                         unread: Vec::new(),
                         statuses: Vec::new(),
                         revision: 1,

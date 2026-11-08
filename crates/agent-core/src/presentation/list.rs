@@ -178,6 +178,8 @@ pub struct ThreadSummary {
     pub project_id: Option<String>,
     pub active: bool,
     pub waiting: bool,
+    /// Waiting on background work that will wake the agent.
+    pub background: bool,
     pub unread: bool,
     pub worktree_status: Option<crate::models::WorktreeStatus>,
 }
@@ -279,7 +281,7 @@ impl<'a> ListSource<'a> {
             && self.storage_scope == other.storage_scope
             && self.connected == other.connected
             && (self.lists.task_activity.same(&other.lists.task_activity)
-                || self.waiting_sessions() == other.waiting_sessions())
+                || self.task_marks() == other.task_marks())
             && self.same_phases(other)
             && self.same_shortcuts(other)
     }
@@ -407,11 +409,14 @@ impl ListSource<'_> {
             .collect()
     }
 
-    fn waiting_sessions(&self) -> &[crate::session::SessionRef] {
+    fn task_marks(&self) -> TaskMarks<'_> {
         self.lists
             .task_activity
             .as_ref()
-            .map_or(&[], |state| state.waiting.as_slice())
+            .map_or(TaskMarks::default(), |state| TaskMarks {
+                waiting: &state.waiting,
+                background: &state.background,
+            })
     }
     fn list_projection(
         &self,
@@ -419,7 +424,7 @@ impl ListSource<'_> {
         include_standalone: bool,
         additional_queries: usize,
     ) -> (ThreadList, ChatPlacements<'_>) {
-        let waiting = self.waiting_sessions();
+        let marks = self.task_marks();
         let search = self.lists.list_query.search_term.to_lowercase();
         let project_ids: HashSet<_> = list
             .projects
@@ -514,7 +519,7 @@ impl ListSource<'_> {
                 }),
                 &self.lists.activity.active,
                 &self.lists.activity.unread,
-                waiting,
+                marks,
                 // The filter has already resolved these rows as standalone.
                 &HashSet::new(),
                 None,
@@ -591,7 +596,7 @@ impl ListSource<'_> {
                                     data,
                                     &self.lists.activity.active,
                                     &self.lists.activity.unread,
-                                    waiting,
+                                    marks,
                                     &project_ids,
                                     None,
                                 )
@@ -614,7 +619,7 @@ impl ListSource<'_> {
                                     }),
                                     &self.lists.activity.active,
                                     &self.lists.activity.unread,
-                                    waiting,
+                                    marks,
                                     &project_ids,
                                     None,
                                 )
@@ -700,7 +705,7 @@ impl ListSource<'_> {
                                 placed.iter().map(AsRef::as_ref),
                                 &self.lists.activity.active,
                                 &self.lists.activity.unread,
-                                waiting,
+                                marks,
                                 &project_ids,
                                 Some(&project.id),
                             ),
@@ -728,7 +733,7 @@ impl ListSource<'_> {
                 queries.saturating_add(page.data.len())
             });
         let (mut list, placements) = self.list_projection(source, false, additional_queries);
-        let waiting = self.waiting_sessions();
+        let marks = self.task_marks();
         let project_ids: HashSet<_> = source.projects.iter().map(|p| p.id.as_str()).collect();
         let mut rows: BTreeMap<_, &crate::models::Thread> = BTreeMap::new();
         for thread in source
@@ -778,7 +783,7 @@ impl ListSource<'_> {
             rows.into_iter(),
             &self.lists.activity.active,
             &self.lists.activity.unread,
-            waiting,
+            marks,
             &project_ids,
             None,
         );
@@ -804,11 +809,18 @@ impl ListSource<'_> {
     }
 }
 
+/// The Host's marks for conversations beside their activity.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct TaskMarks<'a> {
+    waiting: &'a [crate::session::SessionRef],
+    background: &'a [(crate::session::SessionRef, bool)],
+}
+
 fn thread_summaries<'a>(
     data: impl Iterator<Item = &'a crate::models::Thread>,
     active: &BTreeMap<crate::session::SessionRef, bool>,
     unread: &BTreeSet<crate::session::SessionRef>,
-    waiting: &[crate::session::SessionRef],
+    marks: TaskMarks<'_>,
     project_ids: &HashSet<&str>,
     project_override: Option<&str>,
 ) -> Vec<ThreadSummary> {
@@ -817,14 +829,21 @@ fn thread_summaries<'a>(
         .filter_map(|thread| Some((thread, thread.id.as_ref()?)))
         .enumerate()
         .map(|(index, (thread, id))| {
-            let active = task_active(active.get(id).copied(), thread.status);
+            // Work left running after an answer is not the agent working; as
+            // T3 Code, only work that wakes the agent keeps it waiting.
+            let background = marks
+                .background
+                .iter()
+                .find_map(|(session, holds)| (session == id).then_some(*holds));
+            let active =
+                task_active(active.get(id).copied(), thread.status) && background.is_none();
             let unread = unread.contains(id);
-            let waiting = if waiting.len() >= 64 && index >= 64 {
+            let waiting = if marks.waiting.len() >= 64 && index >= 64 {
                 indexed
-                    .get_or_insert_with(|| waiting.iter().collect::<HashSet<_>>())
+                    .get_or_insert_with(|| marks.waiting.iter().collect::<HashSet<_>>())
                     .contains(id)
             } else {
-                waiting.contains(id)
+                marks.waiting.contains(id)
             };
             ThreadSummary {
                 host_id: String::new(),
@@ -841,6 +860,7 @@ fn thread_summaries<'a>(
                     .map(str::to_owned),
                 active,
                 waiting,
+                background: background == Some(true),
                 unread,
                 worktree_status: thread.worktree_status,
             }
@@ -1008,6 +1028,7 @@ mod tests {
             } else {
                 Vec::new()
             },
+            background: Vec::new(),
             unread: Vec::new(),
         };
         for (revision, requested, expected) in
@@ -1037,6 +1058,40 @@ mod tests {
             assert!(state.sessions.conversations.is_empty());
             assert!(state.sessions.subscriptions.is_empty());
         }
+    }
+
+    #[test]
+    fn work_left_running_after_an_answer_reads_waiting_only_when_it_wakes_the_agent() {
+        use agent_protocol::{
+            live_activity::{TaskActivityState, TaskActivitySummary},
+            session::{ProviderKind, SessionRef},
+        };
+        let id = |name: &str| SessionRef::new(ProviderKind::Claude, name.into()).unwrap();
+        let (agents, server, working) = (id("agents"), id("server"), id("working"));
+        let mut state = snapshot_list(json!([{"id":agents}, {"id":server}, {"id":working}]));
+        let _ = state.accept_task_activity(TaskActivityState {
+            revision: 1,
+            display: TaskActivitySummary::default().display(),
+            statuses: [&agents, &server, &working]
+                .into_iter()
+                .map(|id| (id.clone(), models::SessionStatus::Running))
+                .collect(),
+            waiting: Vec::new(),
+            background: vec![(agents.clone(), true), (server.clone(), false)],
+            unread: Vec::new(),
+        });
+        let list = state.thread_list().unwrap();
+        let row = |id: &SessionRef| {
+            let row = list.threads.iter().find(|row| &row.id == id).unwrap();
+            (row.active, row.background)
+        };
+        assert_eq!(row(&agents), (false, true));
+        assert_eq!(
+            row(&server),
+            (false, false),
+            "a dev server leaves the chat ready"
+        );
+        assert_eq!(row(&working), (true, false));
     }
 
     #[test]

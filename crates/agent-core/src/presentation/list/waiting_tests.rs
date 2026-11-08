@@ -42,7 +42,10 @@ fn waiting_membership_keeps_provider_identity_duplicates_and_absent_rows_at_ever
                 rows.iter(),
                 &BTreeMap::new(),
                 &BTreeSet::new(),
-                waiting,
+                TaskMarks {
+                    waiting,
+                    ..Default::default()
+                },
                 &HashSet::new(),
                 None,
             );
@@ -57,7 +60,10 @@ fn waiting_membership_keeps_provider_identity_duplicates_and_absent_rows_at_ever
                 std::iter::empty(),
                 &BTreeMap::new(),
                 &BTreeSet::new(),
-                &waiting,
+                TaskMarks {
+                    waiting: &waiting,
+                    ..Default::default()
+                },
                 &HashSet::new(),
                 None
             )

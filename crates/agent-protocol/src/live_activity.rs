@@ -16,6 +16,10 @@ pub struct TaskActivityState {
     pub statuses: Vec<(crate::session::SessionRef, crate::models::SessionStatus)>,
     /// User conversations awaiting a response; subagent requests are excluded.
     pub waiting: Vec<crate::session::SessionRef>,
+    /// Conversations whose answered turn waits on background work, and
+    /// whether that work holds the conversation's completion.
+    #[serde(default)]
+    pub background: Vec<(crate::session::SessionRef, bool)>,
     pub unread: Vec<(crate::session::SessionRef, crate::ids::TurnId)>,
 }
 
@@ -188,6 +192,9 @@ pub struct TaskActivityView {
 pub struct TaskState {
     pub status: crate::models::SessionStatus,
     pub waiting: bool,
+    /// Some while the answered turn waits on background work: whether that
+    /// work holds the conversation's completion.
+    pub background: Option<bool>,
     pub latest: Option<TurnStatus>,
 }
 impl TaskState {
@@ -362,7 +369,8 @@ mod tests {
                     TaskState {
                         status,
                         waiting: false,
-                        latest: turn
+                        latest: turn,
+                        background: None,
                     }
                     .phase(),
                     ("unknown", false)
@@ -378,7 +386,8 @@ mod tests {
                     TaskState {
                         status,
                         waiting: true,
-                        latest: turn
+                        latest: turn,
+                        background: None,
                     }
                     .phase(),
                     ("waiting", true)
@@ -401,7 +410,8 @@ mod tests {
                 TaskState {
                     status: crate::models::SessionStatus::Idle,
                     waiting: false,
-                    latest: turn
+                    latest: turn,
+                    background: None,
                 }
                 .phase(),
                 expected
@@ -410,7 +420,8 @@ mod tests {
                 TaskState {
                     status: crate::models::SessionStatus::Running,
                     waiting: false,
-                    latest: turn
+                    latest: turn,
+                    background: None,
                 }
                 .phase(),
                 ("running", true)

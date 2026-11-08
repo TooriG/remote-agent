@@ -32,6 +32,9 @@ pub struct ComposerControls {
     pub transferring: bool,
     pub transcribing: bool,
     pub running_turn: Option<agent_protocol::ids::TurnId>,
+    /// The work the answered running turn waits on. As in T3 Code, the
+    /// composer sends while it waits; the work's own strip offers Stop.
+    pub background: Option<super::background_work::BackgroundWork>,
     pub interrupt_phase: Option<OperationPhase>,
     pub unavailable: Option<String>,
     pub question: Option<crate::questions::QuestionPrompt>,
@@ -96,6 +99,8 @@ impl ComposerPresentation {
                     })
                 }),
             running_turn,
+            background: thread
+                .and_then(|thread| super::background_work::BackgroundWork::new(&thread.background)),
             unavailable: session
                 .and_then(|id| snapshot.input_unavailable_reason(id.clone(), provider)),
             question: session.and_then(|id| snapshot.question_prompt(id.clone())),

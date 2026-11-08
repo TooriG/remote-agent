@@ -71,6 +71,7 @@ fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>, scope: 
     let activity = agent_core::presentation::thread_status::thread_activity(
         thread.waiting,
         thread.active,
+        thread.background,
         thread.unread,
     );
     Row {
@@ -695,7 +696,7 @@ fn project_icon(row: &Row) -> AnyElement {
         .into_element()
 }
 
-/// A chat's state after its title: running, unread, a worktree to merge or merged.
+/// A chat's state after its title: running, waiting, unread, a worktree to merge or merged.
 fn indicators(indicators: native::RowIndicators) -> impl IntoElement {
     use crate::ui::{self, Icon};
     use agent_core::presentation::thread_status::ThreadActivity;
@@ -715,6 +716,15 @@ fn indicators(indicators: native::RowIndicators) -> impl IntoElement {
                     .h(px(8.0))
                     .rounded_full()
                     .bg(nsh_core::element::rgb(0xffffff))
+                    .into_element(),
+            ),
+            // As T3 Code's Waiting: grey and still, unlike a running spinner.
+            Some(ThreadActivity::Background) => Some(
+                view()
+                    .w(px(8.0))
+                    .h(px(8.0))
+                    .rounded_full()
+                    .bg(crate::ui::colors::MUTED)
                     .into_element(),
             ),
             None => None,
@@ -820,6 +830,7 @@ mod tests {
             project_id: Some("project".into()),
             active: false,
             waiting: false,
+            background: false,
             unread: false,
             worktree_status: None,
         };
@@ -1039,6 +1050,7 @@ mod tests {
             project_id: None,
             active: true,
             waiting: true,
+            background: false,
             unread: true,
             worktree_status: Some(WorktreeStatus::Unmerged),
         };
@@ -1094,6 +1106,7 @@ mod tests {
             project_id: None,
             active: true,
             waiting: true,
+            background: false,
             unread: false,
             worktree_status: Some(agent_protocol::models::WorktreeStatus::Unmerged),
         };

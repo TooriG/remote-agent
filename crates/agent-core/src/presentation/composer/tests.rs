@@ -278,3 +278,44 @@ fn the_review_card_folds_past_three_files_and_needs_a_conversation_with_changes(
         "a new draft has no card"
     );
 }
+
+#[test]
+fn an_answered_turn_offers_its_background_work_and_stop_while_the_composer_sends() {
+    let mut snapshot = snapshot();
+    let waiting = |background| {
+        Arc::new(Thread {
+            id: Some(session()),
+            turns: Some(vec![Arc::new(Turn {
+                id: "turn".into(),
+                status: TurnStatus::Running,
+                ..Default::default()
+            })]),
+            background,
+            capabilities: Some(agent_protocol::session::Capabilities {
+                additional_input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    };
+    Arc::make_mut(&mut snapshot.sessions.conversations).insert(session(), waiting(Vec::new()));
+    assert_eq!(presentation(&snapshot).controls.background, None);
+    Arc::make_mut(&mut snapshot.sessions.conversations).insert(
+        session(),
+        waiting(vec![agent_protocol::execution::BackgroundTask {
+            id: "shell".into(),
+            kind: agent_protocol::execution::BackgroundTaskKind::Monitor,
+            description: Some("Watch the build".into()),
+        }]),
+    );
+    crate::state::set_draft_text(&mut snapshot, session().into(), "next".into());
+    let composer = presentation(&snapshot);
+    let work = composer.controls.background.as_ref().unwrap();
+    assert!(work.waiting);
+    assert_eq!(
+        work.title(crate::localization::UiLanguage::English),
+        "Waiting on monitor Watch the build"
+    );
+    assert!(composer.can_interrupt(), "Stop ends the work");
+    assert!(composer.can_submit(false), "a message can follow the work");
+}

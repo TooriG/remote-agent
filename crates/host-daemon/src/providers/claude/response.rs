@@ -1,8 +1,10 @@
 //! Response boundaries and input ownership are independent of timeline IO.
 mod background;
+mod roster;
 use super::native;
-use agent_protocol::ids::ItemId;
+use agent_protocol::{execution::BackgroundTask, ids::ItemId};
 use background::Reports;
+use roster::{Roster, task_key};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -34,6 +36,7 @@ pub(super) struct ResponseState {
     result_received: bool,
     idle: bool,
     background: Reports,
+    roster: Roster,
 }
 
 impl ResponseState {
@@ -59,6 +62,21 @@ impl ResponseState {
         self.answered() && (!self.background.pending() || self.interrupted)
     }
 
+    /// Whether Claude still runs work that a new process would end.
+    pub(super) fn has_background(&self) -> bool {
+        !self.roster.tasks().is_empty()
+    }
+
+    /// The work an answered response waits on, as T3 Code's Waiting roster.
+    /// Nothing waits while Claude is responding or input awaits its turn.
+    pub(super) fn waiting(&self) -> &[BackgroundTask] {
+        if self.result_received && self.pending_inputs.is_empty() && !self.interrupted {
+            self.roster.tasks()
+        } else {
+            &[]
+        }
+    }
+
     pub(super) fn delivery(&self) -> InputDelivery {
         if self.background.pending() {
             InputDelivery::Background
@@ -74,6 +92,7 @@ impl ResponseState {
     }
 
     pub(super) fn observe<'a>(&mut self, message: &'a Value) -> Result<Observation<'a>, String> {
+        self.roster.observe(message);
         let background_level = self.observe_background(message)?;
         let echoes = self.consume_echoes(message);
         let disposition = if background_level {
@@ -121,20 +140,14 @@ impl ResponseState {
         }
         match message["subtype"].as_str() {
             Some("task_notification") => {
-                let id = message["run_id"]
-                    .as_str()
-                    .or(message["task_id"].as_str())
-                    .ok_or("Claude task notification ID is missing")?;
+                let id = task_key(message).ok_or("Claude task notification ID is missing")?;
                 self.background.notified(
                     id,
                     message["ambient"] == true || message["skip_transcript"] == true,
                 );
             }
             Some("task_started") => {
-                let id = message["run_id"]
-                    .as_str()
-                    .or(message["task_id"].as_str())
-                    .ok_or("Claude task start ID is missing")?;
+                let id = task_key(message).ok_or("Claude task start ID is missing")?;
                 let report = native::needs_background_report(
                     message["task_type"].as_str(),
                     message["is_backgrounded"] != false,
@@ -148,10 +161,7 @@ impl ResponseState {
                     .ok_or("Claude background task level is missing")?
                     .iter()
                     .map(|task| {
-                        let id = task["run_id"]
-                            .as_str()
-                            .or(task["task_id"].as_str())
-                            .ok_or("Claude background task ID is missing")?;
+                        let id = task_key(task).ok_or("Claude background task ID is missing")?;
                         Ok::<_, String>((
                             id.to_owned(),
                             native::needs_background_report(
@@ -249,6 +259,49 @@ mod tests {
             ),
             MessageDisposition::Applied
         );
+    }
+
+    #[test]
+    fn only_an_answered_response_waits_on_its_background_work() {
+        let ids = |response: &ResponseState| {
+            response
+                .waiting()
+                .iter()
+                .map(|task| task.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut response = ResponseState::default();
+        observe(
+            &mut response,
+            json!({"type":"system","subtype":"task_started","task_id":"agent","task_type":"local_agent"}),
+        );
+        assert!(response.has_background());
+        assert!(ids(&response).is_empty(), "Claude is still responding");
+        // A background subagent keeps the SDK from going idle after the result.
+        observe(&mut response, json!({"type":"result"}));
+        assert_eq!(ids(&response), ["agent"]);
+        response.accept("queued".into());
+        assert!(ids(&response).is_empty(), "input awaits its turn");
+        observe(&mut response, json!({"type":"user","uuid":"queued"}));
+        assert!(ids(&response).is_empty());
+        observe(&mut response, json!({"type":"result"}));
+        assert_eq!(ids(&response), ["agent"]);
+        observe(
+            &mut response,
+            json!({"type":"system","subtype":"task_notification","task_id":"agent"}),
+        );
+        assert!(ids(&response).is_empty());
+        assert!(!response.has_background());
+
+        let mut stopped = ResponseState::default();
+        observe(
+            &mut stopped,
+            json!({"type":"system","subtype":"task_started","task_id":"shell","task_type":"local_bash"}),
+        );
+        settle(&mut stopped);
+        assert_eq!(ids(&stopped), ["shell"]);
+        stopped.interrupt();
+        assert!(ids(&stopped).is_empty(), "a stop ends the wait");
     }
 
     #[test]

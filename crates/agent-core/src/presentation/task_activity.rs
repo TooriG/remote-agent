@@ -56,6 +56,7 @@ mod tests {
             revision: 2,
             waiting: Vec::new(),
             display: TaskActivitySummary::default().display(),
+            background: Vec::new(),
             unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Idle)],
         });
@@ -71,6 +72,7 @@ mod tests {
             revision: 3,
             waiting: Vec::new(),
             display: TaskActivitySummary::default().display(),
+            background: Vec::new(),
             unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Idle)],
         });
@@ -84,6 +86,7 @@ mod tests {
                 ..Default::default()
             }
             .display(),
+            background: Vec::new(),
             unread: Vec::new(),
             statuses: vec![(id.clone(), crate::models::SessionStatus::Running)],
         });
@@ -94,6 +97,7 @@ mod tests {
     fn delayed_read_cannot_replace_a_newer_completion_or_depend_on_visible_rows() {
         let running = TaskActivityState {
             waiting: Vec::new(),
+            background: Vec::new(),
             unread: Vec::new(),
             statuses: Vec::new(),
             revision: 1,
@@ -105,6 +109,7 @@ mod tests {
         };
         let completed = TaskActivityState {
             waiting: Vec::new(),
+            background: Vec::new(),
             unread: Vec::new(),
             statuses: Vec::new(),
             revision: 2,
@@ -135,6 +140,7 @@ mod tests {
             &mut reconnected,
             TaskActivityState {
                 waiting: Vec::new(),
+                background: Vec::new(),
                 unread: Vec::new(),
                 statuses: Vec::new(),
                 revision: 0,

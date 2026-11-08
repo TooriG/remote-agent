@@ -1,0 +1,22 @@
+# Claude answers while a background command, a Monitor and a subagent run:
+# as T3 Code's strip above the composer, the conversation names the work it
+# waits on with Stop instead of a working row, and the strip clears once
+# Claude reports on the finished work in the same turn.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+press "Fixture Model"
+expect "Claude Code" 20000
+press "Claude Code"
+expect "Default (recommended)" 20000
+press "Default (recommended)"
+type "AI に依頼する" "background-roster"
+press 送信
+expect "サブエージェント 1件、コマンド 1件、モニター 1件を待機中" 30000
+expect "Review the change、Start the dev server、Watch the build"
+expect "バックグラウンドで作業しています"
+expect_absent "作業中…"
+screenshot waiting
+fixture /claude-background/release
+expect "バックグラウンドの作業が終わりました" 30000
+expect_absent "サブエージェント 1件、コマンド 1件、モニター 1件を待機中"
+screenshot reported

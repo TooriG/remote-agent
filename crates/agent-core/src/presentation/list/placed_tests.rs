@@ -109,6 +109,7 @@ fn fixture() -> Snapshot {
             revision: 1,
             statuses: vec![],
             waiting: vec![session("live")],
+            background: Vec::new(),
             unread: vec![],
             display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
         }));
@@ -324,7 +325,7 @@ fn project_override_keeps_catalogue_membership_and_does_not_create_row_ids() {
             std::iter::once(&row),
             &BTreeMap::new(),
             &BTreeSet::new(),
-            &[],
+            TaskMarks::default(),
             &projects,
             project,
         );
@@ -342,7 +343,7 @@ fn project_override_keeps_catalogue_membership_and_does_not_create_row_ids() {
             invalid.iter(),
             &BTreeMap::new(),
             &BTreeSet::new(),
-            &[],
+            TaskMarks::default(),
             &projects,
             Some("placed")
         )

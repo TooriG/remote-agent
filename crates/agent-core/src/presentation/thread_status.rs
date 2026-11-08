@@ -7,15 +7,25 @@ use agent_protocol::models::WorktreeStatus;
 pub enum ThreadActivity {
     Waiting,
     Running,
+    /// Answered, with background work that will wake the agent, as T3 Code's
+    /// Waiting: not the user's turn yet, and not a false Done.
+    Background,
     Unread,
 }
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
-pub fn thread_activity(waiting: bool, active: bool, unread: bool) -> Option<ThreadActivity> {
+pub fn thread_activity(
+    waiting: bool,
+    active: bool,
+    background: bool,
+    unread: bool,
+) -> Option<ThreadActivity> {
     if waiting {
         Some(ThreadActivity::Waiting)
     } else if active {
         Some(ThreadActivity::Running)
+    } else if background {
+        Some(ThreadActivity::Background)
     } else if unread {
         Some(ThreadActivity::Unread)
     } else {
@@ -28,6 +38,7 @@ pub fn thread_activity_label(activity: ThreadActivity) -> String {
     match activity {
         ThreadActivity::Waiting => "確認待ち",
         ThreadActivity::Running => "実行中",
+        ThreadActivity::Background => "待機中",
         ThreadActivity::Unread => "完了・未確認",
     }
     .into()
@@ -47,6 +58,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn background_work_reads_waiting_below_running_and_above_unread() {
+        assert_eq!(
+            thread_activity(false, false, true, true),
+            Some(ThreadActivity::Background)
+        );
+        assert_eq!(
+            thread_activity(false, true, true, false),
+            Some(ThreadActivity::Running)
+        );
+        assert_eq!(
+            thread_activity(true, false, true, false),
+            Some(ThreadActivity::Waiting)
+        );
+        assert_eq!(thread_activity_label(ThreadActivity::Background), "待機中");
+    }
+
+    #[test]
     fn waiting_precedes_running_and_running_precedes_unread() {
         for (waiting, active, unread, expected) in [
             (false, false, false, None),
@@ -58,7 +86,7 @@ mod tests {
             (true, true, false, Some(ThreadActivity::Waiting)),
             (true, true, true, Some(ThreadActivity::Waiting)),
         ] {
-            assert_eq!(thread_activity(waiting, active, unread), expected);
+            assert_eq!(thread_activity(waiting, active, false, unread), expected);
         }
         assert_eq!(thread_activity_label(ThreadActivity::Waiting), "確認待ち");
         assert_eq!(thread_activity_label(ThreadActivity::Running), "実行中");

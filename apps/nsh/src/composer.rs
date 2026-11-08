@@ -34,7 +34,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         !recording.get()
             && !requesting.get()
             && !controls.with(|c| c.transcribing)
-            && controls.with(|c| c.running_turn.is_some())
+            && controls.with(|c| c.running_turn.is_some() && c.background.is_none())
             && answering.with(Option::is_none)
             && composer.with(|c| c.draft.text.trim().is_empty() && c.draft.attachments.is_empty())
     };
@@ -481,6 +481,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     #[cfg(desktop)]
     let column = column.child(when(is_desktop, crate::desktop_workspace::review_card));
     column
+        .child(crate::background_work::strip())
         .child(crate::requests::panels(following))
         .child(when(
             move || {

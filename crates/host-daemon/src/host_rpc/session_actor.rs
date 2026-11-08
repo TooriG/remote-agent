@@ -122,6 +122,7 @@ impl SessionActor {
         }
         thread.requests = self.timeline.requests.clone();
         thread.submissions = self.timeline.submissions.clone();
+        thread.background = self.timeline.background.clone();
         if let Some(preparation) = &self.timeline.preparation {
             thread.preparation = preparation.clone();
         }

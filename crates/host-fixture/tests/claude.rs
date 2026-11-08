@@ -2148,6 +2148,90 @@ async fn claude_keeps_loading_until_it_answers_a_background_shell_and_interrupt_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_waits_on_its_background_roster_refuses_a_model_change_and_reports_in_the_turn() {
+    use agent_protocol::execution::BackgroundTaskKind::*;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = host(root.path(), Arc::new(Memory::default()), fixture_program()).await;
+    let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
+    store
+        .dispatch(Intent::NewChat {
+            cwd: root.path().to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    let select = |id: &str| Intent::SelectModel {
+        thread_id: store.snapshot().pane.navigation.draft_key.clone(),
+        model: models::ModelRef {
+            provider: ProviderKind::Claude,
+            id: id.into(),
+        },
+    };
+    store.dispatch(select("default")).await.unwrap();
+    let id = send(&store, "background-roster", "background-roster").await;
+    let roster = |snapshot: &Snapshot| {
+        snapshot.sessions.conversations[&id]
+            .background
+            .iter()
+            .map(|task| (task.kind, task.description.clone().unwrap_or_default()))
+            .collect::<Vec<_>>()
+    };
+    let snapshot = until(&store, |snapshot| roster(snapshot).len() == 3).await;
+    assert_eq!(
+        roster(&snapshot),
+        [
+            (Command, "Start the dev server".into()),
+            (Monitor, "Watch the build".into()),
+            (Subagent, "Review the change".into()),
+        ]
+    );
+    assert_eq!(
+        snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[0].status,
+        models::TurnStatus::Running,
+        "the turn waits for Claude's report"
+    );
+
+    store.dispatch(select("sonnet")).await.unwrap();
+    draft(&store, "after the change").await;
+    let refused = store
+        .dispatch(Intent::Submit {
+            thread_id: Some(id.clone()),
+            client_user_message_id: "model-change".into(),
+        })
+        .await
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    let text = agent_core::presentation::error::error_text(&refused);
+    assert_eq!(
+        text.message,
+        "Claudeのバックグラウンドのエージェントやコマンドが実行中のため、モデルや設定を変更するとそれらが終了します。完了を待つか停止してから、もう一度送信してください。"
+    );
+    assert_eq!(
+        text.details.as_deref(),
+        Some(
+            "Claude is still running background agents or commands, and this model or setting change would end them. Wait for them to finish, or press Stop, then send the message again."
+        )
+    );
+    assert_eq!(roster(&store.snapshot()).len(), 3, "the work keeps running");
+
+    std::fs::write(root.path().join("claude-background-release"), []).unwrap();
+    let snapshot = completed(&store, &id, 1, "completed").await;
+    let thread = &snapshot.sessions.conversations[&id];
+    assert!(thread.background.is_empty());
+    assert!(
+        thread.turns.as_ref().unwrap()[0]
+            .items
+            .iter()
+            .flatten()
+            .any(|item| item_text(item) == Some("バックグラウンドの作業が終わりました")),
+        "Claude reports on its work in the turn that waited on it"
+    );
+    store.close().await.unwrap();
+    endpoint.close().await;
+    fixture.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn input_while_only_a_background_shell_runs_opens_the_turn_history_shows() {
     let root = tempfile::tempdir().unwrap();
     let paused = root.path().join("background-shell-paused");

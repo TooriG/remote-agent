@@ -1,0 +1,26 @@
+# While Claude waits on background work, a model change would end it, so the
+# Host refuses the message with T3 Code's reason and the work keeps running
+# until the strip's Stop ends it.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+press "Fixture Model"
+expect "Claude Code" 20000
+press "Claude Code"
+expect "Default (recommended)" 20000
+press "Default (recommended)"
+type "AI に依頼する" "background-roster"
+press 送信
+expect "サブエージェント 1件、コマンド 1件、モニター 1件を待機中" 30000
+press "Default (recommended)"
+expect "モデルを検索" 10000
+press "Sonnet"
+expect_absent "モデルを検索"
+type "AI に依頼する" "モデルを変えて続けます"
+press 送信
+expect "モデルや設定を変更するとそれらが終了します。完了を待つか停止してから、もう一度送信してください。" 20000
+expect "Claude is still running background agents or commands"
+expect "サブエージェント 1件、コマンド 1件、モニター 1件を待機中"
+screenshot refused
+press 停止
+expect_absent "サブエージェント 1件、コマンド 1件、モニター 1件を待機中" 20000
+screenshot stopped

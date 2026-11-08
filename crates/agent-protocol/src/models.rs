@@ -113,6 +113,9 @@ pub struct Thread {
     #[serde(default)]
     pub status: SessionStatus,
     pub turns: Option<Vec<Arc<Turn>>>,
+    /// Work the agent left running after its running turn answered.
+    #[serde(default)]
+    pub background: Vec<crate::execution::BackgroundTask>,
     #[serde(default, deserialize_with = "project_membership")]
     pub project_id: ProjectMembership,
     pub preview: Option<String>,

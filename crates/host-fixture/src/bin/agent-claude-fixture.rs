@@ -203,6 +203,7 @@ enum Waiting {
     Background,
     BackgroundSettled,
     BackgroundShell,
+    BackgroundRoster,
     Wait,
 }
 
@@ -237,6 +238,7 @@ enum InputScenario {
     Crash,
     Error,
     BackgroundShell,
+    BackgroundRoster,
     Wait,
     Control(ControlRequest),
     Permission(PermissionScenario),
@@ -248,6 +250,7 @@ impl InputScenario {
             "crash" => Self::Crash,
             _ if result_error => Self::Error,
             "background-shell" => Self::BackgroundShell,
+            "background-roster" => Self::BackgroundRoster,
             "wait" => Self::Wait,
             "unknown_control" => Self::Control(ControlRequest::Unknown),
             "dialog" => Self::Control(ControlRequest::Dialog),
@@ -304,7 +307,10 @@ impl Fixture {
             );
         }
         // A settled response has no result to end; its shell keeps running.
-        if self.waiting != Some(Waiting::BackgroundShell) {
+        // A background subagent kept the SDK from reporting idle until the stop.
+        if self.waiting == Some(Waiting::BackgroundRoster) {
+            output(session_state(&self.session, "idle"));
+        } else if self.waiting != Some(Waiting::BackgroundShell) {
             let stop_reason = if prompted { "tool_use" } else { "null" };
             emit(
                 &self.session,
@@ -553,6 +559,10 @@ impl Fixture {
                 });
                 Some(Waiting::BackgroundShell)
             }
+            InputScenario::BackgroundRoster => {
+                self.background_roster();
+                Some(Waiting::BackgroundRoster)
+            }
             InputScenario::Wait => {
                 let message = format!("waiting-{}", self.inputs.len());
                 emit(
@@ -635,6 +645,104 @@ impl Fixture {
                 None
             }
         }
+    }
+}
+
+/// A background command, a Monitor and a background subagent, with each
+/// tool's call, launch result and task start, as Claude Code reports them.
+const ROSTER: [(&str, &str, &str, &str, &str); 3] = [
+    (
+        "roster-shell",
+        "Bash",
+        "shell-roster",
+        "local_bash",
+        "Start the dev server",
+    ),
+    (
+        "roster-monitor",
+        "Monitor",
+        "monitor-roster",
+        "local_bash",
+        "Watch the build",
+    ),
+    (
+        "roster-agent",
+        "Agent",
+        "agent-roster",
+        "local_agent",
+        "Review the change",
+    ),
+];
+
+impl Fixture {
+    /// Claude answers while its background work runs. The work finishes once
+    /// `claude-background-release` exists in the workspace, and Claude reports
+    /// on it without another input.
+    fn background_roster(&self) {
+        let session = self.session.clone();
+        let message = self.message_id();
+        emit(
+            &session,
+            json!({"type":"assistant","uuid":format!("{message}-calls"),"session_id":session,"message":{"id":format!("{message}-calls"),"role":"assistant","stop_reason":"tool_use",
+                "content":ROSTER.iter().map(|(call, tool, _, _, description)| json!({"type":"tool_use","id":call,"name":tool,
+                    "input":{"command":"fixture background work","description":description,"prompt":description,"run_in_background":true}})).collect::<Vec<_>>()}}),
+        );
+        for (call, tool, task, kind, description) in ROSTER {
+            emit(
+                &session,
+                json!({"type":"system","subtype":"task_started","task_id":task,"task_type":kind,"tool_use_id":call,"description":description,"session_id":session}),
+            );
+            emit(
+                &session,
+                json!({"type":"user","uuid":format!("{message}-{call}"),"session_id":session,
+                    "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":call,"content":format!("{tool} started in the background")}]},
+                    "tool_use_result":if tool == "Agent" { json!({"status":"async_launched"}) } else { json!({"backgroundTaskId":task}) }}),
+            );
+        }
+        emit(
+            &session,
+            json!({"type":"stream_event","session_id":session,"event":{"type":"message_start","message":{"id":message}}}),
+        );
+        block(
+            &session,
+            &message,
+            0,
+            "text",
+            "バックグラウンドで作業しています",
+            Some("end_turn"),
+        );
+        end_turn(&session);
+        // The subagent keeps the SDK from reporting idle after the result.
+        output(
+            json!({"type":"result","subtype":"success","session_id":session,"is_error":false,"result":"バックグラウンドで作業しています"}),
+        );
+        std::thread::spawn(move || {
+            while !Path::new("claude-background-release").exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let _response = ROOT_RESPONSE.lock().unwrap();
+            for (call, _, task, _, description) in ROSTER {
+                emit(
+                    &session,
+                    json!({"type":"system","subtype":"task_notification","task_id":task,"tool_use_id":call,"status":"completed","output_file":"","summary":format!("{description} finished"),"session_id":session}),
+                );
+            }
+            emit(
+                &session,
+                json!({"type":"system","subtype":"background_tasks_changed","session_id":session,"tasks":[]}),
+            );
+            emit(
+                &session,
+                json!({"type":"system","subtype":"init","session_id":session}),
+            );
+            output(session_state(&session, "running"));
+            emit_reply(
+                &session,
+                &format!("{message}-report"),
+                "バックグラウンドの作業が終わりました",
+                false,
+            );
+        });
     }
 }
 
