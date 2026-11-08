@@ -27,8 +27,8 @@ use objc2::{
 use objc2_app_kit::{
     NSApplication, NSBitmapImageFileType, NSEvent, NSEventModifierFlags, NSEventType, NSMenu,
     NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification, NSModalResponseOK,
-    NSOpenPanel, NSPasteboard, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting,
-    NSScreen, NSView, NSWindow,
+    NSOpenPanel, NSPasteboard, NSPasteboardItem, NSPasteboardTypePNG, NSPasteboardTypeString,
+    NSPasteboardWriting, NSScreen, NSView, NSWindow,
 };
 use objc2_core_graphics::{CGEvent, CGScrollEventUnit};
 use objc2_foundation::{
@@ -218,6 +218,7 @@ fn limit(step: &Step) -> Duration {
     match step {
         Step::Press(find)
         | Step::Type(find, _)
+        | Step::Paste(find)
         | Step::Scroll(find, _)
         | Step::Select(find, _)
         | Step::Menu(find)
@@ -258,6 +259,9 @@ fn attempt(
             insert(tree, index, text)
                 .map(|()| format!("typed into {}", tree.nodes[index].describe()))
         }),
+        Step::Paste(find) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
+            paste(tree, index).map(|()| format!("pasted into {}", tree.nodes[index].describe()))
+        }),
         Step::Scroll(find, lines) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             scroll(tree, index, *lines, mtm).map(|()| {
                 format!(
@@ -279,6 +283,10 @@ fn attempt(
             } else {
                 Attempt::Pending(format!("the clipboard has {copied:?}"))
             }
+        }
+        Step::Copy { text, image } => {
+            Clipboard::write(text, *image);
+            Attempt::Passed(format!("copied {text:?}, with an image: {image}"), None)
         }
         Step::Key(key) => {
             done(post_key(key, mtm).map(|()| format!("posted key code {}", key.code)))
@@ -748,6 +756,22 @@ fn text(object: &AnyObject, selector: Sel) -> Option<String> {
 }
 
 fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
+    let responder = editor(tree, index)?;
+    let text = NSString::from_str(text);
+    let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
+    Ok(())
+}
+
+/// Edit > Paste into the element `index`: its editor's `paste:` (an NSH input
+/// reports the paste from there).
+fn paste(tree: &Tree, index: usize) -> Result<(), String> {
+    let responder = editor(tree, index)?;
+    let _: () = unsafe { msg_send![&*responder, paste: Option::<&AnyObject>::None] };
+    Ok(())
+}
+
+/// Focuses the element `index` and returns the text editor that took the focus.
+fn editor(tree: &Tree, index: usize) -> Result<Retained<objc2_app_kit::NSResponder>, String> {
     let node = &tree.nodes[index];
     let (Target::Element(object), Some(window)) = (&node.target, &node.window) else {
         return Err(format!("{} takes no text", node.describe()));
@@ -771,9 +795,7 @@ fn insert(tree: &Tree, index: usize, text: &str) -> Result<(), String> {
     if !responds(&responder, sel!(insertText:)) {
         return Err(format!("{} does not edit text", node.describe()));
     }
-    let text = NSString::from_str(text);
-    let _: () = unsafe { msg_send![&*responder, insertText: &*text] };
-    Ok(())
+    Ok(responder)
 }
 
 /// Focuses `view`, or the first view inside it that takes the focus (a field in
@@ -1052,6 +1074,25 @@ impl Clipboard {
         if !items.is_empty() {
             pasteboard.writeObjects(&NSArray::from_retained_slice(&items));
         }
+    }
+
+    /// One item of `text` (none when empty), with a PNG when `image`.
+    fn write(text: &str, image: bool) {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let item = NSPasteboardItem::new();
+        if !text.is_empty() {
+            item.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
+        }
+        if image {
+            let png = include_bytes!(
+                "../../../mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+            );
+            item.setData_forType(&NSData::with_bytes(png), unsafe { NSPasteboardTypePNG });
+        }
+        pasteboard.writeObjects(&NSArray::from_retained_slice(&[
+            ProtocolObject::from_retained(item),
+        ]));
     }
 
     fn text() -> String {

@@ -44,6 +44,7 @@ async fn host(root: &Path, memory: Arc<Memory>, program: &Path) -> HostFixture {
         "Claude fixture Host",
         false,
         Some(program),
+        None,
     )
     .await
     .unwrap()
@@ -1015,7 +1016,7 @@ async fn missing_codex_keeps_claude_inputs_workspaces_and_resumed_history_usable
         let mut thread_id: Option<agent_protocol::session::SessionRef> = None;
         let mut cwd = None;
         for index in 0..2 {
-            let fixture = HostFixture::start(&root, config.clone(), memory.clone(), "Independent Host", false, Some(fixture_program())).await.unwrap();
+            let fixture = HostFixture::start(&root, config.clone(), memory.clone(), "Independent Host", false, Some(fixture_program()), None).await.unwrap();
             let (store, endpoint) = connect(&fixture, saved).await;
             assert!(store.snapshot().connection.connected);
             assert!(store.snapshot().catalog.model_errors.contains_key("codex"));
@@ -1496,6 +1497,7 @@ async fn missing_codex_terminal_is_owned_by_its_connection_and_supports_io_resiz
             "PTY fixture",
             false,
             Some(fixture_program()),
+            None,
         )
         .await
         .unwrap();
@@ -1598,7 +1600,7 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         std::fs::write(native.join("skills/account-test/SKILL.md"), "shared skill").unwrap();
         std::fs::write(native.join("settings.json"), r#"{"model":"shared-model"}"#).unwrap();
         let memory = Arc::new(Memory::default());
-        let start = || HostFixture::start(&root, AppServerConfig { program: root.join("missing-codex"), ..Default::default() }, memory.clone(), "Claude accounts", false, Some(fixture_program()));
+        let start = || HostFixture::start(&root, AppServerConfig { program: root.join("missing-codex"), ..Default::default() }, memory.clone(), "Claude accounts", false, Some(fixture_program()), None);
         std::fs::write(native.join("usage-paused"), root.join("claude/accounts").to_string_lossy().as_bytes()).unwrap();
         let fixture = start().await.unwrap();
         let (store, endpoint) = connect(&fixture, Snapshot::default()).await;
@@ -1763,6 +1765,7 @@ async fn live_claude_account_login_url_and_cancellation() {
         "Isolated Claude login",
         false,
         Some(Path::new(&program)),
+        None,
     )
     .await
     .unwrap();

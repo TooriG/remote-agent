@@ -64,6 +64,7 @@ async fn start_host(directory: &Path) -> HostFixture {
         "isolated Host",
         false,
         None,
+        None,
     )
     .await
     .unwrap()
@@ -691,6 +692,7 @@ async fn new_live_conversation_avoids_unmaterialized_history_and_survives_reconn
             Arc::new(Memory::default()),
             "isolated Host",
             false,
+            None,
             None,
         )
         .await
@@ -1449,7 +1451,7 @@ async fn refreshed_history_pages_recover_every_turn_and_item_through_store() {
         let program = host_fixture::fixture::Config { trace: true, ..Default::default() }
             .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), directory.path()).unwrap();
         let fixture = HostFixture::start(directory.path(), AppServerConfig { program, ..Default::default() },
-            Arc::new(Memory::default()), "isolated Host", false, None).await.unwrap();
+            Arc::new(Memory::default()), "isolated Host", false, None, None).await.unwrap();
         let local = fixture.local().await.unwrap();
         let previous: models::Thread = serde_json::from_value(json!({"id":{"provider":"codex","id":"history"},"historyCursor":null,
             "turns":[{"id":"turn-0","status":"completed","items":[{"id":"item-0-0","status":"completed","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"answer 0/0","phase":"unknown"}}}}}]}, {"id":"turn-11","status":"completed","items":[{"id":"item-11-0","status":"completed","clientInputId":null,"body":{"inline":{"body":{"assistantText":{"text":"answer 11/0","phase":"unknown"}}}}}],
@@ -1547,7 +1549,7 @@ async fn generated_images_are_visible_on_open_reopen_and_older_pages_without_exp
         let program = host_fixture::fixture::Config { trace: true, ..Default::default() }
             .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), directory.path()).unwrap();
         let fixture = HostFixture::start(directory.path(), AppServerConfig { program, ..Default::default() },
-            Arc::new(Memory::default()), "isolated Host", false, None).await.unwrap();
+            Arc::new(Memory::default()), "isolated Host", false, None, None).await.unwrap();
         let local = fixture.local().await.unwrap();
         local.peer.call(&op::ListSessions::new(Default::default())).await.unwrap();
         let session = SessionRef::new(ProviderKind::Codex, "images".into()).unwrap();
@@ -1803,7 +1805,7 @@ async fn title_lists_are_recent_scoped_small_and_expand_without_loading_bodies()
         std::fs::write(directory.path().join("bex-worktrees.json"), json!({"workspaceRoots":{checkout.to_str().unwrap():directory.path().join("project-5")}}).to_string()).unwrap();
         let program = host_fixture::fixture::Config { trace: true, stream_delay_ms: 5, ..Default::default() }
             .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), directory.path()).unwrap();
-        let fixture = HostFixture::start(directory.path(), AppServerConfig { program, ..Default::default() }, Arc::new(Memory::default()), "isolated Host", false, None).await.unwrap();
+        let fixture = HostFixture::start(directory.path(), AppServerConfig { program, ..Default::default() }, Arc::new(Memory::default()), "isolated Host", false, None, None).await.unwrap();
         let mobile = fixture.local().await.unwrap();
 
         let start = std::time::Instant::now();
@@ -2289,6 +2291,7 @@ async fn expired_invitation_is_rejected_by_daemon_and_remains_unconsumed() {
             "isolated Host",
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2722,7 +2725,7 @@ async fn completed_conversations_refresh_the_sidebar_without_manual_reload() {
                 std::fs::write(root.join("bex-worktrees.json"), serde_json::to_vec(&json!({"settings":{"createOnNewSession":automatic}})).unwrap()).unwrap();
                 let program = host_fixture::fixture::Config { trace: true, deferred_thread_metadata: true, stream_delay_ms: 10, ..Default::default() }
                     .install(Path::new(env!("CARGO_BIN_EXE_agent-codex-fixture")), &root).unwrap();
-                let fixture = HostFixture::start(&root, AppServerConfig { program, ..Default::default() }, Arc::new(Memory::default()), "isolated", false, None).await.unwrap();
+                let fixture = HostFixture::start(&root, AppServerConfig { program, ..Default::default() }, Arc::new(Memory::default()), "isolated", false, None, None).await.unwrap();
                 let endpoint = Endpoint::bind(fixture.credentials.local_identity().await, Relays::Disabled).await.unwrap();
                 let store = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
                 let observer = Store::connect(&endpoint, &fixture.ticket, codex_chat_snapshot(), None, "Fixture device").await.unwrap();
@@ -2942,6 +2945,7 @@ async fn unchanged_worktree_cleanup_defers_live_work_and_rechecks_new_commits() 
             Arc::new(Memory::default()),
             "isolated",
             false,
+            None,
             None,
         )
         .await
@@ -3794,6 +3798,7 @@ async fn adding_a_chat_folder_registers_a_project_before_submission() {
             "isolated Host",
             false,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -3828,7 +3833,7 @@ async fn composer_catalog_uses_host_provider_and_excludes_disabled_entries() {
         assert_eq!(catalog.cwd, "/fixture/project");
         assert!(!catalog.loading);
         assert!(catalog.errors.is_empty());
-        assert_eq!(catalog.candidates.len(), 2);
+        assert_eq!(catalog.candidates.len(), 3);
         let plugin = catalog
             .candidates
             .iter()
@@ -3836,12 +3841,20 @@ async fn composer_catalog_uses_host_provider_and_excludes_disabled_entries() {
             .unwrap();
         assert_eq!(plugin.invocation.name, "Fixture Plugin");
         assert_eq!(plugin.invocation.path, "plugin://fixture@local");
-        let skill = catalog
+        let mut skills: Vec<_> = catalog
             .candidates
             .iter()
-            .find(|c| c.invocation.kind == agent_protocol::composer::InvocationKind::Skill)
-            .unwrap();
-        assert_eq!(skill.invocation.path, "/fixture/skills/review/SKILL.md");
+            .filter(|c| c.invocation.kind == agent_protocol::composer::InvocationKind::Skill)
+            .map(|c| c.invocation.path.as_str())
+            .collect();
+        skills.sort_unstable();
+        assert_eq!(
+            skills,
+            [
+                "/fixture/skills/explain/SKILL.md",
+                "/fixture/skills/review/SKILL.md"
+            ]
+        );
         local.close().await;
         fixture.close().await.unwrap();
     })

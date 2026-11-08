@@ -16480,6 +16480,86 @@
           }
         }
       }
+    },
+    "別のフォルダを選択…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose another folder…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "別のフォルダを選択…"
+          }
+        }
+      }
+    },
+    "OpenRouter · Flash 4.1 選択中": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenRouter · Flash 4.1 選択中"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenRouter · Flash 4.1 selected"
+          }
+        }
+      }
+    },
+    "OpenRouterのモデル一覧を表示": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenRouterのモデル一覧を表示"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show OpenRouter models"
+          }
+        }
+      }
+    },
+    "OpenRouterのモデル一覧を開く": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenRouterのモデル一覧を開く"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open OpenRouter models"
+          }
+        }
+      }
+    },
+    "OpenRouter経由のFlash 4.1を選択": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenRouter経由のFlash 4.1を選択"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select Flash 4.1 via OpenRouter"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

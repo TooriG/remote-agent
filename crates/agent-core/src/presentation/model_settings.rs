@@ -49,6 +49,50 @@ pub(crate) fn matching_models<'a>(
         .collect()
 }
 
+/// The model search that lists OpenRouter's DeepSeek routes, as the desktop
+/// client's shortcuts to them.
+pub const OPENROUTER_MODEL_QUERY: &str = "openrouter";
+/// DeepSeek V4.1 Flash through OpenRouter, the model the picker offers in one press.
+const OPENROUTER_FLASH: &str = r#"["openrouter","deepseek/deepseek-v4.1-flash"]"#;
+
+/// The DeepSeek picker's OpenRouter shortcuts, above its model list.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
+pub struct OpenRouterPicks {
+    /// Where the selected model's requests go ("OpenRouter", "DeepSeek公式"),
+    /// when its key route is known.
+    pub route: Option<String>,
+    /// DeepSeek V4.1 Flash through OpenRouter, once the Host offers it.
+    pub flash: Option<ModelRef>,
+    pub flash_selected: bool,
+}
+
+/// The shortcuts while the picker shows DeepSeek's models; `models` are the
+/// enabled providers' models.
+pub(crate) fn openrouter_picks<'a>(
+    provider: Option<ProviderKind>,
+    mut models: impl Iterator<Item = &'a Model> + Clone,
+    selected: Option<&ModelRef>,
+) -> Option<OpenRouterPicks> {
+    if provider != Some(ProviderKind::DeepSeek) {
+        return None;
+    }
+    let flash = models
+        .clone()
+        .find(|model| {
+            model.model.provider == ProviderKind::DeepSeek && model.model.id == OPENROUTER_FLASH
+        })
+        .map(|model| model.model.clone());
+    Some(OpenRouterPicks {
+        route: models
+            .find(|model| Some(&model.model) == selected)
+            .and_then(|model| model.credential_route)
+            .map(|route| route.model_label().into()),
+        flash_selected: flash.is_some() && flash.as_ref() == selected,
+        flash,
+    })
+}
+
 pub(crate) fn weekly_usage(
     accounts: Option<&agent_protocol::operations::Accounts>,
     provider: ProviderKind,
@@ -592,6 +636,57 @@ mod tests {
                 "query: {query:?}"
             );
         }
+    }
+
+    #[test]
+    fn openrouter_picks_name_the_selected_route_and_offer_flash_only_when_listed() {
+        let models: Vec<Model> = serde_json::from_value(serde_json::json!([
+            {"id":"official","credentialRoute":"DeepSeek","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek公式 · DeepSeek V4 Flash","settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+            {"id":"elsewhere","model":{"provider":"codex","id":OPENROUTER_FLASH},"displayName":"Another provider's same ID","settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+            {"id":"router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":OPENROUTER_FLASH},"displayName":"OpenRouter · DeepSeek V4.1 Flash","settings":{"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
+        ]))
+        .unwrap();
+        let (official, elsewhere, router) = (&models[0], &models[1], &models[2]);
+        let picks = |models: &[&Model], selected: Option<&Model>| {
+            openrouter_picks(
+                Some(ProviderKind::DeepSeek),
+                models.iter().copied(),
+                selected.map(|model| &model.model),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            picks(&[official, elsewhere, router], Some(official)),
+            OpenRouterPicks {
+                route: Some("DeepSeek公式".into()),
+                flash: Some(router.model.clone()),
+                flash_selected: false,
+            }
+        );
+        assert_eq!(
+            picks(&[official, elsewhere, router], Some(router)),
+            OpenRouterPicks {
+                route: Some("OpenRouter".into()),
+                flash: Some(router.model.clone()),
+                flash_selected: true,
+            }
+        );
+        assert_eq!(
+            picks(&[official, elsewhere], Some(elsewhere)),
+            OpenRouterPicks {
+                route: None,
+                flash: None,
+                flash_selected: false,
+            },
+            "another provider's model of the same ID is not Flash through OpenRouter"
+        );
+        assert_eq!(picks(&[official, router], None).route, None);
+        assert_eq!(
+            openrouter_picks(Some(ProviderKind::Codex), models.iter(), None),
+            None,
+            "only DeepSeek's models have the shortcuts"
+        );
+        assert_eq!(openrouter_picks(None, models.iter(), None), None);
     }
 
     #[test]

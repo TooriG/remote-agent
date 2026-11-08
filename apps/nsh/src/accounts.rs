@@ -1,7 +1,10 @@
 use crate::l10n::{localized, tr, tr_format};
 use crate::ui::{self, Enabled};
 use crate::{Connection, native};
-use agent_core::state::{Intent, operations as op};
+use agent_core::{
+    presentation::model_settings::OPENROUTER_MODEL_QUERY,
+    state::{Intent, operations as op},
+};
 use agent_protocol::{dsh::KeyProvider, session::ProviderKind};
 use nsh_core::{element::input, platform::Lifecycle, prelude::*};
 
@@ -486,6 +489,14 @@ fn credentials(busy: Memo<bool>, perform: impl Fn(Intent) + Copy + 'static) -> i
                         perform(Intent::UpdateDshCredential(op::UpdateDshCredential { provider, key: None }));
                     }
                 });
+            }).enabled(enabled)
+        }))
+        // As the desktop client's, a saved OpenRouter key leads to OpenRouter's
+        // models in the composer's model form.
+        .child(when(move || selected.get() == KeyProvider::OpenRouter && control.with(|c| c.as_ref().is_some_and(|c| c.can_remove)), move || {
+            ui::text_button(tr("OpenRouterのモデル一覧を開く"), move || {
+                connection.application.with(|app| app.navigate(crate::Navigation::Settings(false)));
+                crate::model_controls::open(connection, Some(ProviderKind::DeepSeek), OPENROUTER_MODEL_QUERY);
             }).enabled(enabled)
         }))
         .child(ui::text_button(tr("設定状態を取得"), move || perform(Intent::ReadDshCredentials(op::ReadDshCredentials {})))

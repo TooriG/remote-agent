@@ -1,0 +1,18 @@
+# Pasted text replaces the composer's selection. As T3 Code's composer, a
+# pasted image is attached and the text copied with it is left out.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "前置き 置換 後書き"
+select "前置き 置換 後書き" "置換"
+copy "貼り付け"
+paste "前置き 置換 後書き"
+expect "前置き 貼り付け 後書き" 10000
+copy_image "画像の説明"
+paste "前置き 貼り付け 後書き"
+expect 添付を削除 10000
+expect_absent "画像の説明"
+expect "前置き 貼り付け 後書き"
+screenshot pasted
+press 送信
+expect "シミュレータで完了しました。" 30000
+expect_absent 添付を削除

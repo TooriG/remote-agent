@@ -135,10 +135,54 @@ pub fn insert_invocation(
     })
 }
 
+/// What a key does while the composer lists completions, as the desktop
+/// client's: the arrows move the highlight, Return and Tab insert the
+/// highlighted candidate and Escape closes the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionKey {
+    Highlight(usize),
+    Insert(usize),
+    Dismiss,
+}
+
+/// `key` (`up`, `down`, `return`, `tab`, `escape`) over `count` candidates with
+/// `highlighted` highlighted; `None` leaves the key to the field.
+pub fn completion_key(key: &str, highlighted: usize, count: usize) -> Option<CompletionKey> {
+    let last = count.checked_sub(1)?;
+    Some(match key {
+        "up" => CompletionKey::Highlight(highlighted.min(last).saturating_sub(1)),
+        "down" => CompletionKey::Highlight((highlighted + 1).min(last)),
+        "return" | "tab" => CompletionKey::Insert(highlighted.min(last)),
+        "escape" => CompletionKey::Dismiss,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::{Draft, Event, Intent, reduce};
+
+    #[rstest::rstest]
+    #[case("down", 0, 3, Some(CompletionKey::Highlight(1)))]
+    #[case("down", 2, 3, Some(CompletionKey::Highlight(2)))]
+    #[case("up", 1, 3, Some(CompletionKey::Highlight(0)))]
+    #[case("up", 0, 3, Some(CompletionKey::Highlight(0)))]
+    #[case("up", 7, 3, Some(CompletionKey::Highlight(1)))]
+    #[case("return", 1, 3, Some(CompletionKey::Insert(1)))]
+    #[case("tab", 9, 3, Some(CompletionKey::Insert(2)))]
+    #[case("escape", 0, 1, Some(CompletionKey::Dismiss))]
+    #[case("left", 0, 3, None)]
+    #[case("return", 0, 0, None)]
+    #[case("escape", 0, 0, None)]
+    fn completion_keys_stay_on_the_listed_candidates(
+        #[case] key: &str,
+        #[case] highlighted: usize,
+        #[case] count: usize,
+        #[case] expected: Option<CompletionKey>,
+    ) {
+        assert_eq!(completion_key(key, highlighted, count), expected);
+    }
     use agent_protocol::operations::Input;
 
     #[rstest::rstest]

@@ -93,6 +93,13 @@ async fn main() {
         ..Default::default()
     };
     println!("Starting UI fixture Host");
+    // After the Claude fixture: `--deepseek <DSH fixture>` and `--prepare-browser`.
+    let options: Vec<_> = std::env::args_os().skip(6).collect();
+    let deepseek = options
+        .iter()
+        .position(|option| option == "--deepseek")
+        .map(|index| PathBuf::from(options.get(index + 1).expect("--deepseek needs a path")));
+    let prepare_browser = options.iter().any(|option| option == "--prepare-browser");
     let host = HostFixture::start(
         &directory,
         config,
@@ -100,6 +107,7 @@ async fn main() {
         "検証 Host",
         true,
         std::env::args_os().nth(5).map(PathBuf::from).as_deref(),
+        deepseek.as_deref(),
     )
     .await
     .unwrap();
@@ -114,8 +122,7 @@ async fn main() {
     }
     #[cfg(target_os = "macos")]
     let mut browser_desktop = None;
-    if let Some(argument) = std::env::args_os().nth(6) {
-        assert_eq!(argument, "--prepare-browser");
+    if prepare_browser {
         println!("Preparing native browser dependency");
         // Use the production native owner in an isolated Mac app window: the
         // bex.app `scripts/build-macos.sh desktop dev` packages beside this

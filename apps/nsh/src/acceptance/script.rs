@@ -27,6 +27,11 @@
 //!   directory, whose `project` folder is the fixture's project.
 //! - `expect_clipboard <text> [timeout-ms]`: waits until the clipboard's text
 //!   contains `<text>`. The driver restores the clipboard when the scenario ends.
+//! - `copy <text>` / `copy_image [text]`: puts `<text>` on the clipboard, or an
+//!   image with `[text]` beside it, as a screenshot tool or a page copies one.
+//! - `paste <label> [after <anchor>] [timeout-ms]`: focuses that element and
+//!   pastes the clipboard into it, as Edit > Paste does (a posted ⌘V reaches
+//!   no field while the app is in the background).
 //! - `wait <ms>`, `screenshot <name>`, `dump <name>` (the accessibility tree as text).
 // Off the Mac only the tests read it.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -55,6 +60,12 @@ pub(crate) enum Step {
     Menu(Find),
     Choose(String),
     ExpectClipboard(String, Duration),
+    /// Text for the clipboard, with an image when `image`.
+    Copy {
+        text: String,
+        image: bool,
+    },
+    Paste(Find),
     Wait(Duration),
     Screenshot(String),
     Dump(String),
@@ -176,6 +187,19 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("expect_clipboard", [text, timeout]) => {
             Step::ExpectClipboard((*text).to_owned(), milliseconds(timeout)?)
         }
+        ("copy", [text]) => Step::Copy {
+            text: (*text).to_owned(),
+            image: false,
+        },
+        ("copy_image", []) => Step::Copy {
+            text: String::new(),
+            image: true,
+        },
+        ("copy_image", [text]) => Step::Copy {
+            text: (*text).to_owned(),
+            image: true,
+        },
+        ("paste", [target, rest @ ..]) => Step::Paste(find(target, rest)?),
         ("wait", [milliseconds]) => Step::Wait(self::milliseconds(milliseconds)?),
         ("screenshot", [name]) => Step::Screenshot(artifact(name)?),
         ("dump", [name]) => Step::Dump(artifact(name)?),
@@ -298,8 +322,8 @@ mod tests {
             "# Comment\nfixture /external-conversation\n\npress \"新しい チャット\"\n\
              type メッセージ \"say \\\"hi\\\"\" 500\nexpect done after 見出し 20000\nexpect_absent x\n\
              scroll 会話 -3\nselect 回答 Needle\nmenu 回答 after 見出し\nchoose /tmp/a.txt\nchoose $AGENT_STATE_DIR/project\n\
-             expect_clipboard \"a b\" 500\nfixture /release-inputs\nwait 250\nscreenshot after-send\n\
-             dump tree_1\n",
+             expect_clipboard \"a b\" 500\ncopy \"a b\"\ncopy_image\ncopy_image 説明\npaste 入力欄 after 見出し\n\
+             fixture /release-inputs\nwait 250\nscreenshot after-send\ndump tree_1\n",
         )
         .unwrap();
         let steps: Vec<_> = lines.iter().map(|line| line.step.clone()).collect();
@@ -354,6 +378,23 @@ mod tests {
                 Step::Choose("/tmp/a.txt".into()),
                 Step::Choose("$AGENT_STATE_DIR/project".into()),
                 Step::ExpectClipboard("a b".into(), Duration::from_millis(500)),
+                Step::Copy {
+                    text: "a b".into(),
+                    image: false
+                },
+                Step::Copy {
+                    text: String::new(),
+                    image: true
+                },
+                Step::Copy {
+                    text: "説明".into(),
+                    image: true
+                },
+                Step::Paste(Find {
+                    text: "入力欄".into(),
+                    after: Some("見出し".into()),
+                    timeout: DEFAULT_TIMEOUT
+                }),
                 Step::Control("/release-inputs".into()),
                 Step::Wait(Duration::from_millis(250)),
                 Step::Screenshot("after-send".into()),
@@ -430,6 +471,11 @@ mod tests {
             (
                 "expect_clipboard a b c",
                 "line 1: unknown step or wrong arguments: expect_clipboard",
+            ),
+            ("copy", "line 1: unknown step or wrong arguments: copy"),
+            (
+                "copy_image a b",
+                "line 1: unknown step or wrong arguments: copy_image",
             ),
             (
                 "fixture release-inputs",

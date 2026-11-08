@@ -2,7 +2,7 @@
 use super::{
     connections::ConnectionSetup,
     error::{ErrorNotice, ErrorScope, ErrorText},
-    model_settings::{CredentialControl, ModelQuickControls},
+    model_settings::{CredentialControl, ModelQuickControls, OpenRouterPicks},
     view::Presentation,
 };
 use crate::{
@@ -54,6 +54,14 @@ const PROVIDERS: [ProviderKind; 3] = [
 impl SettingsPresentation {
     pub fn equivalent(&self, other: &Self) -> bool {
         std::ptr::eq(self, other) || self == other
+    }
+    /// The models of the providers the Host's settings leave enabled.
+    fn enabled_models(&self) -> impl Iterator<Item = &Model> + Clone {
+        self.models.iter().filter(|model| {
+            self.providers
+                .as_ref()
+                .is_none_or(|settings| settings.enabled(model.model.provider))
+        })
     }
     pub(super) fn project(
         snapshot: &Snapshot,
@@ -222,14 +230,13 @@ impl SettingsPresentation {
         })
     }
     pub fn models_matching(&self, provider: Option<ProviderKind>, query: String) -> Vec<Model> {
-        super::model_settings::matching_models(
-            self.models.iter().filter(|model| {
-                self.providers
-                    .as_ref()
-                    .is_none_or(|settings| settings.enabled(model.model.provider))
-            }),
+        super::model_settings::matching_models(self.enabled_models(), provider, &query)
+    }
+    pub fn openrouter_picks(&self, provider: Option<ProviderKind>) -> Option<OpenRouterPicks> {
+        super::model_settings::openrouter_picks(
             provider,
-            &query,
+            self.enabled_models(),
+            self.model.as_ref(),
         )
     }
     pub fn model_for_provider(&self, provider: ProviderKind) -> Option<ModelRef> {

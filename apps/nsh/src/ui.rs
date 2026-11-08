@@ -380,15 +380,17 @@ pub(crate) fn row_text_button(
     .on_press(press)
 }
 
-/// A ghost button with an icon and a label (32 pt), as the composer's folder.
+/// A ghost button with an icon and a title (32 pt), as the composer's folder;
+/// screen readers and its tooltip name it by `label`.
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn labeled_button(
     glyph: Icon,
     title: impl Fn() -> String + Copy + 'static,
+    label: impl Fn() -> String + 'static,
     press: impl Fn() + 'static,
 ) -> Control {
     ghost(
-        move || SharedString::from(title()),
+        move || SharedString::from(label()),
         view()
             .gap_2()
             .min_w_0()
@@ -488,9 +490,10 @@ pub(crate) fn text_button(
 pub(crate) fn labeled_button(
     glyph: Icon,
     title: impl Fn() -> String + Copy + 'static,
+    label: impl Fn() -> String + 'static,
     press: impl Fn() + 'static,
 ) -> Control {
-    appkit_button(move || SharedString::from(title()), press)
+    appkit_button(move || SharedString::from(label()), press)
         .prop("symbol", serde_json::json!(glyph.symbol))
         .prop("symbolSize", serde_json::json!(16.0))
         .prop("title", move || serde_json::json!(title()))

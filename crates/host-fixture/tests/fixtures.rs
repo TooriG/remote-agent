@@ -110,6 +110,7 @@ async fn pairing_controls_restore_the_original_project_store_and_survive_rejecte
             "isolated Host",
             false,
             None,
+            None,
         )
         .await
         .unwrap();

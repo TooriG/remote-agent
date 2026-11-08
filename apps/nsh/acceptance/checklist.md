@@ -96,8 +96,12 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Conversation: copy, edit in composer, fork from a message, quote a selection | covered | message-actions, fork |
 | Conversation: steering a running turn, minimap | covered | steering, queued-input |
 | Composer: model picker | covered | model-picker |
+| Composer: DeepSeek's OpenRouter route, Flash 4.1 pick and models | covered | openrouter |
 | Composer: approval mode menu | covered | permission-mode |
 | Composer: attach files, dictation, completions | partial | attachments, upload-failure, composer; dictation needs microphone permission |
+| Composer: paste text at the selection, paste an image | covered | composer-paste |
+| Composer: Escape discards a recording | not yet | dictation needs microphone permission |
+| Composer: folder menu (no project, a project, another folder) | covered | folder-menu |
 | Thread details card (workspace, editor, changes, sources) | partial | attachments (sources); the editor button opens an external app |
 | Changed-files bar and review | covered | review-panel, worktree-review |
 | Tool panel: files, file preview, diff, close | covered | tool-panel |
@@ -107,5 +111,5 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Settings: accounts, updates, worktree editing | partial | accounts (sign-in starts and stops), worktree-settings; completing a sign-in and updates not yet |
 | Accessibility: the settings overlay is modal, message roles | covered | settings-modal, send-message |
 | Onboarding without a Host | not yet | the runner always starts a fixture Host |
-| Keyboard shortcuts | partial | composer (Return sends); the app binds no other shortcut (⌘, does nothing) |
+| Keyboard shortcuts | partial | composer (Return sends), composer-completion-keys (arrows, Return and Escape in the completion list), tool-keys (the empty tool panel's keys); ⌘, does nothing |
 | Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet |

@@ -1,5 +1,6 @@
-use crate::l10n::{localized, tr};
+use crate::l10n::{localized, tr, tr_format};
 use crate::{Connection, native};
+use agent_core::presentation::folder_menu::{FolderChoice, folder_choices};
 use agent_core::state::{Intent, operations as op};
 use nsh_core::{GlassEffect, element::input, prelude::*};
 use serde_json::json;
@@ -8,7 +9,6 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
     let preview = use_context::<crate::media::Preview>().unwrap();
     let files = use_context::<crate::files::Browser>().unwrap();
-    let workspace = use_context::<crate::workbench::Workbench>().unwrap();
     let composing = signal(false);
     let focused = signal(false);
     let field_ref = connection.composer_ref;
@@ -30,6 +30,14 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             controls.with(|c| c.question.clone())
         }
     });
+    // A question's answer has no attachments; the draft keeps them.
+    let can_attach = move || {
+        controls.with(|c| c.connected && !c.sending && !c.transcribing && !c.transferring)
+            && !recording.get()
+            && !requesting.get()
+            && !connection.uploading()
+            && answering.with(Option::is_none)
+    };
     let stopping = move || {
         !recording.get()
             && !requesting.get()
@@ -134,34 +142,99 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                 })
         })
     };
+    let value = move || {
+        answering
+            .with(|q| q.as_ref().map(|q| q.text.clone()))
+            .unwrap_or_else(|| draft.get())
+    };
+    let masked = move || answering.with(|q| q.as_ref().is_some_and(|q| q.question.secret));
+    let readonly = move || {
+        recording.get()
+            || requesting.get()
+            || controls.with(|c| c.transcribing)
+            || answering.with(|q| {
+                q.as_ref().is_some_and(|q| {
+                    !q.can_respond
+                        || !q.question.allow_free_text
+                        || composer.with(|c| c.request_phase(q.request_id.clone()))
+                            == Some(op::OperationPhase::Running)
+                })
+            })
+    };
+    let edit = move |text: String| {
+        if let Some(question) = answering.get_untracked() {
+            connection.dispatch(Intent::AnswerQuestion {
+                request_id: question.request_id,
+                action: agent_core::questions::QuestionAction::Edit { text },
+            });
+        } else {
+            connection.dispatch(Intent::EditComposer {
+                thread_id: controls.with_untracked(|c| c.navigation.draft_key.clone()),
+                cursor: text.len() as u32,
+                text,
+            });
+        }
+    };
+    let selection = signal(Selection::default());
+    // A pasted text's caret, set once Core publishes the text it is in.
+    let pasted = signal(None::<(String, u32)>);
+    effect(move || {
+        if let Some((text, caret)) = pasted.get()
+            && value() == text
+        {
+            pasted.set(None);
+            field_ref.set_selection(caret, caret);
+        }
+    });
+    // As T3 Code's composer, a paste holding an image (a screenshot) attaches
+    // it and inserts none of the text copied with it. The field reports every
+    // paste, so any other text is inserted here, at the selection.
+    let paste = move |paste: &nsh_core::PasteEvent| {
+        let images: Vec<_> = paste
+            .files
+            .iter()
+            .filter(|file| file.mime.starts_with("image/"))
+            .map(|file| crate::client::AttachmentSource::Image {
+                name: file.name.clone(),
+                bytes: file.data.clone(),
+            })
+            .collect();
+        if !images.is_empty() {
+            if can_attach() {
+                let host = connection.host.get_untracked();
+                let key = controls.with_untracked(|c| c.navigation.draft_key.clone());
+                connection
+                    .application
+                    .with(|app| app.attach(host, connection.pane, key, images));
+            }
+        } else if !paste.text.is_empty() && !readonly() {
+            let secure = masked();
+            let Selection { start, end } = selection.get_untracked();
+            let mut model = nsh_core::text_edit::Model::default();
+            model.set_text(&value());
+            model.select(model.text_at(start, secure), model.text_at(end, secure));
+            if model
+                .insert(&nsh_core::text_edit::pasted(&paste.text, true), None)
+                .is_some()
+            {
+                let text = model.text().to_owned();
+                pasted.set(Some((text.clone(), model.display_caret(secure))));
+                edit(text);
+            }
+        }
+    };
     let field = move || {
         input()
             .element_ref(&field_ref)
             .auto_focus(connection.pane.is_some())
             .multiline(true)
-            .value(move || {
-                answering
-                    .with(|q| q.as_ref().map(|q| q.text.clone()))
-                    .unwrap_or_else(|| draft.get())
-            })
+            .value(value)
             .placeholder(prompt)
             // A multiline field shows its placeholder as a separate label, so
             // screen readers name the field by the same prompt.
             .label(prompt)
-            .masked(move || answering.with(|q| q.as_ref().is_some_and(|q| q.question.secret)))
-            .readonly(move || {
-                recording.get()
-                    || requesting.get()
-                    || controls.with(|c| c.transcribing)
-                    || answering.with(|q| {
-                        q.as_ref().is_some_and(|q| {
-                            !q.can_respond
-                                || !q.question.allow_free_text
-                                || composer.with(|c| c.request_phase(q.request_id.clone()))
-                                    == Some(op::OperationPhase::Running)
-                        })
-                    })
-            })
+            .masked(masked)
+            .readonly(readonly)
             .text_color(move || nsh_base::theme().foreground)
             .placeholder_color(move || color(nsh_base::theme().muted_foreground))
             .submit_behavior(if is_desktop() {
@@ -171,19 +244,12 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             })
             .on_submit(move |_: &str| submit())
             .on_change(move |text: &str| {
-                if let Some(question) = answering.get_untracked() {
-                    connection.dispatch(Intent::AnswerQuestion {
-                        request_id: question.request_id,
-                        action: agent_core::questions::QuestionAction::Edit { text: text.into() },
-                    });
-                } else {
-                    connection.dispatch(Intent::EditComposer {
-                        thread_id: controls.with_untracked(|c| c.navigation.draft_key.clone()),
-                        text: text.into(),
-                        cursor: text.len() as u32,
-                    });
-                }
+                pasted.set(None);
+                edit(text.into());
             })
+            .paste_behavior(PasteBehavior::Report)
+            .on_paste(paste)
+            .on_selection_change(move |s: &Selection| selection.set(*s))
             .on_focus(move || focused.set(true))
             .on_blur(move || focused.set(false))
             .on_composition_change(move |event: &Composition| composing.set(event.composing))
@@ -261,18 +327,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     "appearance",
                     json!(if is_desktop() { "plain" } else { "automatic" }),
                 )
-                .prop("enabled", move || {
-                    json!(
-                        controls.with(|c| c.connected
-                            && !c.sending
-                            && !c.transcribing
-                            && !c.transferring)
-                            && !recording.get()
-                            && !requesting.get()
-                            && !connection.uploading()
-                            && answering.with(Option::is_none)
-                    )
-                })
+                .prop("enabled", move || json!(can_attach()))
                 .min_h(px(44.0))
                 .min_w(px(44.0))
                 .col_start(1)
@@ -339,13 +394,6 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     // The existing desktop client's composer: the field over one row of controls.
     let desktop_box = move || {
         use crate::ui::{self, Enabled, Icon, colors};
-        let attach_enabled = move || {
-            controls.with(|c| c.connected && !c.sending && !c.transcribing && !c.transferring)
-                && !recording.get()
-                && !requesting.get()
-                && !connection.uploading()
-                && answering.with(Option::is_none)
-        };
         let inactive = move || {
             !enabled() || (composer.with(|c| c.draft.text.trim().is_empty()) && !stopping())
         };
@@ -363,7 +411,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                         pick_files(connection.application.get(), host, connection.pane, key);
                     },
                 )
-                .enabled(attach_enabled)
+                .enabled(can_attach)
             },
         ));
         #[cfg(desktop)]
@@ -442,6 +490,36 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         use crate::ui::{self, Enabled, Icon};
         let hosts = computed(move || connection.state.with(|s| s.hosts.clone()));
         let directory = computed(move || connection.context.with(|p| p.selected_directory()));
+        let choose = move || {
+            let host = connection.host.get_untracked();
+            let selected = directory.get_untracked();
+            let choices = connection.state.with_untracked(|state| {
+                let list = state
+                    .list_inputs()
+                    .into_iter()
+                    .find(|(list_host, _)| *list_host == host)
+                    .map(|(_, list)| list);
+                folder_choices(list.as_deref(), &selected, host == "local")
+            });
+            ui::popup(&folder_items(&choices), move |id| {
+                if let Some(cwd) = id.strip_prefix(FOLDER) {
+                    connection.dispatch(Intent::NewChat { cwd: cwd.into() });
+                    field_ref.focus();
+                } else if id == MORE_PROJECTS {
+                    connection.application.with(|application| {
+                        application.request_list(crate::application::ListRequest::MoreProjects)
+                    });
+                } else if id == CHOOSE_FOLDER {
+                    connection.state.with_untracked(|state| {
+                        crate::projects::add_folder(
+                            connection.application,
+                            &connection.host.get_untracked(),
+                            &state.list_sources(),
+                        )
+                    });
+                }
+            });
+        };
         view()
             .flex_row()
             .items_center()
@@ -459,14 +537,21 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                         }
                     },
                     move || {
-                        workspace.open(
-                            agent_core::panels::PanelKind::Files,
-                            Some(directory.get_untracked()),
-                            None,
-                        );
+                        let directory = directory.get();
+                        if directory.is_empty() {
+                            tr("フォルダ: チャット").to_owned()
+                        } else {
+                            tr_format("フォルダ: {0}", [&directory])
+                        }
                     },
+                    choose,
                 )
-                .enabled(move || !directory.get().is_empty()),
+                .enabled(move || {
+                    !recording.get()
+                        && !requesting.get()
+                        && !connection.uploading()
+                        && controls.with(|c| !c.sending && !c.transcribing && !c.transferring)
+                }),
             )
             .child(crate::connections::destination(hosts, connection.host))
     };
@@ -480,6 +565,23 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         .gap(move || if is_desktop() { px(4.0) } else { px(8.0) });
     #[cfg(desktop)]
     let column = column.child(when(is_desktop, crate::desktop_workspace::review_card));
+    // As the desktop client's composer, Escape discards a recording (or its
+    // permission request) before it is transcribed.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let column = column.child(when(
+        move || recording.get() || requesting.get(),
+        move || {
+            on_key_with(
+                "escape",
+                KeyOptions {
+                    when: nsh_core::keymap::When::Always,
+                    repeat: false,
+                },
+                move |_| dictation.cancel(),
+            );
+            view()
+        },
+    ));
     column
         .child(crate::requests::panels(following))
         .child(when(
@@ -581,6 +683,32 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
         ))
 }
 
+/// The folder menu's item IDs: a folder's carries its path after the prefix.
+const FOLDER: &str = "folder:";
+const MORE_PROJECTS: &str = "more-projects";
+const CHOOSE_FOLDER: &str = "choose-folder";
+
+fn folder_items(choices: &[FolderChoice]) -> serde_json::Value {
+    json!(
+        choices
+            .iter()
+            .map(|choice| match choice {
+                FolderChoice::Folder {
+                    path,
+                    title,
+                    checked,
+                } => json!({"id": format!("{FOLDER}{path}"), "title": localized(title.clone()), "selected": checked}),
+                FolderChoice::MoreProjects => {
+                    json!({"id": MORE_PROJECTS, "title": tr("さらにプロジェクトを読み込む")})
+                }
+                FolderChoice::ChooseFolder => {
+                    json!({"id": CHOOSE_FOLDER, "title": tr("別のフォルダを選択…")})
+                }
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
 /// An attached file as T3 Code's composer chips: an image's thumbnail or a
 /// file's name, which opens it, with its removal at the corner.
 fn attachment(
@@ -631,6 +759,7 @@ fn attachment(
                     .justify_center()
                     .child(ui::labeled_button(
                         Icon::FILE_TEXT,
+                        move || file.with(|file| file.name.clone()),
                         move || file.with(|file| file.name.clone()),
                         open,
                     ))

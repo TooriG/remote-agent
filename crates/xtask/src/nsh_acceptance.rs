@@ -38,8 +38,15 @@ pub async fn run(filters: &[String]) -> Result<()> {
         fixture: target.join(FIXTURES).join("agent-ui-fixture"),
         codex: target.join(FIXTURES).join("agent-codex-fixture"),
         claude: target.join(FIXTURES).join("agent-claude-fixture"),
+        deepseek: target.join(FIXTURES).join("agent-dsh-fixture"),
     };
-    for path in [&tools.app, &tools.fixture, &tools.codex, &tools.claude] {
+    for path in [
+        &tools.app,
+        &tools.fixture,
+        &tools.codex,
+        &tools.claude,
+        &tools.deepseek,
+    ] {
         if !path.is_file() {
             return Err(format!(
                 "{} is missing; `just nsh-acceptance` builds it",
@@ -122,6 +129,7 @@ struct Tools {
     fixture: PathBuf,
     codex: PathBuf,
     claude: PathBuf,
+    deepseek: PathBuf,
 }
 
 /// What the app's driver wrote to `result.json`.
@@ -209,8 +217,14 @@ async fn scenario(
         .arg(&port)
         .arg(STREAM_DELAY_MS)
         .arg(&tools.claude)
+        .arg("--deepseek")
+        .arg(&tools.deepseek)
         // Publishes the Host where a client with the same isolated state finds it.
         .env("AGENT_FIXTURE_LOCAL_HOST", "1")
+        // DeepSeek counts a key in the environment or DSH's home as configured;
+        // the user's own stay out of the fixture's.
+        .env("DSH_HOME", temporary.path().join("dsh"))
+        .env_remove("DEEPSEEK_API_KEY")
         .stdin(std::process::Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
