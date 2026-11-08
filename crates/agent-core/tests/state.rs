@@ -1509,13 +1509,18 @@ fn file_navigation_rejects_empty_and_relative_paths_before_rpc() {
         );
     }
     for path in [
-        "~/project".to_owned(),
-        std::env::temp_dir().to_string_lossy().into_owned(),
+        "~",
+        "~/project",
+        "/workspace",
+        "C:/Users/host",
+        r"\\server\share",
     ] {
         let (snapshot, effects) = reduce(
             &Snapshot::default(),
             "",
-            Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles { path })),
+            Event::Intent(agent_core::state::Intent::ListFiles(op::ListFiles {
+                path: path.into(),
+            })),
         );
         assert!(snapshot.panes.primary().error.is_none());
         assert_eq!(effects.len(), 1);

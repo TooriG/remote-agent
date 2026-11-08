@@ -7,12 +7,17 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.remoteagent.core.Attachment
+import dev.remoteagent.core.DraftKey
 import dev.remoteagent.core.Intent
+import dev.remoteagent.core.Outcome
+import dev.remoteagent.core.Presentation
 import dev.remoteagent.core.ProviderKind
+import dev.remoteagent.core.SessionRef
 import dev.remoteagent.core.Snapshot
 import java.io.IOException
 import org.json.JSONArray
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -52,7 +57,19 @@ class ComposerControlsTest {
                 )
         Snapshot.restore(state.toString().encodeToByteArray()).use { snapshot ->
             val intents = mutableListOf<Intent>()
-            compose.setContent { MaterialTheme { ModelPickerFixture(snapshot, { intent, _ -> intents.add(intent) }) } }
+            val presentation = Presentation.fromSnapshot(snapshot, "")
+            val perform: (Intent, (Result<Outcome>) -> Unit) -> Unit = { intent, _ -> intents.add(intent) }
+            compose.setContent {
+                MaterialTheme {
+                    ModelPickerButton(presentation.composer(), perform) { selected, dismiss ->
+                        ModelPickerDialog(presentation.settings(), selected, perform, dismiss)
+                    }
+                }
+            }
+            compose.onNodeWithTag("model.settings").performClick()
+            compose.onNodeWithText("この設定を新規チャットの既定にする").assertDoesNotExist()
+            compose.onNodeWithText("完了").performClick()
+            compose.runOnIdle { assertEquals(listOf(Intent.RefreshModels), intents) }
             compose.onNodeWithTag("model.settings").performClick()
             compose.onNodeWithText("Other Provider").performClick()
             compose.onNodeWithText("GPT-6.1").performClick()
@@ -61,7 +78,10 @@ class ComposerControlsTest {
                 assertTrue(intents.any { it is Intent.RefreshModels })
                 assertTrue(intents.any { it is Intent.SelectModel && it.model.provider == ProviderKind.CLAUDE })
                 assertTrue(intents.any { it is Intent.SelectModel && it.model.id == "gpt-6.1-sol" })
-                assertTrue(intents.any { it is Intent.SelectEffort })
+                assertEquals(
+                    Intent.SelectEffort(DraftKey.Session(SessionRef(ProviderKind.CODEX, "fixture")), "high"),
+                    intents.last(),
+                )
             }
         }
     }

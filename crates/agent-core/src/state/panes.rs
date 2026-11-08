@@ -112,15 +112,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn closing_the_primary_or_a_missing_pane_keeps_the_primary_selection() {
-        let mut state = Snapshot::default();
-        let primary = state.panes.primary().clone();
-        state.close_pane("");
-        state.close_pane("missing");
-        assert!(Arc::ptr_eq(&primary, state.panes.primary()));
-    }
-
-    #[test]
     fn inspection_round_trip_restores_only_the_primary_pane() {
         let mut state = Snapshot::default();
         state.open_pane("side".into(), "/side".into());

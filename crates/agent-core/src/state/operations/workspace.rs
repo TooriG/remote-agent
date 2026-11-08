@@ -1,36 +1,6 @@
 use super::*;
 use crate::client::ClientExt;
 
-#[cfg(test)]
-mod path_tests {
-    use super::*;
-
-    #[test]
-    fn folder_navigation_accepts_home_paths_and_rejects_workspace_relative_paths() {
-        let mut snapshot = Snapshot::default();
-        for path in [
-            "~",
-            "~/Documents",
-            "/workspace",
-            "C:/Users/host",
-            r"\\server\share",
-        ] {
-            assert!(
-                ListFiles { path: path.into() }
-                    .prepare(&mut snapshot, "")
-                    .is_ok()
-            );
-        }
-        for path in ["", "documents", "~someone/documents"] {
-            assert!(
-                ListFiles { path: path.into() }
-                    .prepare(&mut snapshot, "")
-                    .is_err()
-            );
-        }
-    }
-}
-
 pub use agent_protocol::operations::ListFiles;
 pub use agent_protocol::operations::ResolveFile;
 
@@ -464,44 +434,5 @@ mod read_result_tests {
             edited.panes.primary().workspace.file.as_ref().unwrap().text,
             "preview"
         );
-    }
-    #[test]
-    fn each_read_receipt_keeps_its_content_when_another_file_replaces_the_editor_snapshot() {
-        let file = |path: &str, text: &str| FileContent {
-            path: path.into(),
-            text: text.into(),
-            revision: "r1".into(),
-            size: text.len() as u64,
-            truncated: false,
-        };
-        let mut parent = file("/repo/parent.md", "[child](child.md)");
-        let receipt = ReadFile::outcome(&mut parent);
-        let mut snapshot = Snapshot::default();
-        ReadFile {
-            path: parent.path.clone(),
-            discard_draft: false,
-        }
-        .apply(&mut snapshot, "", parent);
-        ReadFile {
-            path: "/repo/child.md".into(),
-            discard_draft: false,
-        }
-        .apply(&mut snapshot, "", file("/repo/child.md", "child content"));
-        assert_eq!(
-            snapshot
-                .panes
-                .primary()
-                .workspace
-                .file
-                .as_ref()
-                .unwrap()
-                .path,
-            "/repo/child.md"
-        );
-        let Outcome::FileRead { file } = receipt else {
-            panic!("file read result")
-        };
-        assert_eq!(file.path, "/repo/parent.md");
-        assert_eq!(file.text, "[child](child.md)");
     }
 }

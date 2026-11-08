@@ -1835,7 +1835,11 @@ async fn file_navigation_ignores_a_late_reply_from_the_previous_file() {
         )
         .await
         .unwrap();
-    second.await.unwrap().unwrap();
+    let Outcome::FileRead { file: second } = second.await.unwrap().unwrap() else {
+        panic!("file read receipt")
+    };
+    assert_eq!(second.path, "/second");
+    assert_eq!(second.text, "second");
     writer
         .reply(
             &first_request,
@@ -1843,7 +1847,11 @@ async fn file_navigation_ignores_a_late_reply_from_the_previous_file() {
         )
         .await
         .unwrap();
-    first.await.unwrap().unwrap();
+    let Outcome::FileRead { file: first } = first.await.unwrap().unwrap() else {
+        panic!("file read receipt")
+    };
+    assert_eq!(first.path, "/first");
+    assert_eq!(first.text, "first");
     assert_eq!(
         store
             .snapshot()
@@ -1856,6 +1864,7 @@ async fn file_navigation_ignores_a_late_reply_from_the_previous_file() {
             .path,
         "/second"
     );
+    store.close().await.unwrap();
 }
 
 #[tokio::test]

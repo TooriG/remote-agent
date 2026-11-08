@@ -230,7 +230,9 @@ async fn closing_the_primary_view_does_not_close_the_host_or_accept_more_view_ac
     let store = Arc::new(Store::offline(Snapshot::default(), None));
     let primary = store.primary_pane();
     let side = store.open_pane("/side".into()).unwrap();
+    let selection = store.snapshot().panes.primary().clone();
     primary.close();
+    assert!(Arc::ptr_eq(&selection, store.snapshot().panes.primary()));
     assert!(primary.dispatch(Intent::ShowThreadList).await.is_err());
     side.dispatch(Intent::NewChat {
         cwd: "/still-open".into(),

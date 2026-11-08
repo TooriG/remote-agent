@@ -5,7 +5,9 @@ import android.content.ContextWrapper
 import android.content.SharedPreferences
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.remoteagent.core.DevicePreferences
 import dev.remoteagent.core.PreferenceKey
+import dev.remoteagent.core.UiLanguage
 import java.io.File
 import java.util.UUID
 import org.junit.Assert.assertEquals
@@ -52,7 +54,7 @@ class StorePersistenceTest {
             language.edit().putInt("language", 42).commit()
             assertTrue(storage.load(PreferenceKey.LANGUAGE).isEmpty())
             assertEquals(42, language.getInt("language", 0))
-            storage.save(PreferenceKey.LANGUAGE, "\"en\"".encodeToByteArray())
+            DevicePreferences(storage).use { it.selectLanguage(UiLanguage.ENGLISH) }
             assertEquals("en", language.getString("language", null))
             assertEquals("\"en\"", AndroidPreferenceStorage(context).load(PreferenceKey.LANGUAGE).decodeToString())
         } finally {
