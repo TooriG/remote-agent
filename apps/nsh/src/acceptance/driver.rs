@@ -36,7 +36,8 @@ use objc2_app_kit::{
 use objc2_core_graphics::{CGEvent, CGScrollEventUnit};
 use objc2_foundation::{
     NSArray, NSAttributedString, NSData, NSDictionary, NSNotification, NSNotificationCenter,
-    NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer, NSURL,
+    NSNumber, NSPoint, NSRange, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
+    NSURL,
 };
 use serde_json::{Value, json};
 use std::{
@@ -1325,14 +1326,15 @@ impl Click {
     }
 }
 
-/// The middle of `element` (of its selected text, for a secondary click)
-/// where it shows now, in `window`'s coordinates. NSH's scroll views show a
-/// new offset as their containers' layer transforms until they rest, and
-/// commit it to the views' bounds only then: AppKit's geometry, the
-/// accessibility frames included, lags while NSH picks the view under a
-/// click by what shows. So the transforms around `view` move the point as
-/// they move what shows; without them a click while the conversation still
-/// scrolls lands where the element was.
+/// The middle of what shows of `element` (of its selected text, for a
+/// secondary click), in `window`'s coordinates. NSH's scroll views show a new
+/// offset as their containers' layer transforms until they rest, and commit it
+/// to the views' bounds only then: AppKit's geometry, the accessibility frames
+/// included, lags while NSH picks the view under a click by what shows. So the
+/// transforms around `view` move the element as they move what shows; without
+/// them a click while the conversation still scrolls lands where the element
+/// was. Each container then clips it to its own bounds: the middle of an
+/// element partly scrolled out of its list is not on it.
 fn shown_point(element: &AnyObject, view: &NSView, window: &NSWindow, click: Click) -> NSPoint {
     let selected = (click == Click::Secondary
         && responds(element, sel!(accessibilitySelectedTextRange)))
@@ -1342,21 +1344,49 @@ fn shown_point(element: &AnyObject, view: &NSView, window: &NSWindow, click: Cli
         Some(range) => unsafe { msg_send![element, accessibilityFrameForRange: range] },
         None => unsafe { msg_send![element, accessibilityFrame] },
     };
-    let frame = window.convertRectFromScreen(frame);
-    let mut point = NSPoint::new(
-        frame.origin.x + frame.size.width / 2.0,
-        frame.origin.y + frame.size.height / 2.0,
-    );
+    let mut frame = window.convertRectFromScreen(frame);
     let mut ancestor = superview(view);
     while let Some(container) = ancestor {
         let (x, y) = sublayer_offset(&container);
         if (x, y) != (0.0, 0.0) {
-            let local = container.convertPoint_fromView(point, None);
-            point = container.convertPoint_toView(NSPoint::new(local.x + x, local.y + y), None);
+            let local = container.convertPoint_fromView(frame.origin, None);
+            frame.origin =
+                container.convertPoint_toView(NSPoint::new(local.x + x, local.y + y), None);
         }
         ancestor = superview(&container);
     }
-    point
+    let middle = |rect: NSRect| {
+        NSPoint::new(
+            rect.origin.x + rect.size.width / 2.0,
+            rect.origin.y + rect.size.height / 2.0,
+        )
+    };
+    let mut shown = frame;
+    let mut ancestor = superview(view);
+    while let Some(container) = ancestor {
+        let bounds = container.convertRect_toView(container.bounds(), None);
+        match intersection(shown, bounds) {
+            Some(clipped) => shown = clipped,
+            // Nothing of it shows: its middle, where it would.
+            None => return middle(frame),
+        }
+        ancestor = superview(&container);
+    }
+    middle(shown)
+}
+
+/// Where `a` and `b` overlap, if they do.
+fn intersection(a: NSRect, b: NSRect) -> Option<NSRect> {
+    let left = a.origin.x.max(b.origin.x);
+    let bottom = a.origin.y.max(b.origin.y);
+    let right = (a.origin.x + a.size.width).min(b.origin.x + b.size.width);
+    let top = (a.origin.y + a.size.height).min(b.origin.y + b.size.height);
+    (left < right && bottom < top).then(|| {
+        NSRect::new(
+            NSPoint::new(left, bottom),
+            NSSize::new(right - left, top - bottom),
+        )
+    })
 }
 
 /// How far `view`'s layer shows its sublayers moved: an NSH scroll view's
