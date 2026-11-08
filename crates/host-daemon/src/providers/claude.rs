@@ -315,6 +315,7 @@ impl Claude {
         &self,
         search: &str,
         cursor: Option<String>,
+        include_print_mode: bool,
         limit: u32,
     ) -> anyhow::Result<SessionPage> {
         let home = self.native_home.clone();
@@ -330,7 +331,14 @@ impl Claude {
             .collect();
         let search = search.to_owned();
         tokio::task::spawn_blocking(move || {
-            history::list_page(&home, running, &search, cursor.as_deref(), limit)
+            history::list_page(
+                &home,
+                running,
+                &search,
+                cursor.as_deref(),
+                include_print_mode,
+                limit,
+            )
         })
         .await?
     }
@@ -1889,7 +1897,10 @@ impl Agent for Claude {
             });
             return Ok(SessionPage { data, next_cursor });
         }
-        Claude::list(self, search, cursor, limit)
+        // Complete listings keep print-mode runs so workspace removal still
+        // sees their unverifiable external activity.
+        let include_print_mode = !matches!(scope, SessionListScope::Roots);
+        Claude::list(self, search, cursor, include_print_mode, limit)
             .await
             .map_err(|e| Failure::new("session_list_failed", e))
     }

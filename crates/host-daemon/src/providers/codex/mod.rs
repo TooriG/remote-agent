@@ -748,9 +748,9 @@ impl Agent for Codex {
                         next_cursor: page.next_cursor,
                     });
                 }
-                SessionListScope::Roots => {
-                    (&["cli", "vscode", "exec", "appServer", "unknown"], None)
-                }
+                // `codex exec` runs are launched by other agents and scripts, not
+                // tasks a person opened; complete listings still see them.
+                SessionListScope::Roots => (&["cli", "vscode", "appServer", "unknown"], None),
                 SessionListScope::All => (
                     &[
                         "cli",
@@ -1316,6 +1316,58 @@ rl.on('line', line => {
         service("healthy.json").prepare_update().await.unwrap();
         server.shutdown().await.unwrap();
         assert!(service("broken.json").prepare_update().await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_listings_omit_exec_runs_that_complete_listings_keep() {
+        use std::{os::unix::fs::PermissionsExt, sync::Arc};
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("codex-fixture");
+        // Filters by source like Codex: Host tasks are `vscode`, agent runs are `exec`.
+        std::fs::write(
+            &program,
+            r##"#!/usr/bin/env node
+const rl = require('node:readline').createInterface({ input: process.stdin });
+const threads = [{ id: 'task', source: 'vscode' }, { id: 'review', source: 'exec' }];
+rl.on('line', line => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  const result = message.method === 'initialize'
+    ? { userAgent: 'list-fixture', codexHome: process.env.CODEX_HOME }
+    : { data: threads.filter(thread => message.params.sourceKinds.includes(thread.source))
+          .map(({ id }) => ({ id, cwd: '/fixture', status: { type: 'idle' } })), nextCursor: null };
+  process.stdout.write(JSON.stringify({ id: message.id, result }) + '\n');
+});
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let server = Arc::new(
+            super::CodexAppServer::spawn(super::Config {
+                program,
+                codex_home: Some(directory.path().join("codex")),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let agent = super::Codex::new(Ok(server));
+        let _events = super::Agent::event_stream(&agent).unwrap();
+        for (scope, expected) in [
+            (super::SessionListScope::Roots, vec!["task"]),
+            (super::SessionListScope::All, vec!["task", "review"]),
+        ] {
+            let page = super::Agent::list(&agent, "", None, scope, 10)
+                .await
+                .unwrap();
+            let ids: Vec<_> = page
+                .data
+                .iter()
+                .map(|summary| summary.thread.id.as_ref().unwrap().id.as_str())
+                .collect();
+            assert_eq!(ids, expected);
+        }
     }
 
     #[test]

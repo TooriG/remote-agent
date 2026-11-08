@@ -40,6 +40,7 @@ pub(super) fn list_page(
     running: Vec<Thread>,
     search: &str,
     cursor: Option<&str>,
+    include_print_mode: bool,
     limit: u32,
 ) -> Result<super::SessionPage> {
     let mut candidates: Vec<_> = files(home)?
@@ -93,26 +94,33 @@ pub(super) fn list_page(
     for (timestamp, id, path, fallback) in candidates.into_iter().skip(offset) {
         visited += 1;
         let mut summary = if let Some(path) = path {
-            summary(&path).unwrap_or_else(|error| {
-                let mut thread = Thread {
-                    id: Some(SessionRef {
-                        provider: ProviderKind::Claude,
-                        id,
-                    }),
-                    updated_at: Some(timestamp as f64),
-                    name: Some("Claude履歴を読み取れません".into()),
-                    status: SessionStatus::Unknown,
-                    ..Default::default()
-                };
-                thread.history_read_state = Some(agent_protocol::session::HistoryReadState::new(
-                    agent_protocol::session::HistoryReadKind::Unavailable,
-                    vec![format!("{error:#}")],
-                ));
-                super::SessionSummary {
-                    thread,
-                    branch: None,
+            match summary(&path) {
+                Ok(Summary {
+                    print_mode: true, ..
+                }) if !include_print_mode && !active.contains(&id) => continue,
+                Ok(Summary { thread, branch, .. }) => super::SessionSummary { thread, branch },
+                Err(error) => {
+                    let mut thread = Thread {
+                        id: Some(SessionRef {
+                            provider: ProviderKind::Claude,
+                            id,
+                        }),
+                        updated_at: Some(timestamp as f64),
+                        name: Some("Claude履歴を読み取れません".into()),
+                        status: SessionStatus::Unknown,
+                        ..Default::default()
+                    };
+                    thread.history_read_state =
+                        Some(agent_protocol::session::HistoryReadState::new(
+                            agent_protocol::session::HistoryReadKind::Unavailable,
+                            vec![format!("{error:#}")],
+                        ));
+                    super::SessionSummary {
+                        thread,
+                        branch: None,
+                    }
                 }
-            })
+            }
         } else {
             super::SessionSummary {
                 thread: fallback.unwrap(),
@@ -225,12 +233,21 @@ struct SummaryMetadata<'a> {
     is_meta: Value,
     origin: Value,
     prompt_source: Value,
+    entrypoint: Value,
     #[serde(borrow)]
     message: Option<&'a serde_json::value::RawValue>,
 }
 
+pub(super) struct Summary {
+    pub thread: Thread,
+    pub branch: Option<String>,
+    /// Started by `claude -p`, which other agents and scripts use for one-off
+    /// runs; Host-started tasks use the SDK entrypoint instead.
+    pub print_mode: bool,
+}
+
 /// Extract metadata without loading complete tool output or message bodies.
-pub(super) fn summary(path: &Path) -> Result<crate::providers::SessionSummary> {
+pub(super) fn summary(path: &Path) -> Result<Summary> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = fs::File::open(path)?;
     let metadata = file.metadata()?;
@@ -270,6 +287,7 @@ pub(super) fn summary(path: &Path) -> Result<crate::providers::SessionSummary> {
         ..Default::default()
     };
     let mut branch = None;
+    let mut entrypoint = None;
     for line in head.split(|byte| *byte == b'\n').chain(
         tail.split(|byte| *byte == b'\n')
             .skip(usize::from(offset > head.len() as u64)),
@@ -286,6 +304,9 @@ pub(super) fn summary(path: &Path) -> Result<crate::providers::SessionSummary> {
             return Err(anyhow!(
                 "Claude transcript session identity does not match its filename"
             ));
+        }
+        if entrypoint.is_none() {
+            entrypoint = value.entrypoint.as_str().map(str::to_owned);
         }
         if let Some(saved_branch) = value.git_branch.as_str() {
             branch = Some(saved_branch.to_owned());
@@ -309,7 +330,11 @@ pub(super) fn summary(path: &Path) -> Result<crate::providers::SessionSummary> {
             thread.preview = input_text(&message["content"]);
         }
     }
-    Ok(crate::providers::SessionSummary { thread, branch })
+    Ok(Summary {
+        thread,
+        branch,
+        print_mode: entrypoint.as_deref() == Some("sdk-cli"),
+    })
 }
 
 fn input_text(content: &Value) -> Option<String> {
@@ -887,7 +912,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let first = list_page(root.path(), vec![], "", None, 3).unwrap();
+        let first = list_page(root.path(), vec![], "", None, false, 3).unwrap();
         assert_eq!(
             first
                 .data
@@ -897,7 +922,15 @@ mod tests {
             [8, 7, 6]
         );
         assert_eq!(first.next_cursor.as_deref(), Some("3"));
-        let second = list_page(root.path(), vec![], "", first.next_cursor.as_deref(), 3).unwrap();
+        let second = list_page(
+            root.path(),
+            vec![],
+            "",
+            first.next_cursor.as_deref(),
+            false,
+            3,
+        )
+        .unwrap();
         assert_eq!(
             second
                 .data
@@ -906,14 +939,81 @@ mod tests {
                 .collect::<Vec<_>>(),
             [5, 4, 3]
         );
-        let last = list_page(root.path(), vec![], "", second.next_cursor.as_deref(), 3).unwrap();
+        let last = list_page(
+            root.path(),
+            vec![],
+            "",
+            second.next_cursor.as_deref(),
+            false,
+            3,
+        )
+        .unwrap();
         assert_eq!(last.data.len(), 2);
         assert!(last.next_cursor.is_none());
-        let found = list_page(root.path(), vec![], "title 1", None, 3).unwrap();
+        let found = list_page(root.path(), vec![], "title 1", None, false, 3).unwrap();
         assert_eq!(found.data.len(), 1);
         assert!(found.next_cursor.is_none());
-        assert!(list_page(root.path(), vec![], "", Some("bad"), 3).is_err());
-        assert!(list_page(root.path(), vec![], "", Some("9"), 3).is_err());
+        assert!(list_page(root.path(), vec![], "", Some("bad"), false, 3).is_err());
+        assert!(list_page(root.path(), vec![], "", Some("9"), false, 3).is_err());
+    }
+    #[test]
+    fn task_listings_omit_print_mode_runs_started_by_other_agents() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("projects/p");
+        fs::create_dir_all(&project).unwrap();
+        // Who started the transcript decides; a later resume by another client does not.
+        let transcripts = [
+            ("terminal", ["cli", "cli"]),
+            ("host", ["sdk-ts", "sdk-ts"]),
+            ("host-resumed-by-agent", ["sdk-ts", "sdk-cli"]),
+            ("agent", ["sdk-cli", "sdk-cli"]),
+            ("agent-opened-by-host", ["sdk-cli", "sdk-ts"]),
+            ("agent-running-in-host", ["sdk-cli", "sdk-ts"]),
+        ];
+        for (index, (name, entrypoints)) in transcripts.into_iter().enumerate() {
+            let id = Uuid::from_u128(index as u128 + 1).to_string();
+            let rows: String = entrypoints
+                .into_iter()
+                .map(|entrypoint| {
+                    json!({"type":"user","sessionId":id,"cwd":"/fixture","entrypoint":entrypoint,"message":{"content":name}}).to_string() + "\n"
+                })
+                .collect();
+            fs::write(project.join(format!("{id}.jsonl")), rows).unwrap();
+        }
+        let running = Thread {
+            id: Some(SessionRef {
+                provider: ProviderKind::Claude,
+                id: Uuid::from_u128(6).to_string(),
+            }),
+            ..Default::default()
+        };
+        let listed = |include_print_mode| {
+            let mut names: Vec<_> = list_page(
+                root.path(),
+                vec![running.clone()],
+                "",
+                None,
+                include_print_mode,
+                10,
+            )
+            .unwrap()
+            .data
+            .into_iter()
+            .map(|summary| summary.thread.preview.unwrap())
+            .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            listed(false),
+            [
+                "agent-running-in-host",
+                "host",
+                "host-resumed-by-agent",
+                "terminal"
+            ]
+        );
+        assert_eq!(listed(true).len(), transcripts.len());
     }
     #[test]
     fn attachments_and_queued_prompts_are_preserved_in_the_active_history() {

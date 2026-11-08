@@ -895,6 +895,9 @@ pub(super) mod tests {
             .map(|line| {
                 let mut entry: serde_json::Value = serde_json::from_str(line).unwrap();
                 entry["cwd"] = serde_json::json!(first);
+                // Another agent's `claude -p` run stays out of task lists, but
+                // its unverifiable activity must still block removal.
+                entry["entrypoint"] = serde_json::json!("sdk-cli");
                 entry.to_string()
             })
             .collect::<Vec<_>>()
