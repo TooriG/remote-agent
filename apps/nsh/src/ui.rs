@@ -60,6 +60,8 @@ impl Icon {
     pub(crate) const CHECK: Self = icon!(Check, "checkmark");
     pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown, "chevron.down");
     pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight, "chevron.right");
+    #[cfg(target_os = "macos")]
+    pub(crate) const CHEVRON_UP: Self = icon!(ChevronUp, "chevron.up");
     pub(crate) const CLOSE: Self = icon!(X, "xmark");
     pub(crate) const COPY: Self = icon!(Copy, "doc.on.doc");
     #[cfg(target_os = "macos")]

@@ -213,3 +213,68 @@ fn stopping_retries_failure_and_does_not_depend_on_message_input_availability() 
     snapshot.connection.connected = false;
     assert!(!presentation(&snapshot).can_interrupt());
 }
+
+#[test]
+fn the_review_card_folds_past_three_files_and_needs_a_conversation_with_changes() {
+    use agent_protocol::models::{ChangedFile, WorkspaceReview};
+    let with_files = |count: usize| {
+        let mut snapshot = snapshot();
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).workspace).review =
+            Some(Arc::new(WorkspaceReview {
+                branch: "main".into(),
+                additions: 7,
+                deletions: 2,
+                files: (0..count)
+                    .map(|index| ChangedFile {
+                        path: format!("src/日本語-{index}.rs"),
+                        status: "M".into(),
+                        additions: Some(1),
+                        deletions: None,
+                    })
+                    .collect(),
+                diff: String::new(),
+            }));
+        snapshot
+    };
+    let paths = |review: &ComposerReview| {
+        review
+            .rows
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(snapshot().composer_review(false), None);
+    assert_eq!(with_files(0).composer_review(true), None);
+
+    let three = with_files(3).composer_review(false).unwrap();
+    assert_eq!((three.files, three.additions, three.deletions), (3, 7, 2));
+    assert_eq!(three.rows.len(), 3);
+    assert_eq!(three.folded, None, "three files need no toggle");
+
+    let four = with_files(4);
+    let folded = four.composer_review(false).unwrap();
+    assert_eq!(
+        paths(&folded),
+        ["src/日本語-0.rs", "src/日本語-1.rs", "src/日本語-2.rs"]
+    );
+    assert_eq!(folded.folded, Some(1));
+    let expanded = four.composer_review(true).unwrap();
+    assert_eq!(expanded.rows.len(), 4);
+    assert_eq!(
+        expanded.folded,
+        Some(1),
+        "the toggle stays to fold it again"
+    );
+
+    let mut draft = four;
+    Arc::make_mut(&mut draft.pane).navigation = Arc::new(Navigation {
+        thread_id: None,
+        draft_key: "draft".into(),
+        cwd: "/project".into(),
+    });
+    assert_eq!(
+        draft.composer_review(false),
+        None,
+        "a new draft has no card"
+    );
+}

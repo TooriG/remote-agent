@@ -138,7 +138,47 @@ impl ComposerPresentation {
     }
 }
 
+/// The changed files a conversation's composer offers to review, as T3 Code's
+/// card above it: the totals, the listed files, and how many the folded card hides.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComposerReview {
+    pub files: usize,
+    pub additions: u64,
+    pub deletions: u64,
+    pub rows: Vec<agent_protocol::models::ChangedFile>,
+    /// The files past the folded card's rows, when there are any: the toggle's count.
+    pub folded: Option<usize>,
+}
+
+/// The files the card lists until it is expanded.
+const REVIEW_ROWS: usize = 3;
+
 impl Snapshot {
+    /// The card for the open conversation's workspace changes; none for a draft
+    /// or a clean workspace.
+    pub fn composer_review(&self, expanded: bool) -> Option<ComposerReview> {
+        self.pane.navigation.thread_id.as_ref()?;
+        let review = self
+            .pane
+            .workspace
+            .review
+            .as_ref()
+            .filter(|review| !review.files.is_empty())?;
+        let files = review.files.len();
+        let shown = if expanded {
+            files
+        } else {
+            files.min(REVIEW_ROWS)
+        };
+        Some(ComposerReview {
+            files,
+            additions: review.additions,
+            deletions: review.deletions,
+            rows: review.files[..shown].to_vec(),
+            folded: files.checked_sub(REVIEW_ROWS).filter(|more| *more > 0),
+        })
+    }
+
     pub(crate) fn submission_unavailable_reason(
         &self,
         session: &crate::session::SessionRef,

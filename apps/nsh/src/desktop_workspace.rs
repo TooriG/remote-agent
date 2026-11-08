@@ -4,9 +4,10 @@ use crate::l10n::tr;
 use crate::{Connection, workbench::Workbench};
 use agent_core::{
     panels::PanelKind,
+    presentation::composer::ComposerReview,
     state::{Intent, operations as op},
 };
-use agent_protocol::editors::EditorId;
+use agent_protocol::{editors::EditorId, models::ChangedFile};
 use nsh_core::prelude::*;
 use serde_json::json;
 
@@ -274,6 +275,210 @@ fn row(glyph: crate::ui::Icon, title: impl Fn() -> String + 'static) -> nsh_base
                 .text_size(px(14.0))
                 .number_of_lines(1),
         )
+}
+
+/// The conversation's changed files above its composer, as T3 Code's card: the
+/// totals and the first files, each opening the diff.
+pub(crate) fn review_card() -> impl IntoElement {
+    use crate::ui::colors;
+    let connection = use_context::<Connection>().unwrap();
+    let workspace = use_context::<Workbench>().unwrap();
+    let expanded = signal(false);
+    let review = computed(move || {
+        let expanded = expanded.get();
+        connection
+            .publication
+            .with(|p| p.snapshot.composer_review(expanded))
+    });
+    let connected = move || connection.composer.with(|p| p.controls.connected);
+    let open = move || {
+        let cwd = connection
+            .composer
+            .with_untracked(|p| p.controls.navigation.cwd.clone());
+        workspace.open(PanelKind::Diff, Some(cwd), None);
+    };
+    let folded = move || review.with(|r| r.as_ref().and_then(|r| r.folded));
+    when(
+        move || review.with(Option::is_some),
+        move || {
+            view()
+                .w_full()
+                .rounded(px(12.0))
+                .border_1()
+                .border_color(colors::BORDER)
+                .overflow_hidden()
+                .bg(colors::RAISED)
+                .text_color(colors::FOREGROUND)
+                .child(review_summary(review, connected, open))
+                .child(review_files(review, open))
+                .child(when(
+                    move || folded().is_some(),
+                    move || review_toggle(expanded, folded),
+                ))
+        },
+    )
+}
+
+/// The card's heading: how many files changed and their lines, and the review.
+fn review_summary(
+    review: Memo<Option<ComposerReview>>,
+    connected: impl Fn() -> bool + Copy + 'static,
+    open: impl Fn() + Copy + 'static,
+) -> nsh_base::ButtonElement {
+    use crate::{
+        l10n::tr_format,
+        ui::{self, Enabled, Icon, colors},
+    };
+    use agent_core::presentation::conversation::ActionTone;
+    let total =
+        move |count: fn(&ComposerReview) -> u64| move || review.with(|r| r.as_ref().map(count));
+    nsh_base::button()
+        .accessibility_label(Some(SharedString::from(tr("変更を表示"))))
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .p_3()
+        .border_b_1()
+        .border_b_color(colors::BORDER)
+        .on_press(open)
+        .child(view().p_2().child(ui::icon(Icon::REPLACE, 16.0)))
+        .child(
+            view()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    text(move || {
+                        let files = review.with(|r| r.as_ref().map_or(0, |r| r.files));
+                        tr_format("{0} 件のファイルを変更", [&files])
+                    })
+                    .text_size(px(14.0)),
+                )
+                .child(counts(total(|r| r.additions), total(|r| r.deletions))),
+        )
+        .child(
+            ui::action_button(tr("レビューする"), ActionTone::Secondary, open)
+                .rounded(px(8.0))
+                .enabled(connected),
+        )
+}
+
+/// The listed files, each with its lines; any of them opens the diff.
+fn review_files(
+    review: Memo<Option<ComposerReview>>,
+    open: impl Fn() + Copy + 'static,
+) -> impl IntoElement {
+    use crate::ui::colors;
+    scroll().max_h(px(252.0)).child(view().py_1().child(each(
+        move || review.with(|r| r.as_ref().map(|r| r.rows.clone()).unwrap_or_default()),
+        |file: &ChangedFile| file.path.clone(),
+        move |file, _| {
+            let ChangedFile {
+                path,
+                additions,
+                deletions,
+                ..
+            } = file.get_untracked();
+            nsh_base::button()
+                .accessibility_label(Some(SharedString::from(path.clone())))
+                .flex_row()
+                .items_center()
+                .flex_shrink_0()
+                .gap_3()
+                .px_3()
+                .h(px(36.0))
+                .hover(|s| s.bg(colors::GHOST_HOVER))
+                .on_press(open)
+                .child(
+                    text(path)
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(14.0))
+                        .number_of_lines(1),
+                )
+                .child(counts(move || additions, move || deletions))
+        },
+    )))
+}
+
+/// Shows the files past the first ones, or folds them away again.
+fn review_toggle(
+    expanded: Signal<bool>,
+    folded: impl Fn() -> Option<usize> + Copy + 'static,
+) -> View {
+    use crate::{
+        l10n::tr_format,
+        ui::{self, Icon, colors},
+    };
+    let label = move || {
+        if expanded.get() {
+            tr("折りたたむ").to_owned()
+        } else {
+            tr_format(
+                "あと {0} 個のファイルを表示",
+                [&folded().unwrap_or_default()],
+            )
+        }
+    };
+    view().px_2().py_1().child(
+        nsh_base::button()
+            .accessibility_label(nsh_core::element::Prop::from(
+                (move || Some(SharedString::from(label()))).into_reactive(),
+            ))
+            .flex_row()
+            .items_center()
+            .self_start()
+            .gap_2()
+            .h(px(28.0))
+            .px_2()
+            .rounded(px(ui::RADIUS))
+            .hover(|s| s.bg(colors::GHOST_HOVER))
+            .on_press(move || expanded.update(|expanded| *expanded = !*expanded))
+            .child(when(expanded, || ui::icon(Icon::CHEVRON_UP, 14.0)))
+            .child(when(
+                move || !expanded.get(),
+                || ui::icon(Icon::CHEVRON_DOWN, 14.0),
+            ))
+            .child(text(label).text_size(px(13.0))),
+    )
+}
+
+/// A file's added and removed lines, as Git counts them; a binary file has none.
+fn counts(
+    additions: impl Fn() -> Option<u64> + Copy + 'static,
+    deletions: impl Fn() -> Option<u64> + Copy + 'static,
+) -> View {
+    use crate::ui::colors;
+    let lines = move || additions().zip(deletions());
+    view()
+        .flex_row()
+        .gap_1()
+        .child(when(
+            move || lines().is_some(),
+            move || {
+                view()
+                    .flex_row()
+                    .gap_1()
+                    .child(
+                        text(move || format!("+{}", additions().unwrap_or_default()))
+                            .text_size(px(12.0))
+                            .text_color(nsh_core::element::rgb(0x37cf77)),
+                    )
+                    .child(
+                        text(move || format!("−{}", deletions().unwrap_or_default()))
+                            .text_size(px(12.0))
+                            .text_color(nsh_core::element::rgb(0xff6259)),
+                    )
+            },
+        ))
+        .child(when(
+            move || lines().is_none(),
+            || {
+                text(tr("バイナリ"))
+                    .text_size(px(12.0))
+                    .text_color(colors::MUTED)
+            },
+        ))
 }
 
 /// Picks a folder rather than one of the projects in the draft's menu.
