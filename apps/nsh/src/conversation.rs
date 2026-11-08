@@ -153,7 +153,8 @@ fn project(
 }
 
 pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
-    let connection = use_context::<Connection>().unwrap();
+    let surroundings = crate::rich_text::Surroundings::current();
+    let connection = surroundings.connection;
     let list = element_ref();
     let expanded = signal(HashMap::<String, String>::new());
     let expanded_items = signal(HashSet::<String>::new());
@@ -344,7 +345,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         )
                                     },
                                 ))
-                                .child(when(move || detail.get().is_some(), move || crate::activity::details(detail, expanded_items, list, at, following)))
+                                .child(when(move || detail.get().is_some(), move || crate::activity::details(surroundings, detail, expanded_items, list, at, following)))
                                 .child(
                                     view()
                                         .max_w(relative(1.0))
@@ -361,6 +362,7 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                                 !row.activity.as_ref().is_some_and(|activity| activity.activity_can_collapse) && row.detail.is_none()
                                             })),
                                             move || crate::rich_text::content(
+                                                surroundings,
                                                 move || label().map(|text| agent_core::presentation::markdown::markdown_blocks(text.to_string())).unwrap_or_default(),
                                                 activity,
                                             ),
@@ -375,15 +377,15 @@ pub(crate) fn list(following: Signal<bool>) -> impl IntoElement {
                                         })
                                     },
                                     |source: &String| source.clone(),
-                                    |source, _| crate::media::image_view(move || source.get(), 320.0, 240.0),
+                                    move |source, _| crate::media::image_view(connection, surroundings.preview, move || source.get(), 320.0, 240.0),
                                 ))
                                 .child(when(
                                     move || {
                                         row.with(|row| row.as_ref().is_some_and(|row| row.actions))
                                     },
-                                    move || response_actions(row),
+                                    move || response_actions(connection, row),
                                 ))
-                                .child(when(user, move || user_actions(row))),
+                                .child(when(user, move || user_actions(connection, row))),
                         )
                         .child(when(
                             move || {
@@ -603,9 +605,8 @@ fn steer_marker() -> View {
 }
 
 /// A response's actions, as the desktop client's: copy, fork from here, its time.
-fn response_actions(row: Memo<Option<Row>>) -> View {
+fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
     use crate::ui::{self, Enabled, Icon, colors};
-    let connection = use_context::<Connection>().unwrap();
     let fork = move || row.with(|row| row.as_ref().and_then(|row| row.fork.clone()));
     let thread = move || {
         connection
@@ -661,9 +662,8 @@ fn response_actions(row: Memo<Option<Row>>) -> View {
 
 /// The user's own message's actions, shown while the pointer is over it: its time,
 /// copy, and editing it in the composer.
-fn user_actions(row: Memo<Option<Row>>) -> View {
+fn user_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
     use crate::ui::{self, Icon};
-    let connection = use_context::<Connection>().unwrap();
     let body = move || row.with_untracked(|row| row.as_ref().map(|row| row.body.to_string()));
     view()
         .flex_row()

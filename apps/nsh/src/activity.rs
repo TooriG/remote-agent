@@ -1,6 +1,6 @@
 use crate::l10n::{localized, tr};
+use crate::shared::Shared;
 use crate::ui::Enabled;
-use crate::{Connection, shared::Shared};
 use agent_core::{
     presentation::conversation::RenderedItem,
     state::{Intent, operations as op},
@@ -16,13 +16,14 @@ pub(crate) struct Item {
 }
 
 pub(crate) fn details(
+    surroundings: crate::rich_text::Surroundings,
     item: Memo<Option<Item>>,
     expanded: Signal<HashSet<String>>,
     list: ElementRef,
     at: Position,
     following: Signal<bool>,
 ) -> impl Element {
-    let connection = use_context::<Connection>().unwrap();
+    let connection = surroundings.connection;
     let open = move || {
         item.with(|item| {
             item.as_ref()
@@ -160,6 +161,7 @@ pub(crate) fn details(
                     },
                 ))
                 .child(crate::rich_text::content(
+                    surroundings,
                     move || {
                         item.with(|item| {
                             item.as_ref()

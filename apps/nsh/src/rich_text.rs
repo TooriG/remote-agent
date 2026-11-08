@@ -38,11 +38,32 @@ struct Target {
     provider: Option<agent_protocol::session::ProviderKind>,
 }
 
+/// What message content reaches. List rows are made outside the context
+/// their list was made in, so they receive these rather than look them up.
+#[derive(Clone, Copy)]
+pub(crate) struct Surroundings {
+    pub connection: Connection,
+    pub files: crate::files::Browser,
+    pub preview: crate::media::Preview,
+}
+
+impl Surroundings {
+    /// The surroundings of the component being made.
+    pub(crate) fn current() -> Self {
+        Self {
+            connection: use_context::<Connection>().unwrap(),
+            files: use_context::<crate::files::Browser>().unwrap(),
+            preview: use_context::<crate::media::Preview>().unwrap(),
+        }
+    }
+}
+
 pub(crate) fn content(
+    surroundings: Surroundings,
     blocks: impl Fn() -> Vec<MarkdownBlock> + 'static,
     secondary: impl Fn() -> bool + Copy + 'static,
 ) -> nsh_core::element::View {
-    let connection = use_context::<Connection>().unwrap();
+    let connection = surroundings.connection;
     let target = computed(move || {
         let scope = connection.scope.get();
         let (cwd, provider) = connection
@@ -60,16 +81,18 @@ pub(crate) fn content(
         .expect("display targets contain only serializable values")
     });
     let content = computed(move || parts(blocks()));
-    view_parts(move || content.get(), target, secondary)
+    view_parts(surroundings, move || content.get(), target, secondary)
 }
 
 fn view_parts(
+    surroundings: Surroundings,
     parts: impl Fn() -> Vec<Part> + 'static,
     target: Memo<String>,
     secondary: impl Fn() -> bool + Copy + 'static,
 ) -> nsh_core::element::View {
-    let connection = use_context::<Connection>().unwrap();
-    let files = use_context::<crate::files::Browser>().unwrap();
+    let Surroundings {
+        connection, files, ..
+    } = surroundings;
     view().w_full().gap_3().child(each(
         move || parts().into_iter().enumerate().collect::<Vec<_>>(),
         |(index, part): &(usize, Part)| (*index, std::mem::discriminant(part)),
@@ -228,6 +251,8 @@ fn view_parts(
                     .into_element()
             }
             Part::Image(_) => crate::media::image_view(
+                surroundings.connection,
+                surroundings.preview,
                 move || {
                     part.with(|(_, part)| {
                         if let Part::Image(source) = part {
@@ -255,7 +280,7 @@ fn view_parts(
                 );
             })
             .into_element(),
-            Part::Table { .. } => table(part, target, secondary).into_element(),
+            Part::Table { .. } => table(surroundings, part, target, secondary).into_element(),
         },
     ))
 }
@@ -263,6 +288,7 @@ fn view_parts(
 /// A table in the desktop client's frame: ruled cells, the header row raised, its copy
 /// actions below.
 fn table(
+    surroundings: Surroundings,
     part: ReadSignal<(usize, Part)>,
     target: Memo<String>,
     secondary: impl Fn() -> bool + Copy + 'static,
@@ -326,6 +352,7 @@ fn table(
                                         |s| s.border_l_1().border_l_color(colors::BORDER),
                                     )
                                     .child(view_parts(
+                                        surroundings,
                                         move || cell.with(|(_, parts)| parts.clone()),
                                         target,
                                         secondary,

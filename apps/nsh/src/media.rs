@@ -146,12 +146,12 @@ pub(crate) async fn load_image(
 }
 
 pub(crate) fn image_view(
+    connection: Connection,
+    preview: Preview,
     source: impl Fn() -> String + 'static,
     width: f32,
     height: f32,
 ) -> impl Element {
-    let connection = use_context::<Connection>().unwrap();
-    let preview = use_context::<Preview>().unwrap();
     let decode_error = signal(None::<String>);
     let key = computed(move || {
         (

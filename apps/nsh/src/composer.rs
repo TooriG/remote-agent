@@ -6,6 +6,7 @@ use serde_json::json;
 
 pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
+    let preview = use_context::<crate::media::Preview>().unwrap();
     let files = use_context::<crate::files::Browser>().unwrap();
     let workspace = use_context::<crate::workbench::Workbench>().unwrap();
     let composing = signal(false);
@@ -550,6 +551,8 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                     move || file.with(|file| file.is_image),
                                     move || {
                                         crate::media::image_view(
+                                            connection,
+                                            preview,
                                             move || file.with(|file| file.path.clone()),
                                             120.0,
                                             120.0,
