@@ -33,7 +33,7 @@ pub(super) fn project_menu_button(
             let local = host == "local" || (host.is_empty() && state.remote.is_none());
             let snapshot = match state.connection_store(&host, cx) {
                 Some(store) => store.snapshot(),
-                None if host.is_empty() => state.snapshot.clone(),
+                None if host.is_empty() => state.publication.snapshot.clone(),
                 None => return menu,
             };
             let Some(list) = snapshot.thread_list() else {
@@ -200,7 +200,7 @@ impl Desktop {
         let language = crate::localization::language(cx);
         let snapshot = match self.connection_store(host, cx) {
             Some(store) => store.snapshot(),
-            None if host.is_empty() => self.snapshot.clone(),
+            None if host.is_empty() => self.publication.snapshot.clone(),
             None => return,
         };
         let Some(list) = snapshot.thread_list() else {
@@ -237,7 +237,7 @@ impl Desktop {
                     let editor = s.project_editor.as_ref().unwrap();
                     let same_scope = match s.connection_store(&editor.host, cx) {
                         Some(store) => editor.scope == store.snapshot().connection.storage_scope,
-                        None => editor.host.is_empty() && editor.scope == s.snapshot.connection.storage_scope,
+                        None => editor.host.is_empty() && editor.scope == s.publication.snapshot.connection.storage_scope,
                     };
                     if !same_scope {
                         s.set_error("接続先が変わりました。プロジェクトを開き直してください");

@@ -15,7 +15,6 @@ mod tests;
 pub struct Presentation {
     pub snapshot: Arc<Snapshot>,
     pub pane_id: String,
-    pub pane: Arc<PaneState>,
     pub list: Option<Arc<ThreadList>>,
     pub conversation: Option<Arc<RenderedConversation>>,
     pub composer: Arc<super::composer::ComposerPresentation>,
@@ -61,7 +60,6 @@ impl Presentation {
         );
         Some(Self {
             pane_id: pane_id.into(),
-            pane,
             snapshot,
             list: None,
             conversation: None,
@@ -83,8 +81,8 @@ impl Presentation {
     ) -> Option<Arc<Self>> {
         let previous = previous.filter(|value| value.pane_id == pane_id);
         let mut next = Self::metadata(snapshot, pane_id, previous)?;
-        let snapshot = &next.snapshot;
-        let pane = &next.pane;
+        let snapshot = next.snapshot.clone();
+        let pane = next.pane().clone();
         let list = if !pane_id.is_empty() {
             None
         } else if let Some(previous) = previous
@@ -102,7 +100,7 @@ impl Presentation {
             }
             .map(Arc::new)
         };
-        let source = snapshot.conversation_thread(pane).map(|source| {
+        let source = snapshot.conversation_thread(&pane).map(|source| {
             // Pending input before session creation has no native Thread. Retain
             // that placeholder across unrelated publications as well.
             previous
@@ -119,19 +117,27 @@ impl Presentation {
                 &previous.and_then(|previous| previous.conversation.clone()),
             )
         });
-        next.agents = super::agents::project(snapshot, pane, previous);
+        next.agents = super::agents::project(&snapshot, &pane, previous);
         next.list = list;
         next.conversation = conversation;
         Some(Arc::new(next))
     }
 
+    /// The projected pane; a presentation exists only while its pane is open.
+    pub fn pane(&self) -> &Arc<PaneState> {
+        self.snapshot
+            .panes
+            .get(&self.pane_id)
+            .expect("a presentation is projected only for an open pane")
+    }
+
     fn same_context(&self, latest: &Snapshot) -> bool {
         latest.panes.get(&self.pane_id).is_some_and(|pane| {
             self.snapshot.catalog.ui_language == latest.catalog.ui_language
-                && self.pane.navigation.draft_key == pane.navigation.draft_key
-                && self.pane.navigation.thread_id == pane.navigation.thread_id
+                && self.pane().navigation.draft_key == pane.navigation.draft_key
+                && self.pane().navigation.thread_id == pane.navigation.thread_id
                 && self.snapshot.connection.epoch == latest.connection.epoch
-                && self.pane.epoch == pane.epoch
+                && self.pane().epoch == pane.epoch
                 && self.snapshot.connection.storage_scope == latest.connection.storage_scope
         })
     }
@@ -146,15 +152,15 @@ impl Presentation {
         let same_host =
             next.snapshot.connection.storage_scope == content.snapshot.connection.storage_scope;
         let same_conversation = same_host
-            && next.pane.navigation.draft_key == content.pane.navigation.draft_key
-            && next.pane.navigation.thread_id == content.pane.navigation.thread_id;
+            && next.pane().navigation.draft_key == content.pane().navigation.draft_key
+            && next.pane().navigation.thread_id == content.pane().navigation.thread_id;
         if same_host {
             next.list = content.list.clone();
         }
         if same_conversation {
             next.conversation = content.conversation.clone();
-            if next.pane.observed_agents == content.pane.observed_agents
-                && next.pane.observed_agents.is_some()
+            if next.pane().observed_agents == content.pane().observed_agents
+                && next.pane().observed_agents.is_some()
             {
                 next.agents = content.agents.clone();
             }
@@ -214,7 +220,7 @@ impl Presentation {
         let groups = self
             .snapshot
             .changes_from(&previous.snapshot)
-            .selected_pane(!Arc::ptr_eq(&self.pane, &previous.pane));
+            .selected_pane(!Arc::ptr_eq(self.pane(), previous.pane()));
         PresentationChanges {
             changed: groups.any
                 || list

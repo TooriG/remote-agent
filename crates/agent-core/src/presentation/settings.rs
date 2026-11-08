@@ -80,7 +80,7 @@ impl SettingsPresentation {
                     )
                 })
             };
-            if key == &previous.pane.navigation.draft_key
+            if key == &previous.pane().navigation.draft_key
                 && provider == previous.settings.provider
                 && snapshot.catalog.same(&before.catalog)
                 && snapshot.operations.same(&before.operations)
@@ -88,7 +88,7 @@ impl SettingsPresentation {
                 && snapshot.connection.connection_disabled == before.connection.connection_disabled
                 && snapshot.connection.host_name == before.connection.host_name
                 && snapshot.connection.epoch == before.connection.epoch
-                && pane.navigation.cwd == previous.pane.navigation.cwd
+                && pane.navigation.cwd == previous.pane().navigation.cwd
                 && snapshot
                     .files
                     .workspace

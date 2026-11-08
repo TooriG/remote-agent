@@ -10,7 +10,9 @@ pub struct PermissionSettingsState {
 macro_rules! permission_operation {
     ($ty:ty) => {
         impl Operation for $ty {
-            const NAVIGATION_BOUND: bool = false;
+            fn navigation_bound(&self) -> bool {
+                false
+            }
             fn key(&self) -> Option<OperationKey> {
                 Some(OperationKey::Permissions {
                     provider: self.provider,

@@ -258,9 +258,9 @@ impl Desktop {
         let active_surface = panel.active;
         let active = self.workbench_visible(panel_open, cx);
         let thread_id = (active && panel_kind == Panel::Agents)
-            .then(|| self.publication.pane.navigation.thread_id.clone())
+            .then(|| self.publication.pane().navigation.thread_id.clone())
             .flatten();
-        if self.publication.pane.observed_agents != thread_id {
+        if self.publication.pane().observed_agents != thread_id {
             self.dispatch(Intent::WatchAgents { thread_id });
         }
         let composer_visible = self.visible
@@ -312,7 +312,7 @@ impl Desktop {
                     });
                 }
                 SurfaceResource::Terminal(view)
-                    if self.snapshot.connection.connected
+                    if self.publication.snapshot.connection.connected
                         && self.panels.scope(*id).is_some_and(|owner| {
                             owner.host == scope.host && owner.storage == scope.storage
                         }) =>
@@ -376,7 +376,7 @@ impl Desktop {
             })
             .collect();
         let file = (kind == Panel::File)
-            .then(|| self.publication.pane.workspace.file.as_ref())
+            .then(|| self.publication.pane().workspace.file.as_ref())
             .flatten()
             .filter(|file| {
                 panel.selected().and_then(|surface| surface.path.as_deref())
@@ -417,10 +417,10 @@ impl Desktop {
             ),
             explorer_available: self.file_explorer.available,
             explorer_focus: self.file_explorer.focus.clone(),
-            cwd: self.publication.pane.navigation.cwd.clone(),
+            cwd: self.publication.pane().navigation.cwd.clone(),
             review_files: self
                 .publication
-                .pane
+                .pane()
                 .workspace
                 .review
                 .as_ref()
@@ -436,7 +436,7 @@ impl Desktop {
                 truncated: file.is_some()
                     && self
                         .publication
-                        .pane
+                        .pane()
                         .workspace
                         .file
                         .as_ref()
@@ -444,6 +444,7 @@ impl Desktop {
                 path: file,
                 saving: kind == Panel::File && self.busy(),
                 failed: self
+                    .publication
                     .snapshot
                     .operation_error(op::OperationKey::File {
                         pane: self.publication.pane_id.clone(),
@@ -451,7 +452,7 @@ impl Desktop {
                     .is_some(),
             },
             review: (kind == Panel::Diff)
-                .then(|| self.publication.pane.workspace.review.as_ref())
+                .then(|| self.publication.pane().workspace.review.as_ref())
                 .flatten()
                 .map(|review| (review.additions, review.deletions, review.files.len())),
             agents: if kind == Panel::Agents {
@@ -487,8 +488,8 @@ fn panel_icon(kind: Panel) -> IconName {
 impl Desktop {
     fn panel_tools(&self) -> Vec<agent_core::panels::PanelTool> {
         agent_core::panels::panel_tools(
-            self.snapshot.connection.connected,
-            !self.publication.pane.navigation.cwd.is_empty(),
+            self.publication.snapshot.connection.connected,
+            !self.publication.pane().navigation.cwd.is_empty(),
         )
     }
     pub(in crate::app) fn open_review(&mut self, path: Option<&str>, cx: &mut Context<Self>) {
@@ -1205,7 +1206,7 @@ impl WorkbenchView {
 
 impl Desktop {
     fn workspace_diff(&mut self, id: u64, cx: &mut Context<Self>) -> Entity<DiffView> {
-        let review = &self.publication.pane.workspace.review;
+        let review = &self.publication.pane().workspace.review;
         let source = review.as_ref().map_or("", |review| review.diff.as_str());
         if let Some(SurfaceResource::Diff {
             view,
@@ -1331,7 +1332,7 @@ mod tests {
                     None,
                 )
                 .unwrap();
-                desktop.snapshot = snapshot.clone();
+                desktop.project_fixture(snapshot.clone());
                 desktop.open_surface(
                     desktop.panel_scope(),
                     Panel::File,
@@ -1375,12 +1376,10 @@ mod tests {
             desktop.onboarding = false;
             desktop.tab = Tab::Settings;
             desktop.open_surface(desktop.panel_scope(), Panel::Diff, None);
-            Arc::make_mut(
-                &mut Arc::make_mut(Arc::make_mut(&mut desktop.snapshot).panes.primary_mut())
-                    .workspace,
-            )
-            .review = Some(review.clone());
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace).review =
+                    Some(review.clone());
+            });
             desktop
         });
         window.simulate_resize(size(px(1600.), px(900.)));
@@ -1433,12 +1432,11 @@ mod tests {
             cx.observe(&diff, move |_, _| changes.set(changes.get() + 1))
         });
         desktop.update(window, |desktop, cx| {
-            let workspace = Arc::make_mut(
-                &mut Arc::make_mut(Arc::make_mut(&mut desktop.snapshot).panes.primary_mut())
-                    .workspace,
-            );
-            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+second".into();
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+                let workspace =
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace);
+                Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+second".into();
+            });
             cx.notify();
         });
         window.run_until_parked();
@@ -1459,12 +1457,11 @@ mod tests {
         window.run_until_parked();
         let notifications = diff_changes.get();
         desktop.update(window, |desktop, cx| {
-            let workspace = Arc::make_mut(
-                &mut Arc::make_mut(Arc::make_mut(&mut desktop.snapshot).panes.primary_mut())
-                    .workspace,
-            );
-            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+third".into();
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+                let workspace =
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace);
+                Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+third".into();
+            });
             cx.notify();
         });
         window.run_until_parked();
@@ -1489,12 +1486,11 @@ mod tests {
         });
         let before = diff_changes.get();
         desktop.update(window, |desktop, cx| {
-            let workspace = Arc::make_mut(
-                &mut Arc::make_mut(Arc::make_mut(&mut desktop.snapshot).panes.primary_mut())
-                    .workspace,
-            );
-            Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+hidden side chat".into();
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+                let workspace =
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).workspace);
+                Arc::make_mut(workspace.review.as_mut().unwrap()).diff = "+hidden side chat".into();
+            });
             cx.notify();
         });
         window.run_until_parked();
@@ -1595,12 +1591,10 @@ mod tests {
                 draft: DraftKey::from("other-conversation"),
                 ..view.panel_scope()
             };
-            Arc::make_mut(
-                &mut Arc::make_mut(Arc::make_mut(&mut view.snapshot).panes.primary_mut())
-                    .navigation,
-            )
-            .draft_key = b.draft.clone();
-            view.project_fixture();
+            view.edit_fixture(|snapshot| {
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
+                    .draft_key = b.draft.clone();
+            });
             assert!(!view.panels.get(b.clone()).open);
             view.panels = view.panels.clone().set_open(b, true);
             cx.notify();
@@ -1609,12 +1603,10 @@ mod tests {
         assert!(window.debug_bounds("surface-launcher").is_some());
         assert!(window.debug_bounds("diff-file-navigation").is_none());
         view.update(window, |view, cx| {
-            Arc::make_mut(
-                &mut Arc::make_mut(Arc::make_mut(&mut view.snapshot).panes.primary_mut())
-                    .navigation,
-            )
-            .draft_key = a.draft.clone();
-            view.project_fixture();
+            view.edit_fixture(|snapshot| {
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
+                    .draft_key = a.draft.clone();
+            });
             assert_eq!(view.panels.get(a.clone()).active, Some(diff));
             assert_eq!(view.panels.get(a.clone()).surfaces.len(), 2);
             cx.notify();

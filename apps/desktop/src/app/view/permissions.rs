@@ -185,7 +185,7 @@ mod tests {
                 )
             });
             desktop.update(cx, |view, _| {
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut snapshot.input.drafts).insert(
                     snapshot.panes.primary().navigation.draft_key.clone(),
@@ -197,7 +197,7 @@ mod tests {
                         ..Default::default()
                     }),
                 );
-                view.project_fixture();
+                view.project_fixture(Arc::new(snapshot));
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
             ComposerView(desktop)

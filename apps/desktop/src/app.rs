@@ -147,10 +147,9 @@ pub(crate) enum Mode {
     },
 }
 /// Business state is owned by Store. Everything else here is a widget, render
-/// cache, pending UI effect, or immutable snapshot retained for display.
+/// cache, pending UI effect, or the immutable publication retained for display.
 pub(crate) struct Desktop {
     session: Option<StoreSession>,
-    snapshot: Arc<Snapshot>,
     publication: Arc<agent_core::presentation::view::Presentation>,
     runtime: Runtime,
     updates: async_channel::Sender<(u64, Update)>,
@@ -402,9 +401,10 @@ impl Desktop {
                     input.set_placeholder(language.text("AI に依頼する"), window, cx)
                 });
                 if view.session.is_none() {
-                    Arc::make_mut(&mut view.snapshot).catalog.ui_language = language;
+                    let mut snapshot = view.publication.snapshot.as_ref().clone();
+                    snapshot.catalog.ui_language = language;
                     view.publication = agent_core::presentation::view::Presentation::project(
-                        view.snapshot.clone(),
+                        Arc::new(snapshot),
                         "",
                         Some(&view.publication),
                     )
@@ -542,8 +542,8 @@ impl Desktop {
             cx.subscribe(&search, |view, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     let value = input.read(cx).value();
-                    if value.as_ref() != view.snapshot.lists.list_query.search_term {
-                        let mut query = (*view.snapshot.lists.list_query).clone();
+                    if value.as_ref() != view.publication.snapshot.lists.list_query.search_term {
+                        let mut query = (*view.publication.snapshot.lists.list_query).clone();
                         query.search_term = value.to_string();
                         view.dispatch_list(Intent::ListSessions(op::ListSessions::new(query)), cx);
                     }
@@ -584,7 +584,6 @@ impl Desktop {
         }
         let mut view = Self {
             session: None,
-            snapshot: initial_snapshot,
             publication,
             runtime: cx.global::<Runtime>().clone(),
             updates,
@@ -773,7 +772,7 @@ impl Desktop {
         });
     }
     fn load_host_configuration(&self) {
-        if !self.snapshot.connection.connected {
+        if !self.publication.snapshot.connection.connected {
             return;
         }
         self.dispatch(Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}));
@@ -968,6 +967,7 @@ impl Desktop {
                 self.accept_snapshot(window, cx);
                 if result.is_ok()
                     && self
+                        .publication
                         .snapshot
                         .project_import
                         .result
@@ -988,7 +988,7 @@ impl Desktop {
                 generation,
                 item_id,
             } => {
-                if self.snapshot.connection.epoch != generation {
+                if self.publication.snapshot.connection.epoch != generation {
                     return true;
                 }
                 self.accept_snapshot(window, cx);
@@ -1032,34 +1032,41 @@ impl Desktop {
             return false;
         };
         let changes = publication.changes(self.publication.clone());
-        let snapshot = publication.snapshot();
         let window_uses_snapshot =
             self.onboarding || self.import_projects || self.project_editor.is_some();
-        let navigation_changed = self.publication.pane.navigation != publication.pane.navigation;
+        let navigation_changed =
+            self.publication.pane().navigation != publication.pane().navigation;
         let connection_changed = changes.groups.connection;
-        let application_error_changed = self.publication.pane.error != publication.pane.error;
+        let application_error_changed = self.publication.pane().error != publication.pane().error;
         let previous_publication = std::mem::replace(&mut self.publication, publication);
-        let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        let previous = &previous_publication.snapshot;
         if let Some(provider) = self.publication.settings.permission.load_provider {
             self.dispatch(Intent::ReadPermissionSettings(op::ReadPermissionSettings {
                 provider,
             }));
         }
-        if previous_publication.pane.error != self.publication.pane.error
-            && let Some(error) = &self.publication.pane.error
+        if previous_publication.pane().error != self.publication.pane().error
+            && let Some(error) = &self.publication.pane().error
         {
             tracing::error!(target: "agent", operation = "store", message = %error);
         }
-        let navigated = previous_publication.pane.navigation.draft_key
-            != self.publication.pane.navigation.draft_key;
+        let navigated = previous_publication.pane().navigation.draft_key
+            != self.publication.pane().navigation.draft_key;
         // Store snapshots may coalesce creation and send acceptance. Use the
         // durable core identity transition rather than transient pending sends.
-        for (draft, session) in self.snapshot.sessions.draft_sessions.iter().filter(|_| {
-            !Arc::ptr_eq(
-                &previous.sessions.draft_sessions,
-                &self.snapshot.sessions.draft_sessions,
-            )
-        }) {
+        for (draft, session) in self
+            .publication
+            .snapshot
+            .sessions
+            .draft_sessions
+            .iter()
+            .filter(|_| {
+                !Arc::ptr_eq(
+                    &previous.sessions.draft_sessions,
+                    &self.publication.snapshot.sessions.draft_sessions,
+                )
+            })
+        {
             if previous.sessions.draft_sessions.get(draft) != Some(session) {
                 let before = PanelScope {
                     draft: draft.clone(),
@@ -1082,10 +1089,10 @@ impl Desktop {
         };
         if (navigated
             || project_for_selected(
-                &previous,
-                previous_publication.pane.navigation.thread_id.as_ref(),
-            ) != project_for_selected(&self.snapshot, self.selected()))
-            && let Some(project) = project_for_selected(&self.snapshot, self.selected())
+                previous,
+                previous_publication.pane().navigation.thread_id.as_ref(),
+            ) != project_for_selected(&self.publication.snapshot, self.selected()))
+            && let Some(project) = project_for_selected(&self.publication.snapshot, self.selected())
         {
             self.dispatch(Intent::SetProjectExpanded {
                 project_id: project,
@@ -1116,10 +1123,11 @@ impl Desktop {
     }
     fn sync_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self
+            .publication
             .snapshot
             .input
             .drafts
-            .get(&self.publication.pane.navigation.draft_key)
+            .get(&self.publication.pane().navigation.draft_key)
             .map_or("", |draft| draft.text.as_str());
         if let Some(value) = self.composer.text.adopt(text) {
             self.composer
@@ -1135,9 +1143,10 @@ impl Desktop {
         if let Some(answer) = answer {
             self.question.set_value(answer, window, cx);
         }
-        let file = self.publication.pane.workspace.file.as_ref();
+        let file = self.publication.pane().workspace.file.as_ref();
         let text = file.map_or("", |file| {
-            self.snapshot
+            self.publication
+                .snapshot
                 .files
                 .file_drafts
                 .get(&file.path)
@@ -1164,14 +1173,14 @@ impl Desktop {
         }
     }
     fn draft_key(&self) -> &DraftKey {
-        &self.publication.pane.navigation.draft_key
+        &self.publication.pane().navigation.draft_key
     }
     fn selected(&self) -> Option<&SessionRef> {
-        self.publication.pane.navigation.thread_id.as_ref()
+        self.publication.pane().navigation.thread_id.as_ref()
     }
     fn thread(&self) -> Option<&Arc<Thread>> {
         self.selected()
-            .and_then(|id| self.snapshot.sessions.conversations.get(id))
+            .and_then(|id| self.publication.snapshot.sessions.conversations.get(id))
     }
     fn draft(&self) -> &Draft {
         static EMPTY: Draft = Draft {
@@ -1183,7 +1192,8 @@ impl Desktop {
             service_tier: None,
             model_settings_changed: false,
         };
-        self.snapshot
+        self.publication
+            .snapshot
             .input
             .drafts
             .get(self.draft_key())
@@ -1238,7 +1248,7 @@ impl Desktop {
         if !needed {
             return;
         }
-        let generation = self.snapshot.connection.epoch;
+        let generation = self.publication.snapshot.connection.epoch;
         let item_id = read.item_id.clone();
         self.perform(
             Intent::ReadItem(read),
@@ -1275,7 +1285,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.remote == remote && self.snapshot.connection.connected {
+        if self.remote == remote && self.publication.snapshot.connection.connected {
             return;
         }
         self.cancel_recording();
@@ -1288,7 +1298,6 @@ impl Desktop {
         cx.notify();
         self.publication =
             agent_core::presentation::view::Presentation::empty(crate::localization::language(cx));
-        self.snapshot = self.publication.snapshot();
         self.pending_quote = None;
         self.pending_explanation = None;
         self.editor.text.pending = None;
@@ -1306,7 +1315,7 @@ impl Desktop {
         self.connect(previous, None);
     }
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.snapshot.connection.connected || self.busy() {
+        if !self.publication.snapshot.connection.connected || self.busy() {
             return;
         }
         if let Some(dictation) = &self.dictation {
@@ -1346,6 +1355,7 @@ impl Desktop {
         };
         let cwd = self.publication.context.selected_directory();
         let Some(provider) = self
+            .publication
             .snapshot
             .model_provider_for_draft(self.draft_key().clone())
         else {
@@ -1398,7 +1408,7 @@ impl Desktop {
     fn refresh_threads(&self, cx: &App) {
         self.dispatch_list(
             Intent::ListSessions(op::ListSessions::new(
-                (*self.snapshot.lists.list_query).clone(),
+                (*self.publication.snapshot.lists.list_query).clone(),
             )),
             cx,
         );
@@ -1406,12 +1416,12 @@ impl Desktop {
     fn refresh_review(&self) {
         if !self.publication.context.selected_directory().is_empty() {
             self.dispatch(Intent::ReviewWorkspace(op::ReviewWorkspace {
-                cwd: self.publication.pane.navigation.cwd.clone(),
+                cwd: self.publication.pane().navigation.cwd.clone(),
             }));
         }
     }
     fn panel_scope(&self) -> PanelScope {
-        self.snapshot.panel_scope(
+        self.publication.snapshot.panel_scope(
             self.remote
                 .as_ref()
                 .map_or_else(|| "local".into(), |host| host.id.clone()),
@@ -1475,7 +1485,7 @@ impl Desktop {
                     };
                     let terminal = crate::terminal::Terminal::new(
                         session.host.store.clone(),
-                        self.publication.pane.navigation.cwd.clone(),
+                        self.publication.pane().navigation.cwd.clone(),
                         format!("agent-terminal-{}", uuid::Uuid::new_v4()),
                         window,
                         cx,
@@ -1556,14 +1566,15 @@ impl Desktop {
             .as_ref()
             .and_then(|host| host.id.strip_prefix("wsl:"))
             .and_then(|distro| {
-                let cwd = if self.publication.pane.navigation.cwd.is_empty() {
-                    self.snapshot
+                let cwd = if self.publication.pane().navigation.cwd.is_empty() {
+                    self.publication
+                        .snapshot
                         .connection
                         .host_home_directory
                         .as_deref()
                         .unwrap_or("/home")
                 } else {
-                    self.publication.pane.navigation.cwd.as_str()
+                    self.publication.pane().navigation.cwd.as_str()
                 };
                 agent_local_host::wsl::to_unc(distro, cwd)
                     .ok()
@@ -1619,7 +1630,7 @@ impl Desktop {
     ) {
         self.tab = Tab::Chat;
         self.cancel_recording();
-        if self.snapshot.connection.connected
+        if self.publication.snapshot.connection.connected
             && self.remote.as_ref().map(|host| &host.id) == remote.as_ref().map(|host| &host.id)
         {
             self.dispatch(Intent::AddProject(op::AddProject { cwd }));
@@ -1672,7 +1683,7 @@ impl Desktop {
         let submit = self.composer.input.update(cx, |input, cx| {
             composer_should_submit(input, action, window, cx)
         });
-        if submit && self.snapshot.connection.connected && !self.busy() {
+        if submit && self.publication.snapshot.connection.connected && !self.busy() {
             cx.stop_propagation();
             return true;
         }
@@ -1928,7 +1939,10 @@ mod completion_tests {
             )
         });
         view.update(cx, |view, window, cx| {
-            assert_eq!(view.snapshot.catalog.ui_language, UiLanguage::English);
+            assert_eq!(
+                view.publication.snapshot.catalog.ui_language,
+                UiLanguage::English
+            );
             assert_eq!(
                 view.publication.settings.connection_status_label(),
                 "Disconnected"
@@ -1942,7 +1956,7 @@ mod completion_tests {
                 session::{ProviderKind, RequestDelivery, SessionRef},
             };
             let session = SessionRef::new(ProviderKind::Codex, "question".into()).unwrap();
-            let snapshot = Arc::make_mut(&mut view.snapshot);
+            let mut snapshot = view.publication.snapshot.as_ref().clone();
             let navigation =
                 Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation);
             navigation.thread_id = Some(session.clone());
@@ -1974,7 +1988,7 @@ mod completion_tests {
                     ..Default::default()
                 }),
             );
-            view.project_fixture();
+            view.project_fixture(Arc::new(snapshot));
             view.sync_inputs(window, cx);
             let answer = gpui::SharedString::from("質問への入力 {0}");
             view.question.text.record(answer.clone());
@@ -1998,7 +2012,7 @@ mod completion_tests {
         ] {
             cx.update(|cx| cx.set_global(Language(language)));
             view.update(cx, |view, _, cx| {
-                assert_eq!(view.snapshot.catalog.ui_language, language);
+                assert_eq!(view.publication.snapshot.catalog.ui_language, language);
                 assert_eq!(view.publication.snapshot().catalog.ui_language, language);
                 assert_eq!(
                     view.preferences.read(cx).metadata.connection_status_label(),
@@ -2057,7 +2071,9 @@ mod completion_tests {
         });
         view.update(cx, |view, window, cx| {
             view.epoch = 3;
-            Arc::make_mut(&mut view.snapshot).connection.epoch = 5;
+            view.edit_fixture(|snapshot| {
+                snapshot.connection.epoch = 5;
+            });
             view.local_busy = 2;
             view.composer.text.pending = Some(9);
             view.editor.text.pending = Some(12);

@@ -24,7 +24,7 @@ impl Desktop {
         if !self.local_shell {
             return;
         }
-        if !self.snapshot.connection.connected {
+        if !self.publication.snapshot.connection.connected {
             self.set_error("ホストに接続していません");
             cx.notify();
             return;

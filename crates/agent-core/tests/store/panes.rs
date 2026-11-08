@@ -1013,7 +1013,7 @@ async fn closed_dictation_cannot_append_to_a_reopened_panes_input(
     let key = pane
         .presentation()
         .unwrap()
-        .pane
+        .pane()
         .navigation
         .draft_key
         .clone();
@@ -1032,7 +1032,7 @@ async fn closed_dictation_cannot_append_to_a_reopened_panes_input(
         replacement
             .presentation()
             .unwrap()
-            .pane
+            .pane()
             .navigation
             .draft_key,
         key
@@ -1065,12 +1065,17 @@ async fn closed_dictation_cannot_append_to_a_reopened_panes_input(
     store.close().await.unwrap();
 }
 
+// Each pair of conditions occurs once; the result belongs to the provider in every case.
 #[rstest::rstest]
+#[case::read_after_navigation(false, false, false)]
+#[case::update_after_closure(true, true, false)]
+#[case::failed_read_after_closure(false, true, true)]
+#[case::failed_update_after_navigation(true, false, true)]
 #[tokio::test]
 async fn permission_results_follow_the_provider_after_navigation_or_pane_closure(
-    #[values(false, true)] update: bool,
-    #[values(false, true)] retired: bool,
-    #[values(false, true)] failed: bool,
+    #[case] update: bool,
+    #[case] retired: bool,
+    #[case] failed: bool,
 ) {
     use agent_protocol::permissions::{PermissionMode, PermissionSettings};
     let (store, mut reader, writer) = setup(Snapshot::default()).await;

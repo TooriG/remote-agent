@@ -145,7 +145,7 @@ pub(super) fn project(
     }
     if let Some(previous) = previous
         && snapshot.catalog.ui_language == previous.snapshot.catalog.ui_language
-        && pane.observed_agents == previous.pane.observed_agents
+        && pane.observed_agents == previous.pane().observed_agents
         && snapshot
             .sessions
             .conversations

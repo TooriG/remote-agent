@@ -1315,17 +1315,22 @@ impl Scheduler {
         running_jobs: usize,
     ) -> Admission {
         // Shared reads depend on interests in the one map, never a fallback pane.
-        let unobserved = (scheduled.effect.scheduling.latest_key().is_some()
+        let unobserved = (scheduled
+            .effect
+            .scheduling
+            .latest_key(&scheduled.scope.pane)
+            .is_some()
             && !generation_current(scheduled.scope.operation.as_ref(), &snapshot.operations))
             || matches!(&scheduled.effect.scheduling, op::Scheduling::LatestAgents(session)
                 if !snapshot.panes.0.values().any(|pane| pane.observed_agents.as_ref() == Some(session)));
         if unobserved {
             return Admission::Unobserved(scheduled);
         }
-        if let Some(key) = scheduled.effect.scheduling.latest_key()
-            && let Some(pending) = self
-                .latest_reads
-                .get_mut(&key.in_pane(&scheduled.scope.pane))
+        if let Some(key) = scheduled
+            .effect
+            .scheduling
+            .latest_key(&scheduled.scope.pane)
+            && let Some(pending) = self.latest_reads.get_mut(&key)
         {
             if let Some(previous) = pending.take()
                 && let Some(complete) = previous.complete
@@ -1355,9 +1360,12 @@ impl Scheduler {
         if running_jobs >= limit {
             return Admission::Rejected(Box::new((scheduled, busy_error())));
         }
-        if let Some(key) = scheduled.effect.scheduling.latest_key() {
-            self.latest_reads
-                .insert(key.in_pane(&scheduled.scope.pane), None);
+        if let Some(key) = scheduled
+            .effect
+            .scheduling
+            .latest_key(&scheduled.scope.pane)
+        {
+            self.latest_reads.insert(key, None);
         }
         Admission::Run(scheduled)
     }
@@ -1393,8 +1401,8 @@ impl Scheduler {
             self.terminal_running.remove(handle);
         }
         let pending = scheduling
-            .latest_key()
-            .and_then(|key| self.latest_reads.remove(&key.in_pane(pane)))
+            .latest_key(pane)
+            .and_then(|key| self.latest_reads.remove(&key))
             .flatten();
         if let Some(key) = scheduling.item()
             && !followups.iter().any(|scheduled| {

@@ -534,7 +534,7 @@ fn another_panes_navigation_reuses_the_held_conversation_and_controls() {
         }),
     );
     let second = Presentation::project(Arc::new(next), "side", Some(&first)).unwrap();
-    assert!(Arc::ptr_eq(&first.pane, &second.pane));
+    assert!(Arc::ptr_eq(first.pane(), second.pane()));
     assert!(Arc::ptr_eq(
         first.conversation.as_ref().unwrap(),
         second.conversation.as_ref().unwrap()

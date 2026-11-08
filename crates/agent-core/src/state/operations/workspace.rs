@@ -89,8 +89,9 @@ pub struct SaveFile {
     pub path: String,
 }
 impl Operation for SaveFile {
-    const NAVIGATION_BOUND: bool = false;
-
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::SaveFile {
             path: self.path.clone(),
@@ -264,8 +265,9 @@ rpc::rpc_method!(UpdateWorktreeSettings, UpdateWorktreeSettings, |self| self
     .clone());
 
 impl Operation for UpdateWorktreeSettings {
-    const NAVIGATION_BOUND: bool = false;
-
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::WorktreeSettings)
     }
@@ -332,8 +334,9 @@ impl Operation for LoadSessionImages {
 pub struct ListWorktrees {}
 rpc::rpc_method!(ListWorktrees, ListWorktrees, |self| crate::models::Empty {});
 impl Operation for ListWorktrees {
-    const NAVIGATION_BOUND: bool = false;
-
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Worktrees)
     }
@@ -352,8 +355,9 @@ impl Operation for ListWorktrees {
 pub use agent_protocol::operations::RemoveWorktree;
 
 impl Operation for RemoveWorktree {
-    const NAVIGATION_BOUND: bool = false;
-
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn apply(self, _: &mut Snapshot, _pane_id: &str, _: Self::Output) -> Vec<Effect> {
         vec![Effect::execute(ListWorktrees {})]
@@ -434,5 +438,29 @@ mod read_result_tests {
             edited.panes.primary().workspace.file.as_ref().unwrap().text,
             "preview"
         );
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn folder_navigation_accepts_home_paths_and_rejects_workspace_relative_paths() {
+        let mut snapshot = Snapshot::default();
+        for path in [
+            "~",
+            "~/Documents",
+            "/workspace",
+            "C:/Users/host",
+            r"\\server\share",
+        ] {
+            let mut list = ListFiles { path: path.into() };
+            assert!(list.prepare(&mut snapshot, "").is_ok(), "{path}");
+        }
+        for path in ["", "documents", "~someone/documents"] {
+            let mut list = ListFiles { path: path.into() };
+            assert!(list.prepare(&mut snapshot, "").is_err(), "{path}");
+        }
     }
 }

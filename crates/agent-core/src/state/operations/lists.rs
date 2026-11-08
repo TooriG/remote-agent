@@ -171,8 +171,9 @@ pub(crate) fn refresh_agents(
 }
 
 impl Operation for ListAgents {
-    const NAVIGATION_BOUND: bool = false;
-
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     rpc_operation!();
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Agents {

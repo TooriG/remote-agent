@@ -118,7 +118,7 @@ impl Desktop {
             self.import_projects = false;
             return;
         }
-        if !self.snapshot.connection.connected {
+        if !self.publication.snapshot.connection.connected {
             return;
         }
         let directory = match platform::state_dir() {
@@ -146,9 +146,9 @@ impl Desktop {
         if self.import_projects {
             return self.project_import_view(window, cx);
         }
-        let setup = self.snapshot.connection_setup();
+        let setup = self.publication.snapshot.connection_setup();
         let current = self.remote.as_ref().map(|host| host.id.as_str());
-        let connected = self.snapshot.connection.connected;
+        let connected = self.publication.snapshot.connection.connected;
         let agent_controls = self.preferences.update(cx, |view, cx| {
             view.connection_agent_controls(&setup.agents, cx)
         });
@@ -158,7 +158,7 @@ impl Desktop {
                     ConnectionLayout::Onboarding,
                     current,
                     connected,
-                    self.snapshot.connection_enabled(),
+                    self.publication.snapshot.connection_enabled(),
                     agent_controls,
                     cx,
                 )
@@ -314,7 +314,7 @@ impl Desktop {
                                             ));
                                             return;
                                         }
-                                        if view.snapshot.connection.connected {
+                                        if view.publication.snapshot.connection.connected {
                                             view.preferences.read(cx).refresh_accounts_and_models();
                                         } else {
                                             view.connect(None, None);
@@ -324,7 +324,10 @@ impl Desktop {
                                         }
                                     },
                                 )
-                                .disabled(self.connecting || self.snapshot.project_import_busy()),
+                                .disabled(
+                                    self.connecting
+                                        || self.publication.snapshot.project_import_busy(),
+                                ),
                             ),
                     )
                     .child(body)
@@ -333,7 +336,7 @@ impl Desktop {
     }
 
     pub(in crate::app) fn open_project_import(&mut self) {
-        if !self.snapshot.connection.connected {
+        if !self.publication.snapshot.connection.connected {
             return;
         }
         self.import_projects = true;
@@ -343,8 +346,8 @@ impl Desktop {
 
     fn project_import_view(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let language = crate::localization::language(cx);
-        let state = &self.snapshot.project_import;
-        let busy = self.snapshot.project_import_busy();
+        let state = &self.publication.snapshot.project_import;
+        let busy = self.publication.snapshot.project_import_busy();
         let mut body = v_flex()
             .gap_4()
             .p_6()
@@ -359,6 +362,7 @@ impl Desktop {
                 ),
             ));
         if self
+            .publication
             .snapshot
             .operation_running(op::OperationKey::ProjectScan)
         {
@@ -492,6 +496,7 @@ impl Desktop {
             }
         }
         let importing = self
+            .publication
             .snapshot
             .operation_running(op::OperationKey::ProjectImport);
         let footer = h_flex()
@@ -547,7 +552,10 @@ impl Desktop {
                 )
                 .debug_selector(|| "import-selected".into())
                 .primary()
-                .disabled(busy || state.selected.is_empty() || !self.snapshot.connection.connected),
+                .disabled(
+                    busy || state.selected.is_empty()
+                        || !self.publication.snapshot.connection.connected,
+                ),
             );
         self.onboarding_frame(body, footer, window, cx)
     }
@@ -610,14 +618,14 @@ mod tests {
                 view.hosts = Some(cx.new(|cx| Hosts::new(window, cx)));
                 view.session = Some(session);
                 view.connecting = false;
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 snapshot.connection.connected = true;
                 snapshot.catalog.models = Arc::new(serde_json::from_value(serde_json::json!([
                     {"id":"gpt","model":{"provider":"codex","id":"gpt"},"displayName":"GPT", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
                     {"id":"sonnet","model":{"provider":"claude","id":"sonnet"},"displayName":"Sonnet", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
                 ])).unwrap());
                 Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({"accounts":[],"selected":{}})).unwrap()));
-                view.project_fixture();
+                view.project_fixture(Arc::new(snapshot));
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
             let preferences = desktop.read(cx).preferences.clone();
@@ -655,15 +663,16 @@ mod tests {
                 view.preferences.update(cx, |preferences, _| {
                     preferences.account.polling = true;
                 });
-                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).catalog.account).login =
-                    Some(Arc::new(agent_protocol::operations::AccountLogin {
-                        provider: agent_protocol::session::ProviderKind::Claude,
-                        login_id: "fixture-login".into(),
-                        requires_code_submission: true,
-                        user_code: String::new(),
-                        verification_url: "https://example.invalid/login".into(),
-                    }));
-                view.project_fixture();
+                view.edit_fixture(|snapshot| {
+                    Arc::make_mut(&mut snapshot.catalog.account).login =
+                        Some(Arc::new(agent_protocol::operations::AccountLogin {
+                            provider: agent_protocol::session::ProviderKind::Claude,
+                            login_id: "fixture-login".into(),
+                            requires_code_submission: true,
+                            user_code: String::new(),
+                            verification_url: "https://example.invalid/login".into(),
+                        }));
+                });
                 cx.notify();
             })
         });
@@ -726,12 +735,13 @@ mod tests {
                 view.preferences.update(cx, |preferences, _| {
                     preferences.account.busy = false;
                 });
-                let account = Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).catalog.account);
-                account.login = None;
-                account.accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({
-                    "accounts":[{"id":"native","provider":"codex"}], "selected":{"codex":"native"}
-                })).unwrap()));
-                view.project_fixture();
+                view.edit_fixture(|snapshot| {
+                    let account = Arc::make_mut(&mut snapshot.catalog.account);
+                    account.login = None;
+                    account.accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({
+                        "accounts":[{"id":"native","provider":"codex"}], "selected":{"codex":"native"}
+                    })).unwrap()));
+                });
                 cx.notify();
             });
         });

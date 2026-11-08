@@ -61,6 +61,7 @@ impl Desktop {
 
     pub(in crate::app) fn error_rows(&self, scope: &ErrorScope) -> Vec<ErrorRow> {
         let mut rows: Vec<_> = self
+            .publication
             .snapshot
             .error_notices(&self.publication.pane_id, scope.clone())
             .into_iter()
@@ -71,7 +72,7 @@ impl Desktop {
             .collect();
         if let Some(notice) = self.local_errors.get(scope) {
             rows.push(local_error_row(
-                self.snapshot.catalog.ui_language,
+                self.publication.snapshot.catalog.ui_language,
                 scope,
                 notice,
             ));
@@ -99,7 +100,8 @@ impl Desktop {
     }
 
     pub(super) fn error_notices(&self, scope: ErrorScope, cx: &Context<Self>) -> Div {
-        let disconnected = scope == ErrorScope::Application && !self.snapshot.connection.connected;
+        let disconnected =
+            scope == ErrorScope::Application && !self.publication.snapshot.connection.connected;
         let rows = self.error_rows(&scope);
         // A lost connection is not an error, but desktop waits for the user to reconnect.
         let idle = disconnected && !self.connecting && rows.is_empty();
@@ -370,10 +372,11 @@ mod tests {
                 );
                 assert!(view.error_rows(&ErrorScope::Projects).is_empty());
                 view.dismiss_notice(&ErrorScope::Settings, device_id);
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
                     .draft_key = first.clone();
+                view.project_fixture(Arc::new(snapshot));
                 view.raise_notice(ErrorScope::Application, "draft persistence failed");
                 view.raise_notice(
                     ErrorScope::Conversation {
@@ -381,7 +384,6 @@ mod tests {
                     },
                     "attachment failed",
                 );
-                view.project_fixture();
                 cx.notify();
             })
         });
@@ -392,12 +394,12 @@ mod tests {
         for key in [DraftKey::from("other"), first.clone()] {
             window.update(|_, cx| {
                 desktop.update(cx, |view, cx| {
-                    Arc::make_mut(
-                        &mut Arc::make_mut(Arc::make_mut(&mut view.snapshot).panes.primary_mut())
-                            .navigation,
-                    )
-                    .draft_key = key.clone();
-                    view.project_fixture();
+                    view.edit_fixture(|snapshot| {
+                        Arc::make_mut(
+                            &mut Arc::make_mut(snapshot.panes.primary_mut()).navigation,
+                        )
+                        .draft_key = key.clone();
+                    });
                     cx.notify();
                 })
             });
@@ -449,9 +451,10 @@ mod tests {
         let mut show = |connected: bool, connecting: bool, failure: Option<&str>| {
             window.update(|_, cx| {
                 desktop.update(cx, |view, cx| {
-                    let snapshot = Arc::make_mut(&mut view.snapshot);
+                    let mut snapshot = view.publication.snapshot.as_ref().clone();
                     snapshot.connection.connected = connected;
                     snapshot.connection.connection_failure = failure.map(Into::into);
+                    view.project_fixture(Arc::new(snapshot));
                     view.connecting = connecting;
                     cx.notify();
                 })

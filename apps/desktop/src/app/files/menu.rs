@@ -34,7 +34,7 @@ pub(in crate::app) fn run_file_menu_command(
 ) {
     cx.stop_propagation();
     let _ = command.owner.update(cx, |view, cx| {
-        if view.snapshot.connection.epoch == command.epoch {
+        if view.publication.snapshot.connection.epoch == command.epoch {
             view.activate_file_action(&command.target, command.action, window, cx);
         }
     });
@@ -77,7 +77,7 @@ impl Desktop {
         native_menu(
             items,
             &cx.entity().downgrade(),
-            self.snapshot.connection.epoch,
+            self.publication.snapshot.connection.epoch,
             &target,
         )
         .show(position, window, cx);
@@ -98,7 +98,12 @@ impl Desktop {
             return;
         }
         let path = agent_core::presentation::files::file_tree_path(&key.root, path);
-        let capabilities = self.snapshot.files.file_open_capabilities.as_deref();
+        let capabilities = self
+            .publication
+            .snapshot
+            .files
+            .file_open_capabilities
+            .as_deref();
         let items = file_tree_menu(
             crate::localization::language(cx),
             true,
@@ -114,7 +119,7 @@ impl Desktop {
             FileMenuTarget {
                 mention: file_tree_mention(
                     &key.root,
-                    &self.publication.pane.navigation.cwd,
+                    &self.publication.pane().navigation.cwd,
                     &relative,
                 ),
                 path,
@@ -139,7 +144,7 @@ impl Desktop {
     ) {
         if target.resolve_reference
             && target.lookup_path.is_some()
-            && self.snapshot.connection.connected
+            && self.publication.snapshot.connection.connected
         {
             self.resolve_reference_action(target.clone(), super::ReferenceAction::Menu(action));
             return;
@@ -154,6 +159,7 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         let editors = self
+            .publication
             .snapshot
             .files
             .file_open_capabilities
@@ -161,9 +167,9 @@ impl Desktop {
             .map_or(&[][..], |value| value.editors.as_slice());
         match action {
             FileAction::OpenEditor { editor } => {
-                if let Some(editor) = editor
-                    .or_else(|| preferred_editor(self.snapshot.files.preferred_editor, editors))
-                {
+                if let Some(editor) = editor.or_else(|| {
+                    preferred_editor(self.publication.snapshot.files.preferred_editor, editors)
+                }) {
                     self.open_in_editor(
                         target.path.clone(),
                         target.line,

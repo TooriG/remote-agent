@@ -39,8 +39,9 @@ impl Operation for LoadTurnItems {
 pub use agent_protocol::session::ReadHistory;
 
 impl Operation for ReadHistory {
-    const NAVIGATION_BOUND: bool = false;
-
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::History {
             session: self.session.clone(),
@@ -130,8 +131,9 @@ fn item_source<'a>(request: &ReadItem, snapshot: &'a Snapshot) -> Option<&'a Arc
     Some(&turns[turn].items.as_ref()?[item])
 }
 impl Operation for ReadItem {
-    const NAVIGATION_BOUND: bool = false;
-
+    fn navigation_bound(&self) -> bool {
+        false
+    }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Item { item: self.clone() })
     }

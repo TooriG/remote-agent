@@ -1502,9 +1502,10 @@ mod tests {
                 // This fixture uses an offline Store for local model edits while
                 // presenting the connected controls under test.
                 if view.session.is_some() {
-                    Arc::make_mut(&mut view.snapshot).connection.connected = true;
+                    view.edit_fixture(|snapshot| {
+                        snapshot.connection.connected = true;
+                    });
                 }
-                view.project_fixture();
                 view.publish_preferences(window, cx);
                 view.preferences.update(cx, |view, cx| {
                     v_flex()
@@ -1571,7 +1572,7 @@ mod tests {
             }, window, cx));
             desktop.update(cx, |view, _| {
                 let key = view.draft_key().to_owned();
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut snapshot.catalog.account).accounts = Some(Arc::new(serde_json::from_value(serde_json::json!({
                     "accounts":[{"provider":"codex","id":"first","email":"first@example.invalid","usage":{"windows":[{"period":{"kind":"minutes","minutes":10080},"remainingPercent":42}],"fetchedAt":1}},
@@ -1582,6 +1583,7 @@ mod tests {
                     {"id":"claude:sonnet","model":{"provider": "claude", "id": "sonnet"},"displayName":"Sonnet", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
                 ])).unwrap());
                 Arc::make_mut(&mut snapshot.input.drafts).insert(key, Arc::new(Draft { model: Some(agent_protocol::models::ModelRef { provider: agent_protocol::session::ProviderKind::Codex, id: "gpt".into() }), ..Default::default() }));
+                view.project_fixture(Arc::new(snapshot));
             });
             cx.observe(&desktop, |_, _, cx| cx.notify()).detach();
             let preferences = desktop.read(cx).preferences.clone();
@@ -1714,12 +1716,13 @@ mod tests {
                     provider: agent_protocol::session::ProviderKind::Codex,
                     id: "existing".into(),
                 };
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
                     .thread_id = Some(session.clone());
                 Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
                     .draft_key = session.clone().into();
                 Arc::make_mut(&mut snapshot.input.drafts).insert(session.into(), Arc::new(draft));
+                view.project_fixture(Arc::new(snapshot));
                 view.preferences.update(cx, |preferences, _| {
                     preferences.model_controls.provider = None;
                 });
@@ -1813,7 +1816,7 @@ mod tests {
                 view.preferences.update(cx, |preferences, _| {
                     preferences.model_controls.panel = ModelPanel::Accounts;
                 });
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials =
                     Some(Arc::new(agent_protocol::dsh::Credentials {
@@ -1823,6 +1826,7 @@ mod tests {
                             needs_attention: false,
                         }],
                     }));
+                view.project_fixture(Arc::new(snapshot));
                 view.preferences.update(cx, |preferences, cx| {
                     preferences.account.code.update(cx, |input, cx| {
                         input.set_value("previous-secret", window, cx)
@@ -1890,10 +1894,12 @@ mod tests {
         window.run_until_parked();
         window.update(|_, cx| {
             view.read(cx).0.clone().update(cx, |view, _| {
-                Arc::make_mut(&mut view.snapshot).catalog.models = Arc::new(serde_json::from_value(serde_json::json!([
-                    {"id":"official","credentialRoute":"DeepSeek","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
-                    {"id":"router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":"[\"openrouter\",\"deepseek/deepseek-v4.1-flash\"]"},"displayName":"OpenRouter · DeepSeek V4.1 Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
-                ])).unwrap());
+                view.edit_fixture(|snapshot| {
+    snapshot.catalog.models = Arc::new(serde_json::from_value(serde_json::json!([
+                        {"id":"official","credentialRoute":"DeepSeek","model":{"provider":"deepseek","id":"[\"deepseek-official\",\"deepseek-flash\"]"},"displayName":"DeepSeek", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}},
+                        {"id":"router","credentialRoute":"OpenRouter","model":{"provider":"deepseek","id":"[\"openrouter\",\"deepseek/deepseek-v4.1-flash\"]"},"displayName":"OpenRouter · DeepSeek V4.1 Flash", "settings": {"defaultReasoningEffort":"","supportedReasoningEfforts":[]}}
+                    ])).unwrap());
+                });
             });
         });
         let models = window.debug_bounds("dsh-openrouter-models").unwrap();
@@ -1985,8 +1991,10 @@ mod tests {
                 )
             });
             desktop.update(cx, |view, cx| {
-                view.snapshot = store.snapshot();
-                Arc::make_mut(&mut view.snapshot).connection.connected = true;
+                view.project_fixture(store.snapshot());
+                view.edit_fixture(|snapshot| {
+                    snapshot.connection.connected = true;
+                });
                 view.session = Some(session);
                 view.preferences.update(cx, |preferences, _| {
                     preferences.model_controls.provider =

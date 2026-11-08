@@ -411,8 +411,9 @@ pub enum Scheduling {
     },
 }
 impl Scheduling {
-    pub(crate) fn latest_key(&self) -> Option<OperationKey> {
-        match self {
+    /// The coalescing key for the latest read issued from `pane`.
+    pub(crate) fn latest_key(&self, pane: &str) -> Option<OperationKey> {
+        let key = match self {
             Self::LatestHostState(key) => Some(key.clone()),
             Self::LatestList(part) => Some(OperationKey::list(*part)),
             Self::LatestProject(project_id) => Some(OperationKey::ProjectList {
@@ -425,7 +426,8 @@ impl Scheduling {
                 pane: String::new(),
             }),
             _ => None,
-        }
+        };
+        key.map(|key| key.in_pane(pane))
     }
     pub(crate) fn item(&self) -> Option<&ReadItem> {
         if let Self::Item(item) = self {
@@ -464,17 +466,15 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     fn scheduling(&self) -> Scheduling {
         Scheduling::Concurrent
     }
-    const NAVIGATION_BOUND: bool = true;
     /// Host and session caches outlive the pane that requested them. Only
     /// results that select or replace a pane's content follow its navigation.
     fn navigation_bound(&self) -> bool {
-        Self::NAVIGATION_BOUND
-            && !matches!(
-                self.scheduling(),
-                Scheduling::LatestHostState(_)
-                    | Scheduling::LatestList(_)
-                    | Scheduling::LatestProject(_)
-            )
+        !matches!(
+            self.scheduling(),
+            Scheduling::LatestHostState(_)
+                | Scheduling::LatestList(_)
+                | Scheduling::LatestProject(_)
+        )
     }
     fn run(
         &self,

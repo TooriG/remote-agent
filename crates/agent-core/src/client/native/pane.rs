@@ -63,7 +63,7 @@ mod tests {
         let key = pane
             .presentation()
             .unwrap()
-            .pane
+            .pane()
             .navigation
             .draft_key
             .clone();

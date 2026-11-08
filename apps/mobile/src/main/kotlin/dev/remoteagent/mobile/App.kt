@@ -86,10 +86,10 @@ internal class AndroidAppModel(private val context: Context, private val prefere
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val repository = AndroidMobileRepository(context)
-    private var publication = Presentation.empty(language)
     @Volatile
-    var snapshot = publication.snapshot()
-        private set
+    private var publication = Presentation.empty(language)
+    val snapshot: Snapshot
+        get() = publication.snapshot()
 
     var settings by mutableStateOf(publication.settings())
         private set
@@ -487,7 +487,6 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         if (changes.groups.files || changes.groups.panes) files = requireNotNull(next.files(value.paneId()))
         if (changes.groups.terminals) terminals = next.terminals()
         fileLocation = FileLocation(context.navigation().cwd, context.home())
-        snapshot = next
         session?.persistenceError()?.let { notice = it }
     }
 

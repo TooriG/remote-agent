@@ -710,7 +710,7 @@ impl Desktop {
             cwd: controls.navigation.cwd.clone(),
             selected_directory: self.publication.context.selected_directory(),
             has_session: controls.navigation.thread_id.is_some(),
-            review: self.publication.pane.workspace.review.clone(),
+            review: self.publication.pane().workspace.review.clone(),
             review_expanded: self.review_expanded,
             model_label: self
                 .publication
@@ -950,8 +950,9 @@ mod composer_tests {
             );
             desktop.session = Some(StoreSession::new(store.clone(), app_runtime));
             desktop.accept_snapshot(window, cx);
-            Arc::make_mut(&mut desktop.snapshot).connection.connected = true;
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+                snapshot.connection.connected = true;
+            });
             desktop.publish_views(window, cx);
             desktop.composer.input.update(cx, |input, cx| {
                 input.set_readonly(false, cx);
@@ -976,18 +977,19 @@ mod composer_tests {
         );
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
-                view.snapshot = store.snapshot();
+                view.project_fixture(store.snapshot());
                 // Keep connectivity and nonempty input eligible so only the
                 // synchronous sending guard can stop another submission.
-                Arc::make_mut(&mut view.snapshot).connection.connected = true;
-                view.project_fixture();
+                view.edit_fixture(|snapshot| {
+                    snapshot.connection.connected = true;
+                });
                 view.sync_inputs(window, cx);
                 view.publish_views(window, cx);
                 view.composer.input.update(cx, |input, cx| {
                     input.set_readonly(false, cx);
                     input.focus_handle(cx).focus(window, cx);
                 });
-                assert!(view.snapshot.connection.connected);
+                assert!(view.publication.snapshot.connection.connected);
                 assert!(view.publication.composer.controls.sending);
                 assert!(!view.composer.input.read(cx).value().trim().is_empty());
             });
@@ -1021,31 +1023,30 @@ mod composer_tests {
             });
         });
         let (desktop, window) = cx.add_window_view(|window, cx| {
-            let mut desktop = Desktop::new(
+            Desktop::new(
                 Mode::Fixture {
                     remote: None,
                     cwd: "/fixture".into(),
                 },
                 window,
                 cx,
-            );
-            desktop.project_fixture();
-            desktop
+            )
         });
         window.run_until_parked();
         for name in [Some("Project"), Some("Renamed"), None] {
             window.update(|window, cx| {
                 desktop.update(cx, |view, cx| {
-                    Arc::make_mut(&mut view.snapshot).lists.threads = name.map(|name| {
-                        let value = serde_json::json!({
-                            "data":[], "projects":[{"id":"project", "name":name,
-                            "roots":[{"path":"/project"}]}],
-                            "hasMore":false, "hasMoreProjects":true, "projectPages":{}, "limit":5
-                        });
-                        Arc::new(serde_json::from_value(value).unwrap())
-                    });
                     let previous = view.publication.clone();
-                    view.project_fixture();
+                    view.edit_fixture(|snapshot| {
+    snapshot.lists.threads = name.map(|name| {
+                            let value = serde_json::json!({
+                                "data":[], "projects":[{"id":"project", "name":name,
+                                "roots":[{"path":"/project"}]}],
+                                "hasMore":false, "hasMoreProjects":true, "projectPages":{}, "limit":5
+                            });
+                            Arc::new(serde_json::from_value(value).unwrap())
+                        });
+                    });
                     let changes = view.publication.changes(previous);
                     assert!(changes.list && !changes.groups.panes);
                     view.publish_views(window, cx);
@@ -1126,7 +1127,7 @@ mod composer_tests {
                 )
             });
             desktop.update(cx, |view, cx| {
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 let navigation =
                     Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation);
                 navigation.thread_id = Some(session.clone());
@@ -1145,7 +1146,7 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.project_fixture();
+                view.project_fixture(Arc::new(snapshot));
                 view.publish_views(window, cx);
                 view.conversation.update(cx, |view, cx| {
                     view.timeline.list.scroll_to(ListOffset::default());
@@ -1176,13 +1177,14 @@ mod composer_tests {
         });
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
-                let thread = Arc::make_mut(
-                    Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).sessions.conversations)
-                        .get_mut(&session)
-                        .unwrap(),
-                );
-                thread.turns = Some(turns(0..8));
-                view.project_fixture();
+                view.edit_fixture(|snapshot| {
+                    let thread = Arc::make_mut(
+                        Arc::make_mut(&mut snapshot.sessions.conversations)
+                            .get_mut(&session)
+                            .unwrap(),
+                    );
+                    thread.turns = Some(turns(0..8));
+                });
                 cx.notify();
             })
         });
@@ -1217,11 +1219,11 @@ mod composer_tests {
             desktop.update(cx, |view, cx| {
                 let store = runtime.block_on(async {
                     Arc::new(agent_core::store::Store::offline(
-                        (*view.snapshot).clone(),
+                        (*view.publication.snapshot).clone(),
                         None,
                     ))
                 });
-                view.snapshot = store.snapshot();
+                view.project_fixture(store.snapshot());
                 let app_runtime = view.runtime.clone();
                 view.session = Some(runtime.block_on(async {
                     let (updates, receive) = async_channel::unbounded();
@@ -1289,7 +1291,7 @@ mod composer_tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 view.session.take();
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 Arc::make_mut(&mut snapshot.operations).remove(&key);
                 let thread = Arc::make_mut(
                     Arc::make_mut(&mut snapshot.sessions.conversations)
@@ -1298,7 +1300,7 @@ mod composer_tests {
                 );
                 thread.history_has_more = Some(false);
                 thread.history_cursor = None;
-                view.project_fixture();
+                view.project_fixture(Arc::new(snapshot));
                 cx.notify();
             })
         });
@@ -1360,7 +1362,7 @@ mod composer_tests {
                 )
             });
             desktop.update(cx, |view, cx| {
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 let navigation =
                     Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation);
                 navigation.thread_id = Some(session.clone());
@@ -1390,7 +1392,7 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.project_fixture();
+                view.project_fixture(Arc::new(snapshot));
                 view.sync_inputs(window, cx);
                 view.publish_views(window, cx);
             });
@@ -1431,15 +1433,14 @@ mod composer_tests {
                 let transition =
                     |view: &mut Desktop, action, window: &mut Window, cx: &mut Context<Desktop>| {
                         let (snapshot, _) = agent_core::state::reduce(
-                            &view.snapshot,
+                            &view.publication.snapshot,
                             "",
                             agent_core::state::Event::Intent(Intent::AnswerQuestion {
                                 request_id: "request".into(),
                                 action,
                             }),
                         );
-                        view.snapshot = Arc::new(snapshot);
-                        view.project_fixture();
+                        view.project_fixture(Arc::new(snapshot));
                         view.sync_inputs(window, cx);
                     };
                 use agent_core::questions::QuestionAction;
@@ -1494,14 +1495,14 @@ mod composer_tests {
         assert!(window.debug_bounds("question-choice-notes-a").is_none());
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&session)
                     .map(Arc::make_mut)
                     .unwrap()
                     .requests
                     .clear();
-                view.project_fixture();
+                view.project_fixture(Arc::new(snapshot));
                 cx.notify();
             })
         });
@@ -1513,7 +1514,7 @@ mod composer_tests {
         );
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
-                let snapshot = Arc::make_mut(&mut view.snapshot);
+                let mut snapshot = view.publication.snapshot.as_ref().clone();
                 Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&session)
                     .map(Arc::make_mut)
@@ -1530,7 +1531,7 @@ mod composer_tests {
                             },
                         }),
                     );
-                view.project_fixture();
+                view.project_fixture(Arc::new(snapshot));
                 view.sync_inputs(window, cx);
                 cx.notify();
             });
@@ -1585,26 +1586,27 @@ mod composer_tests {
             desktop.update(cx, |view, cx| {
                 let key = view.draft_key().clone();
                 draft_key = Some(key.clone());
-                Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).input.drafts).insert(
-                    key,
-                    Arc::new(Draft {
-                        text: "Keep this draft".into(),
-                        attachments: vec![agent_core::state::Attachment {
-                            path: source.clone(),
-                            name: "attachment.png".into(),
-                            is_image: true,
-                        }],
-                        ..Default::default()
-                    }),
-                );
-                view.project_fixture();
+                view.edit_fixture(|snapshot| {
+                    Arc::make_mut(&mut snapshot.input.drafts).insert(
+                        key,
+                        Arc::new(Draft {
+                            text: "Keep this draft".into(),
+                            attachments: vec![agent_core::state::Attachment {
+                                path: source.clone(),
+                                name: "attachment.png".into(),
+                                is_image: true,
+                            }],
+                            ..Default::default()
+                        }),
+                    );
+                });
                 view.publish_views(window, cx);
                 view.media.update(cx, |media, cx| {
                     media.fixture_image(&source, source.clone().into(), cx);
                 });
                 let store = runtime.block_on(async {
                     Arc::new(agent_core::store::Store::offline(
-                        (*view.snapshot).clone(),
+                        (*view.publication.snapshot).clone(),
                         None,
                     ))
                 });

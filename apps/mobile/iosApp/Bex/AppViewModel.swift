@@ -8,7 +8,10 @@ import UIKit
 @Observable
 final class AppViewModel {
     @ObservationIgnored private(set) var publication: Presentation
-    @ObservationIgnored private(set) var snapshot: AgentCore.Snapshot
+    var snapshot: AgentCore.Snapshot {
+        publication.snapshot()
+    }
+
     private(set) var settings: SettingsPresentation
     private(set) var connectionStates: [String: HostConnectionState] = [:]
     private(set) var isConnected = false
@@ -54,7 +57,6 @@ final class AppViewModel {
         self.language = language
         let empty = Presentation.empty(language: language)
         publication = empty
-        snapshot = empty.snapshot()
         settings = empty.settings()
         observeLiveActivityRequests()
         pathMonitor.pathUpdateHandler = { [weak self] path in
@@ -180,7 +182,6 @@ final class AppViewModel {
         notice = nil
         publication = Presentation.empty(language: language)
         settings = publication.settings()
-        snapshot = publication.snapshot()
         isConnected = false
         loadingThreads = false
     }
@@ -287,7 +288,6 @@ extension AppViewModel {
         if self.notices != notices {
             self.notices = notices
         }
-        snapshot = next
         synchronizeLiveActivities(foreground: UIApplication.shared.applicationState == .active)
         if let error = session?.persistenceError() {
             notice = error

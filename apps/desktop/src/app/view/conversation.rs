@@ -138,7 +138,12 @@ impl Desktop {
             view.sync(
                 model,
                 rendered,
-                self.snapshot.files.workspace.file_metadata.clone(),
+                self.publication
+                    .snapshot
+                    .files
+                    .workspace
+                    .file_metadata
+                    .clone(),
                 window,
                 cx,
             )
@@ -168,7 +173,7 @@ impl Desktop {
                 self.open_browser(self.panel_scope(), "https://chatgpt.com/settings/usage", cx)
             }
             ConversationAction::Fork(thread, turn) => {
-                if !self.snapshot.connection.connected || self.busy() {
+                if !self.publication.snapshot.connection.connected || self.busy() {
                     return;
                 }
                 self.local_busy += 1;
@@ -2261,7 +2266,6 @@ mod rendering_tests {
     impl Render for ConversationView {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.desktop.update(cx, |desktop, cx| {
-                desktop.project_fixture();
                 desktop.publish_views(window, cx);
                 gpui_kit::div().size_full().flex().flex_col().child(
                     desktop
@@ -2316,8 +2320,7 @@ mod rendering_tests {
                     window,
                     cx,
                 );
-                desktop.snapshot = Arc::new(snapshot);
-                desktop.project_fixture();
+                desktop.project_fixture(Arc::new(snapshot));
                 desktop.publish_views(window, cx);
                 desktop
             });
@@ -2374,9 +2377,10 @@ mod rendering_tests {
             text.push_str(suffix);
             desktop.update(window, |desktop, cx| {
                 let session = desktop.selected().unwrap().clone();
-                Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).sessions.conversations)
-                    .insert(session, Arc::new(thread(&text)));
-                desktop.project_fixture();
+                desktop.edit_fixture(|snapshot| {
+                    Arc::make_mut(&mut snapshot.sessions.conversations)
+                        .insert(session, Arc::new(thread(&text)));
+                });
                 cx.notify();
             });
             for _ in 0..3 {
@@ -2437,13 +2441,14 @@ mod rendering_tests {
         });
         desktop.update(window, |desktop, cx| {
             let session = desktop.selected().unwrap().clone();
-            let snapshot = Arc::make_mut(&mut desktop.snapshot);
+            let mut snapshot = desktop.publication.snapshot.as_ref().clone();
             let thread = Arc::make_mut(
                 Arc::make_mut(&mut snapshot.sessions.conversations)
                     .get_mut(&session)
                     .unwrap(),
             );
             thread.name = Some("Updated while answering".into());
+            desktop.project_fixture(Arc::new(snapshot));
             cx.notify();
         });
         window.run_until_parked();
@@ -2562,8 +2567,9 @@ mod rendering_tests {
                     cached.wrap_code = true;
                 }
             });
-            Arc::make_mut(&mut desktop.snapshot).connection.epoch += 2;
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+                snapshot.connection.epoch += 2;
+            });
             cx.notify();
         });
         window.run_until_parked();
@@ -2738,7 +2744,7 @@ mod rendering_tests {
         view.update(window, |view, cx| {
             view.desktop.update(cx, |desktop, cx| {
                 let session = desktop.selected().unwrap().clone();
-                let snapshot = Arc::make_mut(&mut desktop.snapshot);
+                let mut snapshot = desktop.publication.snapshot.as_ref().clone();
                 let thread = Arc::make_mut(
                     Arc::make_mut(&mut snapshot.sessions.conversations)
                         .get_mut(&session)
@@ -2768,7 +2774,7 @@ mod rendering_tests {
                     .unwrap(),
                 ));
 
-                desktop.project_fixture();
+                desktop.project_fixture(Arc::new(snapshot));
                 cx.notify();
             })
         });
@@ -2810,19 +2816,21 @@ mod rendering_tests {
             let (_, window) = cx.add_window_view(|window, cx| {
                 let view = ConversationView::new(Snapshot::default(), source, window, cx);
                 view.desktop.update(cx, |desktop, _| {
-                    Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).operations).insert(
-                        op::OperationKey::Fork {
-                            session: agent_protocol::session::SessionRef {
-                                provider: agent_protocol::session::ProviderKind::Codex,
-                                id: session.into(),
+                    desktop.edit_fixture(|snapshot| {
+                        Arc::make_mut(&mut snapshot.operations).insert(
+                            op::OperationKey::Fork {
+                                session: agent_protocol::session::SessionRef {
+                                    provider: agent_protocol::session::ProviderKind::Codex,
+                                    id: session.into(),
+                                },
+                                turn: turn.into(),
                             },
-                            turn: turn.into(),
-                        },
-                        op::OperationState {
-                            generation: 1,
-                            phase,
-                        },
-                    );
+                            op::OperationState {
+                                generation: 1,
+                                phase,
+                            },
+                        );
+                    });
                 });
                 view
             });
@@ -3204,9 +3212,10 @@ mod rendering_tests {
         );
         desktop.update(window, |desktop, cx| {
             let session = desktop.selected().unwrap().clone();
-            Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).sessions.conversations)
-                .insert(session, Arc::new(source));
-            desktop.project_fixture();
+            desktop.edit_fixture(|snapshot| {
+                Arc::make_mut(&mut snapshot.sessions.conversations)
+                    .insert(session, Arc::new(source));
+            });
             cx.notify();
         });
         window.run_until_parked();

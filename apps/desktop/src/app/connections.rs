@@ -235,8 +235,7 @@ mod tests {
                 window,
                 cx,
             );
-            view.snapshot = local.snapshot();
-            view.project_fixture();
+            view.project_fixture(local.snapshot());
             view.session = Some(local_session);
             let hosts = cx.new(|cx| Hosts::new(window, cx));
             hosts.update(cx, |hosts, _| hosts.fixture_remotes(vec![remote.clone()]));
