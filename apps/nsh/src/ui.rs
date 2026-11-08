@@ -87,8 +87,7 @@ impl Icon {
     pub(crate) const MERGE: Self = icon!(GitMerge, "arrow.triangle.merge");
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub(crate) const MICROPHONE: Self = icon!(Mic, "mic");
-    #[cfg(not(target_os = "macos"))]
-    pub(crate) const MONITOR: Self = icon!(Monitor);
+    pub(crate) const MONITOR: Self = icon!(Monitor, "desktopcomputer");
     pub(crate) const NEW_CHAT: Self = icon!(SquarePen, "square.and.pencil");
     pub(crate) const PENCIL: Self = icon!(Pencil, "pencil");
     #[cfg(desktop)]

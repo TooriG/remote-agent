@@ -12,7 +12,7 @@ agent-protocol = { path = "../../crates/agent-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 base64.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "process"] }
 tokio-util = { workspace = true, features = ["rt"] }
 async-channel = "2"
 uuid = { version = "1", features = ["v4", "v5"] }
@@ -61,6 +61,8 @@ alacritty_terminal = "=0.26.0"
 [dev-dependencies]
 alacritty_terminal = "=0.26.0"
 
-# Desktop update flow; the iPhone app is updated by its store.
+# Desktop update flow; the iPhone app is updated by its store. The desktop
+# shows its Host's invitation as a QR code for phones.
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 agent-core = { path = "../../crates/agent-core", features = ["app-updates"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }

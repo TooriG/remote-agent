@@ -291,6 +291,8 @@ mod tests {
             runtime: runtime.handle().clone(),
             jobs: Default::default(),
             selection_path,
+            #[cfg(desktop)]
+            onboarding_path: std::path::PathBuf::new(),
             language_path,
             #[cfg(desktop)]
             updater: None,

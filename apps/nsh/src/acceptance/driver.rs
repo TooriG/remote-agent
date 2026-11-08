@@ -218,6 +218,7 @@ fn limit(step: &Step) -> Duration {
     match step {
         Step::Press(find)
         | Step::Type(find, _)
+        | Step::Paste(find)
         | Step::Scroll(find, _)
         | Step::Select(find, _)
         | Step::Menu(find)
@@ -238,7 +239,9 @@ fn attempt(
     mtm: MainThreadMarker,
 ) -> Attempt {
     match step {
-        Step::Fixture(_) => Attempt::Passed("prepared by the runner".into(), None),
+        Step::Fixture(_) | Step::FirstLaunch => {
+            Attempt::Passed("prepared by the runner".into(), None)
+        }
         Step::Control(path) => done(
             fixture
                 .ok_or_else(|| "the runner gave no fixture control port".to_owned())
@@ -257,6 +260,10 @@ fn attempt(
         Step::Type(find, text) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             insert(tree, index, text)
                 .map(|()| format!("typed into {}", tree.nodes[index].describe()))
+        }),
+        Step::Paste(find) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
+            insert(tree, index, &Clipboard::text())
+                .map(|()| format!("pasted into {}", tree.nodes[index].describe()))
         }),
         Step::Scroll(find, lines) => on_element(&Tree::read(mtm, menus), find, |tree, index| {
             scroll(tree, index, *lines, mtm).map(|()| {

@@ -52,7 +52,7 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | ImagesUITests.testSimulatorOpensOnlyTheTappedImageAndSavesIt | not yet | Quick Look shows only while the app is frontmost, which the runner does not force; it reports "このファイルをプレビューできませんでした。" there |
 | ImagesUITests.testSimulatorDisplaysImagesInMessagesAndMarkdownAfterReopening | covered | images |
 | ModelSelectionUITests.testSimulatorModelPickerUsesNativeFormAndAgentPicker | covered | model-picker |
-| NavigationUITests.testSimulatorRemovesHostAndRequiresPairingAfterRelaunch | not yet | each scenario runs one app process; removing the only Host ends the scenario's connection |
+| NavigationUITests.testSimulatorRemovesHostAndRequiresPairingAfterRelaunch | partial | saved-connections (pairs the fixture Host as a PC and removes it); each scenario runs one app process, so a relaunch is not checked |
 | NavigationUITests.testSimulatorStartsOnListAndPreservesDetailOnForeground | partial | open-conversation; iOS list/detail navigation and foregrounding are n/a |
 | NavigationUITests.testSimulatorOpensQrScannerWhileAddingHost | n/a | camera QR scanner; the Mac pastes the connection info |
 | NavigationUITests.testSimulatorUsesNativeHostNavigationAndPairingDismissal | covered | environment-settings |
@@ -107,5 +107,9 @@ yet; the note says why), **n/a** (no Mac equivalent).
 | Settings: accounts, updates, worktree editing | partial | accounts (sign-in starts and stops), worktree-settings; completing a sign-in and updates not yet |
 | Accessibility: the settings overlay is modal, message roles | covered | settings-modal, send-message |
 | Onboarding without a Host | not yet | the runner always starts a fixture Host |
+| First-run setup: environment and AI, then importing projects from history | covered | onboarding |
+| Settings: importing existing projects | partial | onboarding (the same import as the first run); opening it from the settings has no scenario |
+| Settings: phone connection QR code, copying the invitation, allowed devices | covered | phone-pairing |
+| Settings: adding a PC over SSH or a pasted invitation, removing a saved connection | partial | saved-connections (an SSH destination that would be an option is refused; no SSH server runs) |
 | Keyboard shortcuts | partial | composer (Return sends); the app binds no other shortcut (⌘, does nothing) |
 | Markdown tables, diagrams, images, file links | partial | markdown-table, markdown-document, images, visualization; diagrams not yet |

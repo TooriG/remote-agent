@@ -65,6 +65,17 @@ impl Storage {
             StorageKey::EditorPreferences => self.root.join("editor-preferences.json"),
         }
     }
+
+    /// Forgets a removed Host on this device: its state, conversations and
+    /// diagnostics, and the device key it was paired with. Its session is closed.
+    pub fn forget(&self) -> Result<(), AgentError> {
+        match std::fs::remove_dir_all(self.host_directory()) {
+            Ok(()) => {}
+            Err(reason) if reason.kind() == io::ErrorKind::NotFound => {}
+            Err(reason) => return Err(error(reason)),
+        }
+        forget_identity(&self.host.id)
+    }
 }
 
 pub(crate) fn read(path: &std::path::Path) -> Result<Vec<u8>, AgentError> {
@@ -114,18 +125,33 @@ impl ClientPlatform for Storage {
     }
 }
 
+/// The Keychain service of paired Hosts' device keys.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const SERVICE: &str = "com.bex.nsh-preview.identity";
+
+/// The Keychain's status for an item it does not have.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const ITEM_NOT_FOUND: i32 = -25300;
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn identity(host: &str) -> Result<Vec<u8>, AgentError> {
     use security_framework::passwords::{PasswordOptions, generic_password, set_generic_password};
-    const SERVICE: &str = "com.bex.nsh-preview.identity";
     match generic_password(PasswordOptions::new_generic_password(SERVICE, host)) {
         Ok(bytes) => Ok(bytes),
-        Err(reason) if reason.code() == -25300 => {
+        Err(reason) if reason.code() == ITEM_NOT_FOUND => {
             let bytes = agent_core::client::native::generate_identity();
             set_generic_password(SERVICE, host, &bytes).map_err(error)?;
             Ok(bytes)
         }
         Err(reason) => Err(error(reason)),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn forget_identity(host: &str) -> Result<(), AgentError> {
+    match security_framework::passwords::delete_generic_password(SERVICE, host) {
+        Err(reason) if reason.code() != ITEM_NOT_FOUND => Err(error(reason)),
+        _ => Ok(()),
     }
 }
 
@@ -140,9 +166,9 @@ fn identity(host: &str) -> Result<Vec<u8>, AgentError> {
                 CredWriteW,
             },
         },
-        core::{HSTRING, PWSTR},
+        core::PWSTR,
     };
-    let target = HSTRING::from(format!("com.bex.nsh.identity/{host}"));
+    let target = credential_target(host);
     let mut stored: *mut CREDENTIALW = std::ptr::null_mut();
     // SAFETY: CredReadW fills `stored` with a buffer CredFree releases after
     // its blob is copied.
@@ -173,6 +199,29 @@ fn identity(host: &str) -> Result<Vec<u8>, AgentError> {
         }
         Err(reason) => Err(error(reason)),
     }
+}
+
+#[cfg(windows)]
+fn credential_target(host: &str) -> windows::core::HSTRING {
+    windows::core::HSTRING::from(format!("com.bex.nsh.identity/{host}"))
+}
+
+#[cfg(windows)]
+fn forget_identity(host: &str) -> Result<(), AgentError> {
+    use windows::Win32::{
+        Foundation::ERROR_NOT_FOUND,
+        Security::Credentials::{CRED_TYPE_GENERIC, CredDeleteW},
+    };
+    // SAFETY: the target outlives the call.
+    match unsafe { CredDeleteW(&credential_target(host), CRED_TYPE_GENERIC, None) } {
+        Err(reason) if reason.code() != ERROR_NOT_FOUND.to_hresult() => Err(error(reason)),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios", windows)))]
+fn forget_identity(_: &str) -> Result<(), AgentError> {
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "ios", windows)))]

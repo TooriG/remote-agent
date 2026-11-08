@@ -1,7 +1,7 @@
 //! Loopback-only UI test controls. No saved application profiles are used.
 
 use crate::{Result, test_support::Connection};
-use agent_protocol::operations::{CreateInvitation, CreateSession};
+use agent_protocol::operations::{CreateInvitation, CreateSession, IdentifyDevice, Pair};
 use agent_transport::transport::{Identity, Ticket};
 use serde_json::json;
 use std::fs;
@@ -193,6 +193,8 @@ fn route(
             )?;
         }
         "/list-fixture" | "/title-fixture" | "/list-fixture/reset" => list_fixture(root, path)?,
+        "/paired-device" => pair_device(runtime, ticket, identity)?,
+        "/import-candidates" => import_candidates(root)?,
         "/background-task" => {
             let response = rpc(
                 runtime,
@@ -472,6 +474,53 @@ fn list_fixture(root: &Path, path: &str) -> Result<()> {
     }
     write_json(projects_path, &projects)?;
     write_json(fixture, &threads)
+}
+
+/// A phone this Host allowed, named as the phone names itself.
+fn pair_device(
+    runtime: &tokio::runtime::Runtime,
+    ticket: &Ticket,
+    identity: &Identity,
+) -> Result<()> {
+    let invitation = rpc(runtime, ticket, identity, &CreateInvitation {})?;
+    runtime.block_on(async {
+        let device = Connection::open(ticket, Identity::generate()).await?;
+        let paired: Result<()> = async {
+            device
+                .peer
+                .call(&Pair {
+                    invitation: invitation.invitation,
+                })
+                .await?;
+            device
+                .peer
+                .call(&IdentifyDevice {
+                    name: "検証 iPhone".into(),
+                })
+                .await?;
+            Ok(())
+        }
+        .await;
+        device.close().await;
+        paired
+    })
+}
+
+/// Codex history in a repository the Host has no project for, beside the
+/// fixture's own project, for the project import to offer.
+fn import_candidates(root: &Path) -> Result<()> {
+    let repository = root.join("history-repository");
+    fs::create_dir_all(repository.join(".git"))?;
+    let mut threads = Vec::new();
+    for (number, cwd) in [
+        (1, &repository),
+        (2, &repository),
+        (3, &root.join("project")),
+    ] {
+        threads.push(json!({"id":format!("import-thread-{number}"),"cwd":cwd,
+            "name":format!("Earlier conversation {number}"),"createdAt":number,"updatedAt":number}));
+    }
+    write_json(root.join("list-fixture.json"), &threads)
 }
 
 fn write_json(path: PathBuf, value: &impl serde::Serialize) -> Result<()> {

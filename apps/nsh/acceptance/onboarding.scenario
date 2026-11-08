@@ -1,0 +1,27 @@
+# A first launch sets up where to work and its AI, then imports the projects
+# the Host's Codex and Claude Code history names. Importing them all ends the
+# setup, and the conversations show.
+first-launch
+fixture /import-candidates
+expect "1 / 2 環境とAI" 30000
+expect "どこで作業しますか？"
+expect "この環境で使えるAI"
+expect "プロジェクトを選ぶ" 30000
+screenshot environment
+press プロジェクトを選ぶ
+expect "2 / 2 プロジェクトの取り込み"
+expect "history-repository" 30000
+expect "取り込み済み"
+expect "0件を取り込む"
+# Back returns to the first step, which opens the import again.
+press 戻る
+expect "1 / 2 環境とAI"
+press プロジェクトを選ぶ
+expect "history-repository" 30000
+press history-repository
+expect "1件を取り込む"
+screenshot import
+press 1件を取り込む
+expect "何に取り組みますか？" 30000
+expect_absent "2 / 2 プロジェクトの取り込み"
+expect "history-repository"

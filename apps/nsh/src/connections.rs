@@ -115,14 +115,35 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                     move |host, index| {
                         let host = host.get_untracked();
                         let id = host.id.clone();
+                        let removed = host.id.clone();
+                        let controls =
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .child(ui::text_button(tr("接続"), move || {
+                                    connection.application.with(|application| {
+                                        application.select_host(id.clone(), false)
+                                    });
+                                }));
                         ui::setting(
                             host.label(),
                             String::new,
-                            ui::text_button(tr("接続"), move || {
-                                connection
-                                    .application
-                                    .with(|application| application.select_host(id.clone(), false));
-                            }),
+                            // A paired PC can be forgotten; this PC and its
+                            // WSL distros are found again.
+                            if crate::client::saved(&host.id) {
+                                controls.child(ui::row_icon_button(
+                                    ui::Icon::CLOSE,
+                                    tr("保存した接続を削除"),
+                                    move || {
+                                        connection
+                                            .client
+                                            .with(|client| client.remove(removed.clone()))
+                                    },
+                                ))
+                            } else {
+                                controls
+                            },
                         )
                         .style_when(
                             move || index.get() > 0,
@@ -173,9 +194,10 @@ fn heading(title: &'static str) -> impl IntoElement {
         .font_weight(FontWeight::SEMIBOLD)
 }
 
-/// Pairing a PC from the connection information its Bex issued: the
-/// information, then what this device will send it, then the agreement.
-fn pairing() -> impl IntoElement {
+/// Pairing a PC from the connection information its Bex issued, pasted or, on
+/// the desktop, read over the user's SSH: the information, then what this
+/// device will send it, then the agreement.
+pub(crate) fn pairing() -> impl IntoElement {
     use crate::ui::{self, Enabled, colors};
     let connection = use_context::<Connection>().unwrap();
     let invitation = signal(String::new());
@@ -184,27 +206,49 @@ fn pairing() -> impl IntoElement {
     let confirmed = move |read: fn(&agent_protocol::models::Invitation) -> String| {
         move || confirmation.with(|value| value.as_ref().map(read).unwrap_or_default())
     };
+    let paste = move || {
+        view()
+            .gap_3()
+            .child(
+                text(tr("PCのBexで発行した接続情報を貼り付けてください。"))
+                    .text_size(px(13.0))
+                    .text_color(colors::MUTED),
+            )
+            .child(
+                ui::field()
+                    .masked(true)
+                    .value(move || invitation.get())
+                    .on_change(move |text: &str| invitation.set(text.into()))
+                    .placeholder(tr("接続情報")),
+            )
+            .child(view().flex_row().justify_end().child(ui::text_button(
+                tr("接続先を確認"),
+                move || {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|time| time.as_secs())
+                        .unwrap_or_default();
+                    match agent_core::client::native::parse_invitation(
+                        invitation.get_untracked(),
+                        now,
+                    ) {
+                        Ok(value) => {
+                            confirmation.set(Some(value));
+                            error.set(None);
+                        }
+                        Err(reason) => error.set(Some(localized(reason.to_string()))),
+                    }
+                },
+            )))
+    };
+    #[cfg(desktop)]
+    let information = move || ssh_or_paste(paste, confirmation, error);
+    #[cfg(not(desktop))]
+    let information = paste;
     view()
         .gap_4()
         .child(when(move || confirmation.get().is_none(), move || {
-            ui::card(vec![view()
-                .px_5()
-                .py_4()
-                .gap_3()
-                .child(text(tr("PCのBexで発行した接続情報を貼り付けてください。")).text_size(px(13.0)).text_color(colors::MUTED))
-                .child(ui::field().masked(true)
-                    .value(move || invitation.get())
-                    .on_change(move |text: &str| invitation.set(text.into()))
-                    .placeholder(tr("接続情報")))
-                .child(view().flex_row().justify_end().child(ui::text_button(tr("接続先を確認"), move || {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|time| time.as_secs()).unwrap_or_default();
-                    match agent_core::client::native::parse_invitation(invitation.get_untracked(), now) {
-                        Ok(value) => { confirmation.set(Some(value)); error.set(None); }
-                        Err(reason) => error.set(Some(localized(reason.to_string()))),
-                    }
-                })))])
+            ui::card(vec![information().px_5().py_4()])
         }))
         .child(when(move || confirmation.get().is_some(), move || {
             ui::card(vec![view()
@@ -230,4 +274,104 @@ fn pairing() -> impl IntoElement {
                     }).enabled(move || !connection.pairing.get())))])
         }))
         .child(text(move || error.get().unwrap_or_default()).selectable(true))
+}
+
+/// On the desktop the information can also come from a server over SSH;
+/// pasting stays the default.
+#[cfg(desktop)]
+fn ssh_or_paste(
+    paste: impl Fn() -> View + Copy + 'static,
+    confirmation: Signal<Option<agent_protocol::models::Invitation>>,
+    error: Signal<Option<String>>,
+) -> View {
+    use crate::ui::{self, Enabled, colors};
+    let connection = use_context::<Connection>().unwrap();
+    let ssh = signal(false);
+    let destination = signal(String::new());
+    let reading = signal(false);
+    let method = move |ssh: bool| {
+        if ssh {
+            tr("SSHで接続")
+        } else {
+            tr("接続情報を貼り付け")
+        }
+    };
+    let read = move || {
+        if reading.get_untracked() {
+            return;
+        }
+        reading.set(true);
+        error.set(None);
+        let answer = connection
+            .client
+            .with(|client| client.ssh_invitation(destination.get_untracked()));
+        spawn(async move {
+            match answer.recv().await {
+                Ok(Ok(value)) => confirmation.set(Some(value)),
+                Ok(Err(reason)) => error.set(Some(reason)),
+                Err(_) => {}
+            }
+            reading.set(false);
+        });
+    };
+    view()
+        .gap_3()
+        .child(
+            view().flex_row().child(
+                ui::choice_menu(
+                    "network",
+                    tr("接続方法"),
+                    move || method(ssh.get()).to_owned(),
+                    move || {
+                        json!([false, true].map(|value| json!({
+                            "id": method(value),
+                            "title": method(value),
+                            "selected": value == ssh.get(),
+                        })))
+                    },
+                    move |id: &str| {
+                        ssh.set(id == method(true));
+                        error.set(None);
+                    },
+                )
+                .enabled(move || !reading.get()),
+            ),
+        )
+        .child(when(move || !ssh.get(), paste))
+        .child(when(
+            move || ssh.get(),
+            move || {
+                view()
+                    .gap_3()
+                    .child(
+                        text(tr(
+                            "SSHの鍵で接続でき、Bexのホストを起動済みのサーバーにつなぎます。",
+                        ))
+                        .text_size(px(13.0))
+                        .text_color(colors::MUTED),
+                    )
+                    .child(text(tr("SSH接続先")).text_size(px(13.0)))
+                    .child(
+                        ui::field()
+                            .value(move || destination.get())
+                            .on_change(move |text: &str| destination.set(text.into()))
+                            .placeholder("user@your-server"),
+                    )
+                    .child(
+                        view().flex_row().justify_end().child(
+                            ui::text_button(
+                                move || {
+                                    SharedString::from(if reading.get() {
+                                        tr("接続中…")
+                                    } else {
+                                        tr("接続")
+                                    })
+                                },
+                                read,
+                            )
+                            .enabled(move || !reading.get()),
+                        ),
+                    )
+            },
+        ))
 }
