@@ -76,7 +76,6 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
         | Fork { .. }
         | TurnItems { .. }
         | ProjectList { .. }
-        | ListDecorations { .. }
         | TaskActivity
         | LiveActivity { .. } => return None,
         Item { item } => (
@@ -116,6 +115,12 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
             "エージェントを読み込めませんでした",
         ),
         SessionList | SessionPage { .. } => (Projects, "会話一覧を読み込めませんでした"),
+        // Project icons and worktree states have no control of their own: an
+        // unreadable reply would otherwise leave every project a monogram.
+        ListDecorations { .. } => (
+            Projects,
+            "プロジェクトのアイコンと変更状態を読み込めませんでした",
+        ),
         ProjectScan => (Projects, "プロジェクトを検索できませんでした"),
         ProjectImport => (Projects, "プロジェクトを取り込めませんでした"),
         Directory { .. } => (Workspace, "フォルダを読み込めませんでした"),
@@ -173,7 +178,9 @@ impl Snapshot {
                 Intent::ReadWorktreeSettings(op::ReadWorktreeSettings {}),
             ),
             OperationKey::ProjectScan => ("再検索", Intent::ScanProjects(op::ScanProjects {})),
-            OperationKey::SessionList | OperationKey::SessionPage { .. } => (
+            OperationKey::SessionList
+            | OperationKey::SessionPage { .. }
+            | OperationKey::ListDecorations { .. } => (
                 "会話一覧を再読み込み",
                 Intent::ListSessions(op::ListSessions::new((*self.lists.list_query).clone())),
             ),
@@ -1068,6 +1075,35 @@ mod notice_tests {
             settings[0].text.details.as_deref(),
             Some("account unavailable")
         );
+    }
+
+    #[test]
+    fn unreadable_list_decorations_are_a_project_notice_that_rereads_the_list() {
+        let mut snapshot = Snapshot::default();
+        let key = OperationKey::ListDecorations {
+            scope: agent_protocol::operations::ListDecorationScope::Root { part: None },
+        };
+        failed(
+            &mut snapshot,
+            key.clone(),
+            3,
+            "invalid response: unknown variant `true`",
+        );
+        let notices = snapshot.error_notices(ErrorScope::Projects);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            notices[0].title,
+            "プロジェクトのアイコンと変更状態を読み込めませんでした"
+        );
+        assert_eq!(
+            notices[0].recovery_label.as_deref(),
+            Some("会話一覧を再読み込み")
+        );
+        assert!(snapshot.error_notices(ErrorScope::Application).is_empty());
+        let recovery = snapshot
+            .error_recovery(ErrorId::Operation { key, generation: 3 })
+            .unwrap();
+        assert!(matches!(recovery.intent, Intent::ListSessions(_)));
     }
 
     #[test]

@@ -210,6 +210,12 @@ fn route(
         "/list-fixture" | "/title-fixture" | "/list-fixture/reset" => list_fixture(root, path)?,
         "/paired-device" => pair_device(runtime, ticket, identity)?,
         "/import-candidates" => import_candidates(root)?,
+        // A favicon the Host's icon discovery finds in the project's root,
+        // which other scenarios' file lists and reviews never see.
+        "/project-icon" => fs::write(
+            root.join("project/favicon.svg"),
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#22c55e"/><path d="M4.5 8.5l2.5 2.5 4.5-5" stroke="#ffffff" stroke-width="2" fill="none"/></svg>"##,
+        )?,
         "/background-task" => {
             let response = rpc(
                 runtime,

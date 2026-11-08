@@ -32,7 +32,6 @@ enum Action {
 struct Row {
     scope: Option<ListScope>,
     title: String,
-    symbol: &'static str,
     png: Option<Vec<u8>>,
     glyph: Option<(String, u32)>,
     level: u32,
@@ -55,7 +54,6 @@ impl Row {
             action,
             compose: None,
             menu: serde_json::Value::Null,
-            symbol: "",
             png: None,
             glyph: None,
             level: 0,
@@ -177,9 +175,10 @@ fn rows(
             ));
         }
         rows.push(Row {
-            symbol: "folder",
+            // The desktop sidebar is drawn dark whatever the system's
+            // appearance, as the existing desktop client's.
             png: project.icon.as_ref().map(|icon| {
-                if dark {
+                if dark || desktop {
                     &icon.dark_png
                 } else {
                     &icon.light_png
@@ -706,10 +705,16 @@ fn project_icon(row: &Row) -> AnyElement {
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(png)
         );
+        // Named as an image, so assistive technologies and the acceptance
+        // checks tell the project's own icon from the monogram.
         return image(source)
             .w(px(16.0))
             .h(px(16.0))
+            .flex_shrink_0()
+            .object_fit(ResizeMode::Contain)
             .rounded(px(4.0))
+            .role(AccessibilityRole::Image)
+            .label(tr("プロジェクトのアイコン"))
             .into_element();
     }
     let (monogram, color) = row.glyph.clone().unwrap_or_default();
@@ -763,7 +768,7 @@ fn indicators(indicators: native::RowIndicators) -> impl IntoElement {
 }
 
 fn native_rows(entries: &[Row], sources: &[ListSource]) -> serde_json::Value {
-    json!(entries.iter().map(|row| json!({"id": row_id(row.scope.as_ref(), &row.action), "title": row.title, "symbol": row.symbol, "asset": null, "png": row.png, "monogram":row.glyph.as_ref().map(|glyph| &glyph.0), "color":row.glyph.as_ref().map(|glyph| glyph.1), "level": row.level, "disclosure": row.disclosure, "group": matches!(&row.action, Action::Heading(_) | Action::ProjectHeader), "expanded": row.expanded, "menu": row.menu, "indicators": row.indicators, "loading":row.loading,"enabled":row.enabled,"passive":matches!(row.action,Action::Notice(_) | Action::Loading(_)), "statusLabel": row.indicators.as_ref().map(|data| data.label()), "compose": row.compose.as_ref().map(|action| json!({"id": row_id(row.scope.as_ref(), action), "enabled": sources.iter().any(|source| Some(&source.scope) == row.scope.as_ref() && source.connected)}))})).collect::<Vec<_>>())
+    json!(entries.iter().map(|row| json!({"id": row_id(row.scope.as_ref(), &row.action), "title": row.title, "png": row.png, "monogram":row.glyph.as_ref().map(|glyph| &glyph.0), "color":row.glyph.as_ref().map(|glyph| glyph.1), "level": row.level, "disclosure": row.disclosure, "group": matches!(&row.action, Action::Heading(_) | Action::ProjectHeader), "expanded": row.expanded, "menu": row.menu, "indicators": row.indicators, "loading":row.loading,"enabled":row.enabled,"passive":matches!(row.action,Action::Notice(_) | Action::Loading(_)), "statusLabel": row.indicators.as_ref().map(|data| data.label()), "compose": row.compose.as_ref().map(|action| json!({"id": row_id(row.scope.as_ref(), action), "enabled": sources.iter().any(|source| Some(&source.scope) == row.scope.as_ref() && source.connected)}))})).collect::<Vec<_>>())
 }
 
 fn task_list_data(
@@ -889,12 +894,35 @@ mod tests {
     }
 
     #[test]
+    fn project_icons_follow_the_appearance_the_list_is_drawn_in() {
+        let list = fixture_list();
+        let icon = |dark, desktop| {
+            fixture_rows(Some(&list), dark, "host", "scope", desktop, true)
+                .into_iter()
+                .find(|row| row.disclosure)
+                .and_then(|row| row.png)
+        };
+        assert_eq!(icon(false, false), Some(vec![1, 2]));
+        assert_eq!(icon(true, false), Some(vec![3, 4]));
+        // The desktop sidebar is dark in a light system appearance too.
+        assert_eq!(icon(false, true), Some(vec![3, 4]));
+        assert_eq!(icon(true, true), Some(vec![3, 4]));
+        let mut plain = list.clone();
+        plain.projects[0].icon = None;
+        let row = fixture_rows(Some(&plain), false, "host", "scope", true, true)
+            .into_iter()
+            .find(|row| row.disclosure)
+            .unwrap();
+        assert_eq!(row.png, None);
+        assert_eq!(row.glyph, Some(("PR".into(), 0)));
+    }
+
+    #[test]
     fn native_item_identity_is_stable_and_unique_across_projects() {
         let mut list = fixture_list();
         let thread = list.projects[0].threads[0].clone();
         let collapsed = fixture_rows(Some(&list), false, "host", "scope", false, true);
         assert_eq!(collapsed.len(), 3);
-        assert_eq!(collapsed[0].symbol, "folder");
         assert_eq!(collapsed[0].glyph, Some(("PR".into(), 0)));
         assert_eq!(collapsed[0].png, Some(vec![1, 2]));
         let dark = fixture_rows(Some(&list), true, "host", "scope", false, true);
@@ -1076,7 +1104,6 @@ mod tests {
             copy_items: Vec::new(),
         };
         let row = thread_row(&thread, 1, Some("project"), &scope("host", "scope"));
-        assert!(row.symbol.is_empty());
         let indicators = row.indicators.unwrap();
         assert_eq!(indicators.activity, Some(ThreadActivity::Waiting));
         assert!(indicators.changes);
@@ -1136,7 +1163,6 @@ mod tests {
             Some(owner.clone()),
         );
         project.menu = json!([]);
-        project.symbol = "folder";
         project.glyph = Some(("日".into(), 0x123456));
         project.disclosure = true;
         project.expanded = true;

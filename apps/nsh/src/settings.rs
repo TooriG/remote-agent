@@ -160,7 +160,7 @@ fn navigation(page: Signal<Page>) -> View {
         .bg(colors::SIDEBAR)
         .border_r_1()
         .border_r_color(colors::BORDER)
-        .child(ui::search(query, Some(tr("設定を検索"))).h(px(32.0)).mb_2())
+        .child(ui::search(query, tr("設定を検索")).h(px(32.0)).mb_2())
         .child(
             text(tr("設定"))
                 .text_size(px(12.0))

@@ -1,0 +1,10 @@
+# A project whose folder has a favicon shows that icon in the sidebar, not its
+# monogram, and keeps it when its conversations open and the list refreshes.
+fixture /project-icon
+expect "検証プロジェクト" 30000
+expect "プロジェクトのアイコン" after プロジェクトを追加 20000
+screenshot icon
+press 検証プロジェクト
+press 会話を更新
+wait 1000
+expect "プロジェクトのアイコン" after プロジェクトを追加 10000

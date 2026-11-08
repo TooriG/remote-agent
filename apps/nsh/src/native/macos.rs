@@ -164,7 +164,6 @@ struct Button {
     context: ComponentContext,
     _target: Retained<ActionTarget>,
     symbol: String,
-    symbol_size: f64,
     label: Option<String>,
 }
 impl Button {
@@ -186,29 +185,14 @@ impl Button {
             context,
             _target: target,
             symbol: String::new(),
-            symbol_size: 0.0,
             label: None,
         }
     }
 
-    /// The SF Symbol at the requested point size, else at the button's own.
     /// An image-only button reads its image's description, so that is its label.
     fn apply_symbol(&self) {
-        let image = symbol(&self.symbol, self.label.as_deref()).map(|image| {
-            if self.symbol_size > 0.0 {
-                image
-                    .imageWithSymbolConfiguration(
-                        &NSImageSymbolConfiguration::configurationWithPointSize_weight(
-                            self.symbol_size,
-                            0.0,
-                        ),
-                    )
-                    .unwrap_or(image)
-            } else {
-                image
-            }
-        });
-        self.view.setImage(image.as_deref());
+        self.view
+            .setImage(symbol(&self.symbol, self.label.as_deref()).as_deref());
     }
 }
 impl NativeComponent for Button {
@@ -225,10 +209,6 @@ impl NativeComponent for Button {
                     .and_then(JsonValue::as_str)
                     .unwrap_or_default()
                     .to_owned();
-                self.apply_symbol();
-            }
-            "symbolSize" => {
-                self.symbol_size = value.and_then(JsonValue::as_f64).unwrap_or_default();
                 self.apply_symbol();
             }
             "asset" => self.view.setImage(
@@ -471,11 +451,6 @@ impl NativeComponent for Search {
         self.view.clone().into_super().into_super().into_super()
     }
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
-        if name == "appearance" {
-            let plain = value.and_then(JsonValue::as_str) == Some("plain");
-            self.view.setBezeled(!plain);
-            self.view.setDrawsBackground(!plain);
-        }
         if name == "placeholder" {
             self.view.setPlaceholderString(
                 value

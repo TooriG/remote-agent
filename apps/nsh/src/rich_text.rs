@@ -543,7 +543,7 @@ fn code_header(
                 )
             },
         ))
-        .child(crate::ui::row_icon_button(
+        .child(crate::ui::icon_button(
             crate::ui::Icon::COPY,
             move || {
                 SharedString::from(if mermaid() {

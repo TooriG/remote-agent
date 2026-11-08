@@ -132,7 +132,7 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                             // A paired PC can be forgotten; this PC and its
                             // WSL distros are found again.
                             if crate::client::saved(&host.id) {
-                                controls.child(ui::row_icon_button(
+                                controls.child(ui::icon_button(
                                     ui::Icon::CLOSE,
                                     tr("保存した接続を削除"),
                                     move || {

@@ -832,7 +832,7 @@ fn error_card(error: Memo<Option<TurnErrorPresentation>>) -> View {
                             })
                         }),
                 )
-                .child(ui::row_icon_button(
+                .child(ui::icon_button(
                     Icon::COPY,
                     tr("エラーの詳細をコピー"),
                     move || {
@@ -900,7 +900,7 @@ fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
         .items_center()
         .gap_4()
         .mt_2()
-        .child(ui::row_icon_button(
+        .child(ui::icon_button(
             Icon::COPY,
             tr("回答をコピー"),
             move || {
@@ -912,7 +912,7 @@ fn response_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
         .child(when(
             move || fork().is_some(),
             move || {
-                ui::row_icon_button(Icon::FORK, tr("ここから会話を分岐"), move || {
+                ui::icon_button(Icon::FORK, tr("ここから会話を分岐"), move || {
                     if let (Some(thread_id), Some(last_turn_id)) =
                         (untracked(thread), untracked(fork))
                     {
@@ -947,7 +947,7 @@ fn user_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
         .opacity(0.0)
         .group_hover(|s| s.opacity(1.0))
         .child(time(row).mr_2())
-        .child(ui::row_icon_button(
+        .child(ui::icon_button(
             Icon::COPY,
             tr("発言をコピー"),
             move || {
@@ -956,7 +956,7 @@ fn user_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
                 }
             },
         ))
-        .child(ui::row_icon_button(
+        .child(ui::icon_button(
             Icon::PENCIL,
             tr("入力欄で編集"),
             move || {
@@ -982,7 +982,7 @@ fn unresolved_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
         .flex_row()
         .items_center()
         .gap_1()
-        .child(ui::row_icon_button(
+        .child(ui::icon_button(
             Icon::PENCIL,
             tr("入力欄へ戻す"),
             move || {
@@ -993,7 +993,7 @@ fn unresolved_actions(connection: Connection, row: Memo<Option<Row>>) -> View {
                 }
             },
         ))
-        .child(ui::row_icon_button(Icon::TRASH, tr("破棄"), move || {
+        .child(ui::icon_button(Icon::TRASH, tr("破棄"), move || {
             if let Some(id) = id() {
                 connection.dispatch(Intent::DiscardUnknownSubmission {
                     client_user_message_id: id.into(),
