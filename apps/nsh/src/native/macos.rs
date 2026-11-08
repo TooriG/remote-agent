@@ -53,11 +53,15 @@ impl ActionTarget {
         unsafe { msg_send![super(this), init] }
     }
 }
-pub(super) fn symbol(name: &str) -> Option<Retained<NSImage>> {
+/// An SF Symbol; `description` is what accessibility reads for it.
+pub(super) fn symbol(name: &str, description: Option<&str>) -> Option<Retained<NSImage>> {
     if name.is_empty() {
         return None;
     }
-    NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
+    NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(name),
+        description.map(NSString::from_str).as_deref(),
+    )
 }
 
 struct Switch {
@@ -161,6 +165,7 @@ struct Button {
     _target: Retained<ActionTarget>,
     symbol: String,
     symbol_size: f64,
+    label: Option<String>,
 }
 impl Button {
     fn new(context: ComponentContext) -> Self {
@@ -182,12 +187,14 @@ impl Button {
             _target: target,
             symbol: String::new(),
             symbol_size: 0.0,
+            label: None,
         }
     }
 
     /// The SF Symbol at the requested point size, else at the button's own.
+    /// An image-only button reads its image's description, so that is its label.
     fn apply_symbol(&self) {
-        let image = symbol(&self.symbol).map(|image| {
+        let image = symbol(&self.symbol, self.label.as_deref()).map(|image| {
             if self.symbol_size > 0.0 {
                 image
                     .imageWithSymbolConfiguration(
@@ -230,12 +237,13 @@ impl NativeComponent for Button {
                     .and_then(|name| NSImage::imageNamed(&NSString::from_str(name)))
                     .as_deref(),
             ),
-            "label" => self.view.setAccessibilityLabel(
-                value
-                    .and_then(JsonValue::as_str)
-                    .map(NSString::from_str)
-                    .as_deref(),
-            ),
+            "label" => {
+                self.label = value.and_then(JsonValue::as_str).map(str::to_owned);
+                self.view.setAccessibilityLabel(
+                    self.label.as_deref().map(NSString::from_str).as_deref(),
+                );
+                self.apply_symbol();
+            }
             "identifier" => self.view.setAccessibilityIdentifier(
                 value
                     .and_then(JsonValue::as_str)
@@ -359,7 +367,12 @@ fn menu_items(menu: &NSMenu, entries: &JsonValue, target: &objc2::runtime::AnyOb
                 NSControlStateValueOff
             });
         }
-        item.setImage(entry["symbol"].as_str().and_then(symbol).as_deref());
+        item.setImage(
+            entry["symbol"]
+                .as_str()
+                .and_then(|name| symbol(name, None))
+                .as_deref(),
+        );
         item.setEnabled(entry["enabled"].as_bool().unwrap_or(true));
         menu.addItem(&item);
     }
@@ -397,7 +410,7 @@ impl NativeComponent for Menu {
                     item.setImage(
                         value
                             .and_then(JsonValue::as_str)
-                            .and_then(symbol)
+                            .and_then(|name| symbol(name, None))
                             .as_deref(),
                     );
                 }
@@ -497,7 +510,7 @@ define_class!(
             info.map(|(image, label)| {
                 let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(self.mtm()), identifier);
                 item.setLabel(&NSString::from_str(label));
-                item.setImage(symbol(image).as_deref());
+                item.setImage(symbol(image, Some(label)).as_deref());
                 // The toolbar delegate owns this selector and is retained by its host.
                 unsafe { item.setTarget(Some(self)); item.setAction(Some(sel!(pressed:))); }
                 item

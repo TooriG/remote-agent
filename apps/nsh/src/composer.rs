@@ -119,6 +119,21 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             });
         }
     };
+    let prompt = move || -> String {
+        answering.with(|question| {
+            question
+                .as_ref()
+                .map(|question| localized(question.placeholder.clone()))
+                .unwrap_or_else(|| {
+                    if is_desktop() {
+                        tr("AI に依頼する")
+                    } else {
+                        tr("メッセージを入力")
+                    }
+                    .into()
+                })
+        })
+    };
     let field = move || {
         input()
             .element_ref(&field_ref)
@@ -129,21 +144,10 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                     .with(|q| q.as_ref().map(|q| q.text.clone()))
                     .unwrap_or_else(|| draft.get())
             })
-            .placeholder(move || {
-                answering.with(|question| {
-                    question
-                        .as_ref()
-                        .map(|question| localized(question.placeholder.clone()))
-                        .unwrap_or_else(|| {
-                            if is_desktop() {
-                                tr("AI に依頼する")
-                            } else {
-                                tr("メッセージを入力")
-                            }
-                            .into()
-                        })
-                })
-            })
+            .placeholder(prompt)
+            // A multiline field shows its placeholder as a separate label, so
+            // screen readers name the field by the same prompt.
+            .label(prompt)
             .masked(move || answering.with(|q| q.as_ref().is_some_and(|q| q.question.secret)))
             .readonly(move || {
                 recording.get()
