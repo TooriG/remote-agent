@@ -160,7 +160,7 @@ fn summary_card(
     use crate::ui::{self, Enabled, Icon, colors};
     let enabled = move || summary.with(|s| s.enabled);
     let has_directory = move || summary.with(|s| s.has_directory);
-    let heading = move |title: &'static str, control: ui::Control| {
+    let heading = move |title: &'static str, control: nsh_base::ButtonElement| {
         view()
             .flex_row()
             .items_center()

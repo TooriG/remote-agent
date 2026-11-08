@@ -45,7 +45,7 @@ pub(crate) fn sidebar(hosts: Memo<Vec<Host>>, compose: impl Fn() + 'static) -> i
                         .flex_row()
                         .items_center()
                         .gap_1()
-                        .child(ui::search(query, None).flex_1().min_w_0())
+                        .child(ui::search(query, tr("会話を検索")).flex_1().min_w_0())
                         .child(
                             ui::icon_button(Icon::NEW_CHAT, tr("新しいチャット"), compose)
                                 .enabled(connected),

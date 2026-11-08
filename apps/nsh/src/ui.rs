@@ -28,99 +28,93 @@ pub(crate) mod colors {
 
 pub(crate) const RADIUS: f32 = 6.0;
 
-/// An icon: its markup in the current text color and, on the Mac, the SF Symbol
-/// AppKit draws for it.
+/// An icon: its markup, drawn in the current text color. Every platform draws
+/// the same Lucide set, as the existing desktop client did, so icons side by
+/// side share one size and stroke.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Icon {
     markup: &'static str,
-    #[cfg(target_os = "macos")]
-    symbol: &'static str,
 }
 
 /// A Lucide icon, its markup taken from the catalog at compile time: nothing
 /// looks icons up at run time, so the linker can drop the rest of the catalog.
 macro_rules! icon {
-    ($lucide:ident $(, $symbol:literal)?) => {
+    ($lucide:ident) => {
         Icon {
             markup: lucide_static_svg::Icon::$lucide.svg_str(),
-            $(
-                #[cfg(target_os = "macos")]
-                symbol: $symbol,
-            )?
         }
     };
 }
 
 impl Icon {
-    pub(crate) const ARROW_DOWN: Self = icon!(ArrowDown, "arrow.down");
-    pub(crate) const ARROW_LEFT: Self = icon!(ArrowLeft, "arrow.left");
-    pub(crate) const ARROW_RIGHT: Self = icon!(ArrowRight, "arrow.right");
-    pub(crate) const ARROW_UP: Self = icon!(ArrowUp, "arrow.up");
-    pub(crate) const FORK: Self = icon!(GitBranch, "arrow.triangle.branch");
-    pub(crate) const CHECK: Self = icon!(Check, "checkmark");
-    pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown, "chevron.down");
-    pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight, "chevron.right");
+    pub(crate) const ARROW_DOWN: Self = icon!(ArrowDown);
+    pub(crate) const ARROW_LEFT: Self = icon!(ArrowLeft);
+    pub(crate) const ARROW_RIGHT: Self = icon!(ArrowRight);
+    pub(crate) const ARROW_UP: Self = icon!(ArrowUp);
+    pub(crate) const FORK: Self = icon!(GitBranch);
+    pub(crate) const CHECK: Self = icon!(Check);
+    pub(crate) const CHEVRON_DOWN: Self = icon!(ChevronDown);
+    pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight);
     #[cfg(desktop)]
-    pub(crate) const CHEVRON_UP: Self = icon!(ChevronUp, "chevron.up");
-    pub(crate) const CLOSE: Self = icon!(X, "xmark");
-    pub(crate) const COPY: Self = icon!(Copy, "doc.on.doc");
+    pub(crate) const CHEVRON_UP: Self = icon!(ChevronUp);
+    pub(crate) const CLOSE: Self = icon!(X);
+    pub(crate) const COPY: Self = icon!(Copy);
     #[cfg(desktop)]
-    pub(crate) const DETAILS: Self = icon!(SquareMenu, "list.bullet.rectangle");
-    pub(crate) const DIFF: Self = icon!(Diff, "plusminus");
-    pub(crate) const ELLIPSIS: Self = icon!(Ellipsis, "ellipsis");
-    pub(crate) const WRENCH: Self = icon!(Wrench, "wrench.adjustable");
-    pub(crate) const TERMINAL: Self = icon!(SquareTerminal, "apple.terminal");
-    pub(crate) const FILE_PEN: Self = icon!(FilePen, "square.and.pencil");
-    pub(crate) const BRAIN: Self = icon!(Brain, "brain");
-    pub(crate) const REPLACE: Self = icon!(Replace, "arrow.left.arrow.right");
+    pub(crate) const DETAILS: Self = icon!(SquareMenu);
+    pub(crate) const DIFF: Self = icon!(Diff);
+    pub(crate) const ELLIPSIS: Self = icon!(Ellipsis);
+    pub(crate) const WRENCH: Self = icon!(Wrench);
+    pub(crate) const TERMINAL: Self = icon!(SquareTerminal);
+    pub(crate) const FILE_PEN: Self = icon!(FilePen);
+    pub(crate) const BRAIN: Self = icon!(Brain);
+    pub(crate) const REPLACE: Self = icon!(Replace);
     #[cfg(desktop)]
-    pub(crate) const FOLDER_OPEN: Self = icon!(FolderOpen, "folder");
-    pub(crate) const FILE_TEXT: Self = icon!(FileText, "doc");
-    pub(crate) const EXTERNAL_LINK: Self = icon!(ExternalLink, "arrow.up.right.square");
-    pub(crate) const FOLDER: Self = icon!(Folder, "folder");
-    pub(crate) const GLOBE: Self = icon!(Globe, "globe");
-    pub(crate) const NETWORK: Self = icon!(Network, "network");
-    pub(crate) const LAYOUT: Self = icon!(PanelsRightBottom, "rectangle.split.2x1");
-    pub(crate) const KEYBOARD: Self = icon!(Keyboard, "keyboard");
-    pub(crate) const FOLDER_PLUS: Self = icon!(FolderPlus, "folder.badge.plus");
-    pub(crate) const LOADER: Self = icon!(Loader, "progress.indicator");
-    pub(crate) const MERGE: Self = icon!(GitMerge, "arrow.triangle.merge");
+    pub(crate) const FOLDER_OPEN: Self = icon!(FolderOpen);
+    pub(crate) const FILE_TEXT: Self = icon!(FileText);
+    pub(crate) const EXTERNAL_LINK: Self = icon!(ExternalLink);
+    pub(crate) const FOLDER: Self = icon!(Folder);
+    pub(crate) const GLOBE: Self = icon!(Globe);
+    pub(crate) const NETWORK: Self = icon!(Network);
+    pub(crate) const LAYOUT: Self = icon!(PanelsRightBottom);
+    pub(crate) const KEYBOARD: Self = icon!(Keyboard);
+    pub(crate) const FOLDER_PLUS: Self = icon!(FolderPlus);
+    pub(crate) const LOADER: Self = icon!(Loader);
+    pub(crate) const MERGE: Self = icon!(GitMerge);
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub(crate) const MICROPHONE: Self = icon!(Mic, "mic");
+    pub(crate) const MICROPHONE: Self = icon!(Mic);
     #[cfg(not(target_os = "macos"))]
     pub(crate) const MONITOR: Self = icon!(Monitor);
-    pub(crate) const NEW_CHAT: Self = icon!(SquarePen, "square.and.pencil");
-    pub(crate) const PENCIL: Self = icon!(Pencil, "pencil");
+    pub(crate) const NEW_CHAT: Self = icon!(SquarePen);
+    pub(crate) const PENCIL: Self = icon!(Pencil);
     #[cfg(desktop)]
-    pub(crate) const PANEL_LEFT_CLOSE: Self = icon!(PanelLeftClose, "sidebar.left");
+    pub(crate) const PANEL_LEFT_CLOSE: Self = icon!(PanelLeftClose);
     #[cfg(desktop)]
-    pub(crate) const PANEL_LEFT_OPEN: Self = icon!(PanelLeftOpen, "sidebar.left");
-    pub(crate) const PANEL_RIGHT: Self = icon!(PanelRight, "sidebar.right");
-    pub(crate) const PLUS: Self = icon!(Plus, "plus");
-    pub(crate) const PUZZLE: Self = icon!(Puzzle, "puzzlepiece.extension");
-    pub(crate) const SHIELD: Self = icon!(Shield, "shield");
-    pub(crate) const SPARKLES: Self = icon!(Sparkles, "sparkles");
-    pub(crate) const QUESTION: Self = icon!(MessageCircleQuestionMark, "questionmark.bubble");
-    pub(crate) const REFRESH: Self = icon!(RotateCw, "arrow.clockwise");
-    pub(crate) const SHARE: Self = icon!(Share, "square.and.arrow.up");
-    pub(crate) const EXPAND_ALL: Self = icon!(ChevronsUpDown, "arrow.up.left.and.arrow.down.right");
-    pub(crate) const COLLAPSE_ALL: Self =
-        icon!(ChevronsDownUp, "arrow.down.right.and.arrow.up.left");
+    pub(crate) const PANEL_LEFT_OPEN: Self = icon!(PanelLeftOpen);
+    pub(crate) const PANEL_RIGHT: Self = icon!(PanelRight);
+    pub(crate) const PLUS: Self = icon!(Plus);
+    pub(crate) const PUZZLE: Self = icon!(Puzzle);
+    pub(crate) const SHIELD: Self = icon!(Shield);
+    pub(crate) const SPARKLES: Self = icon!(Sparkles);
+    pub(crate) const QUESTION: Self = icon!(MessageCircleQuestionMark);
+    pub(crate) const REFRESH: Self = icon!(RotateCw);
     #[cfg(desktop)]
-    pub(crate) const SETTINGS: Self = icon!(Settings, "gearshape");
+    pub(crate) const SEARCH: Self = icon!(Search);
+    pub(crate) const SHARE: Self = icon!(Share);
+    pub(crate) const EXPAND_ALL: Self = icon!(ChevronsUpDown);
+    pub(crate) const COLLAPSE_ALL: Self = icon!(ChevronsDownUp);
     #[cfg(desktop)]
-    pub(crate) const SLIDERS: Self = icon!(Settings2, "slider.horizontal.3");
+    pub(crate) const SETTINGS: Self = icon!(Settings);
     #[cfg(desktop)]
-    pub(crate) const FOLDER_TREE: Self = icon!(FolderTree, "folder");
+    pub(crate) const SLIDERS: Self = icon!(Settings2);
     #[cfg(desktop)]
-    pub(crate) const SERVER: Self = icon!(Server, "server.rack");
-    pub(crate) const BOT: Self = icon!(Bot, "cpu");
-    pub(crate) const STEER: Self = icon!(Redo2, "arrow.uturn.forward");
+    pub(crate) const FOLDER_TREE: Self = icon!(FolderTree);
+    #[cfg(desktop)]
+    pub(crate) const SERVER: Self = icon!(Server);
+    pub(crate) const BOT: Self = icon!(Bot);
+    pub(crate) const STEER: Self = icon!(Redo2);
     /// A filled square, which Lucide's outlined `square` is not.
     pub(crate) const STOP: Self = Self {
         markup: include_str!("../assets/stop.svg"),
-        #[cfg(target_os = "macos")]
-        symbol: "stop.fill",
     };
 }
 
@@ -260,11 +254,13 @@ pub(crate) fn spinner() -> impl IntoElement {
         .child(icon(Icon::LOADER, 14.0))
 }
 
-/// A control: nsh-base's button (focus, keys, accessibility) in the desktop client's
-/// ghost look, its content filling it.
+/// A text control: nsh-base's button in the desktop client's ghost look, or
+/// AppKit's own on the Mac.
 #[cfg(not(target_os = "macos"))]
 pub(crate) type Control = nsh_base::ButtonElement;
 
+/// nsh-base's button (focus, keys, accessibility) in the desktop client's
+/// ghost look, its content filling it.
 fn ghost(label: impl IntoReactive<SharedString>, content: View) -> nsh_base::ButtonElement {
     nsh_base::button()
         .accessibility_label(nsh_core::element::Prop::from(
@@ -283,34 +279,35 @@ fn ghost(label: impl IntoReactive<SharedString>, content: View) -> nsh_base::But
         .child(content.flex_row().items_center().min_w_0())
 }
 
-/// A small ghost icon button (24 pt, a 14 pt icon) with its label as tooltip.
-#[cfg(not(target_os = "macos"))]
+/// A small ghost icon button (24 pt, a 14 pt icon) with its label as
+/// tooltip, as the desktop client's `small` buttons. NSH draws it on every
+/// platform: AppKit's symbols differ in size and weight side by side, and its
+/// buttons measure themselves through SwiftUI, which scrolling rows cannot
+/// afford.
 pub(crate) fn icon_button(
     icon: Icon,
     label: impl IntoReactive<SharedString>,
     press: impl Fn() + 'static,
-) -> Control {
+) -> nsh_base::ButtonElement {
     icon_button_sized(icon, label, 24.0, 14.0, press)
 }
 
 /// An extra-small ghost icon button (20 pt, a 12 pt icon).
-#[cfg(not(target_os = "macos"))]
 pub(crate) fn small_icon_button(
     icon: Icon,
     label: impl IntoReactive<SharedString>,
     press: impl Fn() + 'static,
-) -> Control {
+) -> nsh_base::ButtonElement {
     icon_button_sized(icon, label, 20.0, 12.0, press)
 }
 
-#[cfg(not(target_os = "macos"))]
 pub(crate) fn icon_button_sized(
     glyph: Icon,
     label: impl IntoReactive<SharedString>,
     size: f32,
     icon_size: f32,
     press: impl Fn() + 'static,
-) -> Control {
+) -> nsh_base::ButtonElement {
     let label = label.into_reactive();
     ghost(
         label.clone(),
@@ -347,25 +344,8 @@ pub(crate) fn text_button(
     row_text_button(title, press)
 }
 
-/// A small ghost icon button (24 pt, a 14 pt icon) drawn by NSH on every
-/// platform, for controls repeated on each row of a list: AppKit's buttons
-/// measure themselves through SwiftUI, which scrolling cannot afford.
-pub(crate) fn row_icon_button(
-    glyph: Icon,
-    label: impl IntoReactive<SharedString>,
-    press: impl Fn() + 'static,
-) -> nsh_base::ButtonElement {
-    let label = label.into_reactive();
-    ghost(
-        label.clone(),
-        view().tooltip(tooltip(label)).child(icon(glyph, 14.0)),
-    )
-    .w(px(24.0))
-    .h(px(24.0))
-    .on_press(press)
-}
-
-/// A small ghost text button drawn by NSH, for the same rows.
+/// A small ghost text button drawn by NSH on every platform, for controls
+/// repeated on each row of a list.
 pub(crate) fn row_text_button(
     title: impl IntoReactive<SharedString>,
     press: impl Fn() + 'static,
@@ -381,12 +361,11 @@ pub(crate) fn row_text_button(
 }
 
 /// A ghost button with an icon and a label (32 pt), as the composer's folder.
-#[cfg(not(target_os = "macos"))]
 pub(crate) fn labeled_button(
     glyph: Icon,
     title: impl Fn() -> String + Copy + 'static,
     press: impl Fn() + 'static,
-) -> Control {
+) -> nsh_base::ButtonElement {
     ghost(
         move || SharedString::from(title()),
         view()
@@ -412,65 +391,10 @@ impl Enabled for nsh_base::ButtonElement {
     }
 }
 
-/// On the Mac a control is AppKit's own: a borderless `NSButton` with an SF Symbol,
+/// On the Mac a text control is AppKit's own: a borderless `NSButton`,
 /// placed and sized by NSH.
 #[cfg(target_os = "macos")]
 pub(crate) type Control = nsh_core::element::NativeView;
-
-#[cfg(target_os = "macos")]
-fn appkit_button(label: impl IntoReactive<SharedString>, press: impl Fn() + 'static) -> Control {
-    let label = label.into_reactive();
-    native("bex.button")
-        .prop(
-            "label",
-            label
-                .clone()
-                .map(|label| serde_json::json!(label.to_string())),
-        )
-        .prop(
-            "tooltip",
-            label.map(|label| serde_json::json!(label.to_string())),
-        )
-        .prop("appearance", serde_json::json!("plain"))
-        .on_native_event(move |event: &NativeEvent| {
-            if &*event.name == "press" {
-                press();
-            }
-        })
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn icon_button(
-    icon: Icon,
-    label: impl IntoReactive<SharedString>,
-    press: impl Fn() + 'static,
-) -> Control {
-    icon_button_sized(icon, label, 24.0, 14.0, press)
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn small_icon_button(
-    icon: Icon,
-    label: impl IntoReactive<SharedString>,
-    press: impl Fn() + 'static,
-) -> Control {
-    icon_button_sized(icon, label, 20.0, 12.0, press)
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn icon_button_sized(
-    glyph: Icon,
-    label: impl IntoReactive<SharedString>,
-    size: f32,
-    icon_size: f32,
-    press: impl Fn() + 'static,
-) -> Control {
-    appkit_button(label, press)
-        .prop("symbol", serde_json::json!(glyph.symbol))
-        .prop("symbolSize", serde_json::json!(icon_size))
-        .w(px(size))
-        .h(px(size))
-}
 
 #[cfg(target_os = "macos")]
 pub(crate) fn text_button(
@@ -478,24 +402,29 @@ pub(crate) fn text_button(
     press: impl Fn() + 'static,
 ) -> Control {
     let title = title.into_reactive();
-    appkit_button(title.clone(), press).prop(
-        "title",
-        title.map(|title| serde_json::json!(title.to_string())),
-    )
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn labeled_button(
-    glyph: Icon,
-    title: impl Fn() -> String + Copy + 'static,
-    press: impl Fn() + 'static,
-) -> Control {
-    appkit_button(move || SharedString::from(title()), press)
-        .prop("symbol", serde_json::json!(glyph.symbol))
-        .prop("symbolSize", serde_json::json!(16.0))
-        .prop("title", move || serde_json::json!(title()))
-        .min_w_0()
-        .max_w(px(260.0))
+    native("bex.button")
+        .prop(
+            "title",
+            title
+                .clone()
+                .map(|title| serde_json::json!(title.to_string())),
+        )
+        .prop(
+            "label",
+            title
+                .clone()
+                .map(|title| serde_json::json!(title.to_string())),
+        )
+        .prop(
+            "tooltip",
+            title.map(|title| serde_json::json!(title.to_string())),
+        )
+        .prop("appearance", serde_json::json!("plain"))
+        .on_native_event(move |event: &NativeEvent| {
+            if &*event.name == "press" {
+                press();
+            }
+        })
 }
 
 /// On Apple platforms the app's controls are the platform's native components.
@@ -513,23 +442,17 @@ impl Enabled for nsh_base::SwitchElement {
     }
 }
 
-/// A control shown as on: AppKit's selected state, or the selection fill.
+/// A control shown as on: selected for screen readers, on the selection fill.
 #[cfg(desktop)]
 pub(crate) trait Selected {
     fn selected_when(self, selected: impl Fn() -> bool + Copy + 'static) -> Self;
 }
 
-#[cfg(target_os = "macos")]
-impl Selected for Control {
+#[cfg(desktop)]
+impl Selected for nsh_base::ButtonElement {
     fn selected_when(self, selected: impl Fn() -> bool + Copy + 'static) -> Self {
-        self.prop("selected", move || serde_json::json!(selected()))
-    }
-}
-
-#[cfg(windows)]
-impl Selected for Control {
-    fn selected_when(self, selected: impl Fn() -> bool + Copy + 'static) -> Self {
-        self.style_when(selected, |s| s.bg(colors::SELECTED))
+        self.selected(selected)
+            .selected_style(|s| s.bg(colors::SELECTED))
     }
 }
 
@@ -624,17 +547,32 @@ pub(crate) fn search_field(
     }
 }
 
-/// The search field of a desktop list, borderless in AppKit's look on the Mac.
+/// The search field of a desktop list: a borderless field after a search
+/// icon, both centered on the row, as the desktop client's.
 #[cfg(desktop)]
-pub(crate) fn search(query: Signal<String>, placeholder: Option<&'static str>) -> SearchField {
-    let field = search_field(
-        move || query.get(),
-        move |text| query.set(text.to_owned()),
-        placeholder,
-    );
-    #[cfg(target_os = "macos")]
-    let field = field.prop("appearance", serde_json::json!("plain"));
-    field
+pub(crate) fn search(query: Signal<String>, placeholder: &'static str) -> View {
+    view()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .h(px(24.0))
+        .px_2()
+        .text_color(colors::MUTED)
+        .child(icon(Icon::SEARCH, 14.0))
+        .child(
+            nsh_core::element::input()
+                .auto_correct(false)
+                .auto_capitalize(AutoCapitalize::None)
+                .label(placeholder)
+                .placeholder(placeholder)
+                .value(move || query.get())
+                .on_change(move |text: &str| query.set(text.to_owned()))
+                .text_size(px(14.0))
+                .text_color(colors::FOREGROUND)
+                .placeholder_color(colors::MUTED)
+                .flex_1()
+                .min_w_0(),
+        )
 }
 
 /// A share of a known extent (a usage window): AppKit's or UIKit's indicator

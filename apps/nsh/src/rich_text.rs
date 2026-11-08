@@ -242,7 +242,7 @@ fn view_parts(
                                     },
                                     move || wrap.update(|wrap| *wrap = !*wrap),
                                 ))
-                                .child(crate::ui::row_icon_button(
+                                .child(crate::ui::icon_button(
                                     crate::ui::Icon::COPY,
                                     tr("コードをコピー"),
                                     move || {
