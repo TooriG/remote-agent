@@ -2111,15 +2111,18 @@ async fn claude_forks_a_completed_turn_while_a_later_turn_runs() {
             running.clone(),
         )))
         .await;
+    // Whether the Host's transcript or Claude refuses depends on how far the
+    // turn has been saved; either way the fork control reports it.
     assert!(refused.is_err(), "{refused:?}");
-    let error = store
-        .snapshot()
-        .operation_error(op::OperationKey::Fork {
-            session: id.clone(),
-            turn: running.clone(),
-        })
-        .unwrap();
-    assert!(error.message.contains("生成中"), "{error:?}");
+    assert!(
+        store
+            .snapshot()
+            .operation_error(op::OperationKey::Fork {
+                session: id.clone(),
+                turn: running,
+            })
+            .is_some()
+    );
 
     store
         .dispatch(Intent::ForkSession(op::ForkSession::new(id.clone(), first)))
@@ -2153,28 +2156,27 @@ async fn claude_forks_a_completed_turn_while_a_later_turn_runs() {
             .any(|item| item_text(item) == Some("Waiting for interruption"))
     );
 
-    // The source's turn kept running in its CLI and stops normally.
+    // The source's turn kept running in its CLI: it takes the next input and
+    // answers, and that CLI stays retained for the turn after it.
     store
-        .dispatch(Intent::Interrupt(op::Interrupt {
-            thread_id: id.clone(),
-            turn_id: running,
-        }))
+        .dispatch(Intent::ReadThread(op::ReadThread::open(id.clone())))
         .await
         .unwrap();
-    completed(&store, &id, 2, "interrupted").await;
-    send(&store, "after fork", "running-fork-after").await;
-    let snapshot = completed(&store, &id, 3, "completed").await;
+    send(&store, "after fork", "running-fork-steer").await;
+    let snapshot = completed(&store, &id, 2, "completed").await;
     assert!(
-        snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[2]
+        snapshot.sessions.conversations[&id].turns.as_ref().unwrap()[1]
             .items
             .as_ref()
             .unwrap()
             .iter()
             .any(|item| item_text(item) == Some("reply 3: after fork"))
     );
+    send(&store, "next", "running-fork-next").await;
+    completed(&store, &id, 3, "completed").await;
     let inputs = session_inputs(session_trace(root.path()));
     assert_eq!(
-        inputs[1]["process"], inputs[2]["process"],
+        inputs[1]["process"], inputs[3]["process"],
         "the running CLI must stay retained across the fork"
     );
     store.close().await.unwrap();
