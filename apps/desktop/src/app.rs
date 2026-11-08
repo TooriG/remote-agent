@@ -227,6 +227,7 @@ impl Desktop {
             Mode::Fixture { remote, cwd } => {
                 let initial_snapshot = agent_core::state::reduce(
                     &Snapshot::default(),
+                    "",
                     agent_core::state::Event::Intent(Intent::NewChat { cwd }),
                 )
                 .0;
@@ -235,8 +236,12 @@ impl Desktop {
         };
         initial_snapshot.catalog.ui_language = language;
         let initial_snapshot = Arc::new(initial_snapshot);
-        let publication =
-            agent_core::presentation::view::Presentation::project(initial_snapshot.clone(), None);
+        let publication = agent_core::presentation::view::Presentation::project(
+            initial_snapshot.clone(),
+            "",
+            None,
+        )
+        .unwrap();
         let (updates, incoming) = async_channel::unbounded();
         cx.spawn_in(window, async move |view, cx| {
             while let Ok(update) = incoming.recv().await {
@@ -400,8 +405,10 @@ impl Desktop {
                     Arc::make_mut(&mut view.snapshot).catalog.ui_language = language;
                     view.publication = agent_core::presentation::view::Presentation::project(
                         view.snapshot.clone(),
+                        "",
                         Some(&view.publication),
-                    );
+                    )
+                    .unwrap();
                     view.sync_inputs(window, cx);
                     view.publish_views(window, cx);
                 }
@@ -1028,23 +1035,23 @@ impl Desktop {
         let snapshot = publication.snapshot();
         let window_uses_snapshot =
             self.onboarding || self.import_projects || self.project_editor.is_some();
-        let navigation_changed = self.snapshot.pane.navigation != snapshot.pane.navigation;
+        let navigation_changed = self.publication.pane.navigation != publication.pane.navigation;
         let connection_changed = changes.groups.connection;
-        let application_error_changed = self.snapshot.pane.error != snapshot.pane.error;
-        self.publication = publication;
+        let application_error_changed = self.publication.pane.error != publication.pane.error;
+        let previous_publication = std::mem::replace(&mut self.publication, publication);
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
         if let Some(provider) = self.publication.settings.permission.load_provider {
             self.dispatch(Intent::ReadPermissionSettings(op::ReadPermissionSettings {
                 provider,
             }));
         }
-        if previous.pane.error != self.snapshot.pane.error
-            && let Some(error) = &self.snapshot.pane.error
+        if previous_publication.pane.error != self.publication.pane.error
+            && let Some(error) = &self.publication.pane.error
         {
             tracing::error!(target: "agent", operation = "store", message = %error);
         }
-        let navigated =
-            previous.pane.navigation.draft_key != self.snapshot.pane.navigation.draft_key;
+        let navigated = previous_publication.pane.navigation.draft_key
+            != self.publication.pane.navigation.draft_key;
         // Store snapshots may coalesce creation and send acceptance. Use the
         // durable core identity transition rather than transient pending sends.
         for (draft, session) in self.snapshot.sessions.draft_sessions.iter().filter(|_| {
@@ -1065,16 +1072,20 @@ impl Desktop {
                 self.panels = self.panels.clone().rekey(before, after);
             }
         }
-        let project_for_selected = |snapshot: &Snapshot| {
+        let project_for_selected = |snapshot: &Snapshot, selected: Option<&SessionRef>| {
             snapshot
-                .thread_metadata(snapshot.pane.navigation.thread_id.as_ref()?)
+                .thread_metadata(selected?)
                 .filter(|thread| thread.parent_id.is_none())?
                 .project_id
                 .as_ref()
                 .cloned()
         };
-        if (navigated || project_for_selected(&previous) != project_for_selected(&self.snapshot))
-            && let Some(project) = project_for_selected(&self.snapshot)
+        if (navigated
+            || project_for_selected(
+                &previous,
+                previous_publication.pane.navigation.thread_id.as_ref(),
+            ) != project_for_selected(&self.snapshot, self.selected()))
+            && let Some(project) = project_for_selected(&self.snapshot, self.selected())
         {
             self.dispatch(Intent::SetProjectExpanded {
                 project_id: project,
@@ -1108,7 +1119,7 @@ impl Desktop {
             .snapshot
             .input
             .drafts
-            .get(&self.snapshot.pane.navigation.draft_key)
+            .get(&self.publication.pane.navigation.draft_key)
             .map_or("", |draft| draft.text.as_str());
         if let Some(value) = self.composer.text.adopt(text) {
             self.composer
@@ -1124,7 +1135,7 @@ impl Desktop {
         if let Some(answer) = answer {
             self.question.set_value(answer, window, cx);
         }
-        let file = self.snapshot.pane.workspace.file.as_ref();
+        let file = self.publication.pane.workspace.file.as_ref();
         let text = file.map_or("", |file| {
             self.snapshot
                 .files
@@ -1153,10 +1164,10 @@ impl Desktop {
         }
     }
     fn draft_key(&self) -> &DraftKey {
-        &self.snapshot.pane.navigation.draft_key
+        &self.publication.pane.navigation.draft_key
     }
     fn selected(&self) -> Option<&SessionRef> {
-        self.snapshot.pane.navigation.thread_id.as_ref()
+        self.publication.pane.navigation.thread_id.as_ref()
     }
     fn thread(&self) -> Option<&Arc<Thread>> {
         self.selected()
@@ -1211,8 +1222,9 @@ impl Desktop {
             item_id,
         };
         if self
-            .snapshot
-            .operation_running(op::OperationKey::Item { item: read.clone() })
+            .publication
+            .context
+            .operation_running(&op::OperationKey::Item { item: read.clone() })
         {
             return;
         }
@@ -1332,7 +1344,7 @@ impl Desktop {
             self.pending_explanation = Some(text.into());
             return;
         };
-        let cwd = self.snapshot.selected_directory();
+        let cwd = self.publication.context.selected_directory();
         let Some(provider) = self
             .snapshot
             .model_provider_for_draft(self.draft_key().clone())
@@ -1392,9 +1404,9 @@ impl Desktop {
         );
     }
     fn refresh_review(&self) {
-        if !self.snapshot.selected_directory().is_empty() {
+        if !self.publication.context.selected_directory().is_empty() {
             self.dispatch(Intent::ReviewWorkspace(op::ReviewWorkspace {
-                cwd: self.snapshot.pane.navigation.cwd.clone(),
+                cwd: self.publication.pane.navigation.cwd.clone(),
             }));
         }
     }
@@ -1463,7 +1475,7 @@ impl Desktop {
                     };
                     let terminal = crate::terminal::Terminal::new(
                         session.host.store.clone(),
-                        self.snapshot.pane.navigation.cwd.clone(),
+                        self.publication.pane.navigation.cwd.clone(),
                         format!("agent-terminal-{}", uuid::Uuid::new_v4()),
                         window,
                         cx,
@@ -1480,7 +1492,7 @@ impl Desktop {
                     let Some(owner) = &self.session else {
                         return;
                     };
-                    let session = match owner.side(self.snapshot.selected_directory()) {
+                    let session = match owner.side(self.publication.context.selected_directory()) {
                         Ok(session) => session,
                         Err(error) => {
                             self.set_error(error);
@@ -1544,14 +1556,14 @@ impl Desktop {
             .as_ref()
             .and_then(|host| host.id.strip_prefix("wsl:"))
             .and_then(|distro| {
-                let cwd = if self.snapshot.pane.navigation.cwd.is_empty() {
+                let cwd = if self.publication.pane.navigation.cwd.is_empty() {
                     self.snapshot
                         .connection
                         .host_home_directory
                         .as_deref()
                         .unwrap_or("/home")
                 } else {
-                    self.snapshot.pane.navigation.cwd.as_str()
+                    self.publication.pane.navigation.cwd.as_str()
                 };
                 agent_local_host::wsl::to_unc(distro, cwd)
                     .ok()
@@ -1931,7 +1943,8 @@ mod completion_tests {
             };
             let session = SessionRef::new(ProviderKind::Codex, "question".into()).unwrap();
             let snapshot = Arc::make_mut(&mut view.snapshot);
-            let navigation = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation);
+            let navigation =
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation);
             navigation.thread_id = Some(session.clone());
             navigation.draft_key = session.clone().into();
             Arc::make_mut(&mut snapshot.sessions.conversations).insert(
@@ -1961,6 +1974,7 @@ mod completion_tests {
                     ..Default::default()
                 }),
             );
+            view.project_fixture();
             view.sync_inputs(window, cx);
             let answer = gpui::SharedString::from("質問への入力 {0}");
             view.question.text.record(answer.clone());

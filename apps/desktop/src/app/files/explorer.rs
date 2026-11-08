@@ -150,7 +150,8 @@ mod tests {
         window.update(|_, cx| {
             desktop.update(cx, |view, cx| {
                 Arc::make_mut(
-                    &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
+                    &mut Arc::make_mut(Arc::make_mut(&mut view.snapshot).panes.primary_mut())
+                        .navigation,
                 )
                 .cwd = "/workspace".into();
                 view.file_explorer.storage = Some(storage.clone());

@@ -380,9 +380,9 @@ impl Desktop {
     pub(in crate::app) fn publish_workspace(&self, cx: &mut Context<Self>) {
         let model = WorkspaceModel {
             connected: self.snapshot.connection.connected,
-            cwd: self.snapshot.pane.navigation.cwd.clone(),
-            directory: self.snapshot.selected_directory(),
-            review: self.snapshot.pane.workspace.review.clone(),
+            cwd: self.publication.pane.navigation.cwd.clone(),
+            directory: self.publication.context.selected_directory(),
+            review: self.publication.pane.workspace.review.clone(),
             local_shell: self.local_shell,
             editors: self
                 .snapshot

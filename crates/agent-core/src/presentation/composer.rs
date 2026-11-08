@@ -1,5 +1,5 @@
 //! A composer's own inputs and controls, independent of transcript deltas.
-use super::{conversation::Request, error::ErrorText, model_settings::ModelQuickControls};
+use super::model_settings::ModelQuickControls;
 use crate::{
     models::{Model, ModelRef},
     session::ProviderKind,
@@ -9,13 +9,6 @@ use crate::{
     },
 };
 use std::sync::{Arc, OnceLock};
-
-#[derive(Clone, PartialEq)]
-#[cfg_attr(feature = "bindings", derive(uniffi::Record))]
-pub struct RequestControl {
-    pub id: agent_protocol::ids::RequestId,
-    pub phase: Option<OperationPhase>,
-}
 
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
@@ -31,8 +24,6 @@ pub struct ComposerControls {
     pub interrupt_phase: Option<OperationPhase>,
     pub unavailable: Option<String>,
     pub question: Option<crate::questions::QuestionPrompt>,
-    pub request: Option<Request>,
-    pub requests: Vec<RequestControl>,
 }
 
 #[cfg_attr(feature = "bindings", derive(uniffi::Object))]
@@ -52,24 +43,25 @@ impl ComposerPresentation {
             && self.models.same(&other.models)
             && self.catalog.same(&other.catalog)
     }
-    pub(crate) fn project(snapshot: &Snapshot, previous: Option<&Arc<Self>>) -> Arc<Self> {
+    pub(crate) fn project(
+        snapshot: &Snapshot,
+        pane: &crate::state::PaneState,
+        previous: Option<&Arc<Self>>,
+    ) -> Arc<Self> {
         static EMPTY: OnceLock<Arc<Draft>> = OnceLock::new();
-        let key = &snapshot.pane.navigation.draft_key;
+        let key = &pane.navigation.draft_key;
         let draft = snapshot
             .input
             .drafts
             .get(key)
             .cloned()
             .unwrap_or_else(|| EMPTY.get_or_init(Arc::default).clone());
-        let session = snapshot.pane.navigation.thread_id.as_ref();
+        let session = pane.navigation.thread_id.as_ref();
         let thread = session.and_then(|id| snapshot.sessions.conversations.get(id));
         let running_turn = thread.and_then(|thread| thread.active_turn_id());
         let provider = snapshot.model_provider_for_draft(key.clone());
-        let requests = session
-            .map(|id| snapshot.docked_requests(id.clone()))
-            .unwrap_or_default();
         let controls = ComposerControls {
-            navigation: snapshot.pane.navigation.as_ref().clone(),
+            navigation: pane.navigation.as_ref().clone(),
             connected: snapshot.connection.connected,
             provider,
             selected_model: draft.model.clone().or_else(|| {
@@ -94,29 +86,11 @@ impl ComposerPresentation {
             unavailable: session
                 .and_then(|id| snapshot.input_unavailable_reason(id.clone(), provider)),
             question: session.and_then(|id| snapshot.question_prompt(id.clone())),
-            request: requests
-                .iter()
-                .find(|request| {
-                    !matches!(
-                        request.request_body,
-                        agent_protocol::requests::RequestBody::Question { .. }
-                    )
-                })
-                .cloned(),
-            requests: requests
-                .iter()
-                .map(|request| RequestControl {
-                    id: request.id.clone(),
-                    phase: snapshot.operation_phase(OperationKey::Request {
-                        id: request.id.clone(),
-                    }),
-                })
-                .collect(),
         };
         let catalog = snapshot
             .catalog
             .composer_catalogs
-            .get(&snapshot.pane.navigation.cwd)
+            .get(&pane.navigation.cwd)
             .cloned();
         let next = Self {
             language: snapshot.catalog.ui_language,
@@ -174,10 +148,6 @@ impl Snapshot {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl ComposerPresentation {
-    #[cfg_attr(feature = "bindings", uniffi::constructor)]
-    pub fn from_snapshot(snapshot: Arc<Snapshot>) -> Arc<Self> {
-        Self::project(&snapshot, None)
-    }
     pub fn draft(&self) -> Draft {
         self.draft.as_ref().clone()
     }
@@ -186,21 +156,6 @@ impl ComposerPresentation {
     }
     pub fn current_model(&self) -> Option<Model> {
         super::model_settings::current_model(&self.models, self.draft.model.as_ref()).cloned()
-    }
-    pub fn request_phase(&self, id: agent_protocol::ids::RequestId) -> Option<OperationPhase> {
-        self.controls
-            .requests
-            .iter()
-            .find(|request| request.id == id)
-            .and_then(|request| request.phase.clone())
-    }
-    pub fn request_error(&self, id: agent_protocol::ids::RequestId) -> Option<ErrorText> {
-        match self.request_phase(id) {
-            Some(OperationPhase::Failed { message }) => {
-                Some(super::error::error_text(self.language, &message))
-            }
-            _ => None,
-        }
     }
     pub fn composer_suggestions(
         &self,

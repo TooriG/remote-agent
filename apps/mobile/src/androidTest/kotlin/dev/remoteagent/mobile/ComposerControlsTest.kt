@@ -74,7 +74,10 @@ class ComposerControlsTest {
                 MaterialTheme {
                     DraftAttachments(
                         listOf(Attachment("/fixture/notes.txt", "notes.txt", false)),
-                        snapshot.navigation().draftKey,
+                        dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "")
+                            .conversationContext()
+                            .navigation()
+                            .draftKey,
                         { intent, complete ->
                             intents.add(intent)
                             complete(Result.failure(IOException("preview transfer unavailable")))

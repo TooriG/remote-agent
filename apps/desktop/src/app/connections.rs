@@ -269,10 +269,24 @@ mod tests {
                     cx,
                 );
                 assert_eq!(
-                    distant.snapshot().pane.navigation.thread_id.as_ref(),
+                    distant
+                        .snapshot()
+                        .panes
+                        .primary()
+                        .navigation
+                        .thread_id
+                        .as_ref(),
                     Some(&id)
                 );
-                assert!(local.snapshot().pane.navigation.thread_id.is_none());
+                assert!(
+                    local
+                        .snapshot()
+                        .panes
+                        .primary()
+                        .navigation
+                        .thread_id
+                        .is_none()
+                );
                 assert!(view.connection_selection.all);
                 assert_eq!(
                     view.connection_selection.host_id.as_deref(),

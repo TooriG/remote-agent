@@ -1278,7 +1278,13 @@ mod tests {
             }
         }
         assert!(
-            store.snapshot().pane.navigation.thread_id.is_none(),
+            store
+                .snapshot()
+                .panes
+                .primary()
+                .navigation
+                .thread_id
+                .is_none(),
             "dragging must not open the chat"
         );
     }
@@ -1319,9 +1325,9 @@ mod tests {
                      "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5, }))
                 .unwrap(),
             ));
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
                 Some(session.clone());
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key =
                 session.clone().into();
             Arc::make_mut(&mut snapshot.input.drafts).insert(
                 session.into(),
@@ -1490,7 +1496,7 @@ mod tests {
         });
         view.update(window, |view, cx| {
             let snapshot = Arc::make_mut(&mut view.snapshot);
-            let draft = snapshot.pane.navigation.draft_key.clone();
+            let draft = snapshot.panes.primary().navigation.draft_key.clone();
             Arc::make_mut(&mut snapshot.input.drafts).insert(
                 draft,
                 Arc::new(Draft {
@@ -1504,8 +1510,9 @@ mod tests {
         assert_eq!(renders.get(), 0, "typing must not rebuild the sidebar");
         view.update(window, |view, cx| {
             let snapshot = Arc::make_mut(&mut view.snapshot);
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
                 Some(session);
+            view.project_fixture();
             cx.notify();
         });
         window.run_until_parked();
@@ -1648,7 +1655,8 @@ mod tests {
             assert_eq!(
                 store
                     .snapshot()
-                    .pane
+                    .panes
+                    .primary()
                     .navigation
                     .thread_id
                     .as_ref()

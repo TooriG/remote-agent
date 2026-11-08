@@ -36,7 +36,11 @@ async fn wait_for(store: &Store, condition: impl Fn(&Snapshot) -> bool) {
     let mut updates = store.subscribe();
     loop {
         let snapshot = updates.borrow_and_update().clone();
-        assert!(snapshot.pane.error.is_none(), "{:?}", snapshot.pane.error);
+        assert!(
+            snapshot.panes.primary().error.is_none(),
+            "{:?}",
+            snapshot.panes.primary().error
+        );
         if condition(&snapshot) {
             return;
         }
@@ -225,7 +229,14 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
         let source = workspace.path().join("screenshot.png");
         let bytes = b"captured image";
         std::fs::write(&source, bytes).unwrap();
-        let draft_key = fixture.store.snapshot().pane.navigation.draft_key.clone();
+        let draft_key = fixture
+            .store
+            .snapshot()
+            .panes
+            .primary()
+            .navigation
+            .draft_key
+            .clone();
         let upload = fixture
             .store
             .dispatch(Intent::UploadAttachment(op::UploadAttachment {
@@ -344,7 +355,7 @@ async fn attachments_outlive_worktrees_while_linked_images_fail_only_their_downl
             "ファイルまたはフォルダが見つかりません。"
         );
         let after = fixture.store.snapshot();
-        assert!(after.pane.error.is_none());
+        assert!(after.panes.primary().error.is_none());
         assert!(after.connection.connected);
         assert_eq!(after.sessions.conversations, before.sessions.conversations);
         assert_eq!(after.input.drafts, before.input.drafts);

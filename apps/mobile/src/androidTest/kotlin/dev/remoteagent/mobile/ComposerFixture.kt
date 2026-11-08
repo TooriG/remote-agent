@@ -2,10 +2,8 @@ package dev.remoteagent.mobile
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import dev.remoteagent.core.ComposerPresentation
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.Outcome
-import dev.remoteagent.core.SettingsPresentation
 import dev.remoteagent.core.Snapshot
 
 @Composable
@@ -14,8 +12,15 @@ internal fun ModelPickerFixture(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    ModelPickerButton(ComposerPresentation.fromSnapshot(snapshot), perform, modifier) { selected, dismiss ->
-        ModelPickerDialog(SettingsPresentation.fromSnapshot(snapshot), selected, perform, dismiss)
+    ModelPickerButton(dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "").composer(), perform, modifier) {
+        selected,
+        dismiss ->
+        ModelPickerDialog(
+            dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "").settings(),
+            selected,
+            perform,
+            dismiss,
+        )
     }
 }
 
@@ -27,11 +32,16 @@ internal fun ComposerFixture(
     attach: @Composable ((Boolean) -> Unit) -> Unit,
 ) {
     ThreadComposer(
-        ComposerPresentation.fromSnapshot(snapshot),
+        dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "").composer(),
         perform,
         onSend,
         settings = { selected, dismiss ->
-            ModelPickerDialog(SettingsPresentation.fromSnapshot(snapshot), selected, perform, dismiss)
+            ModelPickerDialog(
+                dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "").settings(),
+                selected,
+                perform,
+                dismiss,
+            )
         },
         attach = attach,
     )
@@ -43,5 +53,5 @@ internal fun VoiceInputFixture(
     perform: (Intent, (Result<Outcome>) -> Unit) -> Unit,
     enabled: Boolean,
 ) {
-    VoiceInputButton(ComposerPresentation.fromSnapshot(snapshot), perform, enabled)
+    VoiceInputButton(dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "").composer(), perform, enabled)
 }

@@ -6,10 +6,10 @@ impl Operation for ScanProjects {
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::ProjectScan)
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         ensure_idle(snapshot)
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, output: Self::Output) -> Vec<Effect> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -65,13 +65,13 @@ pub struct ImportProjects {}
 impl Operation for ImportProjects {
     type Input = Vec<String>;
     type Output = agent_protocol::project_import::ProjectImportResult;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         Ok(snapshot.project_import.selected.iter().cloned().collect())
     }
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::ProjectImport)
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         ensure_idle(snapshot)?;
         if snapshot.project_import.selected.is_empty() {
             return Err("取り込むプロジェクトを選択してください。".into());
@@ -88,7 +88,7 @@ impl Operation for ImportProjects {
             .call(&agent_protocol::project_import::ImportProjects { paths })
             .await
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, output: Self::Output) -> Vec<Effect> {
         let state = Arc::make_mut(&mut snapshot.project_import);
         for path in &output.imported {
             state.selected.remove(path);
@@ -137,6 +137,7 @@ mod tests {
         );
         (snapshot, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::SelectImportProject {
                 path: "/a".into(),
                 selected: false,
@@ -200,6 +201,7 @@ mod tests {
         for path in ["/unknown", "/true"] {
             (snapshot, _) = reduce_intent(
                 &snapshot,
+                "",
                 Intent::SelectImportProject {
                     path: path.into(),
                     selected: true,
@@ -209,11 +211,15 @@ mod tests {
         }
         (snapshot, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::SelectAllImportProjects { selected: true },
         );
-        assert_eq!(ImportProjects {}.capture(&snapshot).unwrap(), ["/false"]);
+        assert_eq!(
+            ImportProjects {}.capture(&snapshot, "").unwrap(),
+            ["/false"]
+        );
         for key in [OperationKey::ProjectScan, OperationKey::ProjectImport] {
-            snapshot.operations.insert(
+            Arc::make_mut(&mut snapshot.operations).insert(
                 key.clone(),
                 OperationState {
                     generation: 1,
@@ -222,6 +228,7 @@ mod tests {
             );
             let (blocked, _) = reduce_intent(
                 &snapshot,
+                "",
                 Intent::SelectAllImportProjects { selected: false },
             );
             assert_eq!(
@@ -230,6 +237,7 @@ mod tests {
             );
             let (blocked, _) = reduce_intent(
                 &snapshot,
+                "",
                 Intent::SelectImportProject {
                     path: "/false".into(),
                     selected: false,
@@ -239,17 +247,18 @@ mod tests {
                 blocked.project_import.selected,
                 snapshot.project_import.selected
             );
-            assert!(ScanProjects {}.prepare(&mut snapshot).is_err());
-            assert!(ImportProjects {}.prepare(&mut snapshot).is_err());
-            snapshot.operations.remove(&key);
+            assert!(ScanProjects {}.prepare(&mut snapshot, "").is_err());
+            assert!(ImportProjects {}.prepare(&mut snapshot, "").is_err());
+            Arc::make_mut(&mut snapshot.operations).remove(&key);
         }
         let (other, _) = reduce_event(&snapshot, Event::StorageScope("another-host".into()));
         assert_eq!(*other.project_import, Default::default());
         (snapshot, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::SelectAllImportProjects { selected: false },
         );
-        assert!(ImportProjects {}.prepare(&mut snapshot).is_err());
+        assert!(ImportProjects {}.prepare(&mut snapshot, "").is_err());
     }
 
     #[test]
@@ -272,17 +281,17 @@ mod tests {
         Arc::make_mut(&mut snapshot.project_import)
             .selected
             .insert("/b".into());
-        let navigation = snapshot.pane.navigation.clone();
+        let navigation = snapshot.panes.primary().navigation.clone();
         let drafts = snapshot.input.drafts.clone();
         let result = ProjectImportResult {
             imported: vec!["/a".into()],
             errors: [("/b".into(), "permission denied".into())].into(),
         };
-        let effects = ImportProjects {}.apply(&mut snapshot, result.clone());
+        let effects = ImportProjects {}.apply(&mut snapshot, "", result.clone());
         assert_eq!(snapshot.project_import.result, Some(result));
         assert!(snapshot.project_import.scan.as_ref().unwrap().projects[0].registered);
-        assert_eq!(ImportProjects {}.capture(&snapshot).unwrap(), ["/b"]);
-        assert_eq!(snapshot.pane.navigation, navigation);
+        assert_eq!(ImportProjects {}.capture(&snapshot, "").unwrap(), ["/b"]);
+        assert_eq!(snapshot.panes.primary().navigation, navigation);
         assert_eq!(snapshot.input.drafts, drafts);
         assert_eq!(effects.len(), 1, "refresh the registered project list");
     }

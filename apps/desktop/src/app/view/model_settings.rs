@@ -1715,10 +1715,10 @@ mod tests {
                     id: "existing".into(),
                 };
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
-                    Some(session.clone());
-                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
-                    session.clone().into();
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
+                    .thread_id = Some(session.clone());
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
+                    .draft_key = session.clone().into();
                 Arc::make_mut(&mut snapshot.input.drafts).insert(session.into(), Arc::new(draft));
                 view.preferences.update(cx, |preferences, _| {
                     preferences.model_controls.provider = None;
@@ -1942,7 +1942,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let key = snapshot.pane.navigation.draft_key.clone();
+        let key = snapshot.panes.primary().navigation.draft_key.clone();
         let official = snapshot.catalog.models[0].model.clone();
         Arc::make_mut(&mut snapshot.input.drafts).insert(
             key,

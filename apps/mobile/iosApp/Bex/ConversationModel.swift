@@ -52,7 +52,7 @@ final class ConversationModel {
         conversationContext = empty.conversationContext()
         self.composer = composer
         composerControls = composer.controls()
-        files = snapshot.files()
+        files = snapshot.files(paneId: "")!
         if let value = try? currentPresentation() {
             publish(value)
         }
@@ -106,8 +106,8 @@ final class ConversationModel {
 
     func publish(_ value: Presentation) {
         let changes = value.changes(previous: publication)
-        guard changes.changed else { return }
         let next = value.snapshot()
+        guard changes.changed, let nextFiles = next.files(paneId: value.paneId()) else { return }
         migrateWorkbench(to: next)
         publication = value
         if changes.settings {
@@ -125,7 +125,6 @@ final class ConversationModel {
         if changes.agents {
             agents = value.agents()
         }
-        let nextFiles = next.files()
         if changes.groups.terminals {
             terminals = next.terminals()
         }
@@ -269,7 +268,7 @@ extension ConversationModel {
     }
 
     var dockedRequest: Request? {
-        composerControls.request
+        conversationContext.dockedRequest()
     }
 
     func answerQuestion(_ requestId: String, _ action: QuestionAction) {

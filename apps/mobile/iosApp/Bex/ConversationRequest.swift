@@ -348,7 +348,7 @@ extension ConversationComposer {
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.capsule)
         .disabled(!question.canAdvance || !model.isConnected
-            || model.composer.requestPhase(id: question.requestId) == .running)
+            || model.conversationContext.requestPhase(id: question.requestId) == .running)
         .accessibilityIdentifier("request.send")
     }
 

@@ -118,10 +118,10 @@ fn operation_notice(key: &OperationKey) -> Option<(ErrorScope, &'static str)> {
         SessionList | SessionPage { .. } => (Projects, "会話一覧を読み込めませんでした"),
         ProjectScan => (Projects, "プロジェクトを検索できませんでした"),
         ProjectImport => (Projects, "プロジェクトを取り込めませんでした"),
-        Directory => (Workspace, "フォルダを読み込めませんでした"),
-        File => (Workspace, "ファイルを読み込めませんでした"),
+        Directory { .. } => (Workspace, "フォルダを読み込めませんでした"),
+        File { .. } => (Workspace, "ファイルを読み込めませんでした"),
         SaveFile { .. } => (Workspace, "ファイルを保存できませんでした"),
-        WorkspaceReview => (Workspace, "変更を読み込めませんでした"),
+        WorkspaceReview { .. } => (Workspace, "変更を読み込めませんでした"),
         CodexCli => (Settings, "Codex CLIの操作に失敗しました"),
         ProviderSettings => (Settings, "プロバイダーの設定を変更できませんでした"),
         HostSoftware => (Settings, "ホストのバージョン情報を取得できませんでした"),
@@ -191,17 +191,21 @@ impl Snapshot {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl Snapshot {
-    pub fn error_notices(&self, scope: ErrorScope) -> Vec<ErrorNotice> {
+    pub fn error_notices(&self, pane_id: &str, scope: ErrorScope) -> Vec<ErrorNotice> {
         let language = self.catalog.ui_language;
         let mut notices = Vec::new();
         if scope == ErrorScope::Application {
             let application = [
                 (
-                    &self.connection.connection_failure,
+                    self.connection.connection_failure.as_ref(),
                     "接続",
                     "ホストに接続できません",
                 ),
-                (&self.pane.error, "操作", "操作に失敗しました"),
+                (
+                    self.panes.get(pane_id).and_then(|pane| pane.error.as_ref()),
+                    "操作",
+                    "操作に失敗しました",
+                ),
             ];
             for (error, context, title) in application {
                 if let Some(error) = error {
@@ -218,6 +222,9 @@ impl Snapshot {
             }
         }
         for (key, state) in self.operations.iter() {
+            if key.pane().is_some_and(|owner| owner != pane_id) {
+                continue;
+            }
             let OperationPhase::Failed { message } = &state.phase else {
                 continue;
             };
@@ -904,7 +911,7 @@ mod notice_tests {
     use std::sync::Arc;
 
     fn failed(snapshot: &mut Snapshot, key: OperationKey, generation: u64, message: &str) {
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key,
             OperationState {
                 generation,
@@ -930,9 +937,15 @@ mod notice_tests {
             7,
             "request 42 timed out",
         );
-        let japanese = snapshot.error_notices(ErrorScope::Settings).pop().unwrap();
+        let japanese = snapshot
+            .error_notices("", ErrorScope::Settings)
+            .pop()
+            .unwrap();
         snapshot.catalog.ui_language = UiLanguage::English;
-        let english = snapshot.error_notices(ErrorScope::Settings).pop().unwrap();
+        let english = snapshot
+            .error_notices("", ErrorScope::Settings)
+            .pop()
+            .unwrap();
         assert_eq!(english.id, japanese.id);
         assert_eq!(english.context, "Settings");
         assert_eq!(english.title, "Could not read the Host version");
@@ -972,33 +985,39 @@ mod notice_tests {
             1,
             r#"remote RPC error: {"message":"send rejected","data":{"secret":"private"}}"#,
         );
-        let global = snapshot.error_notices(ErrorScope::Application);
-        let local = snapshot.error_notices(conversation(&draft));
+        let global = snapshot.error_notices("", ErrorScope::Application);
+        let local = snapshot.error_notices("", conversation(&draft));
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].context, "接続");
         assert_eq!(global[0].title, "ホストに接続できません");
-        let (recovered, _) = reduce(&snapshot, Event::Connected);
-        assert!(recovered.error_notices(ErrorScope::Application).is_empty());
+        let (recovered, _) = reduce(&snapshot, "", Event::Connected);
+        assert!(
+            recovered
+                .error_notices("", ErrorScope::Application)
+                .is_empty()
+        );
         assert_eq!(local.len(), 1);
         assert_eq!(local[0].context, "この会話");
         assert_eq!(local[0].title, "メッセージを送信できませんでした");
         assert_eq!(local[0].text.details.as_deref(), Some("send rejected"));
         let (next, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::DismissError {
                 id: local[0].id.clone(),
             }),
         );
         assert!(effects.is_empty());
-        assert!(next.error_notices(conversation(&draft)).is_empty());
-        assert_eq!(next.error_notices(ErrorScope::Application), global);
+        assert!(next.error_notices("", conversation(&draft)).is_empty());
+        assert_eq!(next.error_notices("", ErrorScope::Application), global);
         let (next, _) = reduce(
             &next,
+            "",
             Event::Intent(Intent::DismissError {
                 id: global[0].id.clone(),
             }),
         );
-        assert!(next.error_notices(ErrorScope::Application).is_empty());
+        assert!(next.error_notices("", ErrorScope::Application).is_empty());
     }
 
     #[test]
@@ -1022,8 +1041,12 @@ mod notice_tests {
             2,
             "account unavailable",
         );
-        assert!(snapshot.error_notices(conversation(&draft)).is_empty());
-        assert!(snapshot.error_notices(ErrorScope::Application).is_empty());
+        assert!(snapshot.error_notices("", conversation(&draft)).is_empty());
+        assert!(
+            snapshot
+                .error_notices("", ErrorScope::Application)
+                .is_empty()
+        );
         assert_eq!(
             snapshot
                 .history_control(session)
@@ -1033,7 +1056,7 @@ mod notice_tests {
                 .as_deref(),
             Some("history unavailable")
         );
-        let settings = snapshot.error_notices(ErrorScope::Settings);
+        let settings = snapshot.error_notices("", ErrorScope::Settings);
         assert_eq!(settings.len(), 1);
         assert_eq!(
             settings[0].text.details.as_deref(),
@@ -1052,16 +1075,17 @@ mod notice_tests {
         };
         let (next, effects) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::ListFiles(ListFiles {
                 path: "relative".into(),
             })),
         );
         assert!(effects.is_empty());
         assert_eq!(
-            next.error_notices(ErrorScope::Application),
-            snapshot.error_notices(ErrorScope::Application)
+            next.error_notices("", ErrorScope::Application),
+            snapshot.error_notices("", ErrorScope::Application)
         );
-        let notices = next.error_notices(ErrorScope::Workspace);
+        let notices = next.error_notices("", ErrorScope::Workspace);
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].text.message, "絶対パスを入力してください。");
         assert!(matches!(
@@ -1144,7 +1168,10 @@ mod notice_tests {
                     })
                     .is_none()
             );
-            snapshot.operations.get_mut(&key).unwrap().phase = OperationPhase::Running;
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(&key)
+                .unwrap()
+                .phase = OperationPhase::Running;
             assert!(snapshot.error_recovery(id).is_none());
         }
         for key in [
@@ -1169,14 +1196,14 @@ mod notice_tests {
                 connected: true,
                 ..Default::default()
             },
-            pane: Arc::new(crate::state::PaneState {
+            panes: crate::state::PaneStates::with_primary(Arc::new(crate::state::PaneState {
                 error: Some("save failed".into()),
                 ..Default::default()
-            }),
+            })),
             ..Default::default()
         };
         let notice = snapshot
-            .error_notices(ErrorScope::Application)
+            .error_notices("", ErrorScope::Application)
             .pop()
             .unwrap();
         assert_eq!(notice.title, "操作に失敗しました");
@@ -1184,19 +1211,20 @@ mod notice_tests {
             connection: crate::state::Connection {
                 ..snapshot.connection.clone()
             },
-            pane: Arc::new(crate::state::PaneState {
+            panes: crate::state::PaneStates::with_primary(Arc::new(crate::state::PaneState {
                 error: Some("connection lost".into()),
                 ..Default::default()
-            }),
+            })),
             ..snapshot
         };
         let (next, _) = reduce(
             &newer,
+            "",
             Event::Intent(Intent::DismissError { id: notice.id }),
         );
-        assert_eq!(next.pane.error, newer.pane.error);
-        let (next, _) = reduce(&next, Event::Connected);
-        assert!(next.error_notices(ErrorScope::Application).is_empty());
+        assert_eq!(next.panes.primary().error, newer.panes.primary().error);
+        let (next, _) = reduce(&next, "", Event::Connected);
+        assert!(next.error_notices("", ErrorScope::Application).is_empty());
     }
 
     #[tokio::test]
@@ -1205,7 +1233,7 @@ mod notice_tests {
         assert!(
             store
                 .snapshot()
-                .error_notices(ErrorScope::Application)
+                .error_notices("", ErrorScope::Application)
                 .is_empty()
         );
         assert!(
@@ -1219,11 +1247,14 @@ mod notice_tests {
         assert!(
             store
                 .snapshot()
-                .error_notices(ErrorScope::Application)
+                .error_notices("", ErrorScope::Application)
                 .is_empty()
         );
         assert_eq!(
-            store.snapshot().error_notices(ErrorScope::Settings).len(),
+            store
+                .snapshot()
+                .error_notices("", ErrorScope::Settings)
+                .len(),
             1
         );
         store.close().await.unwrap();
@@ -1233,9 +1264,15 @@ mod notice_tests {
     fn navigation_clears_workspace_failures_but_keeps_other_owners() {
         let mut snapshot = Snapshot::default();
         for key in [
-            OperationKey::File,
-            OperationKey::Directory,
-            OperationKey::WorkspaceReview,
+            OperationKey::File {
+                pane: String::new(),
+            },
+            OperationKey::Directory {
+                pane: String::new(),
+            },
+            OperationKey::WorkspaceReview {
+                pane: String::new(),
+            },
             OperationKey::SaveFile {
                 path: "/file".into(),
             },
@@ -1250,14 +1287,15 @@ mod notice_tests {
         );
         let (next, _) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::NewChat {
                 cwd: "/other".into(),
             }),
         );
-        assert!(next.error_notices(ErrorScope::Workspace).is_empty());
+        assert!(next.error_notices("", ErrorScope::Workspace).is_empty());
         assert_eq!(
-            next.error_notices(ErrorScope::Settings),
-            snapshot.error_notices(ErrorScope::Settings)
+            next.error_notices("", ErrorScope::Settings),
+            snapshot.error_notices("", ErrorScope::Settings)
         );
     }
 
@@ -1267,7 +1305,7 @@ mod notice_tests {
             provider: agent_protocol::session::ProviderKind::Codex,
         };
         let mut snapshot = Snapshot::default();
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key.clone(),
             OperationState {
                 generation: 1,
@@ -1276,6 +1314,7 @@ mod notice_tests {
         );
         let (next, _) = reduce(
             &snapshot,
+            "",
             Event::Intent(Intent::DismissError {
                 id: ErrorId::Operation {
                     key: key.clone(),
@@ -1297,15 +1336,17 @@ mod notice_tests {
             let mut snapshot = Snapshot::default();
             failed(&mut snapshot, key.clone(), 1, &message);
             failed(&mut snapshot, OperationKey::Submission { draft_key: other.clone() }, 100, "other failure");
-            let dismissed = snapshot.error_notices(conversation(&first)).pop().unwrap();
-            prop_assert_eq!(snapshot.error_notices(conversation(&other))[0].text.details.clone(), Some("other failure".into()));
-            snapshot.operations.insert(key.clone(), OperationState {
+            let dismissed = snapshot.error_notices("", conversation(&first)).pop().unwrap();
+            prop_assert_eq!(snapshot.error_notices("", conversation(&other))[0].text.details.clone(), Some("other failure".into()));
+            Arc::make_mut(&mut snapshot.operations).insert(key.clone(),
+            OperationState {
                 generation: newer,
                 phase: if running { OperationPhase::Running } else { OperationPhase::Failed { message: message.clone() } },
-            });
-            let (next, _) = reduce(&snapshot, Event::Intent(Intent::DismissError { id: dismissed.id }));
+            },
+            );
+            let (next, _) = reduce(&snapshot, "", Event::Intent(Intent::DismissError { id: dismissed.id }));
             prop_assert_eq!(next.operations.get(&key), snapshot.operations.get(&key));
-            prop_assert_eq!(next.error_notices(conversation(&other)), snapshot.error_notices(conversation(&other)));
+            prop_assert_eq!(next.error_notices("", conversation(&other)), snapshot.error_notices("", conversation(&other)));
         }
     }
 }

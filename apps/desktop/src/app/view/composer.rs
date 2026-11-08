@@ -710,7 +710,7 @@ impl Desktop {
             cwd: controls.navigation.cwd.clone(),
             selected_directory: self.publication.context.selected_directory(),
             has_session: controls.navigation.thread_id.is_some(),
-            review: self.snapshot.pane.workspace.review.clone(),
+            review: self.publication.pane.workspace.review.clone(),
             review_expanded: self.review_expanded,
             model_label: self
                 .publication
@@ -926,7 +926,7 @@ mod composer_tests {
         });
         let mut snapshot = Snapshot::default();
         Arc::make_mut(&mut snapshot.input.drafts).insert(
-            snapshot.pane.navigation.draft_key.clone(),
+            snapshot.panes.primary().navigation.draft_key.clone(),
             Arc::new(Draft {
                 text: "send once".into(),
                 model: Some(agent_protocol::models::ModelRef {
@@ -962,10 +962,18 @@ mod composer_tests {
         window.run_until_parked();
         window.simulate_keystrokes("enter");
         window.run_until_parked();
-        drop(store.dispatch(Intent::SetDraftText {
-            thread_id: store.snapshot().pane.navigation.draft_key.clone(),
-            text: "another message while sending".into(),
-        }));
+        drop(
+            store.dispatch(Intent::SetDraftText {
+                thread_id: store
+                    .snapshot()
+                    .panes
+                    .primary()
+                    .navigation
+                    .draft_key
+                    .clone(),
+                text: "another message while sending".into(),
+            }),
+        );
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 view.snapshot = store.snapshot();
@@ -1039,7 +1047,7 @@ mod composer_tests {
                     let previous = view.publication.clone();
                     view.project_fixture();
                     let changes = view.publication.changes(previous);
-                    assert!(changes.list && !changes.groups.pane);
+                    assert!(changes.list && !changes.groups.panes);
                     view.publish_views(window, cx);
                     let expected = name
                         .map(|name| vec![("project".into(), name.into())])
@@ -1119,7 +1127,8 @@ mod composer_tests {
             });
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                let navigation = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation);
+                let navigation =
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation);
                 navigation.thread_id = Some(session.clone());
                 navigation.draft_key = session.clone().into();
                 Arc::make_mut(&mut snapshot.sessions.conversations).insert(
@@ -1281,7 +1290,7 @@ mod composer_tests {
             desktop.update(cx, |view, cx| {
                 view.session.take();
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                snapshot.operations.remove(&key);
+                Arc::make_mut(&mut snapshot.operations).remove(&key);
                 let thread = Arc::make_mut(
                     Arc::make_mut(&mut snapshot.sessions.conversations)
                         .get_mut(&session)
@@ -1352,7 +1361,8 @@ mod composer_tests {
             });
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                let navigation = Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation);
+                let navigation =
+                    Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation);
                 navigation.thread_id = Some(session.clone());
                 navigation.draft_key = session.clone().into();
                 let mut thread = Thread {
@@ -1380,8 +1390,8 @@ mod composer_tests {
                         ..Default::default()
                     }),
                 );
-                view.sync_inputs(window, cx);
                 view.project_fixture();
+                view.sync_inputs(window, cx);
                 view.publish_views(window, cx);
             });
             handle = Some(desktop.clone());
@@ -1422,12 +1432,14 @@ mod composer_tests {
                     |view: &mut Desktop, action, window: &mut Window, cx: &mut Context<Desktop>| {
                         let (snapshot, _) = agent_core::state::reduce(
                             &view.snapshot,
+                            "",
                             agent_core::state::Event::Intent(Intent::AnswerQuestion {
                                 request_id: "request".into(),
                                 action,
                             }),
                         );
                         view.snapshot = Arc::new(snapshot);
+                        view.project_fixture();
                         view.sync_inputs(window, cx);
                     };
                 use agent_core::questions::QuestionAction;
@@ -1489,6 +1501,7 @@ mod composer_tests {
                     .unwrap()
                     .requests
                     .clear();
+                view.project_fixture();
                 cx.notify();
             })
         });
@@ -1517,6 +1530,7 @@ mod composer_tests {
                             },
                         }),
                     );
+                view.project_fixture();
                 view.sync_inputs(window, cx);
                 cx.notify();
             });

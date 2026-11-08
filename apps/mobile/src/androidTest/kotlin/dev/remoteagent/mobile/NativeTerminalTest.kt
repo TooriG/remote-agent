@@ -70,7 +70,7 @@ class NativeTerminalTest {
                 while (
                     withContext(Dispatchers.Main) {
                         assertNull("Pairing must not fail while waiting for models", model.notice)
-                        model.busy || !model.snapshot.connected() || model.snapshot.models().isEmpty()
+                        model.busy || !model.snapshot.connected() || model.settings.modelsMatching(null, "").isEmpty()
                     }
                 ) delay(20)
             }

@@ -114,7 +114,7 @@ impl Desktop {
             FileMenuTarget {
                 mention: file_tree_mention(
                     &key.root,
-                    &self.snapshot.pane.navigation.cwd,
+                    &self.publication.pane.navigation.cwd,
                     &relative,
                 ),
                 path,

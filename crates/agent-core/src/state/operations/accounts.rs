@@ -14,7 +14,12 @@ impl Operation for ListAccounts {
         Scheduling::LatestHostState(OperationKey::Accounts)
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, mut output: Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        mut output: Self::Output,
+    ) -> Vec<Effect> {
         let effects = output
             .accounts
             .iter_mut()
@@ -64,7 +69,7 @@ rpc::rpc_method!(ReadAccountUsage, ReadAccountUsage, |self| {
 
 impl Operation for ReadAccountUsage {
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, output: Self::Output) -> Vec<Effect> {
         if let Some(accounts) = &mut Arc::make_mut(&mut snapshot.catalog.account).accounts
             && let Some(account) = Arc::make_mut(accounts).accounts.iter_mut().find(|account| {
                 account.provider == self.provider
@@ -85,8 +90,8 @@ impl Operation for SelectAccount {
         Some(OperationKey::Accounts)
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
-        apply_selection(snapshot, output);
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
+        apply_selection(snapshot, pane_id, output);
         vec![
             Effect::execute(ListAccounts {}),
             Effect::execute(LoadModels {
@@ -96,7 +101,7 @@ impl Operation for SelectAccount {
     }
 }
 
-fn apply_selection(snapshot: &mut Snapshot, output: rpc::AccountSelection) {
+fn apply_selection(snapshot: &mut Snapshot, pane_id: &str, output: rpc::AccountSelection) {
     snapshot.catalog.composer_catalogs = Arc::default();
     let rpc::AccountSelection {
         selected_id,
@@ -107,8 +112,10 @@ fn apply_selection(snapshot: &mut Snapshot, output: rpc::AccountSelection) {
         let accounts = Arc::make_mut(accounts);
         accounts.selected.insert(provider, selected_id);
     }
-    if let Some(error) = persistence_error {
-        Arc::make_mut(&mut snapshot.pane).error = Some(error);
+    if let Some(error) = persistence_error
+        && let Some(pane) = snapshot.panes.get_mut(pane_id)
+    {
+        Arc::make_mut(pane).error = Some(error);
     }
 }
 
@@ -141,7 +148,12 @@ impl Operation for SelectAccountForDraft {
         Ok((selection, context.client.models(self.provider).await))
     }
 
-    fn apply(self, snapshot: &mut Snapshot, (selection, catalog): Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        pane_id: &str,
+        (selection, catalog): Self::Output,
+    ) -> Vec<Effect> {
         let previous_provider = snapshot.model_provider_for_draft(self.thread_id.clone());
         let mut draft = snapshot
             .input
@@ -150,10 +162,10 @@ impl Operation for SelectAccountForDraft {
             .map(|draft| (**draft).clone())
             .unwrap_or_default();
         let provider = selection.provider;
-        apply_selection(snapshot, selection);
+        apply_selection(snapshot, pane_id, selection);
         match catalog {
             Ok(catalog) => {
-                LoadModels { provider }.apply(snapshot, catalog);
+                LoadModels { provider }.apply(snapshot, pane_id, catalog);
                 if snapshot
                     .catalog
                     .models
@@ -187,7 +199,11 @@ impl Operation for SelectAccountForDraft {
                         .insert(self.thread_id, Arc::new(draft));
                 }
             }
-            Err(error) => Arc::make_mut(&mut snapshot.pane).error = Some(error.to_string()),
+            Err(error) => {
+                if let Some(pane) = snapshot.panes.get_mut(pane_id) {
+                    Arc::make_mut(pane).error = Some(error.to_string());
+                }
+            }
         }
         vec![Effect::execute(ListAccounts {})]
     }
@@ -202,7 +218,7 @@ impl Operation for StartAccountLogin {
         })
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, login: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, login: Self::Output) -> Vec<Effect> {
         let account = Arc::make_mut(&mut snapshot.catalog.account);
         account.login = Some(Arc::new(login));
         Vec::new()
@@ -230,7 +246,7 @@ impl Operation for ReadAccountLogin {
         })
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, status: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, status: Self::Output) -> Vec<Effect> {
         if status.completed {
             Arc::make_mut(&mut snapshot.catalog.account).login = None;
             if let Some(id) = status.account_id {
@@ -245,7 +261,7 @@ impl Operation for ReadAccountLogin {
                         id,
                     }),
                 };
-                let (updated, effects) = reduce(snapshot, Event::Intent(intent));
+                let (updated, effects) = reduce(snapshot, pane_id, Event::Intent(intent));
                 *snapshot = updated;
                 return effects;
             }
@@ -269,7 +285,7 @@ impl Operation for CancelAccountLogin {
         })
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         let account = Arc::make_mut(&mut snapshot.catalog.account);
         account.login = None;
         Vec::new()
@@ -286,7 +302,7 @@ impl Operation for LogoutAccount {
         Some(OperationKey::Accounts)
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.catalog.account).accounts = None;
         let mut effects = vec![
             Effect::execute(ListAccounts {}),
@@ -319,7 +335,12 @@ impl Operation for ReadDshCredentials {
         Some(OperationKey::DshCredentials)
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        credentials: Self::Output,
+    ) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials = Some(Arc::new(credentials));
         Vec::new()
     }
@@ -332,7 +353,12 @@ impl Operation for UpdateDshCredential {
         Some(OperationKey::DshCredentials)
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, credentials: Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        credentials: Self::Output,
+    ) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.catalog.account).dsh_credentials = Some(Arc::new(credentials));
         vec![
             Effect::execute(ListAccounts {}),
@@ -351,7 +377,7 @@ mod account_model_tests {
     #[rstest::rstest]
     fn catalogs_and_accounts_can_arrive_in_either_order(#[values(true, false)] models_first: bool) {
         let mut snapshot = Snapshot::default();
-        let key = snapshot.pane.navigation.draft_key.clone();
+        let key = snapshot.panes.primary().navigation.draft_key.clone();
         Arc::make_mut(&mut snapshot.input.drafts).insert(
             key.clone(),
             Arc::new(Draft {
@@ -388,12 +414,12 @@ mod account_model_tests {
                 },
             );
         } else {
-            ListAccounts {}.apply(&mut snapshot, accounts.clone());
+            ListAccounts {}.apply(&mut snapshot, "", accounts.clone());
         }
         assert!(snapshot.model_provider_for_draft(key.clone()).is_none());
         assert_eq!(snapshot.input.drafts[&explicit_key], explicit);
         if models_first {
-            ListAccounts {}.apply(&mut snapshot, accounts);
+            ListAccounts {}.apply(&mut snapshot, "", accounts);
         } else {
             crate::test_models::apply_catalog(&mut snapshot, models);
         }
@@ -412,7 +438,7 @@ mod account_model_tests {
             "accounts": [{"id":"a","provider":"codex","email":"a@example.invalid"}, {"id":"b","provider":"codex"}, {"id":"a","provider":"claude","email":"a@example.invalid"}],
             "selected":{"codex":"b","claude":"a"}
         })).unwrap();
-        let effects = ListAccounts {}.apply(&mut snapshot, accounts.clone());
+        let effects = ListAccounts {}.apply(&mut snapshot, "", accounts.clone());
         assert_eq!(effects.len(), 3);
         let usage = rpc::AccountUsage {
             windows: vec![],
@@ -424,8 +450,8 @@ mod account_model_tests {
             id: "a".into(),
             email: Some("a@example.invalid".into()),
         }
-        .apply(&mut snapshot, usage.clone());
-        ListAccounts {}.apply(&mut snapshot, accounts);
+        .apply(&mut snapshot, "", usage.clone());
+        ListAccounts {}.apply(&mut snapshot, "", accounts);
         let listed = snapshot.catalog.account.accounts.as_ref().unwrap();
         assert_eq!(
             listed
@@ -442,13 +468,13 @@ mod account_model_tests {
         assert!(listed.is_selected(&listed.accounts[2]));
         let mut changed = (**listed).clone();
         changed.accounts[0].email = Some("different@example.invalid".into());
-        ListAccounts {}.apply(&mut snapshot, changed);
+        ListAccounts {}.apply(&mut snapshot, "", changed);
         ReadAccountUsage {
             provider: crate::session::ProviderKind::Codex,
             id: "a".into(),
             email: Some("a@example.invalid".into()),
         }
-        .apply(&mut snapshot, usage.clone());
+        .apply(&mut snapshot, "", usage.clone());
         assert!(
             snapshot.catalog.account.accounts.as_ref().unwrap().accounts[0]
                 .usage
@@ -456,6 +482,7 @@ mod account_model_tests {
         );
         ListAccounts {}.apply(
             &mut snapshot,
+            "",
             serde_json::from_value(json!({"accounts":[],"selected":{}})).unwrap(),
         );
         ReadAccountUsage {
@@ -463,7 +490,7 @@ mod account_model_tests {
             id: "a".into(),
             email: Some("a@example.invalid".into()),
         }
-        .apply(&mut snapshot, usage);
+        .apply(&mut snapshot, "", usage);
         assert!(
             snapshot
                 .catalog
@@ -506,6 +533,7 @@ mod account_model_tests {
             }
             .apply(
                 snapshot,
+                "",
                 (
                     rpc::AccountSelection {
                         selected_id: id.into(),
@@ -619,9 +647,12 @@ mod account_model_tests {
             Some("b")
         );
         assert_eq!(
-            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
-                snapshot.clone()
-            ))
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(snapshot.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
             .models_matching(Some(crate::session::ProviderKind::Codex), String::new()),
             vec![restricted]
         );

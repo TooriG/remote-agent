@@ -90,8 +90,8 @@ struct ConversationComposer: View {
             if let request = model.dockedRequest {
                 RequestPanel(
                     request: request,
-                    busy: model.composer.requestPhase(id: request.id) == .running,
-                    error: model.composer.requestError(id: request.id),
+                    busy: model.conversationContext.requestPhase(id: request.id) == .running,
+                    error: model.conversationContext.requestError(id: request.id),
                     respond: { model.respond(request.id, $0) }
                 )
                 // Typed responses belong to one request.
@@ -100,8 +100,8 @@ struct ConversationComposer: View {
             if let question {
                 QuestionPanel(
                     prompt: question,
-                    busy: model.composer.requestPhase(id: question.requestId) == .running,
-                    error: model.composer.requestError(id: question.requestId),
+                    busy: model.conversationContext.requestPhase(id: question.requestId) == .running,
+                    error: model.conversationContext.requestError(id: question.requestId),
                     choose: { model.answerQuestion(question.requestId, .choose(choiceId: $0)) },
                     skip: { model.respond(question.requestId, .skipQuestions) }
                 )

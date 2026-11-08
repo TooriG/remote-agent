@@ -283,7 +283,7 @@ extension AppViewModel {
         }
         updateConnection(connected: next.connected(), loading: next.operationRunning(key: .sessionList))
         let scopes: [ErrorScope] = [.application, .projects, .settings, .workspace]
-        let notices = Dictionary(uniqueKeysWithValues: scopes.map { ($0, next.errorNotices(scope: $0)) })
+        let notices = Dictionary(uniqueKeysWithValues: scopes.map { ($0, next.errorNotices(paneId: "", scope: $0)) })
         if self.notices != notices {
             self.notices = notices
         }

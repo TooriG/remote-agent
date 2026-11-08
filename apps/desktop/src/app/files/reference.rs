@@ -23,7 +23,7 @@ impl Desktop {
         lookup_path: Option<&str>,
     ) -> FileMenuTarget {
         let root = agent_core::presentation::markdown::file_host_path(
-            self.snapshot.pane.navigation.cwd.clone(),
+            self.publication.pane.navigation.cwd.clone(),
             self.snapshot.connection.host_home_directory.clone(),
         );
         FileMenuTarget {

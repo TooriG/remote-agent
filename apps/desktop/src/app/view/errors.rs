@@ -62,7 +62,7 @@ impl Desktop {
     pub(in crate::app) fn error_rows(&self, scope: &ErrorScope) -> Vec<ErrorRow> {
         let mut rows: Vec<_> = self
             .snapshot
-            .error_notices(scope.clone())
+            .error_notices(&self.publication.pane_id, scope.clone())
             .into_iter()
             .map(|notice| ErrorRow {
                 notice,
@@ -372,8 +372,8 @@ mod tests {
                 view.dismiss_notice(&ErrorScope::Settings, device_id);
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connection.connected = true;
-                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
-                    first.clone();
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation)
+                    .draft_key = first.clone();
                 view.raise_notice(ErrorScope::Application, "draft persistence failed");
                 view.raise_notice(
                     ErrorScope::Conversation {
@@ -393,7 +393,8 @@ mod tests {
             window.update(|_, cx| {
                 desktop.update(cx, |view, cx| {
                     Arc::make_mut(
-                        &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
+                        &mut Arc::make_mut(Arc::make_mut(&mut view.snapshot).panes.primary_mut())
+                            .navigation,
                     )
                     .draft_key = key.clone();
                     view.project_fixture();

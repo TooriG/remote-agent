@@ -100,7 +100,7 @@ internal class AndroidAppModel(private val context: Context, private val prefere
     var composer by mutableStateOf(publication.composer())
         private set
 
-    var files by mutableStateOf(snapshot.files())
+    var files by mutableStateOf(requireNotNull(snapshot.files("")))
         private set
 
     var terminals by mutableStateOf(dev.remoteagent.core.Terminals.empty())
@@ -482,11 +482,11 @@ internal class AndroidAppModel(private val context: Context, private val prefere
         isConnected = next.connected()
         loadingThreads = next.operationRunning(OperationKey.SessionList)
         listQuery = next.listQuery()
-        applicationNotices = next.errorNotices(ErrorScope.Application)
-        projectNotices = next.errorNotices(ErrorScope.Projects)
-        if (changes.groups.files || changes.groups.pane) files = next.files()
+        applicationNotices = next.errorNotices("", ErrorScope.Application)
+        projectNotices = next.errorNotices("", ErrorScope.Projects)
+        if (changes.groups.files || changes.groups.panes) files = requireNotNull(next.files(value.paneId()))
         if (changes.groups.terminals) terminals = next.terminals()
-        fileLocation = FileLocation(next.navigation().cwd, next.hostHomeDirectory())
+        fileLocation = FileLocation(context.navigation().cwd, context.home())
         snapshot = next
         session?.persistenceError()?.let { notice = it }
     }

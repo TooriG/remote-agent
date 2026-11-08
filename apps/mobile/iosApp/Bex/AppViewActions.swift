@@ -117,7 +117,7 @@ extension AppViewModel {
     func openThread(_ id: SessionRef) {
         notice = nil
         perform(.readThread(ReadThread(threadId: id, open: true)))
-        if snapshot.navigation().threadId == id {
+        if publication.conversationContext().navigation().threadId == id {
             navigationPath = [.thread]
         }
     }

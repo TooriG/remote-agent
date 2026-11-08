@@ -60,7 +60,7 @@ class UnknownSubmissionTest {
                 MaterialTheme {
                     ThreadDetailFixture(
                         snapshot,
-                        projectConversationRows(snapshot, snapshot.conversationSource(), null),
+                        projectConversationRows(snapshot),
                         { intent, done ->
                             intents += intent
                             runBlocking { store.dispatch(intent).wait() }
@@ -79,8 +79,19 @@ class UnknownSubmissionTest {
             val restarted = AgentStore.offline(store.snapshot().serializeLocalState(), null, "test-revision")
             try {
                 restarted.dispatch(Intent.NewChat("/fixture")).wait()
-                assertNull(restarted.snapshot().conversationSource())
-                assertEquals("", restarted.snapshot().draft(restarted.snapshot().navigation().draftKey).text)
+                assertNull(dev.remoteagent.core.Presentation.fromSnapshot(restarted.snapshot(), "").conversation())
+                assertEquals(
+                    "",
+                    restarted
+                        .snapshot()
+                        .draft(
+                            dev.remoteagent.core.Presentation.fromSnapshot(restarted.snapshot(), "")
+                                .conversationContext()
+                                .navigation()
+                                .draftKey
+                        )
+                        .text,
+                )
             } finally {
                 restarted.shutdown()
             }
@@ -95,11 +106,8 @@ class UnknownSubmissionTest {
         try {
             val snapshot = store.snapshot()
             val item =
-                (requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null))
-                        .queuedRows()
-                        .single()
-                        .data()
-                        .content as dev.remoteagent.core.ConversationRowContent.User)
+                (requireNotNull(projectConversationRows(snapshot)).queuedRows().single().data().content
+                        as dev.remoteagent.core.ConversationRowContent.User)
                     .item
             val intents = mutableListOf<Intent>()
             compose.setContent {
@@ -119,8 +127,11 @@ class UnknownSubmissionTest {
             compose.onNodeWithText("下書きに戻す").performClick()
             assertTrue(intents.single() is Intent.RestoreUnknownSubmission)
             val next = store.snapshot()
-            assertNull(next.conversationSource())
-            val draft = next.draft(next.navigation().draftKey)
+            assertNull(dev.remoteagent.core.Presentation.fromSnapshot(next, "").conversation())
+            val draft =
+                next.draft(
+                    dev.remoteagent.core.Presentation.fromSnapshot(next, "").conversationContext().navigation().draftKey
+                )
             assertEquals("過去の指示", draft.text)
             assertEquals("/sent.txt", draft.attachments.single().path)
         } finally {
@@ -153,11 +164,8 @@ class UnknownSubmissionTest {
     fun sendingInputShowsTimeAndCopyWithoutDeliveryOrRecoveryLabels() {
         fixture(false).use { snapshot ->
             val item =
-                (requireNotNull(projectConversationRows(snapshot, snapshot.conversationSource(), null))
-                        .queuedRows()
-                        .single()
-                        .data()
-                        .content as dev.remoteagent.core.ConversationRowContent.User)
+                (requireNotNull(projectConversationRows(snapshot)).queuedRows().single().data().content
+                        as dev.remoteagent.core.ConversationRowContent.User)
                     .item
             compose.setContent { MaterialTheme { ThreadMessageCard(item, true, "/fixture", { _, _ -> }) } }
             val sentTime =
@@ -175,7 +183,17 @@ class UnknownSubmissionTest {
     @Test
     fun bulkDiscardPersistsWithoutSendingOrChangingCurrentDraft() = runBlocking {
         val store = AgentStore.offline(fixture(count = 3).use { it.serializeLocalState() }, null, "test-revision")
-        store.dispatch(Intent.SetDraftText(store.snapshot().navigation().draftKey, "編集中の下書き")).wait()
+        store
+            .dispatch(
+                Intent.SetDraftText(
+                    dev.remoteagent.core.Presentation.fromSnapshot(store.snapshot(), "")
+                        .conversationContext()
+                        .navigation()
+                        .draftKey,
+                    "編集中の下書き",
+                )
+            )
+            .wait()
         val current = mutableStateOf(store.snapshot())
         val intents = mutableListOf<Intent>()
         try {
@@ -184,7 +202,7 @@ class UnknownSubmissionTest {
                 MaterialTheme {
                     ThreadDetailFixture(
                         snapshot,
-                        projectConversationRows(snapshot, snapshot.conversationSource(), null),
+                        projectConversationRows(snapshot),
                         { intent, done ->
                             intents += intent
                             runBlocking { store.dispatch(intent).wait() }
@@ -203,8 +221,19 @@ class UnknownSubmissionTest {
             assertTrue(intents.all { it is Intent.DiscardUnknownSubmission })
             val restarted = AgentStore.offline(store.snapshot().serializeLocalState(), null, "test-revision")
             try {
-                assertNull(restarted.snapshot().conversationSource())
-                assertEquals("編集中の下書き", restarted.snapshot().draft(restarted.snapshot().navigation().draftKey).text)
+                assertNull(dev.remoteagent.core.Presentation.fromSnapshot(restarted.snapshot(), "").conversation())
+                assertEquals(
+                    "編集中の下書き",
+                    restarted
+                        .snapshot()
+                        .draft(
+                            dev.remoteagent.core.Presentation.fromSnapshot(restarted.snapshot(), "")
+                                .conversationContext()
+                                .navigation()
+                                .draftKey
+                        )
+                        .text,
+                )
             } finally {
                 restarted.shutdown()
             }

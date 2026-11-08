@@ -28,7 +28,7 @@ impl Operation for ManageCodexCli {
         Ok(status)
     }
 
-    fn apply(self, snapshot: &mut Snapshot, status: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, status: Self::Output) -> Vec<Effect> {
         Arc::make_mut(&mut snapshot.catalog.account).codex_cli = Some(Arc::new(status));
         Vec::new()
     }

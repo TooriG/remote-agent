@@ -16,9 +16,11 @@ pub mod rows;
 
 impl Snapshot {
     /// Display pending input before a new conversation has a server ID.
-    pub fn conversation_thread(&self) -> Option<Arc<models::Thread>> {
-        if let Some(source) = self
-            .pane
+    pub fn conversation_thread(
+        &self,
+        pane: &crate::state::PaneState,
+    ) -> Option<Arc<models::Thread>> {
+        if let Some(source) = pane
             .navigation
             .thread_id
             .as_ref()
@@ -29,7 +31,7 @@ impl Snapshot {
         self.sessions
             .pending_submissions
             .values()
-            .any(|pending| pending.draft_key == self.pane.navigation.draft_key)
+            .any(|pending| pending.draft_key == pane.navigation.draft_key)
             .then(|| {
                 Arc::new(models::Thread {
                     ..Default::default()
@@ -61,7 +63,7 @@ pub struct RenderedTurn {
     pub rows: Vec<ConversationRow>,
 }
 /// Native clients cache this layout per unchanged turn; expansion only filters activity rows.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ConversationRow {
     pub id: String,
@@ -87,7 +89,7 @@ fn turn_key(turn: &str, occurrence: usize) -> String {
     let scope = percent_encoding::utf8_percent_encode(turn, percent_encoding::NON_ALPHANUMERIC);
     format!("turn:{scope}:{occurrence}")
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Enum))]
 pub enum ConversationRowContent {
     Preparation {
@@ -263,6 +265,13 @@ pub struct RenderedItem {
     language: Option<UiLanguage>,
     pub source: ItemSource,
     pub data: ItemPresentation,
+}
+// Prepared bodies are immutable render resources. Reusing their identity avoids
+// comparing or preparing long Markdown bodies again in each native surface.
+impl PartialEq for RenderedItem {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
 }
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl RenderedItem {
@@ -886,7 +895,7 @@ mod preparation_tests {
         );
         let prepared = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread.clone()),
             &None,
@@ -900,7 +909,7 @@ mod preparation_tests {
         .submitted_at_ms = Some(13_000);
         let retimed = project_conversation(
             UiLanguage::Japanese,
-            &timed.pane.navigation.draft_key,
+            &timed.panes.primary().navigation.draft_key,
             &timed.sessions.pending_submissions,
             prepared.source.clone(),
             &Some(prepared.clone()),
@@ -926,7 +935,7 @@ mod preparation_tests {
         })]);
         let starting = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread.clone()),
             &Some(prepared.clone()),
@@ -952,7 +961,7 @@ mod preparation_tests {
         };
         let failed = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread.clone()),
             &Some(prepared.clone()),
@@ -980,7 +989,7 @@ mod preparation_tests {
         })]);
         let echoed = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread.clone()),
             &Some(failed),
@@ -990,7 +999,7 @@ mod preparation_tests {
         thread.preparation = None;
         let complete = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(thread),
             &Some(echoed),
@@ -1569,7 +1578,7 @@ mod tests {
         let snapshot = Snapshot::default();
         let rendered = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             source,
             &None,
@@ -1655,7 +1664,7 @@ mod tests {
         let snapshot = Snapshot::default();
         let live = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             source.clone(),
             &None,
@@ -1671,7 +1680,7 @@ mod tests {
         for previous in [None, Some(live.clone())] {
             let reopened = project_conversation(
                 UiLanguage::Japanese,
-                &snapshot.pane.navigation.draft_key,
+                &snapshot.panes.primary().navigation.draft_key,
                 &snapshot.sessions.pending_submissions,
                 restored.clone(),
                 &previous,
@@ -1729,7 +1738,7 @@ mod tests {
             models::TurnStatus::Interrupted;
         let updated = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             changed,
             &Some(live.clone()),
@@ -1793,7 +1802,7 @@ mod tests {
         let project = |language, previous: Option<Arc<RenderedConversation>>| {
             project_conversation(
                 language,
-                &snapshot.pane.navigation.draft_key,
+                &snapshot.panes.primary().navigation.draft_key,
                 &snapshot.sessions.pending_submissions,
                 source.clone(),
                 &previous,
@@ -1854,7 +1863,7 @@ mod tests {
             Arc::new(PendingSubmission {
                 sequence: 0,
                 submitted_at_ms: None,
-                draft_key: snapshot.pane.navigation.draft_key.clone(),
+                draft_key: snapshot.panes.primary().navigation.draft_key.clone(),
                 draft: Arc::new(crate::state::Draft {
                     text: "設定\n{0}".into(),
                     attachments: vec![crate::state::Attachment {
@@ -1874,14 +1883,14 @@ mod tests {
         let source = Arc::new(models::Thread::default());
         let japanese = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &pending,
             source.clone(),
             &None,
         );
         let english = project_conversation(
             UiLanguage::English,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &pending,
             source,
             &Some(japanese.clone()),
@@ -2097,7 +2106,7 @@ mod tests {
     ) -> Arc<RenderedConversation> {
         project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             snapshot.sessions.conversations[&agent_protocol::session::SessionRef {
                 provider: agent_protocol::session::ProviderKind::Codex,
@@ -2266,7 +2275,7 @@ mod tests {
         }
         let projected = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(source),
             &None,
@@ -2338,7 +2347,7 @@ mod tests {
         };
         let awaiting = project_conversation(
             UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             make(RequestDelivery::Awaiting),
             &None,
@@ -2352,7 +2361,7 @@ mod tests {
         assert!(request.can_respond);
         let sent = project_conversation(
             UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             make(RequestDelivery::Sent),
             &Some(awaiting.clone()),
@@ -2526,7 +2535,7 @@ mod tests {
         })).unwrap());
         let live = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
             &None,
@@ -2557,7 +2566,7 @@ mod tests {
             models::TurnStatus::Completed;
         let completed = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread,
             &Some(live.clone()),
@@ -2582,7 +2591,7 @@ mod tests {
         assert!(Arc::ptr_eq(live_answer, actions[0]));
         let reopened = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             completed.source.clone(),
             &None,
@@ -2619,7 +2628,7 @@ mod tests {
         );
         let initial = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
             &None,
@@ -2630,7 +2639,7 @@ mod tests {
             Some(crate::session::ProviderKind::Codex);
         let attributed = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
             &Some(initial.clone()),
@@ -2643,7 +2652,7 @@ mod tests {
             Some(crate::session::ProviderKind::Claude);
         let updated = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread,
             &Some(attributed),
@@ -2655,7 +2664,7 @@ mod tests {
             (ItemSource::Native(before), ItemSource::Native(after)) if Arc::ptr_eq(before, after)));
         let unchanged = project_conversation(
             UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             updated.source.clone(),
             &Some(updated.clone()),
@@ -2687,7 +2696,7 @@ mod tests {
             });
             let projected = project_conversation(
                 UiLanguage::Japanese,
-                &snapshot.pane.navigation.draft_key,
+                &snapshot.panes.primary().navigation.draft_key,
                 &snapshot.sessions.pending_submissions,
                 thread.clone(),
                 &previous,
@@ -2729,7 +2738,7 @@ mod tests {
         );
         let rendered = project_conversation(
             UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             source,
             &None,
@@ -2767,7 +2776,7 @@ mod tests {
             models::TurnStatus::Interrupted;
         let updated = project_conversation(
             UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             changed,
             &Some(rendered.clone()),
@@ -2793,7 +2802,7 @@ mod tests {
         })).unwrap());
         let rendered = project_conversation(
             UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             source,
             &None,
@@ -2855,6 +2864,7 @@ mod tests {
                 );
                 snapshot = reduce(
                     &snapshot,
+                    "",
                     Event::Intent(Intent::Submit {
                         thread_id: Some(agent_protocol::session::SessionRef {
                             provider: agent_protocol::session::ProviderKind::Codex,
@@ -2864,7 +2874,7 @@ mod tests {
                     }),
                 )
                 .0;
-                snapshot = reduce(&snapshot, Event::SubmissionUnknown(id.into())).0;
+                snapshot = reduce(&snapshot, "", Event::SubmissionUnknown(id.into())).0;
                 if status == "running" {
                     let rendered = project_snapshot(snapshot.clone(), None);
                     let activity = rendered.turns[0]
@@ -2947,6 +2957,7 @@ mod tests {
         for id in ["z-first", "a-second", "m-third"] {
             snapshot = reduce(
                 &snapshot,
+                "",
                 Event::Intent(Intent::Submit {
                     thread_id: Some(agent_protocol::session::SessionRef {
                         provider: agent_protocol::session::ProviderKind::Codex,
@@ -2956,7 +2967,7 @@ mod tests {
                 }),
             )
             .0;
-            snapshot = reduce(&snapshot, Event::SubmissionUnknown(id.into())).0;
+            snapshot = reduce(&snapshot, "", Event::SubmissionUnknown(id.into())).0;
         }
         let rendered = project_snapshot(snapshot.clone(), None);
         assert_eq!(
@@ -3451,7 +3462,7 @@ mod progress_tests {
         })).unwrap());
         let conversation = project_conversation(
             UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             source,
             &None,
@@ -3569,10 +3580,12 @@ mod history_control_tests {
                 ..idle.clone()
             }),
         ] {
-            snapshot.operations.insert(key.clone(), OperationState {
+            Arc::make_mut(&mut snapshot.operations).insert(key.clone(),
+            OperationState {
                 generation: 1,
                 phase,
-            });
+            },
+            );
             assert_eq!(snapshot.history_control(session.clone()), Some(expected));
             assert_eq!(snapshot.history_control(other.clone()), None);
         }
@@ -3594,7 +3607,7 @@ mod history_control_tests {
             }),
         );
         assert_eq!(snapshot.history_control(session.clone()), None);
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             OperationKey::History {
                 session: session.clone(),
             },

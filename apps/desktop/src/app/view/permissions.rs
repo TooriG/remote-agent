@@ -188,7 +188,7 @@ mod tests {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
                 snapshot.connection.connected = true;
                 Arc::make_mut(&mut snapshot.input.drafts).insert(
-                    snapshot.pane.navigation.draft_key.clone(),
+                    snapshot.panes.primary().navigation.draft_key.clone(),
                     Arc::new(agent_core::state::Draft {
                         model: Some(agent_protocol::models::ModelRef {
                             provider: agent_protocol::session::ProviderKind::Codex,

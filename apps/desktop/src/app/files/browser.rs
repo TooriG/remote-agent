@@ -79,7 +79,7 @@ impl Desktop {
     ) {
         let panel = self.panels.get(self.panel_scope());
         let workspace = agent_core::presentation::markdown::file_host_path(
-            self.snapshot.pane.navigation.cwd.clone(),
+            self.publication.pane.navigation.cwd.clone(),
             self.snapshot.connection.host_home_directory.clone(),
         );
         if !visible || workspace.is_empty() {

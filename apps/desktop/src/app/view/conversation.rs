@@ -2298,7 +2298,7 @@ mod rendering_tests {
             window: &mut Window,
             cx: &mut Context<Self>,
         ) -> Self {
-            Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+            Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
                 source.id.clone();
             Arc::make_mut(&mut snapshot.sessions.conversations)
                 .insert(source.id.clone().unwrap(), Arc::new(source));
@@ -2474,7 +2474,8 @@ mod rendering_tests {
         }))
         .unwrap();
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd = "/fixture".into();
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).cwd =
+            "/fixture".into();
         let (view, window) =
             cx.add_window_view(|window, cx| ConversationView::new(snapshot, source, window, cx));
         window.simulate_resize(size(px(380.), px(600.)));
@@ -2618,7 +2619,7 @@ mod rendering_tests {
         .unwrap();
         let conversation = agent_core::presentation::conversation::project_conversation(
             agent_core::localization::UiLanguage::Japanese,
-            &Snapshot::default().pane.navigation.draft_key,
+            &Snapshot::default().panes.primary().navigation.draft_key,
             &Snapshot::default().sessions.pending_submissions,
             Arc::new(source),
             &None,
@@ -2809,7 +2810,7 @@ mod rendering_tests {
             let (_, window) = cx.add_window_view(|window, cx| {
                 let view = ConversationView::new(Snapshot::default(), source, window, cx);
                 view.desktop.update(cx, |desktop, _| {
-                    Arc::make_mut(&mut desktop.snapshot).operations.insert(
+                    Arc::make_mut(&mut Arc::make_mut(&mut desktop.snapshot).operations).insert(
                         op::OperationKey::Fork {
                             session: agent_protocol::session::SessionRef {
                                 provider: agent_protocol::session::ProviderKind::Codex,

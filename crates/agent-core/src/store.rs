@@ -285,9 +285,16 @@ fn generation_current(
     })
 }
 impl Scope {
-    fn current(&self, connection: u64, navigation: u64, operations: &op::OperationStates) -> bool {
+    fn current(
+        &self,
+        connection: u64,
+        navigation: Option<u64>,
+        operations: &op::OperationStates,
+    ) -> bool {
         self.connection == connection
-            && self.navigation.is_none_or(|owner| owner == navigation)
+            && self
+                .navigation
+                .is_none_or(|epoch| navigation == Some(epoch))
             && generation_current(self.operation.as_ref(), operations)
     }
     fn finish(&self, operations: &mut op::OperationStates, error: Option<&PeerError>) {
@@ -298,23 +305,26 @@ impl Scope {
         {
             match error {
                 None => {
-                    operations.remove(key);
+                    Arc::make_mut(operations).remove(key);
                 }
                 Some(error) => {
-                    operations.get_mut(key).unwrap().phase = op::OperationPhase::Failed {
-                        message: error.to_string(),
-                    };
+                    Arc::make_mut(operations).get_mut(key).unwrap().phase =
+                        op::OperationPhase::Failed {
+                            message: error.to_string(),
+                        };
                 }
             }
         }
     }
 }
 impl Scheduled {
-    fn new(mut effect: Effect, snapshot: &mut Snapshot, continuation: Option<&Scope>) -> Self {
-        let owner = snapshot.pane_id.clone();
-        if let Some(pane) = effect.pane.take() {
-            *snapshot = snapshot.for_pane(&pane).expect("effect pane must be open");
-        }
+    fn new(
+        mut effect: Effect,
+        snapshot: &mut Snapshot,
+        pane_id: &str,
+        continuation: Option<&Scope>,
+    ) -> Self {
+        let pane_id = effect.pane.take().unwrap_or_else(|| pane_id.into());
         // Stamp the input being sent before publication, including dictation.
         // Restoring cached input never schedules a send or invents a send time.
         if let Some(id) = effect.operation.submission_id()
@@ -331,7 +341,7 @@ impl Scheduled {
             let inputs = Arc::make_mut(&mut snapshot.sessions.pending_submissions);
             Arc::make_mut(inputs.get_mut(id).unwrap()).submitted_at_ms = Some(now);
         }
-        let operation = effect.operation.key().map(|key| {
+        let operation = effect.key(&pane_id).map(|key| {
             let generation = if (matches!(key, op::OperationKey::Item { .. })
                 || continuation
                     .and_then(|scope| scope.operation.as_ref())
@@ -355,27 +365,26 @@ impl Scheduled {
                 phase: op::OperationPhase::Running,
             };
             if snapshot.operations.get(&key) != Some(&state) {
-                snapshot.operations.insert(key.clone(), state);
+                Arc::make_mut(&mut snapshot.operations).insert(key.clone(), state);
             }
             (key, generation)
         });
-        effect.operation.capture(snapshot);
-        let scheduled = Self {
+        effect.operation.capture(snapshot, &pane_id);
+        Self {
             scope: Scope {
-                pane: snapshot.pane_id.clone(),
+                pane: pane_id.clone(),
                 connection: snapshot.connection.epoch,
-                navigation: effect
-                    .operation
-                    .navigation_bound()
-                    .then_some(snapshot.pane.epoch),
+                navigation: snapshot
+                    .panes
+                    .get(&pane_id)
+                    .filter(|_| effect.operation.navigation_bound())
+                    .map(|pane| pane.epoch),
                 operation,
                 report_error: effect.operation.report_error(),
             },
             effect,
             complete: None,
-        };
-        *snapshot = snapshot.for_pane(&owner).unwrap();
-        scheduled
+        }
     }
 }
 pub struct Store {
@@ -398,7 +407,7 @@ impl Store {
         Self::start(Some(peer), snapshot, preferences)
     }
     pub fn offline(snapshot: Snapshot, preferences: Option<Arc<DevicePreferences>>) -> Self {
-        let (snapshot, _) = reduce(&snapshot, Event::Disconnected);
+        let (snapshot, _) = reduce(&snapshot, "", Event::Disconnected);
         Self::start(None, snapshot, preferences)
     }
     fn start(
@@ -453,7 +462,8 @@ impl Store {
         });
         let presentations = crate::presentation::view::observe(
             updates.clone(),
-            String::new(),
+            crate::presentation::view::Presentation::pending(updates.borrow().clone(), "")
+                .expect("primary pane always exists"),
             stop.child_token(),
             crate::presentation::view::Presentation::project,
         );
@@ -626,7 +636,7 @@ impl Store {
             };
             let Some((connection, storage_scope)) = prepared else {
                 let snapshot = self.snapshot();
-                if let Some(id) = &snapshot.pane.navigation.thread_id
+                if let Some(id) = &snapshot.panes.primary().navigation.thread_id
                     && !snapshot.sessions.subscriptions.contains_key(id)
                 {
                     drop(self.dispatch(Intent::ReadThread(op::ReadThread::open(id.clone()))));
@@ -781,6 +791,7 @@ impl Store {
             self.snapshot(),
             &self.presentations.borrow(),
         )
+        .expect("primary pane always exists")
     }
     pub fn subscribe_presentation(
         &self,
@@ -849,7 +860,7 @@ impl Store {
                     return false;
                 }
                 let mut candidate = current.clone();
-                if current.for_pane(pane).is_none() {
+                if current.panes.get(pane).is_none() {
                     receipt = Err(PeerError::InvalidMessage("pane is closed".into()));
                     return false;
                 }
@@ -935,7 +946,10 @@ impl Store {
             }
         }
     }
-    fn create_pane(&self, cwd: String) -> Result<String, PeerError> {
+    fn create_pane(
+        &self,
+        cwd: String,
+    ) -> Result<Arc<crate::presentation::view::Presentation>, PeerError> {
         if self.stop.is_cancelled() {
             return Err(PeerError::ConnectionClosed("store is closed".into()));
         }
@@ -946,12 +960,17 @@ impl Store {
             .clone()
             .ok_or_else(|| PeerError::ConnectionClosed("store is closed".into()))?;
         let id = uuid::Uuid::new_v4().to_string();
+        let mut initial = None;
         publications.send_if_modified(|current| {
             let mut next = current.as_ref().clone();
             next.open_pane(id.clone(), cwd);
-            publish_locked(current, next)
+            let changed = publish_locked(current, next);
+            initial = Some(current.clone());
+            changed
         });
-        Ok(id)
+        initial
+            .and_then(|snapshot| crate::presentation::view::Presentation::pending(snapshot, &id))
+            .ok_or_else(|| PeerError::ConnectionClosed("pane is closed".into()))
     }
     fn close_pane(&self, pane: &str) {
         if let Some(publications) = self.publications.lock().unwrap().clone() {
@@ -964,12 +983,12 @@ impl Store {
     }
     fn subscribe_pane(
         &self,
-        pane: String,
+        initial: Arc<crate::presentation::view::Presentation>,
         stop: CancellationToken,
     ) -> watch::Receiver<Arc<crate::presentation::view::Presentation>> {
         crate::presentation::view::observe(
             self.updates.clone(),
-            pane,
+            initial,
             stop,
             crate::presentation::view::Presentation::project,
         )
@@ -1016,28 +1035,14 @@ fn apply_locked(current: &mut Arc<Snapshot>, event: Event) -> (Vec<Scheduled>, b
 fn apply_pane_locked(
     current: &mut Arc<Snapshot>,
     event: Event,
-    pane: &str,
+    pane_id: &str,
 ) -> (Vec<Scheduled>, bool) {
-    let owner = current.pane_id.clone();
-    let source = current
-        .for_pane(pane)
-        .expect("pane must exist before reducing");
-    let (mut next, effects) = reduce(&source, event);
-    if next.pane.epoch != source.pane.epoch {
-        next.operations.retain(|key, _| {
-            !matches!(
-                key,
-                op::OperationKey::Directory
-                    | op::OperationKey::File
-                    | op::OperationKey::WorkspaceReview
-            )
-        });
-    }
+    let (mut next, effects) = reduce(current, pane_id, event);
     let scheduled = effects
         .into_iter()
-        .map(|effect| Scheduled::new(effect, &mut next, None))
+        .map(|effect| Scheduled::new(effect, &mut next, pane_id, None))
         .collect();
-    let changed = publish_locked(current, next.for_pane(&owner).unwrap());
+    let changed = publish_locked(current, next);
     (scheduled, changed)
 }
 fn adopt_preferences(snapshot: &mut Arc<Snapshot>, preferences: &Preferences) -> bool {
@@ -1065,11 +1070,9 @@ fn publish_locked(current: &mut Arc<Snapshot>, next: Snapshot) -> bool {
 
 fn finish_unobserved(updates: &watch::Sender<Arc<Snapshot>>, scheduled: Scheduled) {
     updates.send_if_modified(|snapshot| {
-        let Some(mut next) = snapshot.for_pane(&scheduled.scope.pane) else {
-            return false;
-        };
+        let mut next = snapshot.as_ref().clone();
         scheduled.scope.finish(&mut next.operations, None);
-        publish_locked(snapshot, next.for_pane(&snapshot.pane_id).unwrap())
+        publish_locked(snapshot, next)
     });
     if let Some(complete) = scheduled.complete {
         complete.send(Ok(Outcome::Applied));
@@ -1081,20 +1084,15 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
     let mut scheduled = Vec::new();
     let mut result = Ok(Outcome::Applied);
     updates.send_if_modified(|root| {
-        let owner = root.pane_id.clone();
-        let source = root.for_pane(&completed.scope.pane);
-        let open = source.is_some();
-        let held = Arc::new(source.unwrap_or_else(|| root.as_ref().clone()));
-        let snapshot = &held;
-        // Dispatch and completion share this lock. List results and failures
-        // belong to their query, Host state to the connection, and view work
-        // to the navigation epoch.
-        let current = (open || completed.scope.navigation.is_none())
-            && completed.scope.current(
-                snapshot.connection.epoch,
-                snapshot.pane.epoch,
-                &snapshot.operations,
-            );
+        let snapshot = root.as_ref();
+        let pane_id = &completed.scope.pane;
+        let pane = snapshot.panes.get(pane_id);
+        let open = pane.is_some();
+        let current = completed.scope.current(
+            snapshot.connection.epoch,
+            pane.map(|pane| pane.epoch),
+            &snapshot.operations,
+        );
         let global_error = current
             && open
             && completed.scope.report_error
@@ -1103,23 +1101,23 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                 &completed.scheduling,
                 op::Scheduling::LatestProject(_) | op::Scheduling::LatestHostState(_)
             );
-        let mut next = snapshot.as_ref().clone();
+        let mut next = snapshot.clone();
         result = match completed.result {
-            Ok(applied) => match applied.application.apply(&mut next, current) {
+            Ok(applied) => match applied.application.apply(&mut next, pane_id, current) {
                 Ok(next_effects) => {
                     effects = next_effects;
                     Ok(applied.outcome)
                 }
                 Err(error) => {
-                    if global_error {
-                        Arc::make_mut(&mut next.pane).error = Some(error.to_string());
+                    if global_error && let Some(pane) = next.panes.get_mut(pane_id) {
+                        Arc::make_mut(pane).error = Some(error.to_string());
                     }
                     Err(error)
                 }
             },
             Err(error) => {
                 let error = match completed.rejection {
-                    Some(application) => match application.apply(&mut next, current) {
+                    Some(application) => match application.apply(&mut next, pane_id, current) {
                         Ok(next_effects) => {
                             effects.extend(next_effects);
                             error
@@ -1135,7 +1133,7 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                     ))
                     && let Some(handle) = completed.scheduling.terminal()
                 {
-                    next = reduce(
+                    next = crate::state::reduce_event(
                         &next,
                         Event::TerminalFailed {
                             handle: handle.to_owned(),
@@ -1158,7 +1156,7 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                                 ..
                             }
                         ));
-                    next = reduce(
+                    next = crate::state::reduce_event(
                         &next,
                         if unknown {
                             Event::SubmissionUnknown(id)
@@ -1168,8 +1166,8 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
                     )
                     .0;
                 }
-                if global_error {
-                    Arc::make_mut(&mut next.pane).error = Some(error.to_string());
+                if global_error && let Some(pane) = next.panes.get_mut(pane_id) {
+                    Arc::make_mut(pane).error = Some(error.to_string());
                 }
                 Err(error)
             }
@@ -1177,18 +1175,16 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
         effects.extend(op::prefetch_composer_catalog(
             next.connection.connected,
             &mut next.catalog.composer_catalogs,
-            std::iter::once((next.pane_id.as_str(), next.pane.navigation.as_ref())).chain(
-                next.panes
-                    .0
-                    .iter()
-                    .map(|(id, pane)| (id.as_str(), pane.navigation.as_ref())),
-            ),
+            next.panes
+                .0
+                .iter()
+                .map(|(id, pane)| (id.as_str(), pane.navigation.as_ref())),
         ));
         effects.extend(op::prefetch_model_settings(
             next.connection.connected,
-            next.input
-                .drafts
-                .get(&next.pane.navigation.draft_key)
+            next.panes
+                .get(pane_id)
+                .and_then(|pane| next.input.drafts.get(&pane.navigation.draft_key))
                 .and_then(|draft| draft.model.as_ref()),
             &next.catalog.models,
             next.operations.keys(),
@@ -1196,7 +1192,7 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
         let continues = completed.scope.operation.as_ref().is_some_and(|(key, _)| {
             effects
                 .iter()
-                .any(|effect| effect.operation.key().as_ref() == Some(key))
+                .any(|effect| effect.key(pane_id).as_ref() == Some(key))
         });
         if !continues {
             completed
@@ -1216,12 +1212,12 @@ fn finish(updates: &watch::Sender<Arc<Snapshot>>, completed: Completed) -> Vec<S
             .drain(..)
             .filter(|effect| {
                 !superseded
-                    || effect.operation.key().as_ref()
+                    || effect.key(pane_id).as_ref()
                         != completed.scope.operation.as_ref().map(|(key, _)| key)
             })
-            .map(|effect| Scheduled::new(effect, &mut next, Some(&completed.scope)))
+            .map(|effect| Scheduled::new(effect, &mut next, pane_id, Some(&completed.scope)))
             .collect();
-        publish_locked(root, next.for_pane(&owner).unwrap())
+        publish_locked(root, next)
     });
     let continuation = scheduled.iter().position(|scheduled| {
         scheduled.effect.receipt == ReceiptPolicy::Continue
@@ -1298,7 +1294,7 @@ impl ItemReads {
 }
 #[derive(Default)]
 struct Scheduler {
-    latest_reads: BTreeMap<(String, op::OperationKey), Option<Scheduled>>,
+    latest_reads: BTreeMap<op::OperationKey, Option<Scheduled>>,
     terminal_commands: VecDeque<Scheduled>,
     terminal_running: BTreeSet<String>,
     item_reads: ItemReads,
@@ -1318,23 +1314,18 @@ impl Scheduler {
         snapshot: &Snapshot,
         running_jobs: usize,
     ) -> Admission {
-        let selected = snapshot
-            .for_pane(&scheduled.scope.pane)
-            .unwrap_or_else(|| snapshot.clone());
-        let snapshot = &selected;
-        // Dispatch publishes before enqueueing. Newer notifications can arrive
-        // first; older work must not replace the latest pending read.
+        // Shared reads depend on interests in the one map, never a fallback pane.
         let unobserved = (scheduled.effect.scheduling.latest_key().is_some()
             && !generation_current(scheduled.scope.operation.as_ref(), &snapshot.operations))
             || matches!(&scheduled.effect.scheduling, op::Scheduling::LatestAgents(session)
-                if snapshot.pane.observed_agents.as_ref() != Some(session) && !snapshot.panes.0.values().any(|pane| pane.observed_agents.as_ref() == Some(session)));
+                if !snapshot.panes.0.values().any(|pane| pane.observed_agents.as_ref() == Some(session)));
         if unobserved {
             return Admission::Unobserved(scheduled);
         }
         if let Some(key) = scheduled.effect.scheduling.latest_key()
             && let Some(pending) = self
                 .latest_reads
-                .get_mut(&key.address(&scheduled.scope.pane))
+                .get_mut(&key.in_pane(&scheduled.scope.pane))
         {
             if let Some(previous) = pending.take()
                 && let Some(complete) = previous.complete
@@ -1366,7 +1357,7 @@ impl Scheduler {
         }
         if let Some(key) = scheduled.effect.scheduling.latest_key() {
             self.latest_reads
-                .insert(key.address(&scheduled.scope.pane), None);
+                .insert(key.in_pane(&scheduled.scope.pane), None);
         }
         Admission::Run(scheduled)
     }
@@ -1403,7 +1394,7 @@ impl Scheduler {
         }
         let pending = scheduling
             .latest_key()
-            .and_then(|key| self.latest_reads.remove(&key.address(pane)))
+            .and_then(|key| self.latest_reads.remove(&key.in_pane(pane)))
             .flatten();
         if let Some(key) = scheduling.item()
             && !followups.iter().any(|scheduled| {
@@ -1735,6 +1726,7 @@ trait Application: Send + std::fmt::Debug {
     fn apply(
         self: Box<Self>,
         snapshot: &mut Snapshot,
+        pane_id: &str,
         current: bool,
     ) -> Result<Vec<Effect>, PeerError>;
 }
@@ -1748,13 +1740,14 @@ impl<O: op::Operation> Application for Completion<O> {
     fn apply(
         self: Box<Self>,
         snapshot: &mut Snapshot,
+        pane_id: &str,
         current: bool,
     ) -> Result<Vec<Effect>, PeerError> {
         let Self {
             operation, output, ..
         } = *self;
         let output = output.expect("only completed operations are published");
-        operation.complete(snapshot, output, current)
+        operation.complete(snapshot, pane_id, output, current)
     }
 }
 // Intent is replayable data. Only the effect queue erases an operation's type;
@@ -1773,6 +1766,11 @@ enum ReceiptPolicy {
     Background,
 }
 impl Effect {
+    fn key(&self, pane: &str) -> Option<op::OperationKey> {
+        self.operation
+            .key()
+            .map(|key| key.in_pane(self.pane.as_deref().unwrap_or(pane)))
+    }
     pub(crate) fn in_pane(mut self, pane: &str) -> Self {
         self.pane = Some(pane.into());
         self
@@ -1804,7 +1802,7 @@ trait Pending: Application {
     fn navigation_bound(&self) -> bool;
     fn key(&self) -> Option<op::OperationKey>;
     fn report_error(&self) -> bool;
-    fn capture(&mut self, snapshot: &Snapshot);
+    fn capture(&mut self, snapshot: &Snapshot, pane_id: &str);
     fn submission_id(&self) -> Option<&str>;
     fn rejected_output(self: Box<Self>) -> Option<Box<dyn Application>>;
     fn run<'a>(
@@ -1822,8 +1820,8 @@ impl<O: op::Operation> Pending for Completion<O> {
     fn report_error(&self) -> bool {
         O::REPORT_ERROR
     }
-    fn capture(&mut self, snapshot: &Snapshot) {
-        self.input = Some(self.operation.capture(snapshot));
+    fn capture(&mut self, snapshot: &Snapshot, pane_id: &str) {
+        self.input = Some(self.operation.capture(snapshot, pane_id));
     }
     fn submission_id(&self) -> Option<&str> {
         self.operation.submission_id()
@@ -1906,10 +1904,10 @@ mod tests {
             connection: crate::state::Connection {
                 ..Default::default()
             },
-            pane: Arc::new(crate::state::PaneState {
+            panes: crate::state::PaneStates::with_primary(Arc::new(crate::state::PaneState {
                 error: Some("unrelated failure".into()),
                 ..Default::default()
-            }),
+            })),
             ..Default::default()
         };
         let mut download = Scheduled::new(
@@ -1918,6 +1916,7 @@ mod tests {
                 destination: "/preview.png".into(),
             }),
             &mut snapshot,
+            "",
             None,
         );
         let (sender, receipt) = oneshot::channel();
@@ -1939,7 +1938,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(store.snapshot().pane.error.is_none());
+        assert!(store.snapshot().panes.primary().error.is_none());
         let error = store
             .dispatch(Intent::RemoveWorktree(op::RemoveWorktree {
                 path: "/worktree".into(),
@@ -1947,10 +1946,142 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(
-            store.snapshot().pane.error.as_deref(),
+            store.snapshot().panes.primary().error.as_deref(),
             Some(error.to_string().as_str())
         );
         store.close().await.unwrap();
+    }
+
+    #[test]
+    fn shared_operation_failures_remain_visible_after_navigation() {
+        for effect in [
+            Effect::execute(op::RemoveWorktree {
+                path: "/worktree".into(),
+            }),
+            Effect::execute(op::WriteTerminal {
+                handle: "terminal".into(),
+                data: Vec::new(),
+            }),
+        ] {
+            let mut snapshot = Snapshot::default();
+            let scheduled = Scheduled::new(effect, &mut snapshot, "", None);
+            let (snapshot, _) = crate::state::reduce(
+                &snapshot,
+                "",
+                Event::Intent(Intent::NewChat {
+                    cwd: "/another".into(),
+                }),
+            );
+            let (updates, _) = watch::channel(Arc::new(snapshot));
+            finish(&updates, rejected(scheduled, busy_error()));
+            assert_eq!(
+                updates.borrow().panes.primary().error.as_deref(),
+                Some(busy_error().to_string().as_str()),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_terminal_failure_does_not_discard_the_composer_catalog_load() {
+        let mut snapshot = Snapshot::default();
+        snapshot.connection.connected = true;
+        Arc::make_mut(snapshot.panes.primary_mut()).navigation =
+            Arc::new(crate::state::Navigation {
+                cwd: "/fixture".into(),
+                draft_key: "new:/fixture".into(),
+                ..Default::default()
+            });
+        let scheduled = Scheduled::new(
+            Effect::execute(op::StartTerminal {
+                handle: "terminal".into(),
+                cwd: "/fixture".into(),
+                size: agent_protocol::operations::TerminalSize { cols: 80, rows: 24 },
+            }),
+            &mut snapshot,
+            "",
+            None,
+        );
+        let ((client, _events), mut reader, writer) = host_fixture::connect(&snapshot).await;
+        reader.script_composer_catalog();
+        let (updates, _) = watch::channel(Arc::new(snapshot));
+        let followups = finish(&updates, rejected(scheduled, busy_error()));
+        assert!(updates.borrow().catalog.composer_catalogs["/fixture"].loading);
+        let loading = tokio::spawn(async move {
+            for followup in followups {
+                finish(&updates, perform(Some(&client), None, followup).await);
+            }
+            updates.borrow().clone()
+        });
+        let request =
+            tokio::time::timeout(std::time::Duration::from_secs(2), reader.read_request())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        assert_eq!(request["method"], "host/composer/catalog");
+        assert_eq!(request["params"]["cwd"], "/fixture");
+        writer
+            .reply(
+                &request,
+                serde_json::json!({"result":{"cwd":"/fixture","loading":false,"candidates":[],"errors":{}}}),
+            )
+            .await
+            .unwrap();
+        let loaded = tokio::time::timeout(std::time::Duration::from_secs(2), loading)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!loaded.catalog.composer_catalogs["/fixture"].loading);
+    }
+
+    #[test]
+    fn workspace_reads_keep_independent_statuses_and_retire_only_their_owner() {
+        let mut snapshot = Snapshot::default();
+        snapshot.open_pane("side".into(), "/fixture".into());
+        Scheduled::new(
+            Effect::execute(op::ReadPermissionSettings {
+                provider: crate::session::ProviderKind::Codex,
+            }),
+            &mut snapshot,
+            "side",
+            None,
+        );
+        for pane in ["", "side"] {
+            for effect in [
+                Effect::execute(op::ListFiles {
+                    path: "/fixture".into(),
+                }),
+                Effect::execute(op::ReadFile {
+                    path: "/fixture/file".into(),
+                    discard_draft: false,
+                }),
+                Effect::execute(op::ReviewWorkspace {
+                    cwd: "/fixture".into(),
+                }),
+            ] {
+                Scheduled::new(effect, &mut snapshot, pane, None);
+            }
+            for key in [
+                op::OperationKey::Directory { pane: pane.into() },
+                op::OperationKey::File { pane: pane.into() },
+                op::OperationKey::WorkspaceReview { pane: pane.into() },
+            ] {
+                assert!(snapshot.operation_running(key));
+            }
+        }
+        snapshot.invalidate_pane("side");
+        for (pane, running) in [("", true), ("side", false)] {
+            for key in [
+                op::OperationKey::Directory { pane: pane.into() },
+                op::OperationKey::File { pane: pane.into() },
+                op::OperationKey::WorkspaceReview { pane: pane.into() },
+            ] {
+                assert_eq!(snapshot.operation_running(key), running);
+            }
+        }
+        assert!(snapshot.operation_running(op::OperationKey::Permissions {
+            provider: crate::session::ProviderKind::Codex,
+        }));
     }
 
     fn queued(scheduling: op::Scheduling) -> Scheduled {
@@ -2281,7 +2412,7 @@ mod tests {
                 delivery_unknown: false,
             }),
         );
-        let effects = operation.apply(&mut snapshot, opened.unwrap());
+        let effects = operation.apply(&mut snapshot, "", opened.unwrap());
         assert!(snapshot.sessions.pending_submissions["initial-input"].accepted);
         let thread = snapshot.sessions.conversations.values().next().unwrap();
         assert_eq!(
@@ -2296,7 +2427,7 @@ mod tests {
         );
         let rendered = crate::presentation::conversation::project_conversation(
             crate::localization::UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             thread.clone(),
             &None,
@@ -2310,7 +2441,7 @@ mod tests {
         accepted.preparation = None;
         let rendered = crate::presentation::conversation::project_conversation(
             crate::localization::UiLanguage::Japanese,
-            &snapshot.pane.navigation.draft_key,
+            &snapshot.panes.primary().navigation.draft_key,
             &snapshot.sessions.pending_submissions,
             Arc::new(accepted),
             &Some(rendered),
@@ -2362,7 +2493,7 @@ mod tests {
                 // A cached scope attaches before the Host answers the introduction.
                 initial.connection.storage_scope = format!("{}:cached", host.node_id());
             }
-            let draft_key = initial.pane.navigation.draft_key.clone();
+            let draft_key = initial.panes.primary().navigation.draft_key.clone();
             Arc::make_mut(&mut initial.input.drafts).insert(
                 draft_key.clone(),
                 Arc::new(crate::state::Draft {
@@ -2378,7 +2509,7 @@ mod tests {
                 .wait_for(|snapshot| !snapshot.connection.connected)
                 .await
                 .unwrap();
-            let notices = || store.snapshot().error_notices(ErrorScope::Application);
+            let notices = || store.snapshot().error_notices("", ErrorScope::Application);
             assert!(
                 notices().is_empty(),
                 "losing an established connection, for example while suspended, is not a failure"
@@ -2484,10 +2615,10 @@ mod tests {
                 connected: true,
                 ..Default::default()
             },
-            pane: Arc::new(crate::state::PaneState {
+            panes: crate::state::PaneStates::with_primary(Arc::new(crate::state::PaneState {
                 error: Some("previous runtime error".into()),
                 ..Default::default()
-            }),
+            })),
             ..Default::default()
         };
         let store = Store::offline(initial, None);
@@ -2495,14 +2626,14 @@ mod tests {
         assert!(
             store
                 .snapshot()
-                .error_notices(ErrorScope::Application)
+                .error_notices("", ErrorScope::Application)
                 .is_empty()
         );
         store.close().await.unwrap();
         assert!(
             store
                 .snapshot()
-                .error_notices(ErrorScope::Application)
+                .error_notices("", ErrorScope::Application)
                 .is_empty()
         );
     }
@@ -2534,7 +2665,7 @@ mod tests {
         assert!(
             store
                 .snapshot()
-                .error_notices(ErrorScope::Application)
+                .error_notices("", ErrorScope::Application)
                 .is_empty()
         );
         store.close().await.unwrap();
@@ -2625,7 +2756,7 @@ mod tests {
     async fn a_full_command_queue_keeps_the_draft_and_all_submission_state() {
         let mut initial = Snapshot::default();
         Arc::make_mut(&mut initial.input.drafts).insert(
-            initial.pane.navigation.draft_key.clone(),
+            initial.panes.primary().navigation.draft_key.clone(),
             Arc::new(crate::state::Draft {
                 model: Some(agent_protocol::models::ModelRef {
                     provider: agent_protocol::session::ProviderKind::Claude,
@@ -2635,7 +2766,13 @@ mod tests {
             }),
         );
         let store = Store::offline(initial, None);
-        let draft_key = store.snapshot().pane.navigation.draft_key.clone();
+        let draft_key = store
+            .snapshot()
+            .panes
+            .primary()
+            .navigation
+            .draft_key
+            .clone();
         store
             .dispatch(Intent::SetDraftText {
                 thread_id: draft_key,
@@ -2705,7 +2842,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        Scheduled::new(send("new"), &mut current, None);
+        Scheduled::new(send("new"), &mut current, "", None);
         let after = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -2718,7 +2855,7 @@ mod tests {
             current.sessions.pending_submissions["unknown-time"].submitted_at_ms,
             None
         );
-        Scheduled::new(send("known-time"), &mut current, None);
+        Scheduled::new(send("known-time"), &mut current, "", None);
         assert_eq!(
             current.sessions.pending_submissions["known-time"].submitted_at_ms,
             Some(12_000)
@@ -2801,7 +2938,7 @@ mod tests {
                 );
             }),
             ("observed_agents", |snapshot| {
-                Arc::make_mut(&mut snapshot.pane).observed_agents =
+                Arc::make_mut(snapshot.panes.primary_mut()).observed_agents =
                     Some(crate::session::SessionRef {
                         provider: crate::session::ProviderKind::Codex,
                         id: "parent".into(),
@@ -2821,7 +2958,7 @@ mod tests {
                 snapshot.files.workspace = Arc::default()
             }),
             ("navigation", |snapshot| {
-                Arc::make_mut(&mut snapshot.pane).navigation = Arc::default()
+                Arc::make_mut(snapshot.panes.primary_mut()).navigation = Arc::default()
             }),
             ("activity", |snapshot| {
                 snapshot.lists.activity = Arc::default()
@@ -2851,7 +2988,7 @@ mod tests {
                 snapshot.connection.connection_failure = Some("fixture failure".into())
             }),
             ("error", |snapshot| {
-                Arc::make_mut(&mut snapshot.pane).error = Some("fixture failure".into())
+                Arc::make_mut(snapshot.panes.primary_mut()).error = Some("fixture failure".into())
             }),
         ];
         for (name, change) in changes {
@@ -2907,7 +3044,7 @@ mod model_reconnection_tests {
             },
             ..Default::default()
         };
-        let (connected, effects) = reduce(&previous, Event::Connected);
+        let (connected, effects) = reduce(&previous, "", Event::Connected);
         assert!(connected.lists.threads.is_some());
         assert_eq!(
             effects
@@ -2918,6 +3055,7 @@ mod model_reconnection_tests {
         );
         let (opened, effects) = reduce(
             &connected,
+            "",
             Event::Intent(Intent::SetProjectExpanded {
                 project_id: "p".into(),
                 expanded: true,
@@ -2951,7 +3089,7 @@ mod model_reconnection_tests {
             },
             ..Default::default()
         };
-        let (mut next, effects) = reduce(&previous, Event::Connected);
+        let (mut next, effects) = reduce(&previous, "", Event::Connected);
         assert_eq!(next.catalog.models, previous.catalog.models);
         assert_eq!(
             effects
@@ -2966,6 +3104,7 @@ mod model_reconnection_tests {
         use op::Operation;
         op::LoadModels { provider: agent_protocol::session::ProviderKind::Codex }.apply(
             &mut next,
+            "",
             agent_protocol::operations::ModelPage {
                 data: serde_json::from_value(serde_json::json!([
                     {"id":"new","model":{"provider":"codex","id":"gpt-6.1-sol"},
@@ -2978,9 +3117,12 @@ mod model_reconnection_tests {
             },
         );
         assert_eq!(
-            crate::presentation::settings::SettingsPresentation::from_snapshot(Arc::new(
-                next.clone()
-            ))
+            crate::presentation::view::Presentation::from_snapshot(
+                Arc::new(next.clone()),
+                "".into()
+            )
+            .unwrap()
+            .settings()
             .models_matching(None, "6.1".into())[0]
                 .model
                 .id,

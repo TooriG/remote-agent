@@ -69,7 +69,13 @@ class VoiceInputTest {
                 try {
                     store.dispatch(edit).wait()
                     assertEquals("更新後の依頼\n続きの音声🎤", store.snapshot().draft(edit.threadId).text)
-                    assertEquals(DraftKey.Local("other"), store.snapshot().navigation().draftKey)
+                    assertEquals(
+                        DraftKey.Local("other"),
+                        dev.remoteagent.core.Presentation.fromSnapshot(store.snapshot(), "")
+                            .conversationContext()
+                            .navigation()
+                            .draftKey,
+                    )
                 } finally {
                     store.shutdown()
                 }
@@ -96,7 +102,13 @@ class VoiceInputTest {
             compose.runOnIdle { registry.complete(Activity.RESULT_OK, "音声の追記") }
             compose.runOnIdle {
                 val edit = intents.single() as Intent.AppendTranscript
-                assertEquals(snapshot.navigation().draftKey, edit.threadId)
+                assertEquals(
+                    dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "")
+                        .conversationContext()
+                        .navigation()
+                        .draftKey,
+                    edit.threadId,
+                )
                 assertEquals("音声の追記", edit.text)
             }
         }

@@ -9,15 +9,15 @@ impl Operation for AddProject {
     fn invalidates(&self) -> bool {
         true
     }
-    fn apply(self, snapshot: &mut Snapshot, cwd: Self::Output) -> Vec<Effect> {
-        let (next, mut effects) = reduce_intent(snapshot, Intent::NewChat { cwd });
+    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, cwd: Self::Output) -> Vec<Effect> {
+        let (next, mut effects) = reduce_intent(snapshot, pane_id, Intent::NewChat { cwd });
         *snapshot = next;
         effects.push(Effect::execute(ListSessions::new(
             (*snapshot.lists.list_query).clone(),
         )));
         effects
     }
-    fn stale(self, snapshot: &mut Snapshot, _: Self::Output) -> Vec<Effect> {
+    fn stale(self, snapshot: &mut Snapshot, _pane_id: &str, _: Self::Output) -> Vec<Effect> {
         vec![Effect::execute(ListSessions::new(
             (*snapshot.lists.list_query).clone(),
         ))]
@@ -72,7 +72,7 @@ impl Operation for ReadListDecorations {
             scope: self.scope.clone(),
         })
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, output: Self::Output) -> Vec<Effect> {
         if let Some(list) = &mut snapshot.lists.threads {
             let icons: Vec<_> = list
                 .projects
@@ -171,9 +171,8 @@ pub(crate) fn refresh_agents(
 }
 
 impl Operation for ListAgents {
-    fn navigation_bound(&self) -> bool {
-        false
-    }
+    const NAVIGATION_BOUND: bool = false;
+
     rpc_operation!();
     fn key(&self) -> Option<OperationKey> {
         Some(OperationKey::Agents {
@@ -183,8 +182,13 @@ impl Operation for ListAgents {
     fn scheduling(&self) -> Scheduling {
         Scheduling::LatestAgents(self.thread_id.clone())
     }
-    fn apply(self, snapshot: &mut Snapshot, agents: Self::Output) -> Vec<Effect> {
-        if snapshot.pane.observed_agents.as_ref() != Some(&self.thread_id) {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, agents: Self::Output) -> Vec<Effect> {
+        if !snapshot
+            .panes
+            .0
+            .values()
+            .any(|pane| pane.observed_agents.as_ref() == Some(&self.thread_id))
+        {
             return Vec::new();
         }
         for agent in agents {
@@ -382,7 +386,7 @@ impl Operation for ListProjectSessions {
     fn scheduling(&self) -> Scheduling {
         Scheduling::LatestProject(self.project_id.clone())
     }
-    fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, output: Self::Output) -> Vec<Effect> {
         if snapshot.lists.threads.as_ref().is_none_or(|list| {
             !list
                 .projects
@@ -487,7 +491,7 @@ impl Operation for ListSessions {
     fn scheduling(&self) -> Scheduling {
         Scheduling::LatestList(self.query.part)
     }
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError> {
+    fn capture(&self, snapshot: &Snapshot, _pane_id: &str) -> Result<Self::Input, PeerError> {
         let mut query = self.query.clone();
         if query.project_limits.is_none() && !snapshot.lists.project_threads.is_empty() {
             query.project_limits = Some(
@@ -508,14 +512,14 @@ impl Operation for ListSessions {
     ) -> Result<Self::Output, PeerError> {
         context.call(&Self::new(query)).await
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         if snapshot.lists.list_query.search_term != self.query.search_term {
             snapshot.lists.expanded_projects = Arc::default();
             snapshot.lists.project_threads = Arc::default();
             Arc::make_mut(&mut snapshot.lists.unconfirmed_lists)
                 .retain(|key| *key == OperationKey::SessionList);
             self.query.project_limits = None;
-            snapshot.operations.retain(|key, _| {
+            Arc::make_mut(&mut snapshot.operations).retain(|key, _| {
                 !matches!(
                     key,
                     OperationKey::ProjectList { .. }
@@ -537,7 +541,7 @@ impl Operation for ListSessions {
         snapshot.lists.list_query = Arc::new(retained);
         Ok(())
     }
-    fn apply(self, snapshot: &mut Snapshot, threads: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, threads: Self::Output) -> Vec<Effect> {
         let current = &snapshot.lists.list_query;
         if self.query.search_term != current.search_term
             || (self.query.part != Some(crate::models::ListPart::Projects)
@@ -714,6 +718,7 @@ mod tests {
         };
         let effects = ListSessions::new(Default::default()).apply(
             &mut snapshot,
+            "",
             serde_json::from_value(serde_json::json!({
                 "data":[],"projects":[{"id":"p","name":"P","roots":[]}],
                 "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5
@@ -726,16 +731,16 @@ mod tests {
             part: Some(crate::models::ListPart::Chats),
             ..Default::default()
         });
-        operation.prepare(&mut snapshot).unwrap();
+        operation.prepare(&mut snapshot, "").unwrap();
         assert!(
             operation
-                .capture(&snapshot)
+                .capture(&snapshot, "")
                 .unwrap()
                 .project_limits
                 .unwrap()
                 .is_empty()
         );
-        let effects = operation.apply(&mut snapshot, serde_json::from_value(serde_json::json!({
+        let effects = operation.apply(&mut snapshot, "", serde_json::from_value(serde_json::json!({
             "data":[],"projects":[{"id":"p","name":"P","roots":[]},{"id":"q","name":"Q","roots":[]}],
             "hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":15
         })).unwrap());
@@ -797,7 +802,7 @@ mod tests {
         );
         assert!(effects.is_empty());
         state = next;
-        ListSessions::new(Default::default()).apply(&mut state, old.clone());
+        ListSessions::new(Default::default()).apply(&mut state, "", old.clone());
         assert_eq!(
             state.lists.threads.as_ref().unwrap().projects[0].id,
             "new-project"
@@ -808,7 +813,7 @@ mod tests {
                 .as_deref(),
             Some("New")
         );
-        refresh_thread(&mut state, old.data[0].clone());
+        refresh_thread(&mut state, "", old.data[0].clone());
         assert_eq!(
             state.sessions.conversations[&id].name.as_deref(),
             Some("New")
@@ -816,7 +821,7 @@ mod tests {
         let mut authoritative = old;
         authoritative.revision = 2;
         authoritative.data.clear();
-        ListSessions::new(Default::default()).apply(&mut state, authoritative);
+        ListSessions::new(Default::default()).apply(&mut state, "", authoritative);
         assert!(
             state.lists.threads.as_ref().unwrap().data.is_empty(),
             "later refresh can remove a deleted task"
@@ -838,7 +843,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let (connected, effects) = reduce(&snapshot, Event::Connected);
+        let (connected, effects) = reduce(&snapshot, "", Event::Connected);
         assert_eq!(connected.lists.threads.as_ref().unwrap().limit, 15);
         assert_eq!(
             effects.len(),
@@ -904,13 +909,14 @@ mod tests {
         };
         assert!(
             ListSessions::new(Default::default())
-                .apply(&mut state, root)
+                .apply(&mut state, "", root)
                 .is_empty()
         );
         assert_eq!(state.lists.project_threads.len(), 5);
         assert!(state.lists.threads.as_ref().unwrap().data.is_empty());
         let (mut state, effects) = reduce_intent(
             &state,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "p0".into(),
                 expanded: true,
@@ -925,6 +931,7 @@ mod tests {
         }
         .apply(
             &mut state,
+            "",
             ThreadList {
                 revision: 0,
                 data: vec![row("p0")],
@@ -940,13 +947,14 @@ mod tests {
         query.project_limit = 15;
         query.part = Some(ListPart::Projects);
         let mut more = ListSessions::new(query);
-        more.prepare(&mut state).unwrap();
+        more.prepare(&mut state, "").unwrap();
         assert_eq!(
-            more.capture(&state).unwrap().project_limits,
+            more.capture(&state, "").unwrap().project_limits,
             Some(Default::default())
         );
         more.apply(
             &mut state,
+            "",
             ThreadList {
                 revision: 0,
                 data: vec![],
@@ -961,13 +969,14 @@ mod tests {
         assert!(Arc::ptr_eq(&received, &state.lists.project_threads["p1"]));
         assert!(!state.lists.project_threads.contains_key("p14"));
         let mut refresh = ListSessions::new((*state.lists.list_query).clone());
-        refresh.prepare(&mut state).unwrap();
+        refresh.prepare(&mut state, "").unwrap();
         assert_eq!(
-            refresh.capture(&state).unwrap().project_limits,
+            refresh.capture(&state, "").unwrap().project_limits,
             Some([("p0".into(), 25)].into())
         );
         let (state, _) = reduce_intent(
             &state,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "p0".into(),
                 expanded: false,
@@ -975,6 +984,7 @@ mod tests {
         );
         let (state, effects) = reduce_intent(
             &state,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "p0".into(),
                 expanded: true,
@@ -987,6 +997,7 @@ mod tests {
         );
         let (_, effects) = reduce_intent(
             &state,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "p14".into(),
                 expanded: true,
@@ -1041,15 +1052,15 @@ mod tests {
             },
             ..Default::default()
         };
-        ListSessions::new(Default::default()).apply(&mut state, list(&["p"], &["old"]));
+        ListSessions::new(Default::default()).apply(&mut state, "", list(&["p"], &["old"]));
         let mut refresh = ListSessions::new((*state.lists.list_query).clone());
-        refresh.prepare(&mut state).unwrap();
+        refresh.prepare(&mut state, "").unwrap();
         assert_eq!(
-            refresh.capture(&state).unwrap().project_limits,
+            refresh.capture(&state, "").unwrap().project_limits,
             Some(Default::default()),
             "a refresh reads no collapsed project rows"
         );
-        refresh.apply(&mut state, list(&[], &[]));
+        refresh.apply(&mut state, "", list(&[], &[]));
         assert_eq!(
             state.lists.project_threads["p"].data.len(),
             1,
@@ -1057,6 +1068,7 @@ mod tests {
         );
         let (_, effects) = reduce_intent(
             &state,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "p".into(),
                 expanded: true,
@@ -1155,7 +1167,7 @@ mod tests {
             } {
                 updates.changed().await.unwrap();
             }
-            assert!(store.snapshot().pane.error.is_none());
+            assert!(store.snapshot().panes.primary().error.is_none());
             assert!(
                 store.snapshot().thread_list().unwrap().projects[0]
                     .error
@@ -1215,13 +1227,15 @@ mod tests {
                 ),
                 ..Default::default()
             },
-            pane: std::sync::Arc::new(crate::state::PaneState {
-                navigation: Arc::new(Navigation {
-                    thread_id: Some(parent.clone()),
+            panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(
+                crate::state::PaneState {
+                    navigation: Arc::new(Navigation {
+                        thread_id: Some(parent.clone()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            }),
+                },
+            )),
             ..Default::default()
         };
         let (peer, mut reader, writer) = host_fixture::connect(&snapshot).await;
@@ -1289,7 +1303,10 @@ mod tests {
         writer.reply(&request, json!({"result":[{"id":{"provider":"codex","id":"obsolete"},"parentId":parent,"name":"Old","status":"running"}]})).await.unwrap();
         first.await.unwrap();
         assert!(
-            store.snapshot().agent_panel().is_empty(),
+            store
+                .snapshot()
+                .agent_panel(store.snapshot().panes.primary())
+                .is_empty(),
             "a superseded fleet response must not publish stale rows"
         );
         let mut latest = read(&mut reader).await;
@@ -1307,7 +1324,10 @@ mod tests {
             receipt.await.unwrap();
         }
         assert!(
-            store.snapshot().agent_panel().is_empty(),
+            store
+                .snapshot()
+                .agent_panel(store.snapshot().panes.primary())
+                .is_empty(),
             "closing the panel discards an in-flight fleet response"
         );
         let watching = store.dispatch(Intent::WatchAgents {
@@ -1317,9 +1337,12 @@ mod tests {
         writer.reply(&latest, json!({"result":[{"id":{"provider":"codex","id":"child"},"parentId":parent,"name":"Review","status":"running"}]})).await.unwrap();
         watching.await.unwrap();
         let after = store.snapshot();
-        assert_eq!(after.agent_panel()[0].title, "Review");
-        assert!(after.agent_panel()[0].active);
-        assert_eq!(after.pane.navigation, before.pane.navigation);
+        assert_eq!(after.agent_panel(after.panes.primary())[0].title, "Review");
+        assert!(after.agent_panel(after.panes.primary())[0].active);
+        assert_eq!(
+            after.panes.primary().navigation,
+            before.panes.primary().navigation
+        );
         assert_eq!(after.input.drafts, before.input.drafts);
         store
             .dispatch(Intent::WatchAgents { thread_id: None })
@@ -1382,9 +1405,9 @@ mod tests {
             },
             ..Default::default()
         };
-        ListSessions::new(Default::default()).apply(&mut snapshot, root("chat"));
+        ListSessions::new(Default::default()).apply(&mut snapshot, "", root("chat"));
         let selected = SessionRef::new(ProviderKind::Codex, "selected".into()).unwrap();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
             Some(selected.clone());
         Arc::make_mut(&mut snapshot.input.drafts).insert(
             selected.clone().into(),
@@ -1395,6 +1418,7 @@ mod tests {
         );
         let (opened, effects) = reduce_intent(
             &snapshot,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "old".into(),
                 expanded: true,
@@ -1404,7 +1428,7 @@ mod tests {
         let mut published = opened;
         let root_before = published.lists.threads.clone().unwrap();
         let refresh_effects =
-            ListSessions::new(Default::default()).apply(&mut published, root("new-chat"));
+            ListSessions::new(Default::default()).apply(&mut published, "", root("new-chat"));
         assert_eq!(refresh_effects.len(), 1);
         assert!(!Arc::ptr_eq(
             &root_before,
@@ -1413,6 +1437,7 @@ mod tests {
         if count > 5 {
             (published, _) = reduce_intent(
                 &published,
+                "",
                 Intent::ExpandThreadList {
                     project_id: Some("old".into()),
                 },
@@ -1424,13 +1449,14 @@ mod tests {
             limit,
             search_term: String::new(),
         }
-        .apply(&mut published, project("old-task"));
+        .apply(&mut published, "", project("old-task"));
         assert_eq!(published.lists.project_threads["old"].data.len(), count);
         let received = published.lists.project_threads["old"].clone();
-        let navigation = published.pane.navigation.clone();
+        let navigation = published.panes.primary().navigation.clone();
         let drafts = published.input.drafts.clone();
         let (mut closed, effects) = reduce_intent(
             &published,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "old".into(),
                 expanded: false,
@@ -1442,7 +1468,7 @@ mod tests {
             limit,
             search_term: String::new(),
         }
-        .apply(&mut closed, project("late-task"));
+        .apply(&mut closed, "", project("late-task"));
         assert!(!Arc::ptr_eq(
             &received,
             &closed.lists.project_threads["old"]
@@ -1456,6 +1482,7 @@ mod tests {
         assert!(closed.thread_list().unwrap().projects[0].threads.is_empty());
         let (reopened, effects) = reduce_intent(
             &closed,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "old".into(),
                 expanded: true,
@@ -1468,13 +1495,13 @@ mod tests {
         );
         assert_eq!(reopened.lists.expanded_projects["old"], count.max(5) as u32);
         assert!(!reopened.thread_list().unwrap().projects[0].loading);
-        assert_eq!(closed.pane.navigation, navigation);
+        assert_eq!(closed.panes.primary().navigation, navigation);
         assert_eq!(closed.input.drafts, drafts);
         ListSessions::new(crate::models::ListQuery {
             search_term: "other".into(),
             ..Default::default()
         })
-        .prepare(&mut closed)
+        .prepare(&mut closed, "")
         .unwrap();
         assert!(closed.lists.project_threads.is_empty());
     }
@@ -1500,15 +1527,15 @@ mod tests {
             search_term: "needle".into(),
             ..Default::default()
         });
-        search.prepare(&mut snapshot).unwrap();
-        let effects = search.apply(&mut snapshot, page());
+        search.prepare(&mut snapshot, "").unwrap();
+        let effects = search.apply(&mut snapshot, "", page());
         assert_eq!(snapshot.lists.expanded_projects["matching"], 5);
         assert_eq!(effects.len(), 1);
         assert!(snapshot.thread_list().unwrap().projects[0].expanded);
 
         let mut clear = ListSessions::new(Default::default());
-        clear.prepare(&mut snapshot).unwrap();
-        clear.apply(&mut snapshot, page());
+        clear.prepare(&mut snapshot, "").unwrap();
+        clear.apply(&mut snapshot, "", page());
         assert!(snapshot.lists.expanded_projects.is_empty());
         assert!(!snapshot.thread_list().unwrap().projects[0].expanded);
     }
@@ -1538,9 +1565,10 @@ mod tests {
             },
             ..Default::default()
         };
-        ListSessions::new(Default::default()).apply(&mut snapshot, root_page("initial"));
+        ListSessions::new(Default::default()).apply(&mut snapshot, "", root_page("initial"));
         let (opened, effects) = reduce_intent(
             &snapshot,
+            "",
             Intent::SetProjectExpanded {
                 project_id: "project".into(),
                 expanded: true,
@@ -1553,13 +1581,14 @@ mod tests {
             limit: 5,
             search_term: String::new(),
         }
-        .apply(&mut opened, project_page());
+        .apply(&mut opened, "", project_page());
         let loaded = opened.lists.project_threads["project"].clone();
         let (mut paginating, effects) =
-            reduce_intent(&opened, Intent::ExpandThreadList { project_id: None });
+            reduce_intent(&opened, "", Intent::ExpandThreadList { project_id: None });
         assert_eq!(effects.len(), 1);
         let root_query = (*paginating.lists.list_query).clone();
-        let root_effects = ListSessions::new(root_query).apply(&mut paginating, root_page("next"));
+        let root_effects =
+            ListSessions::new(root_query).apply(&mut paginating, "", root_page("next"));
         assert!(root_effects.is_empty());
         assert!(Arc::ptr_eq(
             &loaded,
@@ -1601,14 +1630,14 @@ mod tests {
         let key = OperationKey::ProjectList {
             project_id: "project".into(),
         };
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key.clone(),
             OperationState {
                 generation: 1,
                 phase: OperationPhase::Running,
             },
         );
-        ListSessions::new(Default::default()).apply(&mut snapshot, page.clone());
+        ListSessions::new(Default::default()).apply(&mut snapshot, "", page.clone());
         assert!(
             Arc::ptr_eq(&loaded, &snapshot.lists.project_threads["project"]),
             "A delayed five-row root response cannot replace the fifteen-row project page"
@@ -1619,7 +1648,7 @@ mod tests {
         );
         let mut refresh = page;
         refresh.project_pages.get_mut("project").unwrap().limit = 15;
-        ListSessions::new(Default::default()).apply(&mut snapshot, refresh);
+        ListSessions::new(Default::default()).apply(&mut snapshot, "", refresh);
         assert_eq!(
             snapshot.lists.project_threads["project"].data[0]
                 .id
@@ -1643,7 +1672,7 @@ mod tests {
             },
             ..Default::default()
         };
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
             Some(parent.clone());
         Arc::make_mut(&mut snapshot.input.drafts).insert(
             parent.clone().into(),
@@ -1652,7 +1681,7 @@ mod tests {
                 ..Default::default()
             }),
         );
-        let (_, effects) = reduce(&snapshot, Event::Connected);
+        let (_, effects) = reduce(&snapshot, "", Event::Connected);
         assert_eq!(
             effects.len(),
             7,
@@ -1660,24 +1689,33 @@ mod tests {
         );
         let (ignored, effects) = reduce_intent(
             &snapshot,
+            "",
             Intent::WatchAgents {
                 thread_id: Some(other),
             },
         );
         assert!(effects.is_empty());
-        assert!(ignored.pane.observed_agents.is_none());
+        assert!(ignored.panes.primary().observed_agents.is_none());
         let (watching, effects) = reduce_intent(
             &snapshot,
+            "",
             Intent::WatchAgents {
                 thread_id: Some(parent.clone()),
             },
         );
         assert_eq!(effects.len(), 1);
-        assert_eq!(watching.pane.observed_agents, Some(parent.clone()));
-        assert_eq!(watching.pane.navigation, snapshot.pane.navigation);
+        assert_eq!(
+            watching.panes.primary().observed_agents,
+            Some(parent.clone())
+        );
+        assert_eq!(
+            watching.panes.primary().navigation,
+            snapshot.panes.primary().navigation
+        );
         assert_eq!(watching.input.drafts, snapshot.input.drafts);
         let (_, effects) = reduce_intent(
             &watching,
+            "",
             Intent::WatchAgents {
                 thread_id: Some(parent.clone()),
             },
@@ -1686,26 +1724,28 @@ mod tests {
             effects.is_empty(),
             "rendering the same panel must not refetch"
         );
-        let (_, effects) = reduce(&watching, Event::Connected);
+        let (_, effects) = reduce(&watching, "", Event::Connected);
         assert_eq!(
             effects.len(),
             8,
             "reconnect refreshes each model provider and only the observed fleet"
         );
-        let (closed, effects) = reduce_intent(&watching, Intent::WatchAgents { thread_id: None });
+        let (closed, effects) =
+            reduce_intent(&watching, "", Intent::WatchAgents { thread_id: None });
         assert!(effects.is_empty());
-        assert!(closed.pane.observed_agents.is_none());
+        assert!(closed.panes.primary().observed_agents.is_none());
         let mut offline = closed.clone();
         offline.connection.connected = false;
         let (offline, effects) = reduce_intent(
             &offline,
+            "",
             Intent::WatchAgents {
                 thread_id: Some(parent),
             },
         );
         assert!(effects.is_empty());
         assert!(
-            offline.pane.observed_agents.is_some(),
+            offline.panes.primary().observed_agents.is_some(),
             "offline observations survive until reconnect"
         );
     }
@@ -1723,10 +1763,10 @@ mod tests {
             ..Default::default()
         });
         let mut snapshot = Snapshot {
-            pane: Arc::new(crate::state::PaneState {
+            panes: crate::state::PaneStates::with_primary(Arc::new(crate::state::PaneState {
                 observed_agents: Some(parent.clone()),
                 ..Default::default()
-            }),
+            })),
             sessions: crate::state::Sessions {
                 conversations: Arc::new([(child.clone(), history.clone())].into()),
                 ..Default::default()
@@ -1742,15 +1782,15 @@ mod tests {
         ListAgents {
             thread_id: parent.clone(),
         }
-        .apply(&mut snapshot, observations.clone());
+        .apply(&mut snapshot, "", observations.clone());
         let thread = &snapshot.sessions.conversations[&child];
         assert_eq!(thread.parent_id, Some(parent.clone()));
         assert_eq!(thread.name.as_deref(), Some("Review"));
         assert_eq!(thread.status, crate::models::SessionStatus::Running);
         assert_eq!(thread.turns, history.turns);
-        Arc::make_mut(&mut snapshot.pane).observed_agents = None;
+        Arc::make_mut(snapshot.panes.primary_mut()).observed_agents = None;
         let conversations = snapshot.sessions.conversations.clone();
-        ListAgents { thread_id: parent }.apply(&mut snapshot, observations);
+        ListAgents { thread_id: parent }.apply(&mut snapshot, "", observations);
         assert!(Arc::ptr_eq(
             &snapshot.sessions.conversations,
             &conversations

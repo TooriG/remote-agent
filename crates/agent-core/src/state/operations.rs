@@ -9,7 +9,7 @@ use rpc::{Input, Submission};
 macro_rules! no_input {
     () => {
         type Input = ();
-        fn capture(&self, _: &Snapshot) -> Result<(), PeerError> {
+        fn capture(&self, _: &Snapshot, _: &str) -> Result<(), PeerError> {
             Ok(())
         }
     };
@@ -18,7 +18,12 @@ macro_rules! no_input {
 macro_rules! rpc_operation {
     ($group:ident.$parent:ident.$field:ident) => {
         rpc_operation!();
-        fn apply(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+        fn apply(
+            self,
+            snapshot: &mut Snapshot,
+            _pane_id: &str,
+            output: Self::Output,
+        ) -> Vec<Effect> {
             Arc::make_mut(&mut snapshot.$group.$parent).$field = Some(Arc::new(output));
             Vec::new()
         }
@@ -293,13 +298,19 @@ pub enum OperationKey {
     Item {
         item: ReadItem,
     },
-    Directory,
+    Directory {
+        pane: String,
+    },
     FileOpenCapabilities,
-    File,
+    File {
+        pane: String,
+    },
     SaveFile {
         path: String,
     },
-    WorkspaceReview,
+    WorkspaceReview {
+        pane: String,
+    },
     CodexCli,
     ProviderSettings,
     HostSoftware,
@@ -358,6 +369,25 @@ pub struct OperationState {
 }
 
 impl OperationKey {
+    pub(crate) fn in_pane(mut self, id: &str) -> Self {
+        match &mut self {
+            Self::Directory { pane } | Self::File { pane } | Self::WorkspaceReview { pane } => {
+                *pane = id.into();
+            }
+            _ => (),
+        }
+        self
+    }
+
+    pub(crate) fn pane(&self) -> Option<&str> {
+        match self {
+            Self::Directory { pane } | Self::File { pane } | Self::WorkspaceReview { pane } => {
+                Some(pane)
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn list(part: Option<crate::models::ListPart>) -> Self {
         part.map_or(Self::SessionList, |part| Self::SessionPage { part })
     }
@@ -391,7 +421,9 @@ impl Scheduling {
             Self::LatestAgents(session) => Some(OperationKey::Agents {
                 session: session.clone(),
             }),
-            Self::LatestReview => Some(OperationKey::WorkspaceReview),
+            Self::LatestReview => Some(OperationKey::WorkspaceReview {
+                pane: String::new(),
+            }),
             _ => None,
         }
     }
@@ -414,7 +446,7 @@ impl Scheduling {
 /// Typed state application after Store checks the navigation epoch or list query.
 pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     type Input: Send + std::fmt::Debug + 'static;
-    fn capture(&self, snapshot: &Snapshot) -> Result<Self::Input, PeerError>;
+    fn capture(&self, snapshot: &Snapshot, pane_id: &str) -> Result<Self::Input, PeerError>;
     fn key(&self) -> Option<OperationKey> {
         None
     }
@@ -432,15 +464,17 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     fn scheduling(&self) -> Scheduling {
         Scheduling::Concurrent
     }
+    const NAVIGATION_BOUND: bool = true;
     /// Host and session caches outlive the pane that requested them. Only
     /// results that select or replace a pane's content follow its navigation.
     fn navigation_bound(&self) -> bool {
-        !matches!(
-            self.scheduling(),
-            Scheduling::LatestHostState(_)
-                | Scheduling::LatestList(_)
-                | Scheduling::LatestProject(_)
-        )
+        Self::NAVIGATION_BOUND
+            && !matches!(
+                self.scheduling(),
+                Scheduling::LatestHostState(_)
+                    | Scheduling::LatestList(_)
+                    | Scheduling::LatestProject(_)
+            )
     }
     fn run(
         &self,
@@ -454,28 +488,29 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     fn invalidates(&self) -> bool {
         false
     }
-    fn prepare(&mut self, _snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, _snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         Ok(())
     }
-    fn apply(self, _snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, _snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         Vec::new()
     }
-    fn stale(self, snapshot: &mut Snapshot, output: Self::Output) -> Vec<Effect> {
+    fn stale(self, snapshot: &mut Snapshot, pane_id: &str, output: Self::Output) -> Vec<Effect> {
         match Self::STALE_POLICY {
-            StalePolicy::Apply => self.apply(snapshot, output),
+            StalePolicy::Apply => self.apply(snapshot, pane_id, output),
             StalePolicy::Discard => Vec::new(),
         }
     }
     fn complete(
         self,
         snapshot: &mut Snapshot,
+        pane_id: &str,
         output: Self::Output,
         current: bool,
     ) -> Result<Vec<Effect>, PeerError> {
         Ok(if current {
-            self.apply(snapshot, output)
+            self.apply(snapshot, pane_id, output)
         } else {
-            self.stale(snapshot, output)
+            self.stale(snapshot, pane_id, output)
         })
     }
     fn outcome(_output: &mut Self::Output) -> Outcome {
@@ -483,8 +518,7 @@ pub trait Operation: Send + Sync + std::fmt::Debug + Sized + 'static {
     }
 }
 
-mod states;
-pub use states::OperationStates;
+pub type OperationStates = Arc<BTreeMap<OperationKey, OperationState>>;
 
 mod permissions;
 pub use permissions::*;

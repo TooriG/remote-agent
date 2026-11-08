@@ -32,11 +32,18 @@ pub struct ConversationContext {
 }
 
 impl ConversationContext {
-    pub(crate) fn project(snapshot: &Snapshot, previous: Option<&Arc<Self>>) -> Arc<Self> {
-        let session = snapshot.pane.navigation.thread_id.as_ref();
+    pub(crate) fn project(
+        snapshot: &Snapshot,
+        pane: &crate::state::PaneState,
+        pane_id: &str,
+        previous: Option<&Arc<Self>>,
+    ) -> Arc<Self> {
+        let session = pane.navigation.thread_id.as_ref();
         let next = Self {
-            workspace_error: snapshot.operation_error(OperationKey::WorkspaceReview),
-            navigation: snapshot.pane.navigation.as_ref().clone(),
+            workspace_error: snapshot.operation_error(OperationKey::WorkspaceReview {
+                pane: (pane_id).to_owned(),
+            }),
+            navigation: pane.navigation.as_ref().clone(),
             connected: snapshot.connection.connected,
             epoch: snapshot.connection.epoch,
             docked: session
@@ -63,11 +70,14 @@ impl ConversationContext {
                     })
             }),
             home: snapshot.connection.host_home_directory.clone(),
-            directory: snapshot.selected_directory(),
+            directory: snapshot.selected_directory(pane),
             history: session.and_then(|id| snapshot.history_control(id.clone())),
-            notices: snapshot.error_notices(ErrorScope::Conversation {
-                draft_key: snapshot.pane.navigation.draft_key.clone(),
-            }),
+            notices: snapshot.error_notices(
+                pane_id,
+                ErrorScope::Conversation {
+                    draft_key: pane.navigation.draft_key.clone(),
+                },
+            ),
             operations: snapshot
                 .operations
                 .iter()
@@ -113,10 +123,6 @@ impl ConversationContext {
 
 #[cfg_attr(feature = "bindings", uniffi::export)]
 impl ConversationContext {
-    #[cfg_attr(feature = "bindings", uniffi::constructor)]
-    pub fn from_snapshot(snapshot: Arc<Snapshot>) -> Arc<Self> {
-        Self::project(&snapshot, None)
-    }
     pub fn navigation(&self) -> Navigation {
         self.navigation.clone()
     }
@@ -137,6 +143,20 @@ impl ConversationContext {
     }
     pub fn notices(&self) -> Vec<ErrorNotice> {
         self.notices.clone()
+    }
+    pub fn docked_request(&self) -> Option<super::conversation::Request> {
+        self.docked.first().cloned()
+    }
+    pub fn request_phase(&self, id: agent_protocol::ids::RequestId) -> Option<OperationPhase> {
+        self.operations
+            .get(&OperationKey::Request { id })
+            .map(|control| control.phase.clone())
+    }
+    pub fn request_error(
+        &self,
+        id: agent_protocol::ids::RequestId,
+    ) -> Option<super::error::ErrorText> {
+        self.operation_error(&OperationKey::Request { id }).cloned()
     }
     pub fn fork_phase(&self, turn: agent_protocol::ids::TurnId) -> Option<OperationPhase> {
         let session = self.navigation.thread_id.clone()?;
@@ -165,7 +185,7 @@ mod tests {
         let selected = SessionRef::new(ProviderKind::Codex, "selected".into()).unwrap();
         let other = SessionRef::new(ProviderKind::Codex, "other".into()).unwrap();
         let mut snapshot = Snapshot::default();
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id =
             Some(selected.clone());
         let request = Request {
             id: "request".into(),
@@ -210,7 +230,7 @@ mod tests {
             id: "request".into(),
         };
         for key in [&fork, &item, &request] {
-            snapshot.operations.insert(
+            Arc::make_mut(&mut snapshot.operations).insert(
                 key.clone(),
                 OperationState {
                     generation: 1,
@@ -218,7 +238,7 @@ mod tests {
                 },
             );
         }
-        let initial = ConversationContext::project(&snapshot, None);
+        let initial = ConversationContext::project(&snapshot, snapshot.panes.primary(), "", None);
         assert_eq!(
             initial.docked.len(),
             1,
@@ -250,30 +270,42 @@ mod tests {
                 id: "unrelated".into(),
             },
         ] {
-            snapshot.operations.insert(
+            Arc::make_mut(&mut snapshot.operations).insert(
                 key.clone(),
                 OperationState {
                     generation: 2,
                     phase: OperationPhase::Running,
                 },
             );
-            let next = ConversationContext::project(&snapshot, Some(&initial));
+            let next = ConversationContext::project(
+                &snapshot,
+                snapshot.panes.primary(),
+                "",
+                Some(&initial),
+            );
             assert!(Arc::ptr_eq(&initial, &next));
             assert!(!next.operation_running(&key));
         }
         for key in [&fork, &item, &request] {
-            snapshot.operations.get_mut(key).unwrap().generation += 1;
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(key)
+                .unwrap()
+                .generation += 1;
         }
         assert!(Arc::ptr_eq(
             &initial,
-            &ConversationContext::project(&snapshot, Some(&initial)),
+            &ConversationContext::project(&snapshot, snapshot.panes.primary(), "", Some(&initial)),
         ));
         for key in [&fork, &item, &request] {
-            snapshot.operations.get_mut(key).unwrap().phase = OperationPhase::Failed {
+            Arc::make_mut(&mut snapshot.operations)
+                .get_mut(key)
+                .unwrap()
+                .phase = OperationPhase::Failed {
                 message: "failure".into(),
             };
         }
-        let failed = ConversationContext::project(&snapshot, Some(&initial));
+        let failed =
+            ConversationContext::project(&snapshot, snapshot.panes.primary(), "", Some(&initial));
         for key in [&fork, &item, &request] {
             assert!(!failed.operation_running(key));
             assert_eq!(
@@ -282,8 +314,9 @@ mod tests {
             );
         }
         assert!(failed.fork_error("turn".into()).is_some());
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id = None;
-        let empty = ConversationContext::project(&snapshot, Some(&failed));
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id = None;
+        let empty =
+            ConversationContext::project(&snapshot, snapshot.panes.primary(), "", Some(&failed));
         assert!(empty.fork_phase("turn".into()).is_none());
         assert!(empty.fork_error("turn".into()).is_none());
         for key in [&fork, &item, &request] {

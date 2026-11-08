@@ -270,14 +270,16 @@ impl Desktop {
     pub(in crate::app) fn project_fixture(&mut self) {
         self.publication = agent_core::presentation::view::Presentation::project(
             self.snapshot.clone(),
+            "",
             Some(&self.publication),
-        );
+        )
+        .unwrap();
     }
 
     fn publish_media(&self, cx: &mut Context<Self>) {
         let source = media::MediaSource {
             host: self.remote_key().into(),
-            cwd: self.snapshot.pane.navigation.cwd.clone(),
+            cwd: self.publication.pane.navigation.cwd.clone(),
             remote: self.remote.is_some(),
             session: self.selected().cloned(),
         };
@@ -797,6 +799,7 @@ mod cache_tests {
                 cx,
             );
             desktop.snapshot = store.snapshot();
+            desktop.project_fixture();
             desktop.session = session.take();
             desktop.epoch += 1;
             desktop.connecting = false;
@@ -917,7 +920,7 @@ mod cache_tests {
             },
             ..Default::default()
         };
-        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key =
+        Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key =
             DraftKey::Session {
                 session: SessionRef {
                     provider: agent_protocol::session::ProviderKind::Codex,
@@ -941,6 +944,7 @@ mod cache_tests {
             let mut desktop = Desktop::new(Mode::Main, window, cx);
             desktop.onboarding = false;
             desktop.snapshot = store.snapshot();
+            desktop.project_fixture();
             desktop.session = session.take();
             desktop.open_panel(Panel::Browser, window, cx);
             desktop
@@ -1142,7 +1146,13 @@ mod cache_tests {
             Arc::new(agent_core::store::Store::offline(Snapshot::default(), None))
         });
         let session = runtime.block_on(async { StoreSession::new(store.clone(), app_runtime) });
-        let key = store.snapshot().pane.navigation.draft_key.clone();
+        let key = store
+            .snapshot()
+            .panes
+            .primary()
+            .navigation
+            .draft_key
+            .clone();
         let (desktop, window) = cx.add_window_view(|window, cx| {
             let mut view = Desktop::new(
                 Mode::Fixture {
@@ -1227,8 +1237,8 @@ mod cache_tests {
                 view.app_updates = None;
                 view.open_surface(view.panel_scope(), Panel::Files, None);
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).thread_id = Some(session.clone());
-                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).draft_key = session.clone().into();
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).thread_id = Some(session.clone());
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).draft_key = session.clone().into();
                 snapshot.lists.threads = Some(Arc::new(serde_json::from_value(serde_json::json!({
                     "data":[{"id":{"provider":"codex","id":"selected"},"name":"Task"}],
                     "projects":[],"hasMore":false,"hasMoreProjects":false,"projectPages":{},"limit":5,
@@ -1461,13 +1471,16 @@ mod cache_tests {
                 .unwrap();
             cx.run_until_parked();
             if desktop.read_with(cx, |view, _| {
-                view.snapshot.pane.navigation.cwd == "/next-project"
+                view.snapshot.panes.primary().navigation.cwd == "/next-project"
             }) {
                 break;
             }
         }
         desktop.read_with(cx, |view, cx| {
-            assert_eq!(view.snapshot.pane.navigation.cwd, "/next-project");
+            assert_eq!(
+                view.snapshot.panes.primary().navigation.cwd,
+                "/next-project"
+            );
             assert!(view.composer.input.read(cx).value().is_empty());
         });
         assert!(

@@ -622,7 +622,7 @@ impl Desktop {
         if let Some((file, lookup_path)) =
             agent_core::presentation::markdown::desktop_file_reference(
                 source,
-                &self.snapshot.pane.navigation.cwd,
+                &self.publication.pane.navigation.cwd,
                 self.snapshot.connection.host_home_directory.as_deref(),
             )
         {
@@ -775,7 +775,7 @@ mod file_panel_tests {
     fn reference_request(view: &Desktop, source: &str, epoch: u64) -> files::ReferenceRequest {
         let (file, lookup_path) = agent_core::presentation::markdown::desktop_file_reference(
             source,
-            &view.snapshot.pane.navigation.cwd,
+            &view.snapshot.panes.primary().navigation.cwd,
             view.snapshot.connection.host_home_directory.as_deref(),
         )
         .unwrap();
@@ -838,7 +838,8 @@ mod file_panel_tests {
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 let snapshot = Arc::make_mut(&mut view.snapshot);
-                Arc::make_mut(&mut Arc::make_mut(&mut snapshot.pane).navigation).cwd = cwd.clone();
+                Arc::make_mut(&mut Arc::make_mut(snapshot.panes.primary_mut()).navigation).cwd =
+                    cwd.clone();
                 view.composer.input.update(cx, |input, cx| {
                     input.set_value("Keep this draft", window, cx)
                 });
@@ -1181,7 +1182,8 @@ mod file_panel_tests {
         window.update(|window, cx| {
             desktop.update(cx, |view, cx| {
                 Arc::make_mut(
-                    &mut Arc::make_mut(&mut Arc::make_mut(&mut view.snapshot).pane).navigation,
+                    &mut Arc::make_mut(Arc::make_mut(&mut view.snapshot).panes.primary_mut())
+                        .navigation,
                 )
                 .cwd = "/fixture".into();
                 view.composer.input.update(cx, |input, cx| {

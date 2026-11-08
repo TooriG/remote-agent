@@ -15,7 +15,7 @@ pub(super) struct ComposerQuestion {
 
 impl Desktop {
     pub(in crate::app) fn question_prompt(&self) -> Option<QuestionPrompt> {
-        self.snapshot.question_prompt(self.selected()?.clone())
+        self.publication.composer.controls.question.clone()
     }
 
     pub(super) fn composer_question(&self) -> Option<ComposerQuestion> {
@@ -23,10 +23,10 @@ impl Desktop {
         let key = op::OperationKey::Request {
             id: prompt.request_id.clone(),
         };
-        let busy = self.snapshot.operation_running(key.clone());
+        let busy = self.publication.context.operation_running(&key);
         Some(ComposerQuestion {
             can_advance: prompt.can_advance && self.snapshot.connection.connected && !busy,
-            error: self.snapshot.operation_error(key),
+            error: self.publication.context.operation_error(&key).cloned(),
             collapsed: self
                 .question
                 .collapsed

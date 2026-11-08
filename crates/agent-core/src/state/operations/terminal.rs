@@ -3,9 +3,8 @@ use super::*;
 pub use agent_protocol::operations::StartTerminal;
 
 impl Operation for StartTerminal {
-    fn navigation_bound(&self) -> bool {
-        false
-    }
+    const NAVIGATION_BOUND: bool = false;
+
     rpc_operation!();
     fn scheduling(&self) -> Scheduling {
         Scheduling::Terminal {
@@ -13,7 +12,7 @@ impl Operation for StartTerminal {
             starts: true,
         }
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         if snapshot
             .terminals
             .get(&self.handle)
@@ -37,7 +36,7 @@ impl Operation for StartTerminal {
         );
         Ok(())
     }
-    fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         if snapshot
             .terminals
             .get(&self.handle)
@@ -59,11 +58,10 @@ impl Operation for StartTerminal {
 pub use agent_protocol::operations::ResizeTerminal;
 
 impl Operation for ResizeTerminal {
-    fn navigation_bound(&self) -> bool {
-        false
-    }
+    const NAVIGATION_BOUND: bool = false;
+
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, _output: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
         if let Some(terminal) = shared_mut(&mut snapshot.terminals, &self.handle) {
             terminal.size = self.size;
         }
@@ -96,9 +94,8 @@ impl rpc::RpcMethod for WriteTerminal {
 }
 
 impl Operation for WriteTerminal {
-    fn navigation_bound(&self) -> bool {
-        false
-    }
+    const NAVIGATION_BOUND: bool = false;
+
     no_input!();
     fn scheduling(&self) -> Scheduling {
         Scheduling::Terminal {
@@ -129,9 +126,8 @@ impl Operation for WriteTerminal {
 pub use agent_protocol::operations::DetachTerminal;
 
 impl Operation for DetachTerminal {
-    fn navigation_bound(&self) -> bool {
-        false
-    }
+    const NAVIGATION_BOUND: bool = false;
+
     rpc_operation!();
     fn scheduling(&self) -> Scheduling {
         Scheduling::Terminal {
@@ -139,7 +135,7 @@ impl Operation for DetachTerminal {
             starts: false,
         }
     }
-    fn prepare(&mut self, snapshot: &mut Snapshot) -> Result<(), String> {
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
         if let Some(terminal) = shared_mut(&mut snapshot.terminals, &self.handle)
             && matches!(
                 terminal.phase,
@@ -161,9 +157,8 @@ rpc::rpc_method!(KillTerminal, KillTerminal, |self| rpc::TerminalKill {
     process_handle: self.handle.clone()
 });
 impl Operation for KillTerminal {
-    fn navigation_bound(&self) -> bool {
-        false
-    }
+    const NAVIGATION_BOUND: bool = false;
+
     rpc_operation!();
     fn scheduling(&self) -> Scheduling {
         Scheduling::Terminal {
@@ -203,6 +198,7 @@ mod tests {
             };
             let (closed, effects) = reduce(
                 &before,
+                "",
                 Event::Intent(Intent::CloseTerminal {
                     handle: "closing".into(),
                 }),
@@ -213,6 +209,7 @@ mod tests {
             assert_eq!(before.terminals.len(), 2);
             let (closed_again, effects) = reduce(
                 &closed,
+                "",
                 Event::Intent(Intent::CloseTerminal {
                     handle: "closing".into(),
                 }),

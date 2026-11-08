@@ -36,7 +36,7 @@ impl Operation for LoadModels {
     async fn run(&self, _: (), context: &mut Execution<'_>) -> Result<Self::Output, PeerError> {
         context.client.models(self.provider).await
     }
-    fn apply(self, snapshot: &mut Snapshot, catalog: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, catalog: Self::Output) -> Vec<Effect> {
         let models = Arc::make_mut(&mut snapshot.catalog.models);
         models.retain(|model| model.model.provider != self.provider);
         if snapshot
@@ -52,7 +52,7 @@ impl Operation for LoadModels {
         errors.remove(self.provider.key());
         errors.extend(catalog.provider_errors.unwrap_or_default());
         snapshot.normalize_model_drafts();
-        snapshot.operations.retain(|key, state| {
+        Arc::make_mut(&mut snapshot.operations).retain(|key, state| {
             !matches!(key, OperationKey::ModelSettings { model } if model.provider == self.provider)
                 || state.phase == OperationPhase::Running
         });
@@ -91,7 +91,7 @@ impl Operation for ReadModelSettings {
         })
     }
     rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, settings: Self::Output) -> Vec<Effect> {
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, settings: Self::Output) -> Vec<Effect> {
         if let Some(model) = Arc::make_mut(&mut snapshot.catalog.models)
             .iter_mut()
             .find(|model| model.model == self.model)
@@ -121,7 +121,7 @@ mod tests {
             (ProviderKind::Codex, "old"),
             (ProviderKind::Claude, "retained"),
         ] {
-            LoadModels { provider }.apply(&mut snapshot, catalog(provider, id));
+            LoadModels { provider }.apply(&mut snapshot, "", catalog(provider, id));
         }
         let retained = snapshot.catalog.models[1].clone();
         Arc::make_mut(&mut snapshot.catalog.model_errors).insert(
@@ -131,7 +131,7 @@ mod tests {
         let key = OperationKey::ModelSettings {
             model: retained.model.clone(),
         };
-        snapshot.operations.insert(
+        Arc::make_mut(&mut snapshot.operations).insert(
             key.clone(),
             OperationState {
                 generation: 1,
@@ -158,7 +158,7 @@ mod tests {
             ),
             (running.clone(), OperationPhase::Running),
         ] {
-            snapshot.operations.insert(
+            Arc::make_mut(&mut snapshot.operations).insert(
                 key,
                 OperationState {
                     generation: 1,
@@ -169,7 +169,7 @@ mod tests {
         LoadModels {
             provider: ProviderKind::Codex,
         }
-        .apply(&mut snapshot, catalog(ProviderKind::Codex, "fresh"));
+        .apply(&mut snapshot, "", catalog(ProviderKind::Codex, "fresh"));
         assert_eq!(snapshot.catalog.models[0].id, "fresh");
         assert_eq!(snapshot.catalog.models[1], retained);
         assert_eq!(
@@ -205,7 +205,7 @@ mod tests {
             id: "other-route".into(),
         };
         let mut snapshot = Snapshot::default();
-        let key = snapshot.pane.navigation.draft_key.clone();
+        let key = snapshot.panes.primary().navigation.draft_key.clone();
         let other_key = DraftKey::from("other");
         Arc::make_mut(&mut snapshot.input.drafts).insert(
             key.clone(),
@@ -232,7 +232,7 @@ mod tests {
         LoadModels {
             provider: ProviderKind::DeepSeek,
         }
-        .apply(&mut snapshot, page);
+        .apply(&mut snapshot, "", page);
         assert!(
             prefetch_model_settings(
                 snapshot.connection.connected,
@@ -253,6 +253,7 @@ mod tests {
         );
         let (mut switched, _) = reduce_intent(
             &snapshot,
+            "",
             Intent::SelectModel {
                 thread_id: key.clone(),
                 model: other.clone(),
@@ -262,7 +263,7 @@ mod tests {
         ReadModelSettings {
             model: model.clone(),
         }
-        .apply(&mut switched, settings);
+        .apply(&mut switched, "", settings);
         assert_eq!(switched.input.drafts[&key].model.as_ref(), Some(&other));
         assert_eq!(
             switched.input.drafts[&other_key].effort.as_deref(),

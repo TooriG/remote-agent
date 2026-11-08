@@ -79,7 +79,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             })
         }
         Command::Send { thread_id, .. } => {
-            Arc::make_mut(&mut snapshot.pane).navigation = Arc::new(Navigation {
+            Arc::make_mut(snapshot.panes.primary_mut()).navigation = Arc::new(Navigation {
                 thread_id: Some(thread_id.clone()),
                 draft_key: thread_id.clone().into(),
                 ..Default::default()
@@ -132,7 +132,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
                 if ready {
                     return Ok::<_, anyhow::Error>(());
                 }
-                if let Some(error) = &snapshot.pane.error {
+                if let Some(error) = &snapshot.panes.primary().error {
                     return Err(anyhow::Error::msg(error.clone()));
                 }
             }

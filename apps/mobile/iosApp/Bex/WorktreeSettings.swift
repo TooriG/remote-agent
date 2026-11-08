@@ -179,7 +179,7 @@ struct WorktreeSettingsScreen: View {
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
-            guard let settings = snapshot.files().worktreeSettings() else { error = "設定の応答が無効です。"; return }
+            guard let settings = snapshot.files(paneId: "")?.worktreeSettings() else { error = "設定の応答が無効です。"; return }
             createOnNewSession = settings.createOnNewSession
             copyOnCreate = settings.copyOnCreate
             deleteUnchanged = settings.deleteUnchanged
@@ -203,7 +203,7 @@ struct WorktreeSettingsScreen: View {
             if case let .failure(failure) = result {
                 error = failure.localizedDescription; return
             }
-            guard snapshot.files().worktreeSettings() != nil else { error = "設定を保存できませんでした。"; return }
+            guard snapshot.files(paneId: "")?.worktreeSettings() != nil else { error = "設定を保存できませんでした。"; return }
             dismiss()
         }
     }

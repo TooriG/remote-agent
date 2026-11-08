@@ -63,7 +63,6 @@ mod tests {
         let key = pane
             .presentation()
             .unwrap()
-            .snapshot
             .pane
             .navigation
             .draft_key

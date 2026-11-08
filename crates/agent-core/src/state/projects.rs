@@ -242,7 +242,7 @@ mod tests {
         }
     }
     fn dispatch(s: &Snapshot, intent: Intent) -> Snapshot {
-        let (next, effects) = reduce(s, Event::Intent(intent));
+        let (next, effects) = reduce(s, "", Event::Intent(intent));
         assert!(
             effects.is_empty(),
             "organization must not write to the provider or Host"
@@ -591,7 +591,7 @@ mod tests {
                 section: String::new(),
             },
         );
-        assert!(invalid.pane.error.is_some());
+        assert!(invalid.panes.primary().error.is_some());
         assert_eq!(
             invalid.lists.project_preferences,
             s.lists.project_preferences

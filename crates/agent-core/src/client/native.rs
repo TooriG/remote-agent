@@ -358,23 +358,6 @@ impl AgentStore {
         }
     }
 
-    /// Subscribe before comparing to avoid losing an update between read and wait.
-    pub async fn next_snapshot(
-        &self,
-        previous: Arc<Snapshot>,
-    ) -> Result<Arc<Snapshot>, AgentError> {
-        let mut updates = self.store.subscribe();
-        loop {
-            {
-                let current = updates.borrow_and_update();
-                if !Arc::ptr_eq(&current, &previous) {
-                    return Ok(current.clone());
-                }
-            }
-            updates.changed().await.map_err(error)?;
-        }
-    }
-
     pub async fn browser(
         &self,
         request: crate::browser::BrowserRequest,
@@ -602,16 +585,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_releases_a_native_snapshot_waiter() {
+    async fn shutdown_releases_a_native_presentation_waiter() {
         let store = AgentStore::offline(Vec::new(), None, "test-revision".into())
             .await
             .unwrap();
-        let previous = store.snapshot();
+        let previous = store.presentation();
         let weak = Arc::downgrade(&store);
         let waiting = store.clone();
         let task = tokio::spawn(async move {
             let mut snapshot = previous;
-            while let Ok(next) = waiting.next_snapshot(snapshot).await {
+            while let Ok(next) = waiting.next_presentation(snapshot).await {
                 snapshot = next;
             }
         });
@@ -642,7 +625,7 @@ mod tests {
                     list_query: Arc::new(crate::models::ListQuery { limit: 60, project_limit: 5, search_term: "retained search".into(), ..Default::default() }),
                     ..Default::default()
                 },
- pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: Some(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() }),
+ panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: Some(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() })),
                 ..Default::default()
             };
             let mut saved: serde_json::Value = serde_json::from_slice(&cached.serialize_local_state().unwrap()).unwrap();
@@ -709,8 +692,8 @@ mod tests {
                 }
                 let snapshot = store.store.snapshot();
                 assert!(snapshot.connected());
-                assert!(snapshot.pane.error.is_none());
-                assert_eq!(snapshot.pane.navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("thread"));
+                assert!(snapshot.panes.primary().error.is_none());
+                assert_eq!(snapshot.panes.primary().navigation.thread_id.as_ref().map(|session| session.id.as_str()), Some("thread"));
                 assert!(snapshot.lists.threads.as_ref().unwrap().data.iter().any(|thread| thread.id.as_ref().map(|session| session.id.as_str()) == Some("thread")));
                 assert_eq!(item_text(&(snapshot.sessions.conversations[&agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }].turns.as_ref().unwrap()[0].items.as_ref().unwrap()[0])), Some("after reconnect"));
                 assert_eq!(snapshot.catalog.models[0].model, agent_protocol::models::ModelRef {provider:agent_protocol::session::ProviderKind::Codex,id:"fresh-model".into()});
@@ -753,10 +736,10 @@ mod tests {
                         device_name: "Fixture device".into(),
                     };
                     let snapshot = Snapshot {
- pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation {
+ panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation {
                             thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(),
                             ..Default::default()
-                        }), ..Default::default() }), ..Default::default()
+                        }), ..Default::default() })), ..Default::default()
                     };
                     let store = AgentStore::offline(crate::persistence::encode(&snapshot).unwrap(), None, "test-revision".into()).await.unwrap();
                     let (connected, (first, mut reader, writer)) = tokio::join!(store.reconnect(connection()), scoped_incoming(&host, &trust));
@@ -1173,7 +1156,7 @@ mod tests {
                 let host = Endpoint::bind(Identity::generate(), Relays::Disabled).await.unwrap();
                 let connection = || Connection { ticket: host.ticket().to_string(), identity: identity.to_bytes().to_vec(), invitation: None, use_relays: false, device_name: "Fixture device".into() };
                 let cached = Snapshot {
- pane: std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() }),
+ panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(crate::state::PaneState { navigation: Arc::new(crate::state::Navigation { thread_id: selected.then(|| agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() }), draft_key: agent_protocol::session::SessionRef {provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into()}.into(), ..Default::default() }), ..Default::default() })),
                     ..Default::default()
                 };
                 let store = AgentStore::offline(crate::persistence::encode(&cached).unwrap(), None, "test-revision".into()).await.unwrap();
@@ -1233,7 +1216,7 @@ mod tests {
                     let before = store.snapshot();
                     assert!(refresh().await.is_err());
                     assert!(store.snapshot().connected());
-                    assert!(store.snapshot().pane.error.is_none());
+                    assert!(store.snapshot().panes.primary().error.is_none());
                     assert!(store.snapshot().operations.values().any(|state| matches!(&state.phase,
                         crate::state::operations::OperationPhase::Failed { message } if message.contains("temporary read error"))));
                     if selected {
@@ -1256,9 +1239,9 @@ mod tests {
                     refresh().await.unwrap();
                     let after = store.snapshot();
                     assert!(after.connected());
-                    assert!(after.pane.error.is_none());
+                    assert!(after.panes.primary().error.is_none());
                     assert_eq!(after.connection.epoch, before.connection.epoch);
-                    assert_eq!(after.pane.navigation, before.pane.navigation);
+                    assert_eq!(after.panes.primary().navigation, before.panes.primary().navigation);
                     assert_eq!(after.input.drafts[&crate::state::DraftKey::from(agent_protocol::session::SessionRef { provider: agent_protocol::session::ProviderKind::Codex, id: "thread".into() })].text, "preserved");
                     assert_eq!(after.lists.threads.as_ref().unwrap().data[0].name.as_deref(), Some(if selected { "round 3" } else { "round 2" }));
                     store.shutdown().await.unwrap();

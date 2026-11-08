@@ -125,12 +125,38 @@ class ModelSelectionTest {
                     val restored = restarted.ready()
                     restored.dispatch(Intent.NewChat("/another-project")).wait()
                     val snapshot = restored.snapshot()
-                    val draft = snapshot.draft(snapshot.navigation().draftKey)
+                    val draft =
+                        snapshot.draft(
+                            dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "")
+                                .conversationContext()
+                                .navigation()
+                                .draftKey
+                        )
                     assertEquals("sol", draft.model?.id)
                     assertEquals("low", draft.effort)
                     assertEquals("priority", draft.serviceTier)
-                    assertEquals("keep draft", snapshot.draft(selected.navigation().draftKey).text)
-                    assertEquals("low", snapshot.draft(selected.navigation().draftKey).effort)
+                    assertEquals(
+                        "keep draft",
+                        snapshot
+                            .draft(
+                                dev.remoteagent.core.Presentation.fromSnapshot(selected, "")
+                                    .conversationContext()
+                                    .navigation()
+                                    .draftKey
+                            )
+                            .text,
+                    )
+                    assertEquals(
+                        "low",
+                        snapshot
+                            .draft(
+                                dev.remoteagent.core.Presentation.fromSnapshot(selected, "")
+                                    .conversationContext()
+                                    .navigation()
+                                    .draftKey
+                            )
+                            .effort,
+                    )
                 } finally {
                     restarted.shutdown()
                 }
@@ -161,7 +187,17 @@ class ModelSelectionTest {
                 compose.onNodeWithText("完了").performClick()
                 store.dispatch(Intent.NewChat("/another-project")).wait()
                 val snapshot = store.snapshot()
-                assertEquals(null, snapshot.draft(snapshot.navigation().draftKey).model)
+                assertEquals(
+                    null,
+                    snapshot
+                        .draft(
+                            dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "")
+                                .conversationContext()
+                                .navigation()
+                                .draftKey
+                        )
+                        .model,
+                )
             } finally {
                 store.shutdown()
             }

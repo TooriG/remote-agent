@@ -53,7 +53,12 @@ impl Operation for ReadMetadata {
     fn rejected_output(&self, _: ()) -> Option<Self::Output> {
         Some((self.requested_at, None))
     }
-    fn apply(self, snapshot: &mut Snapshot, (checked_at, output): Self::Output) -> Vec<Effect> {
+    fn apply(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        (checked_at, output): Self::Output,
+    ) -> Vec<Effect> {
         if snapshot.connection.connected
             && snapshot.connection.connection_generation == self.connection
         {
@@ -104,9 +109,9 @@ mod tests {
             connection,
             requested_at: 0,
         };
-        request(1).stale(&mut snapshot, (1, None));
+        request(1).stale(&mut snapshot, "", (1, None));
         assert!(snapshot.files.workspace.file_metadata.get("/a").is_none());
-        request(2).stale(&mut snapshot, (2, None));
+        request(2).stale(&mut snapshot, "", (2, None));
         assert!(snapshot.files.workspace.file_metadata.get("/a").is_some());
     }
 }

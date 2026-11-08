@@ -23,6 +23,7 @@ pub fn apply_catalog(snapshot: &mut Snapshot, mut catalog: ModelPage) {
             .map(|error| [(provider.key().into(), error)].into_iter().collect());
         LoadModels { provider }.apply(
             snapshot,
+            "",
             ModelPage {
                 data,
                 next_cursor: None,

@@ -54,6 +54,7 @@ struct WorkspaceScreen: View {
     var body: some View {
         WorkspaceDirectoryScreen(
             files: model.files,
+            paneId: model.publication.paneId(),
             home: model.hostHomeDirectory,
             directory: root,
             initialFile: initialFile,
@@ -87,6 +88,7 @@ struct WorkspaceScreen: View {
 
 private struct WorkspaceDirectoryScreen: View {
     let files: AgentCore.Files
+    let paneId: String
     let home: String?
     let directory: String
     let initialFile: FileEntry?
@@ -146,7 +148,7 @@ private struct WorkspaceDirectoryScreen: View {
                     refreshCompletion?.resume()
                     refreshCompletion = continuation
                     perform(.fileTree(key: key, action: .refresh)) { next, _ in
-                        if !next.files().fileTree(key: key).refreshing {
+                        if next.files(paneId: paneId)?.fileTree(key: key).refreshing != true {
                             finishRefresh()
                         }
                     }
@@ -182,7 +184,7 @@ private struct WorkspaceDirectoryScreen: View {
                                  path: path, directory: false, size: 0)
         }
         .sheet(item: $selected) { entry in
-            WorkspaceFileSheet(files: files, text: fileDraft(entry.path), perform: perform,
+            WorkspaceFileSheet(files: files, paneId: paneId, text: fileDraft(entry.path), perform: perform,
                                entry: entry, line: selectedLine, download: downloadFile) { path in
                 aiEdit(path)
                 selected = nil

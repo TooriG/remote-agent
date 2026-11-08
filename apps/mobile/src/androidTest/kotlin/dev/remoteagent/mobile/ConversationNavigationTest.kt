@@ -55,7 +55,7 @@ class ConversationNavigationTest {
                     )
                     .put("conversations", JSONArray().put(JSONArray().put(identity).put(thread)))
             Snapshot.restore(state.toString().encodeToByteArray()).use { snapshot ->
-                val projection = requireNotNull(projectConversationRows(snapshot, snapshot.conversation(session), null))
+                val projection = requireNotNull(projectConversationRows(snapshot))
                 val summary =
                     projection
                         .turnRows()
@@ -107,7 +107,7 @@ class ConversationNavigationTest {
                             .put(JSONArray().put(identity).put(JSONObject().put("id", identity).put("turns", turns))),
                     )
             Snapshot.restore(persisted.toString().encodeToByteArray()).use { snapshot ->
-                val projection = projectConversationRows(snapshot, snapshot.conversation(session), null)
+                val projection = projectConversationRows(snapshot)
                 compose.setContent {
                     MaterialTheme {
                         Column {

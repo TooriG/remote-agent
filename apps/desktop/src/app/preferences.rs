@@ -503,7 +503,8 @@ mod tests {
         let (view, window) =
             cx.add_window_view(|window, cx| Preferences::new(None, None, window, cx));
         let mut publication =
-            agent_core::presentation::view::Presentation::project(Arc::default(), None);
+            agent_core::presentation::view::Presentation::project(Arc::default(), "", None)
+                .unwrap();
         window.update(|window, cx| {
             view.update(cx, |view, cx| {
                 view.sync(publication.settings.clone(), window, cx)
@@ -520,7 +521,7 @@ mod tests {
         let mut snapshot = Snapshot::default();
         for text in ["a", "ab", "abc"] {
             Arc::make_mut(&mut snapshot.input.drafts).insert(
-                snapshot.pane.navigation.draft_key.clone(),
+                snapshot.panes.primary().navigation.draft_key.clone(),
                 Arc::new(Draft {
                     text: text.into(),
                     ..Default::default()
@@ -541,8 +542,10 @@ mod tests {
             window.update(|window, cx| {
                 publication = agent_core::presentation::view::Presentation::project(
                     Arc::new(snapshot.clone()),
+                    "",
                     Some(&publication),
-                );
+                )
+                .unwrap();
                 view.update(cx, |view, cx| {
                     view.sync(publication.settings.clone(), window, cx)
                 })
@@ -559,8 +562,10 @@ mod tests {
             );
             publication = agent_core::presentation::view::Presentation::project(
                 Arc::new(snapshot),
+                "",
                 Some(&publication),
-            );
+            )
+            .unwrap();
             view.update(cx, |view, cx| {
                 view.sync(publication.settings.clone(), window, cx)
             });
@@ -593,7 +598,12 @@ mod tests {
                 snapshot.connection.epoch = 1;
                 Arc::make_mut(&mut snapshot.files.workspace).settings = Some(Arc::default());
                 view.sync(
-                    SettingsPresentation::from_snapshot(Arc::new(snapshot)),
+                    agent_core::presentation::view::Presentation::from_snapshot(
+                        Arc::new(snapshot),
+                        "".into(),
+                    )
+                    .unwrap()
+                    .settings(),
                     window,
                     cx,
                 );
@@ -649,7 +659,12 @@ mod tests {
                     let mut stale = store.snapshot().as_ref().clone();
                     Arc::make_mut(&mut stale.files.workspace).settings = Some(Arc::default());
                     view.sync(
-                        SettingsPresentation::from_snapshot(Arc::new(stale)),
+                        agent_core::presentation::view::Presentation::from_snapshot(
+                            Arc::new(stale),
+                            "".into(),
+                        )
+                        .unwrap()
+                        .settings(),
                         window,
                         cx,
                     );
@@ -748,7 +763,12 @@ mod tests {
                 let mut snapshot = Snapshot::default();
                 snapshot.connection.connected = true;
                 view.sync(
-                    SettingsPresentation::from_snapshot(Arc::new(snapshot)),
+                    agent_core::presentation::view::Presentation::from_snapshot(
+                        Arc::new(snapshot),
+                        "".into(),
+                    )
+                    .unwrap()
+                    .settings(),
                     window,
                     cx,
                 );

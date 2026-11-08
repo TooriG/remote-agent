@@ -119,7 +119,7 @@ impl PersistedState {
             drafts: snapshot.input.drafts.clone(),
             pending_submissions: snapshot.sessions.pending_submissions.clone(),
             file_drafts: snapshot.files.file_drafts.clone(),
-            navigation: snapshot.pane.navigation.clone(),
+            navigation: snapshot.panes.primary().navigation.clone(),
         }
     }
 }
@@ -156,10 +156,12 @@ pub fn decode(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {
             pending_submissions: saved.pending_submissions,
             ..Default::default()
         },
-        pane: std::sync::Arc::new(crate::state::PaneState {
-            navigation: saved.navigation,
-            ..Default::default()
-        }),
+        panes: crate::state::PaneStates::with_primary(std::sync::Arc::new(
+            crate::state::PaneState {
+                navigation: saved.navigation,
+                ..Default::default()
+            },
+        )),
         ..Default::default()
     })
 }

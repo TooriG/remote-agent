@@ -154,7 +154,10 @@ async fn device_preferences_apply_across_hosts_without_replacing_their_work() {
             .await
             .unwrap();
         assert_eq!(restored.input.drafts, saved.input.drafts);
-        assert_eq!(restored.pane.navigation, saved.pane.navigation);
+        assert_eq!(
+            restored.panes.primary().navigation,
+            saved.panes.primary().navigation
+        );
         assert_eq!(restored.connection.storage_scope, host);
         assert_eq!(
             restored.catalog.model_preferences,
@@ -805,7 +808,7 @@ async fn autosave_keeps_each_kind_of_host_owned_work() {
             );
         },
         |snapshot| {
-            let pane = Arc::make_mut(&mut snapshot.pane);
+            let pane = Arc::make_mut(snapshot.panes.primary_mut());
             Arc::make_mut(&mut pane.navigation).cwd = "/workspace".into();
         },
     ];
