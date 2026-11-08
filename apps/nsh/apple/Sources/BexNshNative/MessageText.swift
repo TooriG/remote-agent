@@ -156,10 +156,13 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             // The natural size comes from TextKit's own layout, whose glyphs the
             // wrapped layout below reuses, rather than a second typesetting pass.
             if let container = text.textContainer, let manager = text.layoutManager {
+                let wrapped = container.containerSize
                 container.containerSize = CGSize(width: 1_000_000, height: CGFloat.greatestFiniteMagnitude)
                 manager.ensureLayout(for: container)
                 let size = manager.usedRect(for: container).size
                 reportSize(CGSize(width: ceil(size.width), height: ceil(size.height)))
+                // Until the next layout the view keeps wrapping at its width.
+                container.containerSize = wrapped
             }
             text.setSelectedRange(keep ? range : NSRange(location: 0, length: 0))
             needsLayout = true
