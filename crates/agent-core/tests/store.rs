@@ -3026,6 +3026,12 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
 #[tokio::test]
 async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer(
     #[values(false, true)] navigate: bool,
+    #[values(
+        "/fixture/shot.png",
+        r"C:\fixture\shot.png",
+        r"\\server\share\shot.png"
+    )]
+    image: &str,
 ) {
     let source = SessionRef {
         provider: ProviderKind::Codex,
@@ -3039,7 +3045,7 @@ async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer
         "turns":[kept.clone(),
             {"id":"edit","status":"completed","items":[user("b",json!([
                 {"text":{"text":"send this again"}},
-                {"image":{"source":"/fixture/shot.png"}},
+                {"image":{"source":image}},
                 {"image":{"source":"data:image/png;base64,AAAA"}},
                 {"attachment":{"name":"notes.md","path":"/fixture/notes.md"}}
             ]))]},
@@ -3127,7 +3133,7 @@ async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer
             .map(|file| (file.name.as_str(), file.path.as_str(), file.is_image))
             .collect::<Vec<_>>(),
         [
-            ("shot.png", "/fixture/shot.png", true),
+            ("shot.png", image, true),
             ("notes.md", "/fixture/notes.md", false)
         ]
     );

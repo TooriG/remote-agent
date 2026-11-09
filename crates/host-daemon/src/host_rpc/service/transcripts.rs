@@ -147,18 +147,24 @@ impl HostRpcService {
 
     async fn import(&self, target: SessionRef) -> Result<(), Failure> {
         let started = std::time::Instant::now();
-        let result = match self.import_history(&target).await {
-            Ok(response) => {
-                let transcripts = self.inner.transcripts.clone();
-                let key = target.clone();
-                tokio::task::spawn_blocking(move || transcripts.import(&key, response))
-                    .await
-                    .map_err(|error| error.to_string())
-                    .and_then(|result| result)
-                    .map_err(storage_failure)
-            }
-            Err(error) => Err(error),
-        };
+        // Native reads can outlive a rewind or a new recorded turn. Admit
+        // their result only while the captured transcript is still current.
+        let result = async {
+            let version = self
+                .inner
+                .transcripts
+                .version(&target)
+                .map_err(storage_failure)?;
+            let response = self.import_history(&target).await?;
+            let transcripts = self.inner.transcripts.clone();
+            let key = target.clone();
+            tokio::task::spawn_blocking(move || transcripts.import(&key, version, response))
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result)
+                .map_err(storage_failure)
+        }
+        .await;
         let mut imports = self.inner.imports.lock().unwrap();
         match &result {
             Ok(()) => {

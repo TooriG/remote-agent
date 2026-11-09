@@ -1073,6 +1073,7 @@ fn late_item_changes_update_the_correct_recorded_occurrence() {
         transcripts
             .import(
                 &target,
+                transcripts.version(&target).unwrap(),
                 ThreadResponse {
                     thread: Thread {
                         id: Some(target.clone()),

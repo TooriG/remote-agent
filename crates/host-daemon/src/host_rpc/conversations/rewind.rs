@@ -175,7 +175,13 @@ mod tests {
             if managed {
                 store.save(original.clone()).unwrap();
             }
-            transcripts.import(&original.id, before.clone()).unwrap();
+            transcripts
+                .import(
+                    &original.id,
+                    transcripts.version(&original.id).unwrap(),
+                    before.clone(),
+                )
+                .unwrap();
             save_json(
                 &store.rewind_journal(),
                 &Backup {
@@ -213,6 +219,51 @@ mod tests {
     }
 
     #[test]
+    fn native_import_captured_before_rewind_cannot_restore_removed_turns() {
+        for managed in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let transcripts = Transcripts::open(&directory.path().join("history.sqlite"));
+            let store = Conversations::new(directory.path().join("conversations.json"));
+            let (original, replacement, before, after) = values();
+            if managed {
+                store.save(original.clone()).unwrap();
+                transcripts
+                    .import(&original.id, None, before.clone())
+                    .unwrap();
+            }
+            assert_eq!(
+                transcripts
+                    .history(&original.id)
+                    .unwrap()
+                    .map(|history| history.thread.turns.unwrap().len()),
+                managed.then_some(2)
+            );
+            let captured = transcripts.version(&original.id).unwrap();
+            let committed = store
+                .rewind(&transcripts, replacement.clone(), before.clone(), after)
+                .unwrap();
+            // A queued blocking writer completes after the binding and history switch.
+            transcripts.import(&original.id, captured, before).unwrap();
+            assert_eq!(transcripts.version(&original.id).unwrap(), Some(committed));
+            assert_eq!(
+                store.get(&original.id).unwrap().unwrap().active,
+                replacement.active
+            );
+            let history = transcripts.history(&original.id).unwrap().unwrap();
+            assert_eq!(
+                history
+                    .thread
+                    .turns
+                    .unwrap()
+                    .iter()
+                    .map(|turn| turn.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["first"]
+            );
+        }
+    }
+
+    #[test]
     fn unreadable_or_corrupt_journal_fails_closed_without_altering_the_binding() {
         for directory_journal in [true, false] {
             let directory = tempfile::tempdir().unwrap();
@@ -221,7 +272,13 @@ mod tests {
             let (original, _, before, _) = values();
             let store = Conversations::new(path.clone());
             store.save(original.clone()).unwrap();
-            transcripts.import(&original.id, before).unwrap();
+            transcripts
+                .import(
+                    &original.id,
+                    transcripts.version(&original.id).unwrap(),
+                    before,
+                )
+                .unwrap();
             let binding = std::fs::read(&path).unwrap();
             let journal = store.rewind_journal();
             if directory_journal {
@@ -255,7 +312,13 @@ mod tests {
         let (original, replacement, before, after) = values();
         let store = Conversations::new(path.clone());
         store.save(original.clone()).unwrap();
-        transcripts.import(&original.id, before.clone()).unwrap();
+        transcripts
+            .import(
+                &original.id,
+                transcripts.version(&original.id).unwrap(),
+                before.clone(),
+            )
+            .unwrap();
         let saved = path.with_extension("saved");
         std::fs::rename(&path, &saved).unwrap();
         std::fs::create_dir(&path).unwrap();

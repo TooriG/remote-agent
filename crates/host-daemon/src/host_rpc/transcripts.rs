@@ -123,9 +123,20 @@ impl Transcripts {
     pub(crate) fn import(
         &self,
         conversation: &SessionRef,
+        expected_version: Option<u64>,
         response: ThreadResponse,
     ) -> Result<(), String> {
-        self.store(conversation, response, true).map(|_| ())
+        self.write(|transaction| {
+            if transcript_version(transaction, conversation)? != expected_version {
+                return Ok(());
+            }
+            store(transaction, conversation, response, true).map(|_| ())
+        })
+    }
+
+    /// Capture before reading native history; import checks it in its transaction.
+    pub(crate) fn version(&self, conversation: &SessionRef) -> Result<Option<u64>, String> {
+        self.with(|connection| transcript_version(connection, conversation))
     }
 
     /// Replace everything held for `conversation`, recorded turns included.
@@ -134,78 +145,7 @@ impl Transcripts {
         conversation: &SessionRef,
         response: ThreadResponse,
     ) -> Result<u64, String> {
-        self.store(conversation, response, false)
-    }
-
-    fn store(
-        &self,
-        conversation: &SessionRef,
-        mut response: ThreadResponse,
-        keep_recorded: bool,
-    ) -> Result<u64, String> {
-        let native = response.thread.turns.take().unwrap_or_default();
-        // Live execution supplies status; a stored observation would go stale.
-        response.thread.status = SessionStatus::Unknown;
-        response.thread.history_cursor = None;
-        response.thread.history_has_more = None;
-        response.thread.history_read_state = None;
-        let metadata = protocol::encode(&response).map_err(failure)?;
-        let key = params![conversation.provider.key(), conversation.id];
-        self.write(|transaction| {
-            let mut recorded = Vec::new();
-            if keep_recorded {
-                let mut rows = transaction
-                    .prepare("SELECT body FROM turns WHERE provider = ?1 AND id = ?2 ORDER BY position")
-                    .map_err(failure)?;
-                let mut rows = rows.query(key).map_err(failure)?;
-                while let Some(row) = rows.next().map_err(failure)? {
-                    recorded.push(decode_turn(&row.get::<_, Vec<u8>>(0).map_err(failure)?)?);
-                }
-            }
-            // A turn recorded before its conversation was saved lacks the
-            // provider attribution native reads add.
-            let recorded_by_id = turns_by_id(recorded.iter());
-            let native_by_id = turns_by_id(native.iter().map(AsRef::as_ref));
-            let turns: Vec<std::borrow::Cow<Turn>> = native
-                .iter()
-                .map(|native| {
-                    let stored = recorded_by_id.get(&native.id).into_iter().flatten().copied()
-                        .find(|turn| native.matches_occurrence(turn));
-                    match stored {
-                        Some(turn) => std::borrow::Cow::Owned(Turn {
-                            provider: turn.provider.or(native.provider),
-                            supports_fork: turn.supports_fork.or(native.supports_fork),
-                            ..turn.clone()
-                        }),
-                        None => std::borrow::Cow::Borrowed(native.as_ref()),
-                    }
-                })
-                .chain(
-                    recorded
-                        .iter()
-                        .filter(|turn| {
-                            !native_by_id.get(&turn.id).into_iter().flatten()
-                                .any(|native| native.matches_occurrence(turn))
-                        })
-                        .map(std::borrow::Cow::Borrowed),
-                )
-                .collect();
-            transaction
-                .execute("DELETE FROM turns WHERE provider = ?1 AND id = ?2", key)
-                .map_err(failure)?;
-            for (position, turn) in turns.iter().enumerate() {
-                write_turn(transaction, conversation, position as i64, turn)?;
-            }
-            transaction
-                .execute(
-                    "INSERT INTO conversations (provider, id, cwd, metadata) VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT (provider, id) DO UPDATE SET cwd = excluded.cwd, metadata = excluded.metadata",
-                    params![conversation.provider.key(), conversation.id, response.thread.cwd, metadata],
-                )
-                .map_err(failure)?;
-            advance(transaction, conversation.provider.key(), &conversation.id)?;
-            transcript_version(transaction, conversation)?.ok_or_else(|| "stored transcript has no version".into())
-        })
+        self.write(|transaction| store(transaction, conversation, response, false))
     }
 
     /// Replace the stored occurrence of a live turn, or append it. Conversations
@@ -581,6 +521,83 @@ fn find_turn<T>(
     Ok(None)
 }
 
+fn store(
+    transaction: &Transaction,
+    conversation: &SessionRef,
+    mut response: ThreadResponse,
+    keep_recorded: bool,
+) -> Result<u64, String> {
+    let native = response.thread.turns.take().unwrap_or_default();
+    // Live execution supplies status; a stored observation would go stale.
+    response.thread.status = SessionStatus::Unknown;
+    response.thread.history_cursor = None;
+    response.thread.history_has_more = None;
+    response.thread.history_read_state = None;
+    let metadata = protocol::encode(&response).map_err(failure)?;
+    let key = params![conversation.provider.key(), conversation.id];
+    let mut recorded = Vec::new();
+    if keep_recorded {
+        let mut rows = transaction
+            .prepare("SELECT body FROM turns WHERE provider = ?1 AND id = ?2 ORDER BY position")
+            .map_err(failure)?;
+        let mut rows = rows.query(key).map_err(failure)?;
+        while let Some(row) = rows.next().map_err(failure)? {
+            recorded.push(decode_turn(&row.get::<_, Vec<u8>>(0).map_err(failure)?)?);
+        }
+    }
+    // A turn recorded before its conversation was saved lacks the
+    // provider attribution native reads add.
+    let recorded_by_id = turns_by_id(recorded.iter());
+    let native_by_id = turns_by_id(native.iter().map(AsRef::as_ref));
+    let turns: Vec<std::borrow::Cow<Turn>> = native
+        .iter()
+        .map(|native| {
+            let stored = recorded_by_id
+                .get(&native.id)
+                .into_iter()
+                .flatten()
+                .copied()
+                .find(|turn| native.matches_occurrence(turn));
+            match stored {
+                Some(turn) => std::borrow::Cow::Owned(Turn {
+                    provider: turn.provider.or(native.provider),
+                    supports_fork: turn.supports_fork.or(native.supports_fork),
+                    ..turn.clone()
+                }),
+                None => std::borrow::Cow::Borrowed(native.as_ref()),
+            }
+        })
+        .chain(
+            recorded
+                .iter()
+                .filter(|turn| {
+                    !native_by_id
+                        .get(&turn.id)
+                        .into_iter()
+                        .flatten()
+                        .any(|native| native.matches_occurrence(turn))
+                })
+                .map(std::borrow::Cow::Borrowed),
+        )
+        .collect();
+    transaction
+        .execute("DELETE FROM turns WHERE provider = ?1 AND id = ?2", key)
+        .map_err(failure)?;
+    for (position, turn) in turns.iter().enumerate() {
+        write_turn(transaction, conversation, position as i64, turn)?;
+    }
+    transaction
+                .execute(
+                    "INSERT INTO conversations (provider, id, cwd, metadata) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT (provider, id) DO UPDATE SET cwd = excluded.cwd, metadata = excluded.metadata",
+                    params![conversation.provider.key(), conversation.id, response.thread.cwd, metadata],
+                )
+                .map_err(failure)?;
+    advance(transaction, conversation.provider.key(), &conversation.id)?;
+    transcript_version(transaction, conversation)?
+        .ok_or_else(|| "stored transcript has no version".into())
+}
+
 /// Imports enumerate positions, and live writes only replace or append. The
 /// final indexed position therefore gives the count without scanning the history.
 fn turn_count(connection: &Connection, provider: &str, id: &str) -> Result<i64, String> {
@@ -728,6 +745,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![
                     turn("reused", &["a"], TurnStatus::Completed),
                     turn("reused", &["b"], TurnStatus::Failed),
@@ -741,6 +759,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![
                     shared,
                     turn("reused", &["new"], TurnStatus::Completed),
@@ -778,6 +797,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![turn("reused", &[], TurnStatus::Running)]),
             )
             .unwrap();
@@ -837,6 +857,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![turn("first", &["a"], TurnStatus::Completed), native]),
             )
             .unwrap();
@@ -856,6 +877,7 @@ mod tests {
         store
             .import(
                 &running,
+                store.version(&running).unwrap(),
                 history(vec![turn("racing", &["start"], TurnStatus::Running)]),
             )
             .unwrap();
@@ -874,7 +896,9 @@ mod tests {
     fn failed_cached_writes_roll_back_and_recover_without_gaps_after_reopening() {
         let (root, store) = store();
         let target = conversation();
-        store.import(&target, history(vec![])).unwrap();
+        store
+            .import(&target, store.version(&target).unwrap(), history(vec![]))
+            .unwrap();
         assert_eq!(store.window(&target, None, 10).unwrap().unwrap().start, 0);
         store
             .record(&target, &turn("first", &["a"], TurnStatus::Completed), None)
@@ -973,7 +997,9 @@ mod tests {
         let turns = (0..12)
             .map(|index| turn(&index.to_string(), &["x"], TurnStatus::Completed))
             .collect();
-        store.import(&target, history(turns)).unwrap();
+        store
+            .import(&target, store.version(&target).unwrap(), history(turns))
+            .unwrap();
         let newest = store.window(&target, None, 10).unwrap().unwrap();
         assert_eq!(
             (
@@ -1002,7 +1028,11 @@ mod tests {
         };
         let target = SessionRef::new(ProviderKind::Codex, "large".into()).unwrap();
         store
-            .import(&target, history(vec![large("a"), large("b")]))
+            .import(
+                &target,
+                store.version(&target).unwrap(),
+                history(vec![large("a"), large("b")]),
+            )
             .unwrap();
         let window = store.window(&target, None, 10).unwrap().unwrap();
         assert_eq!(
@@ -1018,6 +1048,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![turn("repeated", &["old"], TurnStatus::Completed)]),
             )
             .unwrap();
@@ -1085,6 +1116,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![
                     turn("repeated", &["old"], TurnStatus::Completed),
                     turn("repeated", &[], TurnStatus::Completed),
@@ -1113,6 +1145,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![turn("repeat", &["old"], TurnStatus::Completed)]),
             )
             .unwrap();
@@ -1142,6 +1175,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![turn("running", &["partial"], TurnStatus::Running)]),
             )
             .unwrap();
@@ -1162,6 +1196,7 @@ mod tests {
         store
             .import(
                 &target,
+                store.version(&target).unwrap(),
                 history(vec![turn("done", &["answer"], TurnStatus::Completed)]),
             )
             .unwrap();
@@ -1208,8 +1243,12 @@ mod tests {
                 .transcript_version
                 .unwrap()
         };
-        store.import(&target, history(vec![])).unwrap();
-        store.import(&other, history(vec![])).unwrap();
+        store
+            .import(&target, store.version(&target).unwrap(), history(vec![]))
+            .unwrap();
+        store
+            .import(&other, store.version(&other).unwrap(), history(vec![]))
+            .unwrap();
         let imported = version(&target);
         assert!(version(&other) > imported);
         store
@@ -1241,7 +1280,13 @@ mod tests {
         store.record(&target, &first, None).unwrap();
         assert!(store.history(&target).unwrap().is_none());
         let second = turn("second", &["last"], TurnStatus::Completed);
-        store.import(&target, history(vec![first, second])).unwrap();
+        store
+            .import(
+                &target,
+                store.version(&target).unwrap(),
+                history(vec![first, second]),
+            )
+            .unwrap();
         assert!(store.window(&target, None, 10).unwrap().unwrap().start > 0);
         let complete = store.history(&target).unwrap().unwrap();
         assert_eq!(

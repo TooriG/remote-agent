@@ -72,7 +72,7 @@ impl HostRpcService {
         let (fork, inherited) = self.branch(row, turn_id).await?;
         self.inner
             .transcripts
-            .import(&fork.id, inherited)
+            .import(&fork.id, None, inherited)
             .map_err(transcripts::storage_failure)?;
         self.inner.conversations.save(fork.clone())?;
         self.publish_conversation(&fork).await

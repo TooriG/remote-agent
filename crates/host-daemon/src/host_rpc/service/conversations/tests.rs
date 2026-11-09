@@ -3316,6 +3316,7 @@ async fn recorded_items_with_reused_turn_ids_do_not_need_the_native_provider() {
         .transcripts
         .import(
             &target,
+            host.inner.transcripts.version(&target).unwrap(),
             ThreadResponse {
                 thread: Thread {
                     id: Some(target.clone()),

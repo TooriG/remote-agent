@@ -697,7 +697,9 @@ fn sent_input(
     for part in content {
         match part {
             MessagePart::Text { text } => texts.push(text.as_str()),
-            MessagePart::Image { source } if source.starts_with('/') => {
+            MessagePart::Image { source }
+                if agent_protocol::paths::is_absolute_host_path(source) =>
+            {
                 attachments.push(Attachment {
                     name: file_name(source),
                     path: source.clone(),
@@ -719,7 +721,7 @@ fn sent_input(
 }
 
 fn file_name(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_owned()
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
 }
 
 /// A committed replacement must also refresh its subscription: global notices
