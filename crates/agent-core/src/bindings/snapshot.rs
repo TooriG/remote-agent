@@ -3,9 +3,7 @@ use super::{AgentError, error};
 use crate::presentation::files::Files;
 use crate::{
     models::{FileContent, ListQuery, WorktreeSettings},
-    presentation::conversation::{
-        ItemPresentation, RenderedConversation, RenderedItem, RenderedTurn,
-    },
+    presentation::conversation::{ItemPresentation, RenderedConversation, RenderedItem},
     state::{Draft, FileDraft, Snapshot},
 };
 use std::sync::Arc;
@@ -80,24 +78,9 @@ impl RenderedConversation {
     pub fn unchanged(&self, other: Arc<Self>) -> bool {
         std::ptr::eq(self, other.as_ref())
     }
-    pub fn turns(&self) -> Vec<Arc<RenderedTurn>> {
-        self.turns.clone()
-    }
-    pub fn queued(&self) -> Vec<Arc<RenderedItem>> {
-        self.queued.clone()
-    }
-}
-#[uniffi::export]
-impl RenderedTurn {
-    pub fn unchanged(&self, other: Arc<Self>) -> bool {
-        std::ptr::eq(self, other.as_ref())
-    }
 }
 #[uniffi::export]
 impl RenderedItem {
-    pub fn id(&self) -> String {
-        self.data.id.clone()
-    }
     pub fn unchanged(&self, other: Arc<Self>) -> bool {
         std::ptr::eq(self, other.as_ref())
     }
@@ -111,15 +94,6 @@ impl RenderedItem {
 impl WorkspaceReview {
     pub fn diff_files(&self) -> Vec<crate::presentation::diff::WorkspaceDiffFile> {
         crate::presentation::diff::diff_files(&self.0)
-    }
-    pub fn file_count(&self) -> u64 {
-        self.0.files.len() as u64
-    }
-    pub fn additions(&self) -> u64 {
-        self.0.additions
-    }
-    pub fn deletions(&self) -> u64 {
-        self.0.deletions
     }
     pub fn unchanged(&self, other: Arc<Self>) -> bool {
         Arc::ptr_eq(&self.0, &other.0)

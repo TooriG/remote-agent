@@ -130,15 +130,6 @@
         target.source = false;
         target.file = { ja: description, en: description };
       }
-      if (assets.some((asset) => asset.name === "release.json" && asset.state === "uploaded")) {
-        DL.ios = {
-          name: "iPhone",
-          file: { ja: "iOS 26 \xB7 App Store", en: "iOS 26 \xB7 App Store" },
-          url: "https://apps.apple.com/app/id6816015343",
-          ready: true,
-          cta: { ja: "App Store\u3067\u5165\u624B", en: "Get on the App Store" }
-        };
-      }
       render();
     } catch {
     }

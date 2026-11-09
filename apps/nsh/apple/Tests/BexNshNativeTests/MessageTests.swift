@@ -2,6 +2,7 @@
 import XCTest
 #if os(macOS)
     import AppKit
+    import CoreText
 #endif
 
 final class MessageTests: XCTestCase {
@@ -31,7 +32,11 @@ final class MessageTests: XCTestCase {
             content.layer?.sublayerTransform = CATransform3DMakeTranslation(0, -600, 0)
             XCTAssertEqual(content.bounds, committed)
             XCTAssertEqual(text.visibleRect.height, 40, "glyphs must draw before the deferred NSView bounds commit")
-            XCTAssertEqual(text.layer?.needsDisplay(), true, "layer scrolling must invalidate newly visible native glyphs")
+            XCTAssertEqual(
+                text.layer?.needsDisplay(),
+                true,
+                "layer scrolling must invalidate newly visible native glyphs"
+            )
             text.layer?.displayIfNeeded()
             content.layer?.sublayerTransform = CATransform3DMakeTranslation(0, -590, 0)
             XCTAssertEqual(text.visibleRect.height, 40)
@@ -97,7 +102,7 @@ final class MessageTests: XCTestCase {
                 NSRect(x: 0, y: 0, width: 400, height: 20),
                 NSRect(x: 0, y: 180, width: 400, height: 20),
                 NSRect(x: 0, y: 20, width: 20, height: 160),
-                NSRect(x: 380, y: 20, width: 20, height: 160),
+                NSRect(x: 380, y: 20, width: 20, height: 160)
             ])
         }
 
@@ -106,7 +111,12 @@ final class MessageTests: XCTestCase {
                 var paints = RenderProbe.Paints()
                 paints.record("Render turn 49, paragraph 2. Older content.", at: 10)
                 paints.record("Render turn 51, paragraph 2. Newly visible content.", at: 20)
-                XCTAssertEqual(paints.firstVisible(prefix: "Render turn", in: "clipped line\nRender turn 51, paragraph 2. Newly visible"), 20)
+                XCTAssertEqual(
+                    paints
+                        .firstVisible(prefix: "Render turn",
+                                      in: "clipped line\nRender turn 51, paragraph 2. Newly visible"),
+                    20
+                )
                 XCTAssertNil(paints.firstVisible(prefix: "Render turn", in: "Render turn 50, paragraph 2. Not painted"))
                 XCTAssertNil(paints.firstVisible(prefix: "Render turn", in: "unrelated content"))
             }
@@ -202,7 +212,7 @@ final class MessageTests: XCTestCase {
             XCTAssertEqual(actions.last?["id"] as? String, "code")
         }
 
-        @MainActor func testALineIsT3CodesLineTallWhateverItsScripts() throws {
+        @MainActor func testALineIsT3CodesLineTallWhateverItsScripts() {
             // A bracket falls back to a font whose leading would grow its line.
             for (role, text) in [("assistant", "シミュレータで完了しました。"), ("user", "[groups] 完了した作業を確認します")] {
                 let run = MessageRun(text: text, strong: false, emphasis: false, strikethrough: false, code: false,
@@ -211,7 +221,11 @@ final class MessageTests: XCTestCase {
                                              depth: 0, alignment: "left", runs: [run])
                 let view = MessageTextContainer()
                 var heights: [CGFloat] = []
-                view.send = { if let height = $0["measuredHeight"] as? CGFloat { heights.append(height) } }
+                view.send = {
+                    if let height = $0["measuredHeight"] as? CGFloat {
+                        heights.append(height)
+                    }
+                }
                 view.update(MessageDocument(blocks: [block], secondary: false, role: role, target: "t",
                                             sideChat: false, maxWidth: 600,
                                             menu: MessageMenuTitles(quote: "", sideChat: "")))
@@ -220,7 +234,7 @@ final class MessageTests: XCTestCase {
             }
         }
 
-        @MainActor func testItemsOfOneListSitCloserThanTwoLists() throws {
+        @MainActor func testItemsOfOneListSitCloserThanTwoLists() {
             let item = { (marker: String, text: String) in
                 MessageParagraph(header: nil, marker: marker, code: false, quoted: false, depth: 1,
                                  alignment: "left",
@@ -254,13 +268,96 @@ final class MessageTests: XCTestCase {
                 XCTAssertEqual(weight >= NSFont.Weight.semibold.rawValue, bold, cell)
                 let view = MessageTextContainer()
                 var heights: [CGFloat] = []
-                view.send = { if let height = $0["measuredHeight"] as? CGFloat { heights.append(height) } }
+                view.send = {
+                    if let height = $0["measuredHeight"] as? CGFloat {
+                        heights.append(height)
+                    }
+                }
                 view.update(MessageDocument(blocks: [block], secondary: false, role: "assistant", target: "t",
                                             sideChat: false, maxWidth: 600,
                                             menu: MessageMenuTitles(quote: "", sideChat: ""), cell: cell))
                 // 12 points at `leading-relaxed`: 19.5.
                 XCTAssertEqual(heights.last, 20, cell)
             }
+        }
+
+        @MainActor func testInlineCodeGlyphsAreCenteredInTheNativeBackground() throws {
+            for strong in [false, true] {
+                let code = "session-25VpGP"
+                let block = MessageParagraph(header: nil, marker: "•", code: false, quoted: false,
+                                             depth: 1, alignment: "left", runs: [
+                                                 MessageRun(text: "変更がある worktree: ", strong: strong,
+                                                            emphasis: false, strikethrough: false, code: false,
+                                                            link: nil, darkColor: nil, lightColor: nil),
+                                                 MessageRun(text: code, strong: false, emphasis: false,
+                                                            strikethrough: false, code: true, link: nil,
+                                                            darkColor: nil, lightColor: nil)
+                                             ])
+                let view = MessageTextContainer()
+                view.update(MessageDocument(blocks: [block], secondary: false, role: "assistant", target: "t",
+                                            sideChat: false, maxWidth: 600,
+                                            menu: MessageMenuTitles(quote: "", sideChat: "")))
+                let manager = try XCTUnwrap(view.text.layoutManager)
+                let container = try XCTUnwrap(view.text.textContainer)
+                let storage = try XCTUnwrap(view.text.textStorage)
+                let characters = (view.text.string as NSString).range(of: code)
+                let glyphs = manager.glyphRange(forCharacterRange: characters, actualCharacterRange: nil)
+                var background = NSRect.null
+                manager.enumerateEnclosingRects(forGlyphRange: glyphs,
+                                                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                                in: container) { rect, _ in background = background.union(rect) }
+                var ink = NSRect.null
+                for index in glyphs.location ..< NSMaxRange(glyphs) {
+                    var glyph = manager.cgGlyph(at: index)
+                    let character = manager.characterIndexForGlyph(at: index)
+                    let font = try XCTUnwrap(storage.attribute(.font, at: character, effectiveRange: nil) as? NSFont)
+                    let bounds = CTFontGetBoundingRectsForGlyphs(font, .default, &glyph, nil, 1)
+                    let line = manager.lineFragmentRect(forGlyphAt: index, effectiveRange: nil)
+                    let origin = manager.location(forGlyphAt: index)
+                    ink = ink.union(NSRect(x: line.minX + origin.x + bounds.minX,
+                                           y: line.minY + origin.y - bounds.maxY,
+                                           width: bounds.width, height: bounds.height))
+                }
+                XCTAssertEqual(background.midY, ink.midY, accuracy: 0.5)
+                XCTAssertGreaterThan(ink.minY, background.minY)
+                XCTAssertLessThan(ink.maxY, background.maxY)
+            }
+        }
+
+        @MainActor func testInlineCodeBackgroundsStayInsideTheirFirstAndWrappedLines() throws {
+            let code = "hasPrefix(\"# 日本語 🧑🏽‍💻\") source source source source"
+            let runs = [
+                MessageRun(text: "保持契約の ", strong: false, emphasis: false, strikethrough: false,
+                           code: false, link: nil, darkColor: nil, lightColor: nil),
+                MessageRun(text: code, strong: false, emphasis: false, strikethrough: false,
+                           code: true, link: nil, darkColor: nil, lightColor: nil)
+            ]
+            let block = MessageParagraph(header: nil, marker: nil, code: false, quoted: false,
+                                         depth: 0, alignment: "left", runs: runs)
+            let view = MessageTextContainer()
+            view.update(MessageDocument(blocks: [block], secondary: false, role: "assistant", target: "t",
+                                        sideChat: false, maxWidth: 220,
+                                        menu: MessageMenuTitles(quote: "", sideChat: "")))
+            view.frame = NSRect(x: 0, y: 0, width: 220, height: 200)
+            view.layout()
+            let manager = try XCTUnwrap(view.text.layoutManager)
+            let container = try XCTUnwrap(view.text.textContainer)
+            let characters = (view.text.string as NSString).range(of: code)
+            let glyphs = manager.glyphRange(forCharacterRange: characters, actualCharacterRange: nil)
+            var backgrounds: [NSRect] = []
+            manager.enumerateEnclosingRects(forGlyphRange: glyphs,
+                                            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                            in: container) { rect, _ in
+                backgrounds.append(rect.offsetBy(dx: view.text.textContainerOrigin.x,
+                                                 dy: view.text.textContainerOrigin.y))
+            }
+            XCTAssertGreaterThan(backgrounds.count, 1, "the code spans wrapped native lines")
+            for rect in backgrounds {
+                XCTAssertGreaterThanOrEqual(rect.minY, 0, "the native background must not be shifted above the view")
+                XCTAssertLessThanOrEqual(rect.maxY, view.text.bounds.height)
+            }
+            view.text.setSelectedRange(characters)
+            XCTAssertEqual((view.text.string as NSString).substring(with: view.text.selectedRange()), code)
         }
 
         @MainActor func testRecycledTextReportsOnlyTheHeightAtItsNewColumnsWidth() throws {
@@ -276,7 +373,11 @@ final class MessageTests: XCTestCase {
             // A short user bubble occupied the same recycled native view.
             view.frame = CGRect(x: 0, y: 0, width: 167, height: 17)
             var heights: [CGFloat] = []
-            view.send = { if let height = $0["measuredHeight"] as? CGFloat { heights.append(height) } }
+            view.send = {
+                if let height = $0["measuredHeight"] as? CGFloat {
+                    heights.append(height)
+                }
+            }
             view.update(document)
             let first = try XCTUnwrap(heights.first)
             view.layout()

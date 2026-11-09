@@ -809,8 +809,21 @@ struct StartTerminal {
     pub size: TerminalSize,
 }
 #[uniffi::remote(Record)]
+struct StartAccountTerminal {
+    pub handle: String,
+    pub provider: ProviderKind,
+    pub id: String,
+    pub size: TerminalSize,
+}
+#[uniffi::remote(Record)]
 struct ReviewWorkspace {
     pub cwd: String,
+}
+#[uniffi::remote(Record)]
+struct WriteWorkspaceFile {
+    pub cwd: String,
+    pub relative_path: String,
+    pub text: String,
 }
 #[uniffi::remote(Record)]
 struct RemoveWorktree {
@@ -840,6 +853,11 @@ struct LoadVisualization {
 struct ForkSession {
     pub thread_id: SessionRef,
     pub last_turn_id: agent_protocol::ids::TurnId,
+}
+#[uniffi::remote(Record)]
+struct RewindSession {
+    pub thread_id: SessionRef,
+    pub turn_id: agent_protocol::ids::TurnId,
 }
 #[uniffi::remote(Record)]
 struct CreateSession {

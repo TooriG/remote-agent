@@ -14,7 +14,7 @@ async function waitFor(check) {
   }
 }
 
-function fixture(t, mode, channel = 'stable') {
+function fixture(t, mode) {
   const root = mkdtempSync(join(tmpdir(), 'apple-pipeline-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
@@ -29,7 +29,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = process.env.APPLE_PIPELINE_ROOT;
 const mode = process.env.APPLE_PIPELINE_MODE;
-const preview = process.env.APPLE_PIPELINE_CHANNEL === 'nightly';
 const name = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const log = (name, args = []) => fs.appendFileSync(path.join(root, 'commands'), JSON.stringify({ name, args }) + '\\n');
@@ -56,16 +55,16 @@ log(name, args);
     mark('archive.started');
     if (mode === 'archive-failure') process.exit(41);
     if (mode === 'cancel' || mode === 'interrupt') await wait('archive.release');
-    fs.mkdirSync(path.join(args[1], 'Products/Applications', preview ? 'BEX Preview.app' : 'Bex.app'), { recursive: true });
+    fs.mkdirSync(path.join(args[1], 'Products/Applications', 'Bex.app'), { recursive: true });
     mark('archive.completed');
   }
   if (name === 'PlistBuddy') {
-    const identifier = args[2].includes('bex-macOS-arm64') ? 'app.bex.desktop' : (preview ? 'dev.remoteagent.mobile.ios.preview' : 'dev.remoteagent.mobile.ios');
+    const identifier = args[2].includes('bex-macOS-arm64') ? 'app.bex.desktop' : 'dev.remoteagent.mobile.ios';
     console.log(args[1].includes('CFBundleVersion') ? '101' : identifier);
   }
   if (name === 'jq') {
     if (args.includes('-e')) process.exit(JSON.parse(fs.readFileSync(args.at(-1), 'utf8')).status === 'Accepted' ? 0 : 1);
-    const values = { '.prefix': 'fixture-profile', '.bundleId': preview ? 'dev.remoteagent.mobile.ios.preview' : 'dev.remoteagent.mobile.ios', '.method': preview ? 'release-testing' : 'app-store-connect' };
+    const values = { '.prefix': 'fixture-profile', '.bundleId': 'dev.remoteagent.mobile.ios', '.method': 'app-store-connect' };
     console.log(args.includes('-er') ? values[args[1]] : '{}');
   }
   if (name === 'plutil') {
@@ -88,8 +87,7 @@ log(name, args);
     env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`,
       APPLE_PIPELINE_ROOT: root, APPLE_PIPELINE_MODE: mode,
-      APPLE_PIPELINE_CHANNEL: channel,
-      AGENT_RELEASE_CHANNEL: channel, AGENT_BUILD_NUMBER: '101', AGENT_MARKETING_VERSION: '1.0.1', AGENT_RELEASE_SHA: 'fixture-source',
+      AGENT_BUILD_NUMBER: '101', AGENT_MARKETING_VERSION: '1.0.1', AGENT_RELEASE_SHA: 'fixture-source',
       AGENT_CODE_SIGN_KEYCHAIN: 'fixture-keychain', AGENT_ASC_PRIVATE_KEY_FILE: 'fixture-key',
       AGENT_ASC_KEY_ID: 'fixture-key-id', AGENT_ASC_ISSUER_ID: 'fixture-issuer',
     },
@@ -120,7 +118,7 @@ log(name, args);
   };
 }
 
-test('iPhone archiving overlaps Mac notarization and publication waits for both', { timeout: 20000 }, async t => {
+test('Nightly archiving overlaps Mac notarization and proves signing before TestFlight upload', { timeout: 20000 }, async t => {
   const build = fixture(t, 'success');
   await waitFor(() => build.exists('archive.completed'));
   assert.ok(!build.exists('notary.completed'));
@@ -141,21 +139,6 @@ test('iPhone archiving overlaps Mac notarization and publication waits for both'
     assert.ok(commands.findIndex(command => command.name === name) < commands.findIndex(command => command.name === 'xcodebuild'));
   }
   build.assertNotaryExited();
-});
-
-test('Nightly exports the separate Preview IPA for internal distribution without an App Store upload', { timeout: 20000 }, async t => {
-  const build = fixture(t, 'success', 'nightly');
-  await waitFor(() => build.exists('archive.completed'));
-  build.release();
-  const result = await build.completed;
-  assert.equal(result.code, 0, result.stderr);
-  const commands = build.commands();
-  const archive = commands.find(command => command.name === 'just' && command.args[0] === 'ios-archive');
-  assert.ok(archive.args.some(argument => argument.endsWith('/Config/Preview.xcconfig')));
-  assert.equal(commands.filter(command => command.name === 'xcodebuild').length, 1);
-  assert.ok(!commands.some(command => command.args.includes('record-delivery')));
-  assert.ok(build.exists('target/apple-release/bex-iOS-preview.ipa'));
-  assert.ok(build.exists('target/apple-release/bex-iOS-preview.ipa.sha256'));
 });
 
 test('notarization failure and rejection prevent every iPhone export and upload', { timeout: 20000 }, async t => {

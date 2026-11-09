@@ -48,4 +48,4 @@ macOSでは、`scripts/dev-env.sh just dev`で開発用アプリをビルドし�
 - [プライバシー](docs/PRIVACY.md)
 - [脆弱性の報告](SECURITY.md)
 - [Windows版の開発・インストール](docs/WINDOWS.md)
-- [Nightly・本番・iPhone Preview／Devの配布](docs/RELEASES.md)
+- [Nightly・本番・iPhone TestFlight／Devの配布](docs/RELEASES.md)

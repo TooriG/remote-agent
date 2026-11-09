@@ -837,6 +837,36 @@ fn main() {
         auth(&args);
         return;
     }
+    if args.first().map(String::as_str) == Some("--safe-mode") {
+        assert_eq!(
+            args,
+            ["--safe-mode", "--tools", "", "--permission-mode", "dontAsk"]
+        );
+        let config = std::env::var("CLAUDE_CONFIG_DIR").unwrap();
+        let credentials = std::env::var("CLAUDE_SECURESTORAGE_CONFIG_DIR").unwrap();
+        for key in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+            "CLAUDECODE",
+        ] {
+            assert!(std::env::var_os(key).is_none());
+        }
+        fs::write(
+            Path::new(&credentials).join("fixture-setup-started.json"),
+            json!({"config":config,"credentials":credentials}).to_string(),
+        )
+        .unwrap();
+        println!("Review account terms before continuing");
+        io::stdout().flush().unwrap();
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer).unwrap();
+        if answer.trim() == "fixture-accept" {
+            fs::write(Path::new(&credentials).join("fixture-terms-accepted"), "").unwrap();
+        }
+        return;
+    }
 
     // Process IDs can be reused after a restart; this names one process run.
     let process = format!(
@@ -958,10 +988,27 @@ fn auth(args: &[String]) {
             io::stdout().flush().unwrap();
             let mut code = String::new();
             io::stdin().read_line(&mut code).unwrap();
-            if code.trim() != "fixture-code" {
+            if code.trim() != "fixture-code#fixture-only" {
                 std::process::exit(1);
             }
             fs::write(file, serde_json::to_vec(&json!({"tokenSource":"oauth","apiKeySource":"none","email":"claude@example.invalid","subscriptionType":"max"})).unwrap()).unwrap();
+        }
+        Some("status") => {
+            assert_eq!(args.get(2).map(String::as_str), Some("--json"));
+            let status: Value = fs::read(&file)
+                .ok()
+                .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+                .unwrap_or_else(|| json!({"tokenSource":"none","apiKeySource":"none"}));
+            let value = match status["tokenSource"].as_str() {
+                Some("oauth") => {
+                    json!({"loggedIn":true,"authMethod":"claude.ai","email":status["email"],"subscriptionType":status["subscriptionType"]})
+                }
+                Some("none") if status["apiKeySource"] == "none" => {
+                    json!({"loggedIn":false,"authMethod":"none"})
+                }
+                _ => status,
+            };
+            println!("{value}");
         }
         Some("logout") => {
             if home.join("fail-auth-logout").exists() {

@@ -1,14 +1,11 @@
 //! One terminal's supervisor protocol, device attachment, and process lifetime.
 //! Cleanup completes before the registry is allowed to release ownership.
-use super::{Action, Command, Receipt, screen::TerminalScreen};
+use super::{Action, Command, Launch, Receipt, screen::TerminalScreen};
 use crate::host_rpc::routing::{SessionId, SessionRouter};
 use agent_process::{PtyCommand, PtyEvent};
 use agent_protocol::{operations::TerminalSize, protocol::Notification};
 use agent_transport::peer::JsonlReader;
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 use tokio::{io::AsyncWriteExt, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -30,17 +27,21 @@ impl Worker {
             *attached = None;
         }
     }
-    pub(super) async fn run(mut self, cwd: PathBuf, size: TerminalSize) -> Result<(), String> {
+    pub(super) async fn run(mut self, launch: Launch, size: TerminalSize) -> Result<(), String> {
         let mut pending: Option<(u64, Receipt)> = None;
         let mut screen = TerminalScreen::new(size);
         let mut cleanup = Ok(());
         let result = async {
             if self.stop.is_cancelled() { return Err("terminal startup cancelled".into()); }
-            let mut child = agent_process::terminal_command().and_then(|mut command| command.spawn()).map_err(|error| error.to_string())?;
+            let mut command = agent_process::terminal_command().map_err(|error| error.to_string())?;
+            for (key, value) in &launch.environment {
+                match value { Some(value) => {command.command_mut().env(key, value);}, None => {command.command_mut().env_remove(key);} }
+            }
+            let mut child = command.spawn().map_err(|error| error.to_string())?;
             cleanup = Err("terminal cleanup incomplete".into());
             let mut stdin = child.stdin().take().ok_or("terminal input pipe unavailable")?;
             let mut output = JsonlReader::new(child.stdout().take().ok_or("terminal output pipe unavailable")?);
-            let initialize = PtyCommand::Start { command:crate::platform::terminal_command().iter().map(|value| (*value).into()).collect(), cwd:cwd.to_string_lossy().into_owned(), rows:size.rows, cols:size.cols };
+            let initialize = PtyCommand::Start { command:launch.arguments, cwd:launch.directory.to_string_lossy().into_owned(), rows:size.rows, cols:size.cols };
             let mut next_id = 0u64;
             let interaction: Result<(), String> = async {
                 write(&mut stdin, &initialize).await?;

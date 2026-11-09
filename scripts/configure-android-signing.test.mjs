@@ -5,9 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-test('Android candidate recovery requires an unpublished tag and successful checks for its exact source', t => {
-  const workflow = readFileSync(new URL('../.github/workflows/android-download.yml', import.meta.url), 'utf8');
-  const block = workflow.match(/      - name: Require a verified draft candidate[\s\S]*?        run: \|\n([\s\S]*?)(?=      - name: Free build space)/);
+for (const [platform, filename, stepName] of [
+  ['Android', 'android-download.yml', 'Require a verified draft candidate'],
+  ['Linux', 'native.yml', 'Require a verified draft Nightly for Linux packaging'],
+]) {
+test(`${platform} candidate recovery requires an unpublished Nightly and successful checks for its exact source`, t => {
+  const workflow = readFileSync(new URL(`../.github/workflows/${filename}`, import.meta.url), 'utf8');
+  const block = workflow.match(new RegExp(String.raw`      - name: ${stepName}[\s\S]*?        run: \|\n([\s\S]*?)(?=      -(?: name:| uses:))`));
   assert.ok(block);
   const script = block[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
   const root = mkdtempSync(join(tmpdir(), 'android-recovery-'));
@@ -26,7 +30,7 @@ else if (args[0] === 'run' && args[1] === 'list') {
   for (const name of ['git', 'gh']) chmodSync(join(root, name), 0o755);
   const ready = { draft: true, 'portable.yml': revision, 'native.yml': revision };
   for (const [tag, state, success] of [
-    ['nightly-149', ready, true], ['prd-150', ready, true],
+    ['nightly-149', ready, true], ['prd-150', ready, false],
     ['main', ready, false], ['nightly-149', { ...ready, draft: false }, false],
     ['nightly-149', { ...ready, 'portable.yml': '' }, false],
     ['nightly-149', { ...ready, 'native.yml': 'b'.repeat(40) }, false],
@@ -39,6 +43,8 @@ else if (args[0] === 'run' && args[1] === 'list') {
     assert.equal(result.status === 0, success, result.stderr);
   }
 });
+
+}
 
 test('Android distribution keeps private signing material out of logs and exported environment values', t => {
   const root = mkdtempSync(join(tmpdir(), 'android-signing-'));
@@ -65,4 +71,41 @@ test('Android distribution keeps private signing material out of logs and export
   assert.ok(exported.includes('AGENT_ANDROID_KEY_ALIAS=bex\n'));
   assert.ok(!exported.includes(payload));
   assert.equal(statSync(join(root, 'bex-android.p12')).mode & 0o777, 0o600);
+});
+
+test('Windows release packaging accepts only a verified unpublished Nightly', t => {
+  const workflow = readFileSync(new URL('../.github/workflows/native.yml', import.meta.url), 'utf8');
+  const block = workflow.match(/      - name: Require a verified Nightly revision for release packaging[\s\S]*?        run: \|\n([\s\S]*?)(?=      # Native Windows)/);
+  assert.ok(block);
+  const script = block[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
+  const root = mkdtempSync(join(tmpdir(), 'windows-release-guard-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const file = join(root, 'guard.ps1');
+  writeFileSync(file, `
+$ErrorActionPreference = 'Stop'
+$mock = ConvertFrom-Json -AsHashtable $env:BEX_WINDOWS_GUARD
+function git { $global:LASTEXITCODE = 0; return 'fixture-source' }
+function gh {
+  $global:LASTEXITCODE = 0
+  if ($args[0] -eq 'release') { return [string]$mock.draft }
+  if ($args[0] -eq 'run') {
+    if ($args[$args.IndexOf('--commit') + 1] -ne 'fixture-source') { throw 'Wrong source' }
+    return $mock[$args[$args.IndexOf('--workflow') + 1]]
+  }
+  throw 'Unexpected gh command'
+}
+${script}`);
+  const ready = { draft: true, 'portable.yml': 'fixture-source', 'native.yml': 'fixture-source' };
+  for (const [tag, state, success] of [
+    ['nightly-149', ready, true], ['prd-150', ready, false],
+    ['nightly-149', { ...ready, draft: false }, false],
+    ['nightly-149', { ...ready, 'portable.yml': '' }, false],
+    ['nightly-149', { ...ready, 'native.yml': 'another-source' }, false],
+  ]) {
+    const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', file], {
+      encoding: 'utf8', env: { ...process.env, AGENT_RELEASE_TAG: tag, GITHUB_REPOSITORY: 'fixture/repo', BEX_WINDOWS_GUARD: JSON.stringify(state) },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status === 0, success, result.stderr);
+  }
 });

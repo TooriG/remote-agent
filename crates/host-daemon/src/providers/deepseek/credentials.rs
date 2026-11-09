@@ -80,22 +80,27 @@ impl ManagedKeys {
         }
         agent_local_host::save_private_json(&directory.join("dsh-keys.json"), self).map_err(failure)
     }
-    pub fn status(&self, external: bool) -> Credentials {
+    pub fn status(&self, external_key: Option<&str>, external_file: bool) -> Credentials {
         Credentials {
             routes: KeyProvider::ALL
                 .into_iter()
                 .map(|provider| {
                     let key = self.get(provider);
+                    let external_key = external_key.filter(|_| provider == KeyProvider::DeepSeek);
                     CredentialRoute {
                         provider,
                         source: if key.is_some() {
                             CredentialSource::Managed
-                        } else if provider == KeyProvider::DeepSeek && external {
+                        } else if external_key.is_some()
+                            || provider == KeyProvider::DeepSeek && external_file
+                        {
                             CredentialSource::External
                         } else {
                             CredentialSource::Missing
                         },
-                        needs_attention: key.is_some_and(|key| misplaced_key(provider, key)),
+                        needs_attention: key
+                            .or(external_key)
+                            .is_some_and(|key| misplaced_key(provider, key)),
                     }
                 })
                 .collect(),
@@ -144,12 +149,41 @@ mod tests {
         assert!(validate_key(KeyProvider::OpenRouter, Some(&"k".repeat(4097))).is_err());
     }
     #[test]
+    fn external_keys_use_the_same_attention_rule_and_managed_keys_take_precedence() {
+        let mut keys = ManagedKeys::default();
+        let status = keys.status(Some("sk-or-external"), false);
+        let official = status
+            .routes
+            .iter()
+            .find(|route| route.provider == KeyProvider::DeepSeek)
+            .unwrap();
+        assert_eq!(official.source, CredentialSource::External);
+        assert!(official.needs_attention);
+        assert!(
+            status
+                .routes
+                .iter()
+                .filter(|route| route.provider != KeyProvider::DeepSeek)
+                .all(|route| route.source == CredentialSource::Missing)
+        );
+        keys.set(KeyProvider::DeepSeek, Some("official-test-key"));
+        let status = keys.status(Some("sk-or-external"), false);
+        let official = status
+            .routes
+            .iter()
+            .find(|route| route.provider == KeyProvider::DeepSeek)
+            .unwrap();
+        assert_eq!(official.source, CredentialSource::Managed);
+        assert!(!official.needs_attention);
+    }
+
+    #[test]
     fn routed_key_validation_and_metadata_agree() {
         for provider in KeyProvider::ALL {
             let mut keys = ManagedKeys::default();
             keys.set(provider, Some("sk-or-test-only"));
             let route = keys
-                .status(false)
+                .status(None, false)
                 .routes
                 .into_iter()
                 .find(|route| route.provider == provider)

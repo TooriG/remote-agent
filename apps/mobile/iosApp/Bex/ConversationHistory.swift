@@ -180,13 +180,7 @@ extension ThreadScreen {
         if turn.activityCanCollapse {
             Button {
                 scroll.following = false
-                guard let conversation,
-                      let change = model.activityExpansion(id, in: conversation, expansion: activityExpansionOverrides)
-                else { return }
-                activityExpansionOverrides = change.expansion
-                if let params = change.loadItems {
-                    model.perform(.loadTurnItems(params))
-                }
+                model.toggleActivity(id)
             } label: {
                 header
             }
@@ -198,7 +192,7 @@ extension ThreadScreen {
     }
 
     func threadAccessibilityValue(_ thread: ConversationPresentation, itemCount: UInt32) -> String {
-        "turns=\(thread.projection.turnCount());items=\(itemCount)"
+        "turns=\(thread.projection.source().turnCount());items=\(itemCount)"
     }
 }
 

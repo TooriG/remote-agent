@@ -270,24 +270,49 @@ impl Operation for ReadAccountLogin {
             provider: self.provider,
         })
     }
-    rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, status: Self::Output) -> Vec<Effect> {
-        if !status.completed {
-            return poll_account_login(snapshot).into_iter().collect();
+    no_input!();
+    type Output = Result<rpc::AccountLoginStatus, PeerError>;
+
+    async fn run(
+        &self,
+        _: Self::Input,
+        context: &mut Execution<'_>,
+    ) -> Result<Self::Output, PeerError> {
+        Ok(context.call(self).await)
+    }
+
+    fn complete(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        output: Self::Output,
+        current: bool,
+    ) -> Result<Vec<Effect>, PeerError> {
+        if !current {
+            return Ok(Vec::new());
         }
-        let account = Arc::make_mut(&mut snapshot.catalog.account);
-        account.login = None;
-        let draft = account.login_draft.take();
+        let status = output.inspect_err(|error| {
+            Arc::make_mut(&mut snapshot.catalog.account).discard_ended_login(
+                self.provider,
+                &self.id,
+                error,
+            );
+        })?;
+        if !status.completed {
+            return Ok(poll_account_login(snapshot).into_iter().collect());
+        }
+        let draft =
+            Arc::make_mut(&mut snapshot.catalog.account).clear_login(self.provider, &self.id);
         let Some(id) = status.account_id else {
-            return vec![
+            return Ok(vec![
                 Effect::execute(ListAccounts {}),
                 Effect::execute(LoadModels {
                     provider: self.provider,
                 }),
-            ];
+            ]);
         };
         // The Host owns the login: a pane closed meanwhile still gets the new account.
-        vec![match draft {
+        Ok(vec![match draft {
             Some(thread_id) => Effect::execute(SelectAccountForDraft {
                 provider: self.provider,
                 id,
@@ -297,7 +322,7 @@ impl Operation for ReadAccountLogin {
                 provider: self.provider,
                 id,
             }),
-        }]
+        }])
     }
 }
 
@@ -311,17 +336,23 @@ impl Operation for PollAccountLogin {
         self.0.key()
     }
     no_input!();
-    type Output = <ReadAccountLogin as rpc::RpcMethod>::Output;
+    type Output = <ReadAccountLogin as Operation>::Output;
     async fn run(
         &self,
         _: Self::Input,
         context: &mut Execution<'_>,
     ) -> Result<Self::Output, PeerError> {
         tokio::time::sleep(LOGIN_POLL_INTERVAL).await;
-        context.call(&self.0).await
+        Ok(context.call(&self.0).await)
     }
-    fn apply(self, snapshot: &mut Snapshot, pane_id: &str, status: Self::Output) -> Vec<Effect> {
-        self.0.apply(snapshot, pane_id, status)
+    fn complete(
+        self,
+        snapshot: &mut Snapshot,
+        pane_id: &str,
+        output: Self::Output,
+        current: bool,
+    ) -> Result<Vec<Effect>, PeerError> {
+        self.0.complete(snapshot, pane_id, output, current)
     }
 }
 
@@ -335,10 +366,9 @@ impl Operation for CancelAccountLogin {
     }
     rpc_operation!();
     fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
-        let account = Arc::make_mut(&mut snapshot.catalog.account);
-        account.login = None;
-        account.login_draft = None;
-        Vec::new()
+        Arc::make_mut(&mut snapshot.catalog.account).clear_login(self.provider, &self.id);
+        // Cancelling an obsolete form supersedes the poll of the login that continues.
+        poll_account_login(snapshot).into_iter().collect()
     }
 }
 
@@ -374,9 +404,69 @@ impl Operation for SubmitAccountLogin {
             provider: self.provider,
         })
     }
-    rpc_operation!();
-    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
-        poll_account_login(snapshot).into_iter().collect()
+    no_input!();
+    type Output = Result<crate::models::Empty, PeerError>;
+
+    async fn run(
+        &self,
+        _: Self::Input,
+        context: &mut Execution<'_>,
+    ) -> Result<Self::Output, PeerError> {
+        Ok(context.call(self).await)
+    }
+
+    fn complete(
+        self,
+        snapshot: &mut Snapshot,
+        _pane_id: &str,
+        output: Self::Output,
+        current: bool,
+    ) -> Result<Vec<Effect>, PeerError> {
+        if !current {
+            return Ok(Vec::new());
+        }
+        output.inspect_err(|error| {
+            Arc::make_mut(&mut snapshot.catalog.account).discard_ended_login(
+                self.provider,
+                &self.id,
+                error,
+            );
+        })?;
+        Ok(poll_account_login(snapshot).into_iter().collect())
+    }
+}
+
+impl AccountState {
+    /// Ends this login unless a different one is pending, returning the draft
+    /// that was waiting to adopt the new account.
+    fn clear_login(
+        &mut self,
+        provider: crate::session::ProviderKind,
+        id: &str,
+    ) -> Option<DraftKey> {
+        if self
+            .login
+            .as_ref()
+            .is_some_and(|login| login.provider != provider || login.login_id != id)
+        {
+            return None;
+        }
+        self.login = None;
+        self.login_draft.take()
+    }
+
+    fn discard_ended_login(
+        &mut self,
+        provider: crate::session::ProviderKind,
+        id: &str,
+        error: &PeerError,
+    ) {
+        if let PeerError::Remote { error, .. } = error
+            && serde_json::from_str::<agent_protocol::error::RpcFailure>(error)
+                .is_ok_and(|failure| failure.code == agent_protocol::error::ACCOUNT_LOGIN_ENDED)
+        {
+            self.clear_login(provider, id);
+        }
     }
 }
 

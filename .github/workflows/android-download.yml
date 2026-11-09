@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       release-tag:
-        description: Existing draft candidate whose Android package needs rebuilding
+        description: Existing draft Nightly whose Android package needs rebuilding
         type: string
         required: true
   workflow_call:
@@ -44,7 +44,7 @@ jobs:
           CANDIDATE_TAG: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
-          [[ $CANDIDATE_TAG =~ ^(nightly|prd)-[1-9][0-9]*$ ]]
+          [[ $CANDIDATE_TAG =~ ^nightly-[1-9][0-9]*$ ]]
           test "$(gh release view "$CANDIDATE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
           revision=$(git rev-parse HEAD)
           for workflow in portable.yml native.yml; do
@@ -70,7 +70,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
       - name: Initialize pinned tooling before loading signing credentials
         run: scripts/dev-env.sh true
-      - name: Configure stable distribution signing and version
+      - name: Configure distribution signing and Nightly version
         env:
           AGENT_ANDROID_KEYSTORE_BASE64: ${{ secrets.BEX_ANDROID_KEYSTORE_BASE64 }}
           AGENT_ANDROID_KEY_ALIAS: ${{ vars.BEX_ANDROID_KEY_ALIAS }}

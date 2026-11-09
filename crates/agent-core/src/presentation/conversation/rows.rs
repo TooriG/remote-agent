@@ -79,9 +79,6 @@ impl VisibleConversationRow {
     pub fn id(&self) -> String {
         self.id.clone()
     }
-    pub fn source_id(&self) -> String {
-        self.data.id.clone()
-    }
     pub fn data(&self) -> ConversationRow {
         self.data.clone()
     }
@@ -99,8 +96,6 @@ pub struct ConversationRows {
     scope: PanelScope,
     expansion: HashMap<String, String>,
     policy: ConversationRowPolicy,
-    // Keep hidden rows as well, so collapse/reopen can reuse unchanged content.
-    all: Vec<Arc<VisibleConversationRow>>,
     pub rows: Vec<Arc<VisibleConversationRow>>,
     turn_end: usize,
     queued_end: usize,
@@ -131,14 +126,19 @@ impl ConversationRows {
             .as_ref()
             .filter(|previous| previous.scope == scope)
             .into_iter()
-            .flat_map(|previous| &previous.all)
+            .flat_map(|previous| &previous.rows)
             .map(|row| ((row.origin.label(), row.data.id.as_str()), row))
             .collect();
         let prefix = serde_json::to_string(&(&scope.host, &scope.storage, &scope.draft))
             .expect("conversation scope contains strings");
-        let mut all = Vec::new();
         let mut rows = Vec::new();
-        let mut source_item_count = 0;
+        let source_item_count = source
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.rows)
+            .chain(&source.session_rows)
+            .filter(|row| is_source_item(&row.content))
+            .count() as u32;
         for turn in &source.turns {
             let origin = ConversationRowOrigin::Turn {
                 key: turn.key(),
@@ -149,7 +149,7 @@ impl ConversationRows {
                     .or_else(|| source.source.id.as_ref().map(|id| id.provider)),
                 started_at: turn.source.started_at,
             };
-            for (row, visible) in project_rows(
+            rows.extend(project_rows(
                 &turn.rows,
                 &origin,
                 &prefix,
@@ -157,13 +157,7 @@ impl ConversationRows {
                 policy,
                 &turn.work_progress(true),
                 &before,
-            ) {
-                source_item_count += u32::from(is_source_item(&row.data.content));
-                if visible {
-                    rows.push(row.clone());
-                }
-                all.push(row);
-            }
+            ));
         }
         let turn_end = rows.len();
         for item in &source.queued {
@@ -173,6 +167,7 @@ impl ConversationRows {
                 timestamp_ms: item.data.timestamp_ms,
                 steer: false,
                 queued: false,
+                edit_turn_id: None,
             };
             let row = project_row(
                 &prefix,
@@ -183,11 +178,10 @@ impl ConversationRows {
                 None,
                 before.get(&("queued", data.id.as_str())).copied(),
             );
-            rows.push(row.clone());
-            all.push(row);
+            rows.push(row);
         }
         let queued_end = rows.len();
-        for (row, visible) in project_rows(
+        rows.extend(project_rows(
             &source.session_rows,
             &ConversationRowOrigin::Session,
             &prefix,
@@ -198,19 +192,12 @@ impl ConversationRows {
                 action: None,
             },
             &before,
-        ) {
-            source_item_count += u32::from(is_source_item(&row.data.content));
-            if visible {
-                rows.push(row.clone());
-            }
-            all.push(row);
-        }
+        ));
         Arc::new(Self {
             source,
             scope,
             expansion,
             policy,
-            all,
             rows,
             turn_end,
             queued_end,
@@ -237,7 +224,11 @@ impl ConversationRows {
         self.rows[self.queued_end..].to_vec()
     }
     /// Return the native owner's next choice and optional load, without updating either.
-    pub fn toggle_activity(&self, id: String) -> Option<ActivityExpansionChange> {
+    pub fn toggle_activity(
+        &self,
+        id: String,
+        mut expansion: HashMap<String, String>,
+    ) -> Option<ActivityExpansionChange> {
         let row = self.rows.iter().find(|row| row.id == id)?;
         let ConversationRowContent::ActivityHeader { activity } = &row.data.content else {
             return None;
@@ -245,17 +236,16 @@ impl ConversationRows {
         if !activity.activity_can_collapse {
             return None;
         }
-        let mut expansion = self.expansion.clone();
-        if row.expanded {
+        // The owner may have accepted another click before publishing a new frame.
+        let expanded = super::activity_is_expanded(&activity.status, expansion.get(&id).cloned());
+        if expanded {
             expansion.remove(&id);
         } else {
             expansion.insert(id, activity.status.clone());
         }
         Some(ActivityExpansionChange {
             expansion,
-            load_items: (!row.expanded)
-                .then(|| activity.load_items.clone())
-                .flatten(),
+            load_items: (!expanded).then(|| activity.load_items.clone()).flatten(),
         })
     }
     /// Accessibility counts the unfiltered source, independently of presentation policy.
@@ -269,7 +259,6 @@ impl ConversationRows {
 
 struct RowInput<'a> {
     data: &'a ConversationRow,
-    visible: bool,
     expanded: bool,
     progress: Option<WorkProgress>,
 }
@@ -282,12 +271,12 @@ fn project_rows(
     policy: ConversationRowPolicy,
     progress: &WorkProgress,
     previous: &PreviousRows<'_>,
-) -> Vec<(Arc<VisibleConversationRow>, bool)> {
+) -> Vec<Arc<VisibleConversationRow>> {
     let mut expanded = false;
     let mut progress_shown = false;
     let inputs: Vec<_> = source
         .iter()
-        .map(|data| {
+        .filter_map(|data| {
             let mut header_expanded = false;
             let mut row_progress = None;
             match &data.content {
@@ -325,20 +314,21 @@ fn project_rows(
                 progress_shown = matches!(&data.content,
                 ConversationRowContent::ActivityHeader { activity } if activity.is_in_progress);
             }
-            RowInput {
+            // Hidden source rows remain in RenderedConversation; do not allocate
+            // native render values until the owner expands their activity.
+            visible.then_some(RowInput {
                 data,
-                visible,
                 expanded: header_expanded,
                 progress: row_progress,
-            }
+            })
         })
         .collect();
-    let last = inputs.iter().rposition(|input| input.visible);
+    let last = inputs.len().checked_sub(1);
     inputs
         .into_iter()
         .enumerate()
         .map(|(index, input)| {
-            let row = project_row(
+            project_row(
                 prefix,
                 origin,
                 input.data,
@@ -348,8 +338,7 @@ fn project_rows(
                 previous
                     .get(&(origin.label(), input.data.id.as_str()))
                     .copied(),
-            );
-            (row, input.visible)
+            )
         })
         .collect()
 }

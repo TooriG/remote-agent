@@ -218,9 +218,25 @@ pub struct TerminalOutput {
     pub data: Vec<u8>,
     pub reset_size: Option<agent_protocol::operations::TerminalSize>,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TerminalTarget {
+    Shell {
+        cwd: String,
+    },
+    Account {
+        provider: agent_protocol::session::ProviderKind,
+        id: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Terminal {
-    pub cwd: String,
+    pub target: TerminalTarget,
     pub size: agent_protocol::operations::TerminalSize,
     pub phase: TerminalPhase,
     pub output: VecDeque<Arc<TerminalOutput>>,
@@ -701,11 +717,11 @@ fn reduce_intent(previous: &Snapshot, pane_id: &str, intent: Intent) -> (Snapsho
         ReadTaskActivity, RegisterLiveActivity, UnregisterLiveActivity, ReadHostSoftware,
         ReadPermissionSettings, UpdatePermissionSettings,
         ManageCodexCli, ReadProviderSettings, SetProviderEnabled, ReadDshCredentials, UpdateDshCredential, ListAccounts, SelectAccount, SelectAccountForDraft, LogoutAccount, StartAccountLogin,
-        ReadAccountLogin, CancelAccountLogin, SubmitAccountLogin, ForkSession,
-        StartTerminal, DetachTerminal, KillTerminal, CreateInvitation, RemoveRemoteHost,
+        ReadAccountLogin, CancelAccountLogin, SubmitAccountLogin, ForkSession, RewindSession,
+        StartTerminal, StartAccountTerminal, DetachTerminal, KillTerminal, CreateInvitation, RemoveRemoteHost,
         RevokeDevice, ListFiles, ResolveFile, ResolveFileReference, ReadFile,
         ReadFileOpenCapabilities, OpenInEditor,
-        SaveFile, ReviewWorkspace, ReadWorktreeSettings,
+        SaveFile, WriteWorkspaceFile, ReviewWorkspace, ReadWorktreeSettings,
         UpdateWorktreeSettings, ListWorktrees, RemoveWorktree, ListProjectSessions,
         ListAgents, AddProject, ScanProjects, ImportProjects, CreateSession, RetryPreparation,
         ReadThread, OpenRequest, ReadItem, ResizeTerminal,
@@ -1502,11 +1518,21 @@ impl Snapshot {
         }
         for (handle, terminal) in self.terminals.iter() {
             if terminal.phase == TerminalPhase::Suspended {
-                effects.push(Effect::execute(op::StartTerminal {
-                    handle: handle.clone(),
-                    cwd: terminal.cwd.clone(),
-                    size: terminal.size,
-                }));
+                effects.push(match &terminal.target {
+                    TerminalTarget::Shell { cwd } => Effect::execute(op::StartTerminal {
+                        handle: handle.clone(),
+                        cwd: cwd.clone(),
+                        size: terminal.size,
+                    }),
+                    TerminalTarget::Account { provider, id } => {
+                        Effect::execute(op::StartAccountTerminal {
+                            handle: handle.clone(),
+                            provider: *provider,
+                            id: id.clone(),
+                            size: terminal.size,
+                        })
+                    }
+                });
             }
         }
         effects
