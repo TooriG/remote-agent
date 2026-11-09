@@ -368,6 +368,11 @@ private fun LazyListScope.projectThreads(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    list?.hiddenProjects?.takeIf { it.isNotEmpty() }?.let { hidden ->
+        item(key = "hidden-projects") {
+            HiddenProjects(hidden) { _, intent -> perform(intent) }
+        }
+    }
 }
 
 @Composable
@@ -426,6 +431,7 @@ private fun ProjectRow(
                 Icon(painterResource(R.drawable.ic_add), "${project.name}で新しいチャット")
             }
         }
+        if (!floating) ProjectActions(project, perform)
     }
 }
 
