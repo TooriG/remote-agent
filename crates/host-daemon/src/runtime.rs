@@ -81,6 +81,12 @@ pub(crate) async fn run(config: StartupConfig) -> Result<()> {
     let deepseek = match host_daemon::providers::deepseek::DeepSeek::load(
         config.deepseek,
         account_directory.join("deepseek"),
+        std::env::var_os("DSH_HOME")
+            .map(Into::into)
+            .or_else(|| directories::BaseDirs::new().map(|base| base.home_dir().join(".dsh"))),
+        std::env::var("DEEPSEEK_API_KEY")
+            .ok()
+            .map(zeroize::Zeroizing::new),
     )
     .await
     {

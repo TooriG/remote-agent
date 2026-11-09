@@ -1182,10 +1182,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let harness =
-            crate::providers::deepseek::DeepSeek::load("dsh".into(), root.path().join("harness"))
-                .await
-                .unwrap();
+        let harness = crate::providers::deepseek::DeepSeek::load(
+            "dsh".into(),
+            root.path().join("harness"),
+            Some(root.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         let service = super::HostRpcService::new(
             [claude.into(), harness.into()],
             crate::ProjectStore::new(root.path().join("projects.json")),

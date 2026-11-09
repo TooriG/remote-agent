@@ -43,6 +43,7 @@ use model_catalog::{catalog, credential_route, provider_profile, resolved_model_
 
 const PROVIDER: ProviderKind = ProviderKind::DeepSeek;
 const ACCOUNT: &str = "deepseek:native";
+#[cfg(test)]
 const DEFAULT_MODEL: &str = "[\"deepseek-official\",\"deepseek-flash\"]";
 const INSTALL_DSH_HINT: &str = "HostにDSHをインストールするか、--deepseekで本体のパスを指定してください。APIキーの保存だけでは本体はインストールされません。";
 type Pending = HashMap<u64, oneshot::Sender<Result<Value, String>>>;
@@ -52,6 +53,8 @@ pub struct DeepSeek(Arc<Inner>);
 struct Inner {
     program: PathBuf,
     directory: PathBuf,
+    home: Option<PathBuf>,
+    external_key: Option<zeroize::Zeroizing<String>>,
     records: Mutex<BTreeMap<String, ThreadResponse>>,
     rpc: Mutex<Option<Arc<Rpc>>>,
     events: mpsc::Sender<AgentEvent>,
@@ -132,7 +135,12 @@ fn now() -> f64 {
 }
 
 impl DeepSeek {
-    pub async fn load(program: PathBuf, directory: PathBuf) -> anyhow::Result<Self> {
+    pub async fn load(
+        program: PathBuf,
+        directory: PathBuf,
+        home: Option<PathBuf>,
+        external_key: Option<zeroize::Zeroizing<String>>,
+    ) -> anyhow::Result<Self> {
         agent_local_host::create_state_directory(&directory)?;
         let mut records: BTreeMap<String, ThreadResponse> =
             match tokio::fs::read(directory.join("conversations.json")).await {
@@ -153,6 +161,8 @@ impl DeepSeek {
         Ok(Self(Arc::new(Inner {
             program,
             directory,
+            home,
+            external_key: external_key.filter(|key| !key.trim().is_empty()),
             records: Mutex::new(records),
             rpc: Mutex::new(None),
             events,
@@ -273,7 +283,14 @@ impl DeepSeek {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        if let Some(key) = keys.get(KeyProvider::DeepSeek) {
+        command.env_remove("DEEPSEEK_API_KEY");
+        if let Some(home) = &self.0.home {
+            command.env("DSH_HOME", home);
+        }
+        if let Some(key) =
+            keys.get(KeyProvider::DeepSeek)
+                .or(self.0.external_key.as_deref().map(String::as_str))
+        {
             command.env("DEEPSEEK_API_KEY", key);
         }
         #[cfg(windows)]
@@ -360,16 +377,11 @@ impl DeepSeek {
     }
     async fn configured(&self) -> Result<bool, Failure> {
         Ok(!ManagedKeys::load(&self.0.directory).await?.is_empty()
-            || self.external_key_configured().await)
+            || self.0.external_key.is_some()
+            || self.external_file_configured().await)
     }
-    async fn external_key_configured(&self) -> bool {
-        if std::env::var("DEEPSEEK_API_KEY").is_ok_and(|value| !value.trim().is_empty()) {
-            return true;
-        }
-        let home = std::env::var_os("DSH_HOME")
-            .map(PathBuf::from)
-            .or_else(|| directories::BaseDirs::new().map(|base| base.home_dir().join(".dsh")));
-        if let Some(home) = home {
+    async fn external_file_configured(&self) -> bool {
+        if let Some(home) = &self.0.home {
             tokio::fs::read_to_string(home.join(".credentials.yaml"))
                 .await
                 .is_ok_and(|text| {
@@ -479,21 +491,15 @@ impl DeepSeek {
     async fn validate_model_key(&self, model: &str) -> Result<(), Failure> {
         if credential_route(model) == Some(KeyProvider::DeepSeek) {
             let keys = ManagedKeys::load(&self.0.directory).await?;
-            let key = keys
-                .get(KeyProvider::DeepSeek)
-                .map(|key| zeroize::Zeroizing::new(key.to_owned()))
-                .or_else(|| {
-                    std::env::var("DEEPSEEK_API_KEY")
-                        .ok()
-                        .map(zeroize::Zeroizing::new)
-                });
-            if key
-                .as_ref()
-                .is_some_and(|key| credentials::misplaced_key(KeyProvider::DeepSeek, key))
-            {
+            let key = keys.get(KeyProvider::DeepSeek).or(self
+                .0
+                .external_key
+                .as_deref()
+                .map(String::as_str));
+            if key.is_some_and(|key| credentials::misplaced_key(KeyProvider::DeepSeek, key)) {
                 return Err(Failure::new(
                     "dsh_key_provider_mismatch",
-                    "選択中の送信先はDeepSeek公式ですが、保存されているのはOpenRouterのキーです。モデル選択で「OpenRouter · DeepSeek: DeepSeek V4.1 Flash」など、OpenRouterのモデルを選択してください。",
+                    "OpenRouterのキーです。DeepSeek公式のAPIキーを保存するか、このキーを接続先「OpenRouter」に保存し直してください。",
                 ));
             }
         }
@@ -813,9 +819,10 @@ impl Identity for DeepSeek {
         })
     }
     async fn dsh_credentials(&self) -> Result<agent_protocol::dsh::Credentials, Failure> {
-        Ok(ManagedKeys::load(&self.0.directory)
-            .await?
-            .status(self.external_key_configured().await))
+        Ok(ManagedKeys::load(&self.0.directory).await?.status(
+            self.0.external_key.as_deref().map(String::as_str),
+            self.external_file_configured().await,
+        ))
     }
     async fn update_dsh_credential(
         &self,
@@ -1000,6 +1007,7 @@ impl Agent for DeepSeek {
             self.validate_model_key(model).await?;
         }
         let rpc = self.rpc().await?;
+        let credentials = self.dsh_credentials().await?;
         let created = rpc
             .call(
                 "session/new",
@@ -1010,17 +1018,35 @@ impl Agent for DeepSeek {
         let id = created["sessionId"]
             .as_str()
             .ok_or_else(|| failure("Harness did not return a session ID"))?;
-        rpc.loaded.lock().await.insert(id.into());
-        if let Err(error) = self.select(&rpc, id, model, None).await {
-            let _ = rpc
-                .call(
-                    "session/close",
-                    json!({"sessionId":id}),
-                    Some(Duration::from_secs(15)),
-                )
-                .await;
-            return Err(error);
+        let selection = async {
+            let selected = catalog(&created, &credentials.routes)
+                .into_iter()
+                .find(|candidate| match model {
+                    Some(id) => candidate.model.id == id,
+                    None => candidate.is_default == Some(true),
+                })
+                .ok_or_else(|| {
+                    failure("設定済みの接続先から利用できるモデルを選択してください。")
+                })?;
+            self.select(&rpc, id, Some(&selected.model.id), None)
+                .await?;
+            Ok::<_, Failure>(selected.model)
         }
+        .await;
+        let model = match selection {
+            Ok(model) => model,
+            Err(error) => {
+                let _ = rpc
+                    .call(
+                        "session/close",
+                        json!({"sessionId":id}),
+                        Some(Duration::from_secs(15)),
+                    )
+                    .await;
+                return Err(error);
+            }
+        };
+        rpc.loaded.lock().await.insert(id.into());
         let record = ThreadResponse {
             thread: Thread {
                 id: Some(session(id)),
@@ -1031,18 +1057,7 @@ impl Agent for DeepSeek {
                 updated_at: Some(now()),
                 ..Default::default()
             },
-            model: Some(ModelRef {
-                provider: PROVIDER,
-                id: model
-                    .or_else(|| {
-                        created["configOptions"]
-                            .as_array()
-                            .and_then(|v| v.iter().find(|o| o["id"] == "model"))
-                            .and_then(|o| o["currentValue"].as_str())
-                    })
-                    .unwrap_or(DEFAULT_MODEL)
-                    .into(),
-            }),
+            model: Some(model),
             ..Default::default()
         };
         let mut records = self.0.records.lock().await;
@@ -1205,6 +1220,7 @@ impl Agent for DeepSeek {
         let data = if params.cursor.is_some() {
             vec![]
         } else {
+            let credentials = self.dsh_credentials().await?;
             let created = rpc
                 .call(
                     "session/new",
@@ -1212,7 +1228,7 @@ impl Agent for DeepSeek {
                     Some(Duration::from_secs(90)),
                 )
                 .await?;
-            let mut models = catalog(&created);
+            let mut models = catalog(&created, &credentials.routes);
             if let Some(id) = created["sessionId"].as_str() {
                 let known = rpc.model_settings.lock().await;
                 for model in &mut models {
@@ -1255,7 +1271,8 @@ impl Agent for DeepSeek {
             .as_str()
             .ok_or_else(|| failure("Model discovery returned no session"))?;
         let result = async {
-            if !catalog(&created)
+            let credentials = self.dsh_credentials().await?;
+            if !catalog(&created, &credentials.routes)
                 .iter()
                 .any(|model| model.model.id == model_id)
             {
@@ -1431,9 +1448,14 @@ mod tests {
     #[tokio::test]
     async fn conversation_search_keeps_unicode_whitespace_paging_and_saved_history() {
         let root = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load(root.path().join("missing-dsh"), root.path().join("records"))
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            root.path().join("missing-dsh"),
+            root.path().join("records"),
+            Some(root.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         let records = [
             ("a", Some("ALPHA"), Some("βeta")),
             ("b", Some("case"), Some("İSTANBUL")),
@@ -1589,9 +1611,14 @@ mod tests {
     async fn stalled_harness_catalog_returns_provider_errors_before_the_client_deadline() {
         use agent_protocol::protocol::{Call, Response};
         let root = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load(root.path().join("missing-dsh"), root.path().join("dsh"))
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            root.path().join("missing-dsh"),
+            root.path().join("dsh"),
+            Some(root.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         // A concurrent initialization holds the same lock. Model discovery
         // must bound this wait too, not just the eventual ACP request.
         let _initializing = adapter.0.rpc.lock().await;
@@ -1640,12 +1667,194 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_and_new_sessions_follow_credential_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let harness = dir.path().join("harness.js");
+        std::fs::write(&harness, r#"
+const readline = require('node:readline');
+const {appendFileSync} = require('node:fs');
+const models = [
+    '["deepseek-official","deepseek-flash"]',
+    '["opencode-go","deepseek-v4.1-flash"]',
+    '["opencode","deepseek-v4.1-flash"]'
+];
+const config = currentValue => ({configOptions: [
+    {id: 'model', currentValue, options: models.map(value => ({value}))},
+    {id: 'reasoning_effort', currentValue: 'high', options: [{value: 'high'}]}
+]});
+let session = 0;
+readline.createInterface({input: process.stdin}).on('line', line => {
+    const request = JSON.parse(line);
+    const key = process.env.DEEPSEEK_API_KEY;
+    const environment = request.method === 'initialize' ? {
+        home: process.env.DSH_HOME,
+        key: key === undefined ? 'missing' : key === 'external-test-key' ? 'external' : key === 'managed-test-key' ? 'managed' : 'unexpected'
+    } : undefined;
+    appendFileSync(__dirname + '/calls.jsonl', JSON.stringify({...request, environment}) + '\n');
+    let result = {};
+    switch (request.method) {
+        case 'initialize': result = {protocolVersion: 1}; break;
+        case 'session/new': result = {sessionId: `session-${++session}`, ...config(models[0])}; break;
+        case 'session/set_config_option': result = config(request.params.value); break;
+    }
+    process.stdout.write(JSON.stringify({jsonrpc: '2.0', id: request.id, result}) + '\n');
+});
+"#).unwrap();
+        let adapter = DeepSeek::load(
+            harness,
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
+        let params = op::ListModels {
+            provider: PROVIDER,
+            limit: 100,
+            cursor: None,
+        };
+        let go = r#"["opencode-go","deepseek-v4.1-flash"]"#;
+        let zen = r#"["opencode","deepseek-v4.1-flash"]"#;
+        save_test_key(&adapter, KeyProvider::OpenCode, Some("catalog-test-key")).await;
+        let models = adapter.models(&params).await.unwrap().data;
+        assert_eq!(
+            models
+                .iter()
+                .map(|m| m.model.id.as_str())
+                .collect::<Vec<_>>(),
+            [go, zen]
+        );
+        let created = adapter
+            .create(dir.path().to_str().unwrap(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(created.model.unwrap().id, go);
+        let calls = || -> Vec<Value> {
+            std::fs::read_to_string(dir.path().join("calls.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        };
+        let environment = || {
+            calls()
+                .into_iter()
+                .rev()
+                .find(|call| call["method"] == "initialize")
+                .unwrap()["environment"]
+                .clone()
+        };
+        assert_eq!(environment()["home"], json!(dir.path().join("home")));
+        assert_eq!(environment()["key"], "missing");
+        assert!(
+            calls()
+                .iter()
+                .any(|call| call["method"] == "session/set_config_option"
+                    && call["params"]["configId"] == "model"
+                    && call["params"]["value"] == go),
+            "the Harness must actually switch away from its unconfigured native default"
+        );
+        let before = calls().len();
+        let error = adapter
+            .create(dir.path().to_str().unwrap(), Some(DEFAULT_MODEL), None)
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("設定済みの接続先"));
+        assert!(
+            calls()[before..]
+                .iter()
+                .any(|call| call["method"] == "session/close"),
+            "a rejected model must close the new native session"
+        );
+        assert_eq!(
+            Agent::list(&adapter, "", None, SessionListScope::All, 100)
+                .await
+                .unwrap()
+                .data
+                .len(),
+            1,
+            "failed creation must not save a conversation"
+        );
+        assert!(
+            adapter
+                .model_settings(DEFAULT_MODEL)
+                .await
+                .unwrap_err()
+                .message
+                .contains("not available")
+        );
+        assert_eq!(
+            adapter
+                .model_settings(go)
+                .await
+                .unwrap()
+                .default_reasoning_effort,
+            "high"
+        );
+
+        save_test_key(&adapter, KeyProvider::OpenCode, None).await;
+        assert!(adapter.models(&params).await.unwrap().data.is_empty());
+        let before = calls().len();
+        let error = adapter
+            .create(dir.path().to_str().unwrap(), None, None)
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("設定済みの接続先"));
+        assert!(
+            calls()[before..]
+                .iter()
+                .any(|call| call["method"] == "session/close")
+        );
+
+        save_test_key(&adapter, KeyProvider::DeepSeek, Some("managed-test-key")).await;
+        let models = adapter.models(&params).await.unwrap().data;
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model.id, DEFAULT_MODEL);
+        assert_eq!(models[0].is_default, Some(true));
+        let created = adapter
+            .create(dir.path().to_str().unwrap(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(created.model.unwrap().id, DEFAULT_MODEL);
+        adapter.shutdown().await;
+
+        let external = DeepSeek::load(
+            dir.path().join("harness.js"),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            Some(zeroize::Zeroizing::new("external-test-key".into())),
+        )
+        .await
+        .unwrap();
+        external.models(&params).await.unwrap();
+        assert_eq!(
+            environment()["key"],
+            "managed",
+            "the saved key overrides the external key in the actual child"
+        );
+        save_test_key(&external, KeyProvider::DeepSeek, None).await;
+        external.models(&params).await.unwrap();
+        assert_eq!(
+            environment()["key"],
+            "external",
+            "the external key reaches the actual child after removing the saved key"
+        );
+        external.shutdown().await;
+    }
+
+    #[tokio::test]
     #[ignore = "requires an installed DeepSeek Harness and its supervisor companion"]
     async fn installed_harness_creates_selects_and_resumes_the_same_native_session() {
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
+        save_test_key(&adapter, KeyProvider::DeepSeek, Some("test-catalog-only")).await;
         let mut events = adapter.event_stream().unwrap();
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
@@ -1699,9 +1908,14 @@ mod tests {
     #[tokio::test]
     async fn opencode_allowance_cache_is_invalidated_when_credentials_change() {
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load(dir.path().join("missing-dsh"), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            dir.path().join("missing-dsh"),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         save_test_key(&adapter, KeyProvider::OpenCode, Some("first-test-key")).await;
         let first = adapter.0.usage.lock().unwrap().clone();
         let original = first
@@ -1748,9 +1962,14 @@ mod tests {
     async fn missing_harness_reports_installation_instead_of_a_disconnection_and_keeps_the_key() {
         let dir = tempfile::tempdir().unwrap();
         for program in ["not-installed-dsh", "not-installed-dsh.js"] {
-            let adapter = DeepSeek::load(dir.path().join(program), dir.path().into())
-                .await
-                .unwrap();
+            let adapter = DeepSeek::load(
+                dir.path().join(program),
+                dir.path().into(),
+                Some(dir.path().join("home")),
+                None,
+            )
+            .await
+            .unwrap();
             save_test_key(&adapter, KeyProvider::OpenCode, Some("test-key")).await;
             let error = adapter
                 .models(&op::ListModels {
@@ -1791,9 +2010,14 @@ mod tests {
     async fn opencode_key_enables_both_routes_and_removal_preserves_other_providers() {
         let dir = tempfile::tempdir().unwrap();
         // Even a failed launch must leave a regenerable, secret-free profile.
-        let adapter = DeepSeek::load(dir.path().join("missing-dsh"), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            dir.path().join("missing-dsh"),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         save_test_key(&adapter, KeyProvider::OpenRouter, Some("router-test-key")).await;
         save_test_key(&adapter, KeyProvider::OpenCode, Some("opencode-test-key")).await;
         assert!(adapter.rpc().await.is_err());
@@ -1825,16 +2049,26 @@ mod tests {
     #[tokio::test]
     async fn dsh_keys_rotate_independently_persist_and_never_appear_in_account_metadata() {
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         save_test_key(&adapter, KeyProvider::DeepSeek, Some("native-secret")).await;
         save_test_key(&adapter, KeyProvider::OpenRouter, Some("router-secret")).await;
         save_test_key(&adapter, KeyProvider::OpenAI, Some("openai-secret")).await;
         save_test_key(&adapter, KeyProvider::OpenRouter, Some("rotated-secret")).await;
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         let usage = adapter.usage(ACCOUNT).await.unwrap();
         assert!(usage.windows.is_empty());
         assert!(usage.error.is_none());
@@ -1877,9 +2111,14 @@ mod tests {
     #[tokio::test]
     async fn concurrent_credential_updates_keep_independent_routes_and_do_not_leak_secrets() {
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         let (first, second) = tokio::join!(
             adapter.update_dsh_credential(KeyUpdate {
                 provider: KeyProvider::DeepSeek,
@@ -1915,9 +2154,14 @@ mod tests {
     #[tokio::test]
     async fn dsh_keys_reject_invalid_values_without_overwriting_existing_credentials() {
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         save_test_key(&adapter, KeyProvider::OpenRouter, Some("keep-secret")).await;
         for key in [
             "".to_owned(),
@@ -1948,10 +2192,32 @@ mod tests {
     async fn misplaced_credentials_are_reported_as_typed_attention_without_exposing_keys() {
         use agent_protocol::dsh::CredentialSource;
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            Some(zeroize::Zeroizing::new("sk-or-external-test-key".into())),
+        )
+        .await
+        .unwrap();
+        let external = adapter.dsh_credentials().await.unwrap();
+        let official = external
+            .routes
+            .iter()
+            .find(|route| route.provider == KeyProvider::DeepSeek)
             .unwrap();
+        assert_eq!(official.source, CredentialSource::External);
+        assert!(official.needs_attention);
+        assert_eq!(
+            adapter
+                .validate_model_key(DEFAULT_MODEL)
+                .await
+                .unwrap_err()
+                .code,
+            "dsh_key_provider_mismatch"
+        );
         save_test_key(&adapter, KeyProvider::DeepSeek, Some("native-secret")).await;
+        adapter.validate_model_key(DEFAULT_MODEL).await.unwrap();
         let rejected = adapter
             .update_dsh_credential(KeyUpdate {
                 provider: KeyProvider::DeepSeek,
@@ -1998,9 +2264,14 @@ mod tests {
     #[ignore = "requires installed DeepSeek Harness; no inference or paid request"]
     async fn installed_harness_exposes_configured_openrouter_models() {
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         save_test_key(&adapter, KeyProvider::OpenRouter, Some("test-catalog-only")).await;
         let models = adapter
             .models(&op::ListModels {
@@ -2073,9 +2344,14 @@ mod tests {
     #[ignore = "requires installed Harness; catalog only, no inference"]
     async fn installed_harness_exposes_nanogpt_deepseek_and_native_efforts() {
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         save_test_key(&adapter, KeyProvider::NanoGpt, Some("test-catalog-only")).await;
         let selected = ModelRef {
             provider: PROVIDER,
@@ -2189,9 +2465,14 @@ mod tests {
             &BTreeMap::from([("native", record)]),
         )
         .unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         let restored = adapter.open("native", 100, true).await.unwrap();
         assert_eq!(restored.thread.name.as_deref(), Some("Keep me"));
         assert_eq!(restored.thread.status, SessionStatus::Idle);
@@ -2205,9 +2486,14 @@ mod tests {
     #[tokio::test]
     async fn credentials_have_a_dedicated_contract_and_logout_clears_managed_routes() {
         let dir = tempfile::tempdir().unwrap();
-        let adapter = DeepSeek::load("dsh".into(), dir.path().into())
-            .await
-            .unwrap();
+        let adapter = DeepSeek::load(
+            "dsh".into(),
+            dir.path().into(),
+            Some(dir.path().join("home")),
+            None,
+        )
+        .await
+        .unwrap();
         assert!(adapter.account(AccountCommand::StartLogin).await.is_err());
         assert!(
             adapter
