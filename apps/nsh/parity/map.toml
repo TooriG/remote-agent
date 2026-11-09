@@ -91,7 +91,7 @@ description = "The finished turn's work expanded down to its tool rows and comme
 nsh = ["send [groups] 展開した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000", "press \"Worked for*\"", "press \"Ran 1 command\"", "expect \"./gradlew test\""]
 t3 = [{ send = "[groups] 展開した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }, { click = "[data-timeline-row-kind=turn-fold] button" }, { click = "[data-timeline-row-kind=work-toggle] button" }, { waitText = "./gradlew test" }]
 column = "composer"
-elements = ["composer", "composer-overlay", "work-toggle", "work-group-toggle", "tool-row", "tool-row-icon", "commentary-text", "assistant-text", "scroll-to-bottom"]
+elements = ["composer", "composer-overlay", "user-bubble", "work-toggle", "work-group-toggle", "tool-row", "tool-row-icon", "commentary-text", "assistant-text", "scroll-to-bottom"]
 
 [[state]]
 name = "turn-items"
@@ -145,7 +145,7 @@ description = "A question from the agent: its options above the composer."
 nsh = ["send [request] 質問を確認します", "expect \"このまま続けますか？\" 20000"]
 t3 = [{ send = "[request] 質問を確認します" }, { waitText = "このまま続けますか？" }]
 column = "composer"
-elements = ["composer", "composer-overlay", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-dismiss", "question-submit", "composer-placeholder", "working-header", "question-live-row"]
+elements = ["composer", "composer-overlay", "user-bubble", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-dismiss", "question-submit", "composer-placeholder", "working-header", "question-live-row"]
 
 [[state]]
 name = "markdown-document"
@@ -956,6 +956,17 @@ follows = "composer-overlay"
 reason = "the timeline's end sits above the composer and Bex's changed-files card, which keep Bex's design and stand taller than T3 Code's composer: what is scrolled to the end moves with them"
 approved = "2026-11-09"
 by = "the coordinator"
+
+# A conversation that fits T3 Code's timeline can run past Bex's end, whose
+# reservation (the composer and the changed-files card, both Bex's design)
+# stands taller: Bex's timeline then follows its end, scrolled by the
+# overflow, and every row keeps its place from the conversation's first
+# message.
+[[approved]]
+follows = "user-bubble"
+reason = "scrolled by the overflow of Bex's taller composer reservation (the composer and the changed-files card keep Bex's design): every row keeps its place from the conversation's first message"
+approved = "2026-11-09"
+by = "the coordinator (follows the user's composer decision)"
 
 [[approved]]
 element = "markdown-body"
