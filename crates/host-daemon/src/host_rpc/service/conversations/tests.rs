@@ -1005,7 +1005,12 @@ async fn rewind_publication_failure_leaves_the_conversation_unchanged() {
     .unwrap()
     .turn_id
     .unwrap();
-    let binding = host.inner.conversations.get(&root).unwrap().unwrap().active;
+    let binding = host
+        .inner
+        .conversations
+        .get(&root)
+        .unwrap()
+        .map(|row| row.active);
     let projects = directory.path().join("bex-projects.json");
     std::fs::write(&projects, b"broken projects").unwrap();
     let error = call::<ThreadResponse>(
@@ -1017,7 +1022,11 @@ async fn rewind_publication_failure_leaves_the_conversation_unchanged() {
     .unwrap_err();
     assert_eq!(error.code, "project_state_unavailable");
     assert_eq!(
-        host.inner.conversations.get(&root).unwrap().unwrap().active,
+        host.inner
+            .conversations
+            .get(&root)
+            .unwrap()
+            .map(|row| row.active),
         binding
     );
     assert_eq!(
