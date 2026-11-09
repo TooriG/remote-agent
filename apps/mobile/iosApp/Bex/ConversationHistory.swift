@@ -192,7 +192,7 @@ extension ThreadScreen {
     }
 
     func threadAccessibilityValue(_ thread: ConversationPresentation, itemCount: UInt32) -> String {
-        "turns=\(thread.projection.turnCount());items=\(itemCount)"
+        "turns=\(thread.projection.source().turnCount());items=\(itemCount)"
     }
 }
 

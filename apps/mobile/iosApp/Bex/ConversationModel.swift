@@ -332,7 +332,7 @@ extension ConversationModel {
         let scope = snapshot.panelScope(host: host, draft: coreDraftKey)
         if conversation?.scope != scope {
             activityExpansionOverrides.removeAll()
-            conversation = nil
+            conversation = recentConversations.first { $0.scope == scope }
         }
         pendingPresentation = ProjectionInput(
             rendered: rendered,
@@ -344,8 +344,7 @@ extension ConversationModel {
         presentationTask = Task { [weak self] in
             while let self, let input = pendingPresentation {
                 pendingPresentation = nil
-                let previous = conversation ?? recentConversations.first { $0.scope == input.scope }
-                let rendered = await Task.detached(priority: .userInitiated) {
+                let rendered = await Task.detached(priority: .userInitiated) { [previous = conversation] in
                     ConversationPresentation.project(input.rendered, scope: input.scope,
                                                      expansion: input.expansion, previous: previous)
                 }.value
@@ -355,7 +354,8 @@ extension ConversationModel {
                    activityExpansionOverrides == input.expansion,
                    publication.conversation() != nil {
                     conversation = rendered
-                    if rendered.id != nil {
+                    // Expansion resets with the scope, so only collapsed rows can be shown on reopen.
+                    if rendered.id != nil, input.expansion.isEmpty {
                         recentConversations.removeAll { $0.scope == rendered.scope }
                         recentConversations.insert(rendered, at: 0)
                         if recentConversations.count > 3 {
