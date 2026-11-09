@@ -734,7 +734,8 @@ nsh = { text = "Submit", role = "AXButton" }
 [[element]]
 id = "markdown-body"
 what = "Markdown answer body"
-kind = "text"
+# Both sides' column of blocks: its frame, not one text's ink.
+kind = "box"
 t3 = "[data-timeline-row-kind=message][data-message-role=assistant].pb-4 .chat-markdown"
 # NSH draws a text view for each run of text between a code block, an image
 # and a table: the body is the column holding them (the first text view's
