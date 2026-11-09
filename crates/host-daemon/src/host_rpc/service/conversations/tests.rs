@@ -1089,6 +1089,108 @@ async fn rewinding_refuses_running_work_and_unknown_turns_without_a_new_session(
 }
 
 #[tokio::test]
+async fn covered_rewind_refuses_live_work_missing_from_the_stored_transcript() {
+    for observation in ["native_status", "native_turn", "live_turn"] {
+        let directory = tempfile::tempdir().unwrap();
+        let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+        let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+        let root = a
+            .create(directory.path().to_str().unwrap(), None, None)
+            .await
+            .unwrap()
+            .thread
+            .id
+            .unwrap();
+        let host = service(directory.path(), &a, &b);
+        let client = host.open_session();
+        send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Codex,
+            "one",
+            "first",
+        )
+        .await
+        .unwrap();
+        let edited = send(
+            &host,
+            client.id(),
+            &root,
+            ProviderKind::Claude,
+            "two",
+            "second",
+        )
+        .await
+        .unwrap()
+        .turn_id
+        .unwrap();
+        let binding = host.inner.conversations.get(&root).unwrap().unwrap().active;
+        let before = b.records.lock().unwrap().len();
+        let turn = Turn {
+            id: "not-yet-recorded".into(),
+            status: TurnStatus::Running,
+            ..Default::default()
+        };
+        match observation {
+            "native_status" => {
+                b.records
+                    .lock()
+                    .unwrap()
+                    .get_mut(&binding.id)
+                    .unwrap()
+                    .thread
+                    .status = SessionStatus::Running;
+            }
+            "native_turn" => {
+                b.records
+                    .lock()
+                    .unwrap()
+                    .get_mut(&binding.id)
+                    .unwrap()
+                    .thread
+                    .turns
+                    .get_or_insert_default()
+                    .push(Arc::new(turn));
+            }
+            _ => host.inner.router.session_change(
+                &root,
+                SessionChange::Turn {
+                    turn,
+                    completed: false,
+                },
+            ),
+        }
+        let stored = host.inner.transcripts.history(&root).unwrap().unwrap();
+        assert!(
+            stored
+                .thread
+                .turns
+                .iter()
+                .flatten()
+                .all(|turn| turn.status == TurnStatus::Completed)
+        );
+        let error = call::<ThreadResponse>(
+            &host,
+            client.id(),
+            Call::RewindSession(op::RewindSession::new(root.clone(), edited)),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "conversation_busy", "{observation}");
+        assert_eq!(
+            host.inner.conversations.get(&root).unwrap().unwrap().active,
+            binding
+        );
+        assert_eq!(b.records.lock().unwrap().len(), before);
+        assert_eq!(
+            message_texts(&host.inner.transcripts.history(&root).unwrap().unwrap()),
+            ["first", "second"]
+        );
+    }
+}
+
+#[tokio::test]
 async fn native_fork_rejects_an_unsupported_provider_before_execution() {
     let directory = tempfile::tempdir().unwrap();
     let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));

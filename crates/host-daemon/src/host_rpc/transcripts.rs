@@ -55,10 +55,12 @@ impl Transcripts {
             connection
                 .busy_timeout(std::time::Duration::from_secs(10))
                 .map_err(failure)?;
+            // Rewind removes its cross-file recovery journal after replace
+            // commits, including when restoring. Each WAL commit must be durable.
             connection
                 .execute_batch(
                     "PRAGMA journal_mode = WAL;
-                     PRAGMA synchronous = NORMAL;
+                     PRAGMA synchronous = FULL;
                      CREATE TABLE IF NOT EXISTS conversations (
                          provider TEXT NOT NULL,
                          id TEXT NOT NULL,
@@ -721,6 +723,24 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Transcripts::open(&root.path().join("state/transcripts.sqlite"));
         (root, store)
+    }
+
+    #[test]
+    fn commits_are_durable_before_cross_file_recovery_journals_can_be_removed() {
+        let (_root, store) = store();
+        store
+            .with(|connection| {
+                let mode: String = connection
+                    .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                    .map_err(failure)?;
+                let synchronous: u32 = connection
+                    .query_row("PRAGMA synchronous", [], |row| row.get(0))
+                    .map_err(failure)?;
+                assert_eq!(mode, "wal");
+                assert_eq!(synchronous, 2); // PRAGMA synchronous=FULL
+                Ok(())
+            })
+            .unwrap();
     }
 
     fn texts(window: &Window) -> Vec<String> {

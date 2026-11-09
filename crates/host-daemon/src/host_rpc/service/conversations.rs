@@ -104,6 +104,30 @@ impl HostRpcService {
         if row.startup.is_some() {
             return Err(busy());
         }
+        // Covered transcripts contain settled turns only. Check the active
+        // runtime and live Host state while the submission lock is held.
+        let native = self.inner.providers.get(row.active.provider)?;
+        let state = native.state(&row.active.id).await?.response;
+        if state.thread.id.as_ref() != Some(&row.active) {
+            return Err(Failure::new(
+                "invalid_session",
+                "native session identity changed",
+            ));
+        }
+        if agent_protocol::models::task_active(None, state.thread.status) {
+            return Err(busy());
+        }
+        let live = self.inner.router.overlay_execution(target, state.thread);
+        if agent_protocol::models::task_active(None, live.status)
+            || !live.requests.is_empty()
+            || live
+                .turns
+                .iter()
+                .flatten()
+                .any(|turn| turn.status == agent_protocol::models::TurnStatus::Running)
+        {
+            return Err(busy());
+        }
         let history = self.conversation_history(&row, HistoryUse::Import).await?;
         let turns = history.thread.turns.as_deref().unwrap_or_default();
         if turns

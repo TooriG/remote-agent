@@ -21,10 +21,7 @@ pub(super) fn save_json(path: &Path, value: &impl Serialize) -> Result<(), Failu
     }
     atomicwrites::AtomicFile::new(path, atomicwrites::AllowOverwrite)
         .write_with_options(
-            |file| {
-                file.write_all(&bytes)?;
-                file.sync_all()
-            },
+            |file| file.write_all(&bytes),
             agent_local_host::private_file_options(),
         )
         .map_err(storage)

@@ -1102,7 +1102,14 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|item| item["title"] == "フォルダを開く")
+                .find(|item| {
+                    item["title"]
+                        == if cfg!(windows) {
+                            "エクスプローラーで開く"
+                        } else {
+                            "フォルダを開く"
+                        }
+                })
                 .unwrap();
             assert_eq!(folder["enabled"], folder_enabled);
             let more = rendered

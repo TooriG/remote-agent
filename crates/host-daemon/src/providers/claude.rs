@@ -3115,7 +3115,23 @@ for await (const line of createInterface({input: process.stdin})) {
                 process.read().await.unwrap(),
                 Some(SdkEvent::Ready { .. })
             ));
-            let (router, session, mut worker) = routed_worker();
+            let (_, _, mut worker) = routed_worker();
+            // Observe the emitted history as a client does. The router is a
+            // live cache and can prune a settled turn before a polling read.
+            let (events, mut emitted) = mpsc::channel::<AgentEvent>(256);
+            let (history, mut observed) = watch::channel(agent_protocol::models::Thread::default());
+            worker.events = events;
+            tokio::spawn(async move {
+                while let Some(event) = emitted.recv().await {
+                    if let AgentChange::Session { change, .. } = event.change {
+                        let next = change.apply(&history.borrow()).unwrap();
+                        history.send_replace(next);
+                    }
+                    if let Some(applied) = event.applied {
+                        let _ = applied.send(Ok(()));
+                    }
+                }
+            });
             let (input, receiver) = mpsc::channel(2);
             worker.input = input.clone();
             worker.record.lock().await.running.as_mut().unwrap().input = input.clone();
@@ -3160,26 +3176,34 @@ for await (const line of createInterface({input: process.stdin})) {
                     "{mode}"
                 );
             }
-            let assigned = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                loop {
-                        if router.current_turn(&session, "next").is_some_and(|turn| {
-                            ids.iter().all(|id| turn.items.iter().flatten().any(|item| item.id.as_str() == *id))
-                                && (!matches!(mode, "stamped" | "batched") || turn.items.iter().flatten().any(|item| {
+            let assigned = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                observed.wait_for(|thread| {
+                    thread
+                        .turns
+                        .iter()
+                        .flatten()
+                        .find(|turn| turn.id.as_str() == "next")
+                        .is_some_and(|turn| {
+                            ids.iter().all(|id| {
+                                turn.items.iter().flatten().any(|item| item.id.as_str() == *id)
+                            }) && (!matches!(mode, "stamped" | "batched")
+                                || turn.items.iter().flatten().any(|item| {
                                     matches!(item.body(), ItemBody::AssistantText {text, ..} if text == "answer")
                                 }))
-                        }) {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                }
-            })
-            .await;
+                        })
+                }),
+            )
+            .await
+            .map(|result| result.map(|_| ()));
             stop.cancel();
             tokio::time::timeout(std::time::Duration::from_secs(5), run)
                 .await
                 .unwrap()
                 .unwrap();
-            assigned.unwrap();
+            assigned
+                .unwrap_or_else(|error| panic!("{mode}: {error}"))
+                .unwrap();
         }
     }
 

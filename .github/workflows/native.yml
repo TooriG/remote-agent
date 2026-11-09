@@ -488,6 +488,22 @@ jobs:
         env:
           AGENT_CODE_SIGN_IDENTITY: '-'
         run: nix develop .#native --command just build-desktop-macos dev
+      - name: Verify native Find scrolling and visible matches
+        run: |
+          nix develop .#native --command cargo build --locked -p host-fixture -p agent-process --bins --target aarch64-apple-darwin
+          nix develop .#native --command cargo xtask nsh-acceptance find-in-thread
+      - name: Retain Find acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: nsh-find-acceptance
+          path: |
+            target/nsh-acceptance/run-*/report.md
+            target/nsh-acceptance/run-*/find-in-thread/*.log
+            target/nsh-acceptance/run-*/find-in-thread/*.json
+            target/nsh-acceptance/run-*/find-in-thread/*.txt
+            target/nsh-acceptance/run-*/find-in-thread/*.png
+          retention-days: 7
       - name: Build and package the native NSH iPhone app
         run: nix develop .#ios-build --command just nsh-ios-simulator
   iphone-tests:
