@@ -88,6 +88,9 @@ pub(super) fn decorate(
     query: &str,
     active: Option<TextMatch>,
 ) -> Vec<Value> {
+    if query.trim().is_empty() {
+        return blocks;
+    }
     let ranges = find_matches(&text(&blocks), query);
     let mut offset = 0;
     for block in &mut blocks {

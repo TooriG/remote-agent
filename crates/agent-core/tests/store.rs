@@ -3022,8 +3022,11 @@ async fn fork_opens_the_returned_thread_and_keeps_later_deltas() {
     }
 }
 
+#[rstest::rstest]
 #[tokio::test]
-async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer() {
+async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer(
+    #[values(false, true)] navigate: bool,
+) {
     let source = SessionRef {
         provider: ProviderKind::Codex,
         id: "thread".into(),
@@ -3058,6 +3061,18 @@ async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer
     let request = read(&mut reader).await;
     assert_eq!(request["method"], "host/session/rewind");
     assert_eq!(request["params"]["turnId"], "edit");
+    if navigate {
+        let navigation = store.dispatch(Intent::NewChat {
+            cwd: "/else".into(),
+        });
+        let review_request = read(&mut reader).await;
+        assert_eq!(review_request["method"], "host/workspace/review");
+        writer
+            .reply(&review_request, json!({"result":review()}))
+            .await
+            .unwrap();
+        navigation.await.unwrap();
+    }
     // The global notification precedes the RPC response on the requesting
     // connection too. Its original edited message must remain available.
     writer
@@ -3073,6 +3088,20 @@ async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer
         .await
         .unwrap();
     rewind.await.unwrap();
+    if !navigate {
+        let refresh = loop {
+            let request = read(&mut reader).await;
+            if request["method"] == "host/session/open" {
+                break request;
+            }
+            assert_eq!(request["method"], "host/workspace/review");
+            writer
+                .reply(&request, json!({"result":review()}))
+                .await
+                .unwrap();
+        };
+        writer.reply(&refresh, json!({"result":{"session":{"provider":"codex","id":"thread"},"subscriptionId":"00000000-0000-0000-0000-000000000001","unchanged":false,"response":{"thread":{"id":{"provider":"codex","id":"thread"},"cwd":"/fixture","turns":[kept]}}}})).await.unwrap();
+    }
     let snapshot = store.snapshot();
     let turns = snapshot.sessions.conversations[&source]
         .turns
@@ -3085,6 +3114,10 @@ async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer
             .collect::<Vec<_>>(),
         ["kept"]
     );
+    if navigate {
+        assert_eq!(snapshot.panes.primary().navigation.cwd, "/else");
+        assert_eq!(snapshot.panes.primary().navigation.thread_id, None);
+    }
     let draft = &snapshot.input.drafts[&DraftKey::from(source)];
     assert_eq!(draft.text, "send this again");
     assert_eq!(

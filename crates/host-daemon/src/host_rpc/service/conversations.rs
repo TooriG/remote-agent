@@ -123,11 +123,25 @@ impl HostRpcService {
         rewound.id = row.id;
         rewound.name = row.name;
         rewound.preview = row.preview;
-        self.inner
-            .conversations
-            .rewind(&self.inner.transcripts, rewound.clone(), history, kept)?;
+        // Complete every fallible response/publication read before committing.
+        // The storage owner returns the version from the same write transaction.
+        let options = self
+            .inner
+            .model_selections
+            .resolve(&rewound.active, None, None, None)?;
+        let mut page = Self::conversation_page(
+            self.describe_conversation_history(&rewound, kept.clone(), options)?,
+            None,
+            5,
+        )?;
+        let projects = self.project_snapshot().await?;
+        let version =
+            self.inner
+                .conversations
+                .rewind(&self.inner.transcripts, rewound, history, kept)?;
+        page.thread.transcript_version = Some(version);
         self.inner.router.reset_history(target);
-        let page = self.publish_conversation(&rewound).await?;
+        self.notify_session_updated(page.thread.clone(), &projects.projects);
         self.inner
             .router
             .broadcast(Notification::SessionHistoryReplaced {

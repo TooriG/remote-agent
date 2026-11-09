@@ -575,8 +575,13 @@ fn view_parts(
     };
     #[cfg(target_os = "macos")]
     let content = {
-        let multiple =
-            move || cell.is_none() && parts.try_get().is_some_and(|parts| parts.len() > 1);
+        let multiple = move || {
+            cell.is_none()
+                && !surroundings
+                    .find_row
+                    .is_some_and(|row| surroundings.find.selected_row(&row.get()))
+                && parts.try_get().is_some_and(|parts| parts.len() > 1)
+        };
         view()
             .w_full()
             .gap_3()
@@ -1193,6 +1198,9 @@ mod drawn {
     }
 
     fn highlighted_run(run: &Value, find: crate::find::Find) -> Text {
+        if run["highlights"].as_array().is_none_or(Vec::is_empty) {
+            return text(run["text"].as_str().unwrap_or_default().to_owned());
+        }
         let mut span = text("");
         for fragment in super::search::fragments(run) {
             let highlight = fragment.highlighted;

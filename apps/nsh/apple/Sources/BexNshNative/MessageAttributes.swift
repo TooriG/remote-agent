@@ -270,10 +270,11 @@ struct MessageMenuTitles: Decodable, Equatable {
 
     private static func append(_ text: NSAttributedString, highlights: [MessageHighlight]?,
                                to result: NSMutableAttributedString) {
+        guard let highlights, !highlights.isEmpty else { result.append(text); return }
         let value = NSMutableAttributedString(attributedString: text)
         let string = value.string
         let bytes = Array(string.utf8)
-        for highlight in highlights ?? [] {
+        for highlight in highlights {
             guard highlight.start >= 0, highlight.end > highlight.start,
                   highlight.end <= bytes.count,
                   let prefix = String(bytes: bytes[..<highlight.start], encoding: .utf8),

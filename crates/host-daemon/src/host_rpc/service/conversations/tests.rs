@@ -880,6 +880,16 @@ async fn rewinding_keeps_the_conversation_and_continues_without_the_later_turns(
         .await
         .unwrap();
     let _subscription = opened.updates.unwrap();
+    let before_version = host
+        .inner
+        .transcripts
+        .window(&root, None, 100)
+        .unwrap()
+        .unwrap()
+        .response
+        .thread
+        .transcript_version
+        .unwrap();
 
     let rewound: ThreadResponse = call(
         &host,
@@ -901,6 +911,20 @@ async fn rewinding_keeps_the_conversation_and_continues_without_the_later_turns(
     })
     .await
     .unwrap();
+
+    let committed_version = host
+        .inner
+        .transcripts
+        .window(&root, None, 100)
+        .unwrap()
+        .unwrap()
+        .response
+        .thread
+        .transcript_version
+        .unwrap();
+    assert!(committed_version > before_version);
+    assert_eq!(rewound.thread.transcript_version, Some(committed_version));
+    assert_eq!(replaced.transcript_version, Some(committed_version));
     assert_eq!(replaced.id.as_ref(), Some(&root));
     assert_eq!(
         message_texts(&ThreadResponse {
@@ -942,6 +966,68 @@ async fn rewinding_keeps_the_conversation_and_continues_without_the_later_turns(
     assert_eq!(
         message_texts(&history(&host, client.id(), &root).await),
         ["restart"]
+    );
+}
+
+#[tokio::test]
+async fn rewind_publication_failure_leaves_the_conversation_unchanged() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "one",
+        "first",
+    )
+    .await
+    .unwrap();
+    let edited = send(
+        &host,
+        client.id(),
+        &root,
+        ProviderKind::Codex,
+        "two",
+        "second",
+    )
+    .await
+    .unwrap()
+    .turn_id
+    .unwrap();
+    let binding = host.inner.conversations.get(&root).unwrap().unwrap().active;
+    let projects = directory.path().join("bex-projects.json");
+    std::fs::write(&projects, b"broken projects").unwrap();
+    let error = call::<ThreadResponse>(
+        &host,
+        client.id(),
+        Call::RewindSession(op::RewindSession::new(root.clone(), edited)),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "project_state_unavailable");
+    assert_eq!(
+        host.inner.conversations.get(&root).unwrap().unwrap().active,
+        binding
+    );
+    assert_eq!(
+        message_texts(&host.inner.transcripts.history(&root).unwrap().unwrap()),
+        ["first", "second"]
+    );
+    std::fs::remove_file(projects).unwrap();
+    assert_eq!(
+        message_texts(&history(&host, client.id(), &root).await),
+        ["first", "second"]
     );
 }
 

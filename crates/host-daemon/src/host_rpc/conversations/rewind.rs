@@ -96,7 +96,7 @@ impl Conversations {
         row: Conversation,
         before: ThreadResponse,
         after: ThreadResponse,
-    ) -> Result<(), Failure> {
+    ) -> Result<u64, Failure> {
         let mut state = self.state.lock().unwrap();
         let rows = state.as_ref().map_err(storage)?.clone();
         let id = row.id.clone();
@@ -110,15 +110,20 @@ impl Conversations {
         let result = transcripts
             .replace(&id, after)
             .map_err(storage)
-            .and_then(|()| self.save_rows(&mut state, next))
-            .and_then(|()| remove_journal(&self.rewind_journal()));
-        if let Err(error) = result {
-            if let Err(recovery) = self.restore_rewind(&mut state, transcripts, backup) {
-                *state = Err(recovery.to_string());
+            .and_then(|version| {
+                self.save_rows(&mut state, next)?;
+                remove_journal(&self.rewind_journal())?;
+                Ok(version)
+            });
+        match result {
+            Err(error) => {
+                if let Err(recovery) = self.restore_rewind(&mut state, transcripts, backup) {
+                    *state = Err(recovery.to_string());
+                }
+                Err(error)
             }
-            return Err(error);
+            Ok(version) => Ok(version),
         }
-        Ok(())
     }
 }
 
@@ -158,18 +163,23 @@ mod tests {
 
     #[test]
     fn restart_rolls_back_every_incomplete_rewind_boundary() {
-        for boundary in 0..3 {
+        for (managed, boundary) in [false, true]
+            .into_iter()
+            .flat_map(|managed| (0..3).map(move |boundary| (managed, boundary)))
+        {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("conversations.json");
             let transcripts = Transcripts::open(&directory.path().join("history.sqlite"));
             let (original, replacement, before, after) = values();
             let store = Conversations::new(path.clone());
-            store.save(original.clone()).unwrap();
+            if managed {
+                store.save(original.clone()).unwrap();
+            }
             transcripts.import(&original.id, before.clone()).unwrap();
             save_json(
                 &store.rewind_journal(),
                 &Backup {
-                    previous: Some(original.clone()),
+                    previous: managed.then(|| original.clone()),
                     history: before,
                 },
             )
@@ -184,8 +194,8 @@ mod tests {
             let restored = Conversations::new(path);
             restored.recover_rewind(&transcripts);
             assert_eq!(
-                restored.get(&original.id).unwrap().unwrap().active,
-                original.active
+                restored.get(&original.id).unwrap().map(|row| row.active),
+                managed.then(|| original.active.clone())
             );
             assert_eq!(
                 transcripts
@@ -199,6 +209,41 @@ mod tests {
                 2
             );
             assert!(!restored.rewind_journal().exists());
+        }
+    }
+
+    #[test]
+    fn unreadable_or_corrupt_journal_fails_closed_without_altering_the_binding() {
+        for directory_journal in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("conversations.json");
+            let transcripts = Transcripts::open(&directory.path().join("history.sqlite"));
+            let (original, _, before, _) = values();
+            let store = Conversations::new(path.clone());
+            store.save(original.clone()).unwrap();
+            transcripts.import(&original.id, before).unwrap();
+            let binding = std::fs::read(&path).unwrap();
+            let journal = store.rewind_journal();
+            if directory_journal {
+                std::fs::create_dir(&journal).unwrap();
+            } else {
+                std::fs::write(&journal, b"broken journal").unwrap();
+            }
+            store.recover_rewind(&transcripts);
+            assert!(store.get(&original.id).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), binding);
+            if directory_journal {
+                std::fs::remove_dir(journal).unwrap();
+            } else {
+                assert_eq!(std::fs::read(&journal).unwrap(), b"broken journal");
+                std::fs::remove_file(journal).unwrap();
+            }
+            let repaired = Conversations::new(path);
+            repaired.recover_rewind(&transcripts);
+            assert_eq!(
+                repaired.get(&original.id).unwrap().unwrap().active,
+                original.active
+            );
         }
     }
 

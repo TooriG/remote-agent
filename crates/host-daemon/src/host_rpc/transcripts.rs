@@ -125,7 +125,7 @@ impl Transcripts {
         conversation: &SessionRef,
         response: ThreadResponse,
     ) -> Result<(), String> {
-        self.store(conversation, response, true)
+        self.store(conversation, response, true).map(|_| ())
     }
 
     /// Replace everything held for `conversation`, recorded turns included.
@@ -133,7 +133,7 @@ impl Transcripts {
         &self,
         conversation: &SessionRef,
         response: ThreadResponse,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         self.store(conversation, response, false)
     }
 
@@ -142,7 +142,7 @@ impl Transcripts {
         conversation: &SessionRef,
         mut response: ThreadResponse,
         keep_recorded: bool,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let native = response.thread.turns.take().unwrap_or_default();
         // Live execution supplies status; a stored observation would go stale.
         response.thread.status = SessionStatus::Unknown;
@@ -203,7 +203,8 @@ impl Transcripts {
                     params![conversation.provider.key(), conversation.id, response.thread.cwd, metadata],
                 )
                 .map_err(failure)?;
-            advance(transaction, conversation.provider.key(), &conversation.id)
+            advance(transaction, conversation.provider.key(), &conversation.id)?;
+            transcript_version(transaction, conversation)?.ok_or_else(|| "stored transcript has no version".into())
         })
     }
 
@@ -407,15 +408,7 @@ impl Transcripts {
             let mut response: ThreadResponse = protocol::decode(&metadata).map_err(failure)?;
             let start = end - turns.len();
             response.thread.turns = Some(turns);
-            response.thread.transcript_version = connection
-                .query_row(
-                    "SELECT version FROM versions WHERE provider = ?1 AND id = ?2",
-                    key,
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()
-                .map_err(failure)?
-                .map(|version| version as u64);
+            response.thread.transcript_version = transcript_version(connection, conversation)?;
             Ok(Some(Window { response, start }))
         })
     }
@@ -598,6 +591,21 @@ fn turn_count(connection: &Connection, provider: &str, id: &str) -> Result<i64, 
         .map_err(failure)?
         .query_row(params![provider, id], |row| row.get(0))
         .map_err(failure)
+}
+
+fn transcript_version(
+    connection: &Connection,
+    conversation: &SessionRef,
+) -> Result<Option<u64>, String> {
+    connection
+        .query_row(
+            "SELECT version FROM versions WHERE provider = ?1 AND id = ?2",
+            params![conversation.provider.key(), conversation.id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(failure)
+        .map(|version| version.map(|version| version as u64))
 }
 
 /// Give the conversation the next Host-wide version, using the version index.

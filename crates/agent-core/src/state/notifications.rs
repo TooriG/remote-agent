@@ -53,32 +53,8 @@ pub(super) fn notification(
     match message {
         Notification::SessionHistoryReplaced { thread } => {
             let mut next = previous.clone();
-            let Some(id) = thread.id.clone() else {
-                return (next, Vec::new());
-            };
-            // The initiating operation still needs its original message to fill
-            // the editor; its RPC response replaces the history atomically.
-            if previous.operation_running(op::OperationKey::Rewind {
-                session: id.clone(),
-            }) {
-                return (next, Vec::new());
-            }
-            let reading = previous.operation_running(op::OperationKey::History {
-                session: id.clone(),
-            });
-            Arc::make_mut(&mut next.operations).retain(|key, _| match key {
-                op::OperationKey::History { session }
-                | op::OperationKey::TurnItems { session, .. } => session != &id,
-                op::OperationKey::Item { item } => item.thread_id != id,
-                _ => true,
-            });
-            let cached = Arc::make_mut(&mut next.sessions.conversations)
-                .remove(&id)
-                .is_some();
-            if cached || reading || next.sessions.subscriptions.contains_key(&id) {
-                op::refresh_thread(&mut next, "", *thread);
-            }
-            (next, Vec::new())
+            let effects = op::replace_history(&mut next, "", *thread, false);
+            (next, effects)
         }
         Notification::ProviderSettings { settings } => {
             let mut next = previous.clone();
@@ -1156,7 +1132,7 @@ mod tests {
                     thread: replacement.into(),
                 },
             );
-            assert!(effects.is_empty());
+            assert_eq!(effects.len(), 1, "refresh the authoritative subscription");
             assert!(!next.operations.contains_key(&key));
             assert_eq!(next.sessions.subscriptions, state.sessions.subscriptions);
             assert_eq!(next.input.drafts, state.input.drafts);

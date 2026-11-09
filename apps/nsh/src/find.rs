@@ -59,16 +59,26 @@ impl Find {
                 .map(|selected| selected.range)
         })
     }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn selected_row(self, row: &str) -> bool {
+        self.selected.with(|selected| {
+            selected
+                .as_ref()
+                .is_some_and(|selected| selected.row == row)
+        })
+    }
     pub(crate) fn key(self) -> Option<String> {
         let selected = self.selected.get()?;
-        Some(format!(
-            "{}/{}/{}/{}/{}",
-            selected.row,
-            selected.document,
-            selected.range.start,
-            selected.range.end,
-            self.highlighted()
-        ))
+        Some(
+            serde_json::to_string(&(
+                selected.row,
+                selected.document,
+                selected.range.start,
+                selected.range.end,
+                self.highlighted(),
+            ))
+            .expect("search identity serializes"),
+        )
     }
     /// Native glyphs or a drawn inline attachment report the selected text's
     /// actual position. Ignore measurements belonging to an earlier match.
