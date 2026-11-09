@@ -34,7 +34,7 @@ function fixture(t, draft = false) {
   const statePath = join(root, 'state.json');
   const read = () => JSON.parse(readFileSync(statePath));
   const update = patch => writeFileSync(statePath, JSON.stringify({ ...read(), ...patch }));
-  writeFileSync(statePath, JSON.stringify({ beta: 'IN_BETA_TESTING', refs: { 'nightly-145': sha },
+  writeFileSync(statePath, JSON.stringify({ beta: 'IN_BETA_TESTING', autoNotify: true, refs: { 'nightly-145': sha },
     releases: [{ tagName: 'nightly-145', isDraft: draft, isPrerelease: true }] }));
   writeFileSync(join(bin, 'gh'), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
@@ -88,15 +88,19 @@ globalThis.fetch = async (url, options) => {
  appendFileSync(root + '/apple', JSON.stringify({ pathname, method: options.method, body: options.body && JSON.parse(options.body) }) + '\\n');
  let data;
  if (options.method !== 'GET') {
-  if (pathname === '/v1/betaAppReviewSubmissions') { state.beta = 'WAITING_FOR_REVIEW'; writeFileSync(statePath, JSON.stringify(state)); }
-  else if (pathname !== '/v1/buildBetaNotifications' && !pathname.endsWith('/relationships/builds')) throw new Error('Unexpected Apple mutation ' + pathname);
+  const body = options.body && JSON.parse(options.body);
+  if (pathname === '/v1/betaAppReviewSubmissions') state.beta = 'WAITING_FOR_BETA_REVIEW';
+  else if (pathname === '/v1/buildBetaDetails/detail') state.autoNotify = body.data.attributes.autoNotifyEnabled;
+  else if (pathname === '/v1/buildBetaNotifications') return { ok: false, status: 409, json: async () => ({ errors: [{ code: 'ENTITY_ERROR', detail: 'Auto-notify already enabled' }] }) };
+  else if (!pathname.endsWith('/relationships/builds')) throw new Error('Unexpected Apple mutation ' + pathname);
+  writeFileSync(statePath, JSON.stringify(state));
   return { ok: true, status: 204 };
  }
  if (pathname === '/v1/betaGroups') data = [
   { id: 'nightly', attributes: { name: 'BEX Nightly', isInternalGroup: false, publicLinkEnabled: true, publicLink: '${nightlyUrl}' } },
   { id: 'stable', attributes: { name: 'BEX External', isInternalGroup: false, publicLinkEnabled: true, publicLink: '${stableUrl}' } }
  ];
- else if (pathname.endsWith('/buildBetaDetail')) data = { id: 'detail', attributes: { externalBuildState: state.beta, autoNotifyEnabled: true } };
+ else if (pathname.endsWith('/buildBetaDetail')) data = { id: 'detail', attributes: { externalBuildState: state.beta, autoNotifyEnabled: state.autoNotify } };
  else if (pathname.endsWith('/betaBuildLocalizations')) data = [{ id: 'locale', attributes: { locale: 'ja', whatsNew: 'Changes' } }];
  else throw new Error('Unexpected Apple GET ' + pathname);
  return { ok: true, status: 200, json: async () => ({ data }) };
@@ -125,15 +129,15 @@ test('tags identify one numbered candidate without accepting branches or shell s
 
 test('Nightly waits for external review and production preserves every package, number and Apple build', t => {
   const build = fixture(t, true);
-  build.update({ beta: 'WAITING_FOR_REVIEW' });
+  build.update({ beta: 'WAITING_FOR_BETA_REVIEW' });
   build.run('seal', 'nightly-145');
   assert.equal(build.read().releases[0].isDraft, true);
   build.update({ beta: 'BETA_APPROVED' });
   build.run('sync');
-  assert.equal(build.read().releases[0].isDraft, true);
-  build.update({ beta: 'IN_BETA_TESTING' });
-  build.run('sync');
   assert.equal(build.read().releases[0].isDraft, false);
+  assert.equal(build.read().autoNotify, true);
+  assert.ok(build.calls('apple').some(call => call.pathname === '/v1/betaGroups/nightly/relationships/builds'));
+  assert.ok(!build.calls('apple').some(call => call.pathname === '/v1/buildBetaNotifications'));
   build.run('promote', 'nightly-145');
   const state = build.read();
   assert.equal(state.refs['prd-145'], sha);
@@ -157,8 +161,31 @@ test('Nightly waits for external review and production preserves every package, 
   build.run('seal', 'nightly-145');
 });
 
+test('seal publishes an approved build without changing auto-notify settings', t => {
+  for (const beta of ['BETA_APPROVED', 'IN_BETA_TESTING']) {
+    const build = fixture(t, true);
+    build.update({ beta });
+    build.run('seal', 'nightly-145');
+    assert.equal(build.read().releases[0].isDraft, false);
+    assert.equal(build.read().autoNotify, true);
+    assert.ok(!build.calls('apple').some(call => call.pathname === '/v1/buildBetaNotifications'));
+  }
+});
+
+test('sync keeps waiting and rejected Nightlies in draft', t => {
+  for (const [beta, expectedStatus] of [['WAITING_FOR_BETA_REVIEW', 0], ['IN_BETA_REVIEW', 0], ['READY_FOR_BETA_TESTING', 0], ['BETA_REJECTED', 1]]) {
+    const build = fixture(t, true);
+    build.update({ beta: 'WAITING_FOR_BETA_REVIEW' });
+    build.run('seal', 'nightly-145');
+    build.update({ beta });
+    build.run('sync', undefined, expectedStatus);
+    assert.equal(build.read().releases[0].isDraft, true);
+    assert.ok(!build.calls('apple').some(call => call.pathname === '/v1/buildBetaNotifications'));
+  }
+});
+
 test('unapproved and expired builds cannot be promoted or reach the production group', t => {
-  for (const beta of ['READY_FOR_BETA_SUBMISSION', 'WAITING_FOR_REVIEW', 'EXPIRED', 'BETA_REJECTED']) {
+  for (const beta of ['READY_FOR_BETA_SUBMISSION', 'READY_FOR_BETA_TESTING', 'WAITING_FOR_BETA_REVIEW', 'IN_BETA_REVIEW', 'EXPIRED', 'BETA_REJECTED']) {
     const build = fixture(t); build.update({ beta });
     build.run('promote', 'nightly-145', 1);
     assert.equal(build.read().refs['prd-145'], undefined);

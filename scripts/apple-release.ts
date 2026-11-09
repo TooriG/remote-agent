@@ -59,6 +59,10 @@ export const testflightGroups = {
 } as const;
 export const iosDistribution = { bundleId: 'dev.remoteagent.mobile.ios', profileType: 'IOS_APP_STORE', method: 'app-store-connect', product: 'Bex' } as const;
 
+export function externalTestingAvailable(state: string | undefined) {
+  return state === 'BETA_APPROVED' || state === 'IN_BETA_TESTING';
+}
+
 const required = (name: string) => { const value = process.env[name]; if (!value) throw new Error(`${name} is required.`); return value; };
 
 export function requestFromEnvironment() {
@@ -126,9 +130,13 @@ export async function distributeBuild(request: AscRequest, appId: string, buildI
   const detail = await request<{ data: AscResource<{ externalBuildState?: string; autoNotifyEnabled: boolean }> }>(`/v1/builds/${buildId}/buildBetaDetail`);
   const state = detail.data.attributes.externalBuildState;
   if (!state || ['BETA_REJECTED', 'EXPIRED', 'PROCESSING_EXCEPTION', 'MISSING_EXPORT_COMPLIANCE'].includes(state)) throw new Error(`TestFlight distribution is blocked (${state ?? 'unknown state'}).`);
-  if (!detail.data.attributes.autoNotifyEnabled) {
+  // Keep automatic notification enabled until beta review approves the build.
+  // Approved and active builds are already externally available; changing their
+  // notification setting is unnecessary and can conflict with Apple's API.
+  const desiredAutoNotify = externalTestingAvailable(state) ? undefined : true;
+  if (desiredAutoNotify !== undefined && detail.data.attributes.autoNotifyEnabled !== desiredAutoNotify) {
     await request(`/v1/buildBetaDetails/${detail.data.id}`, { method: 'PATCH', data: {
-      data: { type: 'buildBetaDetails', id: detail.data.id, attributes: { autoNotifyEnabled: true } },
+      data: { type: 'buildBetaDetails', id: detail.data.id, attributes: { autoNotifyEnabled: desiredAutoNotify } },
     } });
   }
   const localized = (await request<{ data: AscResource<{ locale: string; whatsNew: string }>[] }>(`/v1/builds/${buildId}/betaBuildLocalizations`)).data;
@@ -139,16 +147,6 @@ export async function distributeBuild(request: AscRequest, appId: string, buildI
     await request('/v1/betaBuildLocalizations', { method: 'POST', data: { data: { type: 'betaBuildLocalizations', attributes: { locale, whatsNew: notes }, relationships: { build: { data: { type: 'builds', id: buildId } } } } } });
   }
   await request(`/v1/betaGroups/${group.id}/relationships/builds`, { method: 'POST', data: { data: [{ type: 'builds', id: buildId }] } });
-  if (state === 'BETA_APPROVED' || state === 'READY_FOR_BETA_TESTING') {
-    // Enabling automatic notifications after approval does not start testing.
-    await request('/v1/buildBetaNotifications', { method: 'POST', data: { data: {
-      type: 'buildBetaNotifications', relationships: { build: { data: { type: 'builds', id: buildId } } },
-    } } });
-    const current = await request<typeof detail>(`/v1/builds/${buildId}/buildBetaDetail`);
-    const active = current.data.attributes.externalBuildState;
-    if (!active) throw new Error('Apple did not return the external testing state.');
-    return { state: active, url };
-  }
   const submit = state === 'READY_FOR_BETA_SUBMISSION';
   if (submit) {
     try {

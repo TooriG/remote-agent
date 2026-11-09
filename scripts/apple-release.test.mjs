@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { appForBundleId, ascClient, deliveryId, distributeBuild, iosDistribution, listAll, nextBuildNumber, nextMarketingVersion, parseBuildStatus } from './apple-release.ts';
+import { appForBundleId, ascClient, deliveryId, distributeBuild, externalTestingAvailable, iosDistribution, listAll, nextBuildNumber, nextMarketingVersion, parseBuildStatus } from './apple-release.ts';
 
 test('release waits for pending checks and requires both workflows to pass for the exact revision', (t) => {
   const workflow = readFileSync(new URL('../.github/workflows/nightly-release.yml', import.meta.url), 'utf8');
@@ -120,7 +120,7 @@ test('ASC requests use a valid ES256 signature and never follow pagination to an
 });
 
 test('TestFlight assigns the existing group and submits only builds needing beta review', async () => {
-  for (const state of ['READY_FOR_BETA_SUBMISSION', 'IN_BETA_TESTING']) {
+  for (const [state, available] of [['READY_FOR_BETA_SUBMISSION', false], ['READY_FOR_BETA_TESTING', false], ['BETA_APPROVED', true], ['IN_BETA_TESTING', true]]) {
     const mutations = [];
     const request = async (path, options = {}) => {
       if (options.method) { mutations.push({ path, data: options.data }); return null; }
@@ -130,39 +130,48 @@ test('TestFlight assigns the existing group and submits only builds needing beta
     };
     await distributeBuild(request, 'app', 'build', 'BEX External', 'Release changes', 'ja');
     assert.ok(mutations.some(call => call.path === '/v1/betaGroups/external/relationships/builds' && call.data.data[0].id === 'build'));
-    assert.ok(mutations.some(call => call.path === '/v1/buildBetaDetails/beta-detail' && call.data.data.attributes.autoNotifyEnabled));
+    const detailPatches = mutations.filter(call => call.path === '/v1/buildBetaDetails/beta-detail');
+    assert.equal(detailPatches.length, available ? 0 : 1);
+    if (!available) {
+      assert.equal(detailPatches[0].data.data.attributes.autoNotifyEnabled, true);
+    }
     assert.equal(mutations.some(call => call.path === '/v1/betaAppReviewSubmissions'), state === 'READY_FOR_BETA_SUBMISSION');
+    assert.ok(!mutations.some(call => call.path === '/v1/buildBetaNotifications'));
   }
 });
 
-test('an approved build starts external testing and notification failure remains retryable', async () => {
-  for (const approved of ['BETA_APPROVED', 'READY_FOR_BETA_TESTING']) {
-    let state = approved;
-    let fail = true;
-    let assigned = false;
+test('only approved or active builds are externally available', () => {
+  assert.equal(externalTestingAvailable('BETA_APPROVED'), true);
+  assert.equal(externalTestingAvailable('IN_BETA_TESTING'), true);
+  for (const state of [undefined, 'READY_FOR_BETA_SUBMISSION', 'READY_FOR_BETA_TESTING', 'WAITING_FOR_BETA_REVIEW', 'IN_BETA_REVIEW', 'WAITING_FOR_REVIEW', 'BETA_REJECTED']) {
+    assert.equal(externalTestingAvailable(state), false);
+  }
+});
+
+test('approved builds preserve notification settings and never call manual notification', async () => {
+  for (const state of ['BETA_APPROVED', 'IN_BETA_TESTING']) {
+    let autoNotifyEnabled = true;
     const mutations = [];
     const request = async (path, options = {}) => {
       if (options.method) {
         mutations.push({ path, data: options.data });
-        if (path === '/v1/betaGroups/external/relationships/builds') assigned = true;
         if (path === '/v1/buildBetaNotifications') {
-          assert.equal(assigned, true);
-          if (fail) { fail = false; throw new Error('Apple temporarily unavailable'); }
-          assert.equal(options.data.data.relationships.build.data.id, 'build');
-          state = 'IN_BETA_TESTING';
+          const error = new Error('Auto-notify already enabled');
+          error.status = 409;
+          throw error;
         }
+        if (path === '/v1/buildBetaDetails/detail') autoNotifyEnabled = options.data.data.attributes.autoNotifyEnabled;
         return null;
       }
       if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'external', attributes: { name: 'BEX External', isInternalGroup: false } }] };
       if (path.endsWith('/betaBuildLocalizations')) return { data: [{ id: 'locale', attributes: { locale: 'ja', whatsNew: 'Changes' } }] };
-      return { data: { id: 'detail', attributes: { externalBuildState: state, autoNotifyEnabled: true } } };
+      return { data: { id: 'detail', attributes: { externalBuildState: state, autoNotifyEnabled } } };
     };
-    await assert.rejects(distributeBuild(request, 'app', 'build', 'BEX External', 'Changes', 'ja'), /temporarily unavailable/);
-    assert.equal((await distributeBuild(request, 'app', 'build', 'BEX External', 'Changes', 'ja')).state, 'IN_BETA_TESTING');
-    const delivered = mutations.filter(call => call.path === '/v1/buildBetaNotifications').length;
-    await distributeBuild(request, 'app', 'build', 'BEX External', 'Changes', 'ja');
-    assert.equal(mutations.filter(call => call.path === '/v1/buildBetaNotifications').length, delivered);
-    assert.ok(!mutations.some(call => call.path === '/v1/betaAppReviewSubmissions'));
+    assert.equal((await distributeBuild(request, 'app', 'build', 'BEX External', 'Changes', 'ja')).state, state);
+    assert.equal(autoNotifyEnabled, true);
+    assert.ok(mutations.some(call => call.path === '/v1/betaGroups/external/relationships/builds'));
+    assert.ok(!mutations.some(call => call.path === '/v1/buildBetaDetails/detail'));
+    assert.ok(!mutations.some(call => call.path === '/v1/buildBetaNotifications'));
   }
 });
 

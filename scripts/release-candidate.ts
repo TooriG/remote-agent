@@ -4,7 +4,7 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { distributeBuild, iosDistribution, testflightGroups, requestFromEnvironment, type AscRequest, type AppleBuildPlan } from './apple-release.ts';
+import { distributeBuild, externalTestingAvailable, iosDistribution, testflightGroups, requestFromEnvironment, type AscRequest, type AppleBuildPlan } from './apple-release.ts';
 
 type AssetVerification = { size: number; sha256: string };
 export type ReleaseManifest = AppleBuildPlan & { assets: Record<string, AssetVerification> };
@@ -117,8 +117,7 @@ async function seal(tag: string) {
     const request = requestFromEnvironment();
     gh('release', 'upload', tag, path, '--repo', repository(), '--clobber');
     const state = await nightlyStatus(request, manifest.appId, manifest.buildId!, manifest.notes, manifest.locale);
-    // Beta approval alone is insufficient: the assigned external group must be active.
-    if (state === 'IN_BETA_TESTING') publish(tag, 'nightly');
+    if (externalTestingAvailable(state)) publish(tag, 'nightly');
     console.log(`${tag}: ${state}`);
   });
 }
@@ -163,7 +162,7 @@ async function promote(selected: string | undefined) {
     verifyPackages(directory, source.assets);
     const request = requestFromEnvironment();
     const state = await nightlyStatus(request, source.appId, source.buildId!, source.notes, source.locale);
-    if (state !== 'IN_BETA_TESTING') throw new Error(`The selected Nightly is not approved for external testing (${state}).`);
+    if (!externalTestingAvailable(state)) throw new Error(`The selected Nightly is not approved for external testing (${state}).`);
     ensureTag(target, source.sha);
     run('git', ['fetch', 'origin', `refs/tags/${target}:refs/tags/${target}`]);
     const manifest = promotion(source);
@@ -179,7 +178,7 @@ async function promote(selected: string | undefined) {
       verifyPackages(verified, source.assets);
     });
     const stable = await distributeBuild(request, source.appId, source.buildId!, testflightGroups.production.name, source.notes, source.locale);
-    if (stable.state !== 'IN_BETA_TESTING' || stable.url !== manifest.testflightUrl) throw new Error('The production TestFlight group is not ready.');
+    if (!externalTestingAvailable(stable.state) || stable.url !== manifest.testflightUrl) throw new Error('The production TestFlight group is not ready.');
     publish(target, 'stable');
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `tag=${target}\n`);
     console.log(`Promoted ${sourceTag} to ${target}, preserving every package and Apple build ${source.buildId}.`);
@@ -195,7 +194,7 @@ async function sync() {
       if (!info.assets.some(asset => asset.name === 'release.json')) continue;
       await withManifest(item.tagName, async (manifest, directory) => {
         const state = await nightlyStatus(request, manifest.appId, manifest.buildId!, manifest.notes, manifest.locale);
-        if (state === 'IN_BETA_TESTING') {
+        if (externalTestingAvailable(state)) {
           gh('release', 'download', item.tagName, '--repo', repository(), '--skip-existing', '--dir', directory);
           verifyPackages(directory, manifest.assets);
           publish(item.tagName, 'nightly');
