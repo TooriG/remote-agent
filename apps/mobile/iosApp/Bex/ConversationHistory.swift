@@ -178,9 +178,7 @@ extension ThreadScreen {
         if turn.activityCanCollapse {
             Button {
                 scroll.following = false
-                if let conversation {
-                    model.toggleActivity(id, scope: conversation.scope)
-                }
+                model.toggleActivity(id)
             } label: {
                 header
             }

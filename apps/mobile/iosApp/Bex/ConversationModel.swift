@@ -310,9 +310,9 @@ extension ConversationModel {
         }
     }
 
-    func toggleActivity(_ id: String, scope: PanelScope) {
-        guard let conversation, conversation.scope == scope,
-              scope == snapshot.panelScope(host: host, draft: coreDraftKey),
+    func toggleActivity(_ id: String) {
+        guard let conversation,
+              conversation.scope == snapshot.panelScope(host: host, draft: coreDraftKey),
               let change = conversation.projection.toggleActivity(id: id, expansion: activityExpansionOverrides)
         else { return }
         activityExpansionOverrides = change.expansion
