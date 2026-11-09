@@ -244,7 +244,7 @@ pub(crate) fn details(
                         })
                     },
                     || crate::conversation::Kind::Response,
-                    move || (column_width.get() - 28.0).max(0.0),
+                    move || (column_width.try_get().unwrap_or_default() - 28.0).max(0.0),
                 ))
         }))
 }

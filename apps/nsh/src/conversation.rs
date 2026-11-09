@@ -1009,9 +1009,9 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                                 kind,
                                                 move || {
                                                     if user() {
-                                                        (column_width.get() * 0.8 - 24.0).max(0.0)
+                                                        (column_width.try_get().unwrap_or_default() * 0.8 - 24.0).max(0.0)
                                                     } else {
-                                                        (column_width.get() - 8.0).max(0.0)
+                                                        (column_width.try_get().unwrap_or_default() - 8.0).max(0.0)
                                                     }
                                                 },
                                             ))
@@ -1554,7 +1554,7 @@ fn plan_card(
                 surroundings,
                 move || Some(note().to_string()),
                 || Kind::Response,
-                move || (column_width.get() - 8.0 - 42.0).max(0.0),
+                move || (column_width.try_get().unwrap_or_default() - 8.0 - 42.0).max(0.0),
             ))),
     )
 }
