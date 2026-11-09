@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import dev.remoteagent.core.Intent
 import dev.remoteagent.core.ProjectSummary
 
+private const val PROJECT_NAME_MAX_LENGTH = 100
+
 @Composable
 internal fun ProjectActions(project: ProjectSummary, perform: (Intent) -> Unit) {
     var expanded by remember(project.id) { mutableStateOf(false) }
@@ -71,7 +73,7 @@ private fun ProjectNameDialog(
 ) {
     var name by rememberSaveable(project.id) { mutableStateOf(project.name) }
     val trimmed = name.trim()
-    val valid = trimmed.isNotEmpty() && trimmed.codePointCount(0, trimmed.length) <= 100
+    val valid = trimmed.isNotEmpty() && trimmed.codePointCount(0, trimmed.length) <= PROJECT_NAME_MAX_LENGTH
     AlertDialog(
         onDismissRequest = dismiss,
         title = { Text("名前を変更") },
