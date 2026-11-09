@@ -384,6 +384,12 @@ private fun LazyListScope.projectThreads(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    list?.hiddenProjects?.takeIf { it.isNotEmpty() }?.let { hidden ->
+        item(key = "hidden-projects") {
+            HiddenProjects(hidden) { _, intent -> perform(intent) }
+        }
+    }
+
 }
 
 @Composable
@@ -450,6 +456,7 @@ private fun ProjectRow(
                 )
             }
         }
+        if (!floating) ProjectActions(project, perform)
     }
 }
 
