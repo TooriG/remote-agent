@@ -1090,7 +1090,13 @@ async fn rewinding_refuses_running_work_and_unknown_turns_without_a_new_session(
 
 #[tokio::test]
 async fn covered_rewind_refuses_live_work_missing_from_the_stored_transcript() {
-    for observation in ["native_status", "native_turn", "live_turn"] {
+    for observation in [
+        "native_status",
+        "native_turn",
+        "live_status",
+        "live_request",
+        "live_turn",
+    ] {
         let directory = tempfile::tempdir().unwrap();
         let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
         let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
@@ -1127,6 +1133,7 @@ async fn covered_rewind_refuses_live_work_missing_from_the_stored_transcript() {
         .unwrap();
         let binding = host.inner.conversations.get(&root).unwrap().unwrap().active;
         let before = b.records.lock().unwrap().len();
+        let _reader = host.inner.router.retain_execution(root.clone()).unwrap();
         let turn = Turn {
             id: "not-yet-recorded".into(),
             status: TurnStatus::Running,
@@ -1153,6 +1160,22 @@ async fn covered_rewind_refuses_live_work_missing_from_the_stored_transcript() {
                     .get_or_insert_default()
                     .push(Arc::new(turn));
             }
+            "live_status" => host.inner.router.session_change(
+                &root,
+                SessionChange::Status {
+                    status: SessionStatus::Preparing,
+                },
+            ),
+            "live_request" => host.inner.router.session_change(
+                &root,
+                SessionChange::Request {
+                    request: serde_json::from_value(serde_json::json!({
+                        "id":"pending", "target":"session", "delivery":"awaiting",
+                        "body":{"question":{"questions":[]}}
+                    }))
+                    .unwrap(),
+                },
+            ),
             _ => host.inner.router.session_change(
                 &root,
                 SessionChange::Turn {
@@ -1188,6 +1211,73 @@ async fn covered_rewind_refuses_live_work_missing_from_the_stored_transcript() {
             ["first", "second"]
         );
     }
+}
+
+#[tokio::test]
+async fn rewind_without_subscribers_serializes_input_until_the_new_binding_is_ready() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = NativeAgent::new(ProviderKind::Codex, directory.path().join("codex"));
+    let b = NativeAgent::new(ProviderKind::Claude, directory.path().join("claude"));
+    let root = a
+        .create(directory.path().to_str().unwrap(), None, None)
+        .await
+        .unwrap()
+        .thread
+        .id
+        .unwrap();
+    let host = service(directory.path(), &a, &b);
+    let client = host.open_session();
+    let id = client.id();
+    let edited = send(&host, id, &root, ProviderKind::Codex, "one", "before")
+        .await
+        .unwrap()
+        .turn_id
+        .unwrap();
+    // No OpenSession subscription retains the idle conversation's actor.
+    a.create_started.notified().await;
+    let blocked = a.create_gate.acquire().await.unwrap();
+    let rewind = {
+        let host = host.clone();
+        let root = root.clone();
+        tokio::spawn(async move {
+            call::<ThreadResponse>(
+                &host,
+                id,
+                Call::RewindSession(op::RewindSession::new(root, edited)),
+            )
+            .await
+        })
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        a.create_started.notified(),
+    )
+    .await
+    .unwrap();
+    let mut sending = {
+        let host = host.clone();
+        let root = root.clone();
+        tokio::spawn(
+            async move { send(&host, id, &root, ProviderKind::Codex, "two", "after").await },
+        )
+    };
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut sending)
+            .await
+            .is_err()
+    );
+    assert_eq!(a.inputs.lock().unwrap().len(), 1);
+    drop(blocked);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        rewind.await.unwrap().unwrap();
+        sending.await.unwrap().unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(message_texts(&history(&host, id, &root).await), ["after"]);
+    let binding = host.inner.conversations.get(&root).unwrap().unwrap().active;
+    assert_ne!(binding, root);
+    assert_eq!(a.inputs.lock().unwrap().last().unwrap().thread_id, binding);
 }
 
 #[tokio::test]

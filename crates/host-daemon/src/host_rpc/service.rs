@@ -255,13 +255,7 @@ impl HostRpcService {
             let (target, input_id) = session_target(message);
             let target = target.cloned();
             let submission = target.as_ref().zip(input_id);
-            // Keep the execution alive and serialize decisions through the
-            // provider acknowledgement, including concurrent client inputs.
-            let _read = submission
-                .map(|(target, _)| self.inner.router.retain_execution(target.clone()))
-                .transpose()
-                .map_err(|error| Failure::new("invalid_params", error))?;
-            let _serial = if let Some(target) = target.as_ref().filter(|_| {
+            let serialized = target.as_ref().filter(|_| {
                 matches!(
                     message,
                     Call::Submit(_)
@@ -271,7 +265,14 @@ impl HostRpcService {
                         | Call::RewindSession(_)
                         | Call::RetryPreparation(_)
                 )
-            }) {
+            });
+            // Retain the actor before locking: idle reads must not prune it
+            // and let a concurrent operation acquire a different mutex.
+            let _execution = serialized
+                .map(|target| self.inner.router.retain_execution(target.clone()))
+                .transpose()
+                .map_err(|error| Failure::new("invalid_params", error))?;
+            let _serial = if let Some(target) = serialized {
                 Some(self.inner.router.submission_lock(target).lock_owned().await)
             } else {
                 None
