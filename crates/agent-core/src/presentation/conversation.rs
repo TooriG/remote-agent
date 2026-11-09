@@ -187,21 +187,8 @@ pub fn should_collapse_user_message(text: &str) -> bool {
         && (visible.encode_utf16().count() > 600 || visible.split('\n').count() > 8)
 }
 
-/// For each case-insensitive occurrence of `query`, the index of the text it
-/// is in: T3 Code's find in thread counts occurrences, not messages.
-pub fn find_occurrences<'a>(texts: impl Iterator<Item = &'a str>, query: &str) -> Vec<usize> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return Vec::new();
-    }
-    texts
-        .enumerate()
-        .flat_map(|(index, text)| {
-            let count = text.to_lowercase().matches(query.as_str()).count();
-            std::iter::repeat_n(index, count)
-        })
-        .collect()
-}
+mod search;
+pub use search::{TextMatch, find_matches};
 
 /// `text` with each Markdown link `[label](target)` as its label.
 fn link_labels(text: &str) -> String {
@@ -1818,15 +1805,6 @@ mod message_text_tests {
         assert!(!collapses(&"あ".repeat(600)));
         assert!(collapses(&"あ".repeat(601)));
         assert!(!collapses("   \n  "));
-    }
-
-    #[test]
-    fn find_counts_each_occurrence_with_its_message_ignoring_case() {
-        use super::find_occurrences as find;
-        let texts = ["Alpha alpha", "beta", "ALPHA"];
-        assert_eq!(find(texts.into_iter(), "alpha"), [0, 0, 2]);
-        assert_eq!(find(texts.into_iter(), "  "), Vec::<usize>::new());
-        assert_eq!(find(texts.into_iter(), "gamma"), Vec::<usize>::new());
     }
 
     #[test]

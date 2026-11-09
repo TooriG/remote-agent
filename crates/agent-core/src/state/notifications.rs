@@ -51,6 +51,35 @@ pub(super) fn notification(
     }
 
     match message {
+        Notification::SessionHistoryReplaced { thread } => {
+            let mut next = previous.clone();
+            let Some(id) = thread.id.clone() else {
+                return (next, Vec::new());
+            };
+            // The initiating operation still needs its original message to fill
+            // the editor; its RPC response replaces the history atomically.
+            if previous.operation_running(op::OperationKey::Rewind {
+                session: id.clone(),
+            }) {
+                return (next, Vec::new());
+            }
+            let reading = previous.operation_running(op::OperationKey::History {
+                session: id.clone(),
+            });
+            Arc::make_mut(&mut next.operations).retain(|key, _| match key {
+                op::OperationKey::History { session }
+                | op::OperationKey::TurnItems { session, .. } => session != &id,
+                op::OperationKey::Item { item } => item.thread_id != id,
+                _ => true,
+            });
+            let cached = Arc::make_mut(&mut next.sessions.conversations)
+                .remove(&id)
+                .is_some();
+            if cached || reading || next.sessions.subscriptions.contains_key(&id) {
+                op::refresh_thread(&mut next, "", *thread);
+            }
+            (next, Vec::new())
+        }
         Notification::ProviderSettings { settings } => {
             let mut next = previous.clone();
             let effects = if next.accept_provider_settings(settings) {
@@ -1078,6 +1107,74 @@ mod tests {
                 ..Default::default()
             },
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn replacing_history_drops_removed_turns_pages_and_late_reads_without_losing_the_draft() {
+        use crate::state::operations::Operation;
+        for subscribed in [true, false] {
+            let mut state = snapshot(ProviderKind::Codex);
+            let id = SessionRef::new(ProviderKind::Codex, "parent".into()).unwrap();
+            if !subscribed {
+                Arc::make_mut(&mut state.sessions.subscriptions).clear();
+            }
+            let thread = Arc::make_mut(
+                Arc::make_mut(&mut state.sessions.conversations)
+                    .get_mut(&id)
+                    .unwrap(),
+            );
+            thread.transcript_version = Some(1);
+            thread.history_cursor = Some("10".into());
+            thread.history_has_more = Some(true);
+            let before = thread.clone();
+            let mut replacement = before.clone();
+            replacement.turns = Some(Vec::new());
+            replacement.transcript_version = Some(2);
+            replacement.history_cursor = None;
+            replacement.history_has_more = Some(false);
+            Arc::make_mut(&mut state.input.drafts).insert(
+                id.clone().into(),
+                Arc::new(crate::state::Draft {
+                    text: "keep this draft".into(),
+                    ..Default::default()
+                }),
+            );
+            let key = op::OperationKey::History {
+                session: id.clone(),
+            };
+            Arc::make_mut(&mut state.operations).insert(
+                key.clone(),
+                op::OperationState {
+                    generation: 7,
+                    phase: op::OperationPhase::Running,
+                },
+            );
+            let (mut next, effects) = notification(
+                &state,
+                Notification::SessionHistoryReplaced {
+                    thread: replacement.into(),
+                },
+            );
+            assert!(effects.is_empty());
+            assert!(!next.operations.contains_key(&key));
+            assert_eq!(next.sessions.subscriptions, state.sessions.subscriptions);
+            assert_eq!(next.input.drafts, state.input.drafts);
+            let late = crate::session::OpenedSession {
+                session: id.clone(),
+                subscription_id: uuid::Uuid::new_v4(),
+                unchanged: false,
+                response: crate::models::ThreadResponse {
+                    thread: before,
+                    ..Default::default()
+                },
+            };
+            op::ReadThread::new(id.clone()).stale(&mut next, "", late);
+            let held = &next.sessions.conversations[&id];
+            assert!(held.turns.as_ref().unwrap().is_empty());
+            assert_eq!(held.history_cursor, None);
+            assert_eq!(held.history_has_more, Some(false));
+            assert_eq!(held.transcript_version, Some(2));
         }
     }
 

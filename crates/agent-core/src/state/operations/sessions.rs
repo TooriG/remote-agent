@@ -413,6 +413,14 @@ impl Operation for ReadThread {
         pane_id: &str,
         mut output: Self::Output,
     ) -> Vec<Effect> {
+        if snapshot
+            .sessions
+            .conversations
+            .get(&self.thread_id)
+            .is_some_and(|held| held.transcript_version > output.response.thread.transcript_version)
+        {
+            return Vec::new();
+        }
         held_window(snapshot, &self.thread_id, &mut output);
         // A late navigation result can warm the cache, but must never replace
         // an already subscribed, more recent view or change the selected draft.
@@ -546,7 +554,7 @@ pub(super) fn open_thread(
     review_workspace(snapshot, pane_id).into_iter().collect()
 }
 
-pub(super) fn refresh_thread(snapshot: &mut Snapshot, pane_id: &str, incoming: Thread) {
+pub(crate) fn refresh_thread(snapshot: &mut Snapshot, pane_id: &str, incoming: Thread) {
     let Some(id) = incoming.id.clone().filter(|id| id.validate().is_ok()) else {
         if let Some(pane) = snapshot.panes.get_mut(pane_id) {
             Arc::make_mut(pane).error = Some("thread ID is missing".into());

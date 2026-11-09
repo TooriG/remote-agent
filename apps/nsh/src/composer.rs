@@ -170,7 +170,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                 } else if stopping() {
                     c.can_interrupt()
                 } else if resuming() {
-                    c.controls.connected && !c.controls.follow_up.busy
+                    !connection.uploading() && c.can_send(true) && !c.controls.follow_up.busy
                 } else {
                     // Text being composed is content Core is yet to hear of,
                     // as a recording is.

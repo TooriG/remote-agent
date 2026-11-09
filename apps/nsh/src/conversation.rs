@@ -529,27 +529,41 @@ pub(crate) struct Timeline {
     /// The composer's current height positions the latest-message button and
     /// starts the next conversation's scroll reservation.
     covered: Signal<f32>,
+    position: Stored<Option<agent_core::presentation::conversation::ScrollPosition>>,
 }
 
 impl Timeline {
     /// The loaded messages' texts, each with its row's place in the list.
-    pub(crate) fn message_texts<T>(self, read: impl FnOnce(&[(usize, String)]) -> T) -> T {
-        let texts: Vec<_> = self.rows.with(|rows| {
+    pub(crate) fn message_texts(self) -> Vec<(usize, String, String)> {
+        self.rows.with(|rows| {
             rows.iter()
                 .enumerate()
                 .filter(|(_, row)| {
                     matches!(row.kind, Kind::User | Kind::Response)
                         && matches!(row.shape, Shape::Message | Shape::Commentary)
                 })
-                .map(|(index, row)| (index, row.body.to_string()))
+                .map(|(index, row)| (index, row.id.to_string(), row.body.to_string()))
                 .collect()
-        });
-        read(&texts)
+        })
     }
 
     /// Brings a row into view.
     pub(crate) fn reveal(self, row: usize) {
+        self.following.set(false);
         reveal_row(self.list, row as u32);
+    }
+
+    pub(crate) async fn reveal_text(self, page_y: f32) {
+        if let Some(bounds) = self.list.measure().await {
+            let offset = self
+                .position
+                .with(|position| position.map_or(0.0, |position| position.offset));
+            self.following.set(false);
+            self.list.scroll_to_offset(
+                px((offset + page_y - bounds.page.y.0 - 40.0).max(0.0)),
+                false,
+            );
+        }
     }
 
     pub(crate) fn new(following: Signal<bool>) -> Self {
@@ -582,6 +596,7 @@ impl Timeline {
             width: signal(0.0),
             inset: signal(0.0),
             covered: signal(0.0),
+            position: stored(None),
         }
     }
 
@@ -623,6 +638,7 @@ fn list(timeline: Timeline) -> impl IntoElement {
         width,
         inset,
         covered,
+        position,
     } = timeline;
     let surroundings = crate::rich_text::Surroundings::current();
     let connection = surroundings.connection;
@@ -631,7 +647,7 @@ fn list(timeline: Timeline) -> impl IntoElement {
     // Long messages the reader unfolded, as T3 Code's per-row Show full message.
     let unfolded = signal(HashSet::<String>::new());
     // Where the list was last scrolled to, for Core's follow rule.
-    let scrolled = stored(None::<agent_core::presentation::conversation::ScrollPosition>);
+    let scrolled = position;
     let scroll_pending = stored(false);
     // Further from the end than following reaches, as T3 Code offers the way
     // back.
@@ -689,6 +705,7 @@ fn list(timeline: Timeline) -> impl IntoElement {
         groups.set(HashSet::new());
         expanded_items.set(HashSet::new());
         unfolded.set(HashSet::new());
+        surroundings.find.reset_position();
         // A reservation held for another conversation's draft is not this one's.
         inset.set(covered.get_untracked());
     });
@@ -1107,7 +1124,10 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                                             .overflow_hidden()
                                                     })
                                                     .child(crate::rich_text::message(
-                                                        surroundings,
+                                                        crate::rich_text::Surroundings {
+                                                            find_row: Some(computed(move || row.with(|row| row.as_ref().map(|row| row.id.to_string()).unwrap_or_default()))),
+                                                            ..surroundings
+                                                        },
                                                         move || {
                                                             label().map(|text| text.to_string())
                                                         },

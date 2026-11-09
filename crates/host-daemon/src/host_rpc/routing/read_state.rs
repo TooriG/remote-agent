@@ -50,6 +50,19 @@ impl ReadState {
             .map(|completion| (completion.session.clone(), completion.turn_id.clone()))
             .collect()
     }
+    pub(super) fn forget(&mut self, session: &SessionRef) {
+        let Ok(completions) = &self.completions else {
+            return;
+        };
+        let next: Vec<_> = completions
+            .iter()
+            .filter(|completion| &completion.session != session)
+            .cloned()
+            .collect();
+        if next.len() != completions.len() {
+            self.update(next);
+        }
+    }
     fn save(&self, completions: &[Completion]) -> Result<(), Failure> {
         let Some(path) = &self.path else {
             return Ok(());
@@ -292,6 +305,21 @@ mod tests {
         std::fs::remove_file(&parent).unwrap();
         assert!(state.mark_read(&id, &turn).unwrap());
         assert!(ReadState::load(path).unread().is_empty());
+    }
+
+    #[test]
+    fn rewinding_forgets_removed_completion_receipts_without_affecting_other_tasks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reads.json");
+        let mut state = ReadState::load(path.clone());
+        let a = SessionRef::new(ProviderKind::Codex, "a".into()).unwrap();
+        let b = SessionRef::new(ProviderKind::Codex, "b".into()).unwrap();
+        state.record(&a, false, Some(&"removed".into()));
+        state.record(&b, false, Some(&"retained".into()));
+        state.forget(&a);
+        state.forget(&a);
+        assert!(!state.mark_read(&a, &"removed".into()).unwrap());
+        assert_eq!(ReadState::load(path).unread(), [(b, "retained".into())]);
     }
 
     #[test]

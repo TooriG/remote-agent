@@ -356,6 +356,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         let text = MessageTextView()
         var send: (([String: Any]) -> Void)?
         private var measuredSize = CGSize(width: -1, height: -1)
+        private var revealedFind: String?
         override var isFlipped: Bool {
             true
         }
@@ -382,6 +383,9 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
 
         func update(_ document: MessageDocument) {
             guard text.document != document else { return }
+            if text.document.findKey != document.findKey {
+                revealedFind = nil
+            }
             #if DEBUG
                 RenderProbe.record("update.begin", text)
             #endif
@@ -414,7 +418,8 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let content = MessageAttributes.text(document.blocks, secondary: document.secondary,
                                                  dark: effectiveAppearance
                                                      .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
-                                                 answer: document.role == "assistant", cell: document.cell, foreground: document.foreground, find: document.find)
+                                                 answer: document.role == "assistant", cell: document.cell,
+                                                 foreground: document.foreground)
             let range = text.selectedRange()
             let keep = range.length > 0 && NSMaxRange(range) <= content.length && NSMaxRange(range) <= text.string.utf16
                 .count
@@ -453,9 +458,29 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let height = ceil(manager.usedRect(for: container).maxY)
             text.frame = CGRect(x: 0, y: 0, width: bounds.width, height: height)
             reportSize(CGSize(width: max(0, measuredSize.width), height: height))
+            revealFind(manager, container: container)
             #if DEBUG
                 RenderProbe.record("layout", text)
             #endif
+        }
+
+        private func revealFind(_ manager: NSLayoutManager, container: NSTextContainer) {
+            guard let key = text.document.findKey, key != revealedFind,
+                  let storage = text.textStorage else { return }
+            var selected: NSRange?
+            storage.enumerateAttribute(.messageFindActive, in: NSRange(
+                location: 0,
+                length: storage.length
+            )) { value, range, stop in
+                if value as? Bool == true {
+                    selected = range; stop.pointee = true
+                }
+            }
+            guard let selected else { return }
+            let glyphs = manager.glyphRange(forCharacterRange: selected, actualCharacterRange: nil)
+            let bounds = manager.boundingRect(forGlyphRange: glyphs, in: container)
+            revealedFind = key
+            send?(["findY": bounds.minY, "findKey": key])
         }
     }
 #else
@@ -546,7 +571,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let document = text.document
             let content = MessageAttributes.text(document.blocks, secondary: document.secondary,
                                                  dark: traitCollection.userInterfaceStyle == .dark,
-                                                 foreground: document.foreground, find: document.find)
+                                                 foreground: document.foreground)
             let range = text.selectedRange
             let keep = range.length > 0 && NSMaxRange(range) <= content.length && NSMaxRange(range) <= text
                 .attributedText.length

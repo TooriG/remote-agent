@@ -10,10 +10,11 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
-    io::Write,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+
+mod rewind;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Binding {
@@ -380,6 +381,15 @@ pub(super) struct Conversations {
     state: Mutex<Result<Vec<Conversation>, String>>,
 }
 
+fn replacing(mut rows: Vec<Conversation>, conversation: Conversation) -> Vec<Conversation> {
+    if let Some(row) = rows.iter_mut().find(|row| row.id == conversation.id) {
+        *row = conversation;
+    } else {
+        rows.push(conversation);
+    }
+    rows
+}
+
 impl Conversations {
     pub fn new(path: PathBuf) -> Self {
         let state = match std::fs::read(&path) {
@@ -517,16 +527,11 @@ impl Conversations {
 
     pub fn save(&self, conversation: Conversation) -> Result<(), Failure> {
         let mut state = self.state.lock().unwrap();
-        let mut next = state
+        let next = state
             .as_ref()
             .cloned()
             .map_err(|error| Failure::new("conversation_storage_failed", error))?;
-        if let Some(row) = next.iter_mut().find(|row| row.id == conversation.id) {
-            *row = conversation;
-        } else {
-            next.push(conversation);
-        }
-        self.save_rows(&mut state, next)
+        self.save_rows(&mut state, replacing(next, conversation))
     }
 
     pub fn admit(&self, conversation: Conversation) -> Result<(Conversation, bool), Failure> {
@@ -571,17 +576,7 @@ impl Conversations {
         next: Vec<Conversation>,
     ) -> Result<(), Failure> {
         validate(&next).map_err(|error| Failure::new("invalid_conversation", error))?;
-        let bytes = serde_json::to_vec(&next)?;
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| Failure::new("conversation_storage_failed", error))?;
-        }
-        atomicwrites::AtomicFile::new(&self.path, atomicwrites::OverwriteBehavior::AllowOverwrite)
-            .write(|file| {
-                file.write_all(&bytes)?;
-                file.sync_all()
-            })
-            .map_err(|error| Failure::new("conversation_storage_failed", error))?;
+        rewind::save_json(&self.path, &next)?;
         *state = Ok(next);
         Ok(())
     }

@@ -866,6 +866,21 @@ async fn rewinding_keeps_the_conversation_and_continues_without_the_later_turns(
         .await
         .unwrap();
 
+    let mut other = host.open_session();
+    let opened = host
+        .dispatch(
+            other.id(),
+            &Call::OpenSession(agent_protocol::session::OpenSession {
+                session: root.clone(),
+                limit: 100,
+                include_activity: true,
+                known_version: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let _subscription = opened.updates.unwrap();
+
     let rewound: ThreadResponse = call(
         &host,
         client.id(),
@@ -875,6 +890,25 @@ async fn rewinding_keeps_the_conversation_and_continues_without_the_later_turns(
     .unwrap();
     assert_eq!(rewound.thread.id.as_ref(), Some(&root));
     assert_eq!(message_texts(&rewound), ["first"]);
+    let replaced = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let notice: Notification =
+                agent_protocol::protocol::decode(&other.recv().await.unwrap()).unwrap();
+            if let Notification::SessionHistoryReplaced { thread } = notice {
+                break thread;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(replaced.id.as_ref(), Some(&root));
+    assert_eq!(
+        message_texts(&ThreadResponse {
+            thread: *replaced,
+            ..Default::default()
+        }),
+        ["first"]
+    );
     assert_eq!(
         message_texts(&history(&host, client.id(), &root).await),
         ["first"]

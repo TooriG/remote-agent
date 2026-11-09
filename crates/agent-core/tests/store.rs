@@ -3058,6 +3058,16 @@ async fn rewinding_drops_the_later_turns_and_returns_the_message_to_the_composer
     let request = read(&mut reader).await;
     assert_eq!(request["method"], "host/session/rewind");
     assert_eq!(request["params"]["turnId"], "edit");
+    // The global notification precedes the RPC response on the requesting
+    // connection too. Its original edited message must remain available.
+    writer
+        .notify(
+            json!({"method":"host/session/historyReplaced","params":{"thread":{
+                "id":{"provider":"codex","id":"thread"},"cwd":"/fixture","turns":[kept.clone()]
+            }}}),
+        )
+        .await
+        .unwrap();
     writer
         .reply(&request, json!({"result":{"thread":{"id":{"provider":"codex","id":"thread"},"cwd":"/fixture","turns":[kept]}}}))
         .await

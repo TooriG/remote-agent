@@ -71,6 +71,10 @@ impl HostRpcService {
         let transcripts = Arc::new(super::transcripts::Transcripts::open(
             &projects.path().with_file_name("bex-transcripts.sqlite"),
         ));
+        let conversations = super::conversations::Conversations::new(
+            projects.path().with_file_name("bex-conversations.json"),
+        );
+        conversations.recover_rewind(&transcripts);
         let router = SessionRouter::new()
             .with_read_state(projects.path().with_file_name("bex-read-state.json"))
             .with_transcripts(transcripts.clone());
@@ -79,9 +83,7 @@ impl HostRpcService {
             inner: Arc::new(ServiceInner {
                 history_scope: OnceLock::new(),
                 updating: std::sync::atomic::AtomicBool::new(false),
-                conversations: super::conversations::Conversations::new(
-                    projects.path().with_file_name("bex-conversations.json"),
-                ),
+                conversations,
                 transcripts,
                 imports: Default::default(),
                 capacity: Default::default(),

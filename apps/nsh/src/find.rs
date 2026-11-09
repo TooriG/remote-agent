@@ -1,19 +1,28 @@
-//! T3 Code's find in thread (⌘F): a bar over the conversation's corner that
-//! counts what the loaded messages say and walks the list through it.
+//! Find in the loaded conversation, using the renderer's text documents and
+//! Core's shared match ranges. The timeline owns the resulting scrolls.
 use crate::{
     composer::shortcut,
     conversation::Timeline,
     l10n::tr,
     ui::{self, Icon, colors},
 };
-use agent_core::presentation::conversation::find_occurrences;
+use agent_core::presentation::conversation::{TextMatch, find_matches};
 use nsh_core::{keymap::When, prelude::*};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Match {
+    row: String,
+    document: usize,
+    range: TextMatch,
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct Find {
     open: Signal<bool>,
     query: Signal<String>,
     current: Signal<usize>,
+    selected: Signal<Option<Match>>,
+    timeline: Stored<Option<Timeline>>,
 }
 
 impl Find {
@@ -22,10 +31,10 @@ impl Find {
             open: signal(false),
             query: signal(String::new()),
             current: signal(0),
+            selected: signal(None),
+            timeline: stored(None),
         }
     }
-
-    /// What the messages mark, empty while the bar is closed.
     pub(crate) fn highlighted(self) -> String {
         if self.open.get() {
             self.query.get()
@@ -33,16 +42,86 @@ impl Find {
             String::new()
         }
     }
-
+    pub(crate) fn reset_position(self) {
+        self.current.set(0);
+        self.selected.set(None);
+    }
     fn close(self) {
         self.open.set(false);
         self.query.set(String::new());
-        self.current.set(0);
+        self.reset_position();
+    }
+    pub(crate) fn active(self, row: &str, document: usize) -> Option<TextMatch> {
+        self.selected.with(|selected| {
+            selected
+                .as_ref()
+                .filter(|selected| selected.row == row && selected.document == document)
+                .map(|selected| selected.range)
+        })
+    }
+    pub(crate) fn key(self) -> Option<String> {
+        let selected = self.selected.get()?;
+        Some(format!(
+            "{}/{}/{}/{}/{}",
+            selected.row,
+            selected.document,
+            selected.range.start,
+            selected.range.end,
+            self.highlighted()
+        ))
+    }
+    /// Native glyphs or a drawn inline attachment report the selected text's
+    /// actual position. Ignore measurements belonging to an earlier match.
+    pub(crate) fn reveal(self, view: ElementRef, y: f32, key: String) {
+        if self.key().as_ref() != Some(&key) {
+            return;
+        }
+        let timeline = self.timeline.with(|timeline| *timeline);
+        if let Some(timeline) = timeline {
+            spawn(async move {
+                if let Some(bounds) = view.measure().await
+                    && self.key().as_ref() == Some(&key)
+                {
+                    timeline.reveal_text(bounds.page.y.0 + y).await;
+                }
+            });
+        }
     }
 }
 
-/// The bar, and ⌘F, while the terminal does not hold the keyboard.
+fn occurrences(
+    rows: Vec<(usize, String, String)>,
+    query: &str,
+    cwd: &str,
+    home: Option<&str>,
+) -> Vec<(usize, Match)> {
+    let mut matches = Vec::new();
+    if query.trim().is_empty() {
+        return matches;
+    }
+    for (row, id, source) in rows {
+        for (document, text) in
+            crate::rich_text::search_documents(source, cwd.into(), home.map(str::to_owned))
+                .into_iter()
+                .enumerate()
+        {
+            for range in find_matches(&text, query) {
+                matches.push((
+                    row,
+                    Match {
+                        row: id.clone(),
+                        document,
+                        range,
+                    },
+                ));
+            }
+        }
+    }
+    matches
+}
+
 pub(crate) fn bar(find: Find, timeline: Timeline) -> impl IntoElement {
+    find.timeline.replace(Some(timeline));
     let terminal = use_context::<crate::terminal::Focus>().unwrap();
     view()
         .absolute()
@@ -50,11 +129,7 @@ pub(crate) fn bar(find: Find, timeline: Timeline) -> impl IntoElement {
         .right(px(16.0))
         .child(when(
             move || !terminal.get(),
-            move || {
-                shortcut("mod+f", When::Always, move |_| {
-                    find.open.set(true);
-                })
-            },
+            move || shortcut("mod+f", When::Always, move |_| find.open.set(true)),
         ))
         .child(when(
             move || find.open.get(),
@@ -65,27 +140,41 @@ pub(crate) fn bar(find: Find, timeline: Timeline) -> impl IntoElement {
 fn open_bar(find: Find, timeline: Timeline) -> View {
     let field = element_ref();
     let focused = signal(false);
-    let occurrences = computed(move || {
-        let query = find.query.get();
-        timeline.message_texts(|rows| {
-            find_occurrences(rows.iter().map(|(_, text)| text.as_str()), &query)
-                .into_iter()
-                .map(|row| rows[row].0)
-                .collect::<Vec<_>>()
-        })
+    let connection = use_context::<crate::Connection>().unwrap();
+    let matches = computed(move || {
+        occurrences(
+            timeline.message_texts(),
+            &find.query.get(),
+            &connection
+                .composer
+                .with(|p| p.controls.navigation.cwd.clone()),
+            connection.context.with(|p| p.home()).as_deref(),
+        )
     });
-    let count = move || occurrences.with(Vec::len);
+    let count = move || matches.with(Vec::len);
+    let current = move || find.current.get().min(count().saturating_sub(1));
     let step = move |by: isize| {
         let total = count() as isize;
         if total > 0 {
-            let at = find.current.get_untracked() as isize;
-            find.current.set((at + by).rem_euclid(total) as usize);
+            find.current
+                .set((current() as isize + by).rem_euclid(total) as usize);
         }
     };
     effect(move || {
-        let row = occurrences.with(|rows| rows.get(find.current.get()).copied());
-        if let Some(row) = row {
-            timeline.reveal(row);
+        let at = current();
+        if find.current.get_untracked() != at {
+            find.current.set(at);
+        }
+        let next = matches.with(|matches| matches.get(at).cloned());
+        let selected = next.as_ref().map(|(_, selected)| selected.clone());
+        let previous = find.selected.get_untracked();
+        if previous != selected {
+            if let Some((row, selected)) = &next
+                && previous.as_ref().is_none_or(|old| old.row != selected.row)
+            {
+                timeline.reveal(*row);
+            }
+            find.selected.set(selected);
         }
     });
     after_answer(move || field.focus());
@@ -118,14 +207,14 @@ fn open_bar(find: Find, timeline: Timeline) -> View {
                 .on_blur(move || focused.set(false))
                 .on_submit(move |_: &str| step(1))
                 .on_change(move |text: &str| {
-                    find.query.set(text.to_owned());
+                    find.query.set(text.into());
                     find.current.set(0);
                 }),
         )
         .child(
             text(move || match count() {
                 0 => String::new(),
-                total => format!("{}/{total}", find.current.get() + 1),
+                total => format!("{}/{total}", current() + 1),
             })
             .text_size(px(12.0))
             .text_color(colors::muted()),

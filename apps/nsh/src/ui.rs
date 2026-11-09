@@ -128,6 +128,7 @@ impl Icon {
     pub(crate) const ARROW_DOWN: Self = icon!(ArrowDown);
     pub(crate) const GIT_FORK: Self = icon!(GitFork);
     pub(crate) const WRAP: Self = icon!(TextWrap);
+    #[cfg(desktop)]
     pub(crate) const MAXIMIZE: Self = icon!(Maximize2);
     pub(crate) const MINIMIZE: Self = icon!(Minimize2);
     pub(crate) const WARNING: Self = icon!(TriangleExclamationPoint);
@@ -168,6 +169,7 @@ impl Icon {
     pub(crate) const PANEL_LEFT_CLOSE: Self = icon!(PanelLeftClose);
     #[cfg(desktop)]
     pub(crate) const PANEL_LEFT_OPEN: Self = icon!(PanelLeftOpen);
+    #[cfg(desktop)]
     pub(crate) const PANEL_RIGHT: Self = icon!(PanelRight);
     #[cfg(desktop)]
     pub(crate) const PANEL_BOTTOM: Self = icon!(PanelBottom);

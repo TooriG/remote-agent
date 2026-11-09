@@ -2,6 +2,7 @@ use super::*;
 use crate::host_rpc::conversations::{Binding, Conversation, Delivery, Handoff, inline_context};
 use agent_protocol::{
     handoff,
+    protocol::Notification,
     session::{HistoryPage, SessionRef},
 };
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
@@ -123,11 +124,16 @@ impl HostRpcService {
         rewound.name = row.name;
         rewound.preview = row.preview;
         self.inner
-            .transcripts
-            .replace(&rewound.id, kept)
-            .map_err(transcripts::storage_failure)?;
-        self.inner.conversations.save(rewound.clone())?;
-        self.publish_conversation(&rewound).await
+            .conversations
+            .rewind(&self.inner.transcripts, rewound.clone(), history, kept)?;
+        self.inner.router.reset_history(target);
+        let page = self.publish_conversation(&rewound).await?;
+        self.inner
+            .router
+            .broadcast(Notification::SessionHistoryReplaced {
+                thread: page.thread.clone().into(),
+            });
+        Ok(page)
     }
 
     /// A new native session for a conversation rewound past its first turn.

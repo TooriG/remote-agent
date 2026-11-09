@@ -238,6 +238,18 @@ impl SessionRouter {
         }
         thread
     }
+    /// A rewind releases delivery evidence and live overlays from the old runtime,
+    /// while retaining the actor's subscriptions and serialization lock.
+    pub(super) fn reset_history(&self, target: &SessionRef) {
+        let actor = self.actor(target);
+        let mut owned = lock_state(&actor);
+        owned.timeline = Default::default();
+        owned.request_origins.clear();
+        owned.queued_turns.clear();
+        let mut state = lock_state(&self.state);
+        state.tasks.remove(target);
+        state.reads.forget(target);
+    }
     pub(super) fn execution_targets(&self) -> Vec<SessionRef> {
         lock_state(&self.state).executions.keys().cloned().collect()
     }

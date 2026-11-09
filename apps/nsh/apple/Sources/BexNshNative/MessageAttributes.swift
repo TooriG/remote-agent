@@ -22,6 +22,14 @@ struct MessageRun: Decodable, Equatable {
     let lightColor: UInt32?
     /// The desktop's chip of the file the run names.
     var file: MessageFile?
+    var highlights: [MessageHighlight]? = nil
+}
+
+/// Core's UTF-8 byte ranges within one displayed run.
+struct MessageHighlight: Decodable, Equatable {
+    let start: Int
+    let end: Int
+    let active: Bool
 }
 
 /// A file chip as Core describes it: its glyph (a folder's, or the file's SVG),
@@ -45,6 +53,7 @@ struct MessageMenuItem: Decodable, Equatable {
 extension NSAttributedString.Key {
     /// The chip a range of message text shows, and the link it opens.
     static let messageFile = NSAttributedString.Key("BexMessageFile")
+    static let messageFindActive = NSAttributedString.Key("BexMessageFindActive")
 }
 
 /// What a chip's text carries: its link and the chip, for its menu.
@@ -66,6 +75,7 @@ struct MessageParagraph: Decodable, Equatable {
     let depth: UInt32
     let alignment: String
     let runs: [MessageRun]
+    var markerHighlights: [MessageHighlight]? = nil
 }
 
 struct MessageDocument: Decodable, Equatable {
@@ -73,8 +83,8 @@ struct MessageDocument: Decodable, Equatable {
     let secondary: Bool
     /// The text's color at the device's contrast.
     var foreground: UInt32? = nil
-    /// What find in thread marks; empty while it is closed.
-    var find: String? = nil
+    /// The selected occurrence, so layout reveals it once per navigation.
+    var findKey: String? = nil
     /// Whose text it is, `user` or `assistant`, as its accessibility identifier names it.
     let role: String
     let target: String
@@ -101,16 +111,16 @@ struct MessageMenuTitles: Decodable, Equatable {
     /// foreground on the Mac. `cell`: a table's cell (`header` or `body`).
     static func text(_ blocks: [MessageParagraph], secondary: Bool, dark: Bool,
                      answer: Bool = false, cell: String? = nil,
-                     foreground: UInt32? = nil, find: String? = nil) -> NSAttributedString {
+                     foreground: UInt32? = nil) -> NSAttributedString {
         let result = NSMutableAttributedString(string: "")
         for (index, block) in blocks.enumerated() {
             let start = result.length
             let size = Self.size(block, cell: cell)
             if let marker = block.marker {
-                result.append(NSAttributedString(string: marker + " ", attributes: [
+                append(NSAttributedString(string: marker + " ", attributes: [
                     .font: font(size: size, mono: block.code, bold: false, italic: false),
                     .foregroundColor: color(secondary: secondary, answer: answer, foreground: foreground)
-                ]))
+                ]), highlights: block.markerHighlights, to: result)
             }
             for (position, run) in block.runs.enumerated() {
                 var attributes = attributes(
@@ -135,7 +145,11 @@ struct MessageMenuTitles: Decodable, Equatable {
                         result.append(icon)
                     }
                 }
-                result.append(NSAttributedString(string: run.text, attributes: attributes))
+                append(
+                    NSAttributedString(string: run.text, attributes: attributes),
+                    highlights: run.highlights,
+                    to: result
+                )
             }
             let paragraph = style(block, size: size, at: index, of: blocks)
             if index + 1 < blocks.count {
@@ -157,7 +171,6 @@ struct MessageMenuTitles: Decodable, Equatable {
                 result.addAttribute(.baselineOffset, value: max(0, leading / 2), range: range)
             #endif
         }
-        mark(find, in: result)
         return result
     }
 
@@ -255,19 +268,24 @@ struct MessageMenuTitles: Decodable, Equatable {
         return attachment
     }
 
-    /// T3 Code's find highlight, over each case-insensitive occurrence.
-    private static func mark(_ find: String?, in text: NSMutableAttributedString) {
-        let query = (find ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return }
-        let string = text.string as NSString
-        var from = 0
-        while from < string.length {
-            let found = string.range(of: query, options: .caseInsensitive,
-                                     range: NSRange(location: from, length: string.length - from))
-            guard found.location != NSNotFound else { return }
-            text.addAttributes([.backgroundColor: rgb(0xF59E0B), .foregroundColor: rgb(0x000000)], range: found)
-            from = NSMaxRange(found)
+    private static func append(_ text: NSAttributedString, highlights: [MessageHighlight]?,
+                               to result: NSMutableAttributedString) {
+        let value = NSMutableAttributedString(attributedString: text)
+        let string = value.string
+        let bytes = Array(string.utf8)
+        for highlight in highlights ?? [] {
+            guard highlight.start >= 0, highlight.end > highlight.start,
+                  highlight.end <= bytes.count,
+                  let prefix = String(bytes: bytes[..<highlight.start], encoding: .utf8),
+                  let found = String(bytes: bytes[highlight.start ..< highlight.end], encoding: .utf8) else { continue }
+            let range = NSRange(location: prefix.utf16.count, length: found.utf16.count)
+            value.addAttributes([.backgroundColor: rgb(highlight.active ? 0xF97316 : 0xF59E0B),
+                                 .foregroundColor: rgb(0x000000)], range: range)
+            if highlight.active {
+                value.addAttribute(.messageFindActive, value: true, range: range)
+            }
         }
+        result.append(value)
     }
 
     private static func rgb(_ rgb: UInt32) -> MessageColor {
@@ -276,7 +294,9 @@ struct MessageMenuTitles: Decodable, Equatable {
     }
 
     private static func color(secondary: Bool, answer: Bool = false, foreground: UInt32? = nil) -> MessageColor {
-        if let foreground { return rgb(foreground) }
+        if let foreground {
+            return rgb(foreground)
+        }
         #if os(macOS)
             // T3 Code's answer: the foreground at 90%.
             return secondary ? .secondaryLabelColor : answer ? NSColor(white: 0.83, alpha: 1) : .labelColor
@@ -286,7 +306,8 @@ struct MessageMenuTitles: Decodable, Equatable {
     }
 
     private static func attributes(_ run: MessageRun, size: CGFloat, code: Bool, heading: Bool,
-                                   secondary: Bool, answer: Bool, dark: Bool, foreground: UInt32?) -> [NSAttributedString.Key: Any] {
+                                   secondary: Bool, answer: Bool, dark: Bool,
+                                   foreground: UInt32?) -> [NSAttributedString.Key: Any] {
         var result: [NSAttributedString.Key: Any] = [
             .font: font(size: size, mono: code || run.code, bold: heading || run.strong, italic: run.emphasis),
             .foregroundColor: color(secondary: secondary, answer: answer, foreground: foreground)

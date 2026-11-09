@@ -14,6 +14,9 @@ use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
+mod search;
+pub(crate) use search::documents as search_documents;
+
 /// How far a code block keeps its code from its edges, as T3 Code's `pre`
 /// (`0.8rem 0.9rem`) inside its 1 point border.
 const CODE_INSET: f32 = 15.0;
@@ -114,6 +117,7 @@ pub(crate) struct Surroundings {
     pub preview: crate::media::Preview,
     pub workspace: crate::workbench::Workbench,
     pub find: crate::find::Find,
+    pub find_row: Option<Memo<String>>,
     /// The bar of actions on the text selected in the list's messages.
     #[cfg(desktop)]
     pub selection: crate::selection_bar::SelectionBar,
@@ -128,6 +132,7 @@ impl Surroundings {
             preview: use_context::<crate::media::Preview>().unwrap(),
             workspace: use_context::<crate::workbench::Workbench>().unwrap(),
             find: use_context::<crate::find::Find>().unwrap(),
+            find_row: None,
             #[cfg(desktop)]
             selection: crate::selection_bar::SelectionBar::new(),
         }
@@ -224,14 +229,32 @@ pub(crate) fn message(
         computed(move || {
             chips.with(|chips| {
                 document.with(|(blocks, diagrams)| {
-                    parts(blocks.clone(), diagrams, &|file| Some(chips.chip(file)))
+                    search::indexed(parts(
+                        blocks.clone(),
+                        if surroundings.find.highlighted().is_empty() {
+                            diagrams
+                        } else {
+                            &[]
+                        },
+                        &|file| Some(chips.chip(file)),
+                    ))
                 })
             })
         })
     };
     #[cfg(not(desktop))]
     let content = computed(move || {
-        document.with(|(blocks, diagrams)| parts(blocks.clone(), diagrams, &|_| None))
+        document.with(|(blocks, diagrams)| {
+            search::indexed(parts(
+                blocks.clone(),
+                if surroundings.find.highlighted().is_empty() {
+                    diagrams
+                } else {
+                    &[]
+                },
+                &|_| None,
+            ))
+        })
     });
     view_parts(
         surroundings,
@@ -412,7 +435,9 @@ fn view_parts(
                 // for another row; unwrapped code keeps its lines.
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 let message = move |wrap: Signal<bool>| {
+                    let reference = element_ref();
                     native("bex.messageText")
+                        .element_ref(&reference)
                         .prop("data", move || {
                             // A recycled native cell can finish its pending
                             // update after the message owning these values left
@@ -428,19 +453,34 @@ fn view_parts(
                                     return Value::Null;
                                 };
                                 let kind = kind();
+                                let row = surroundings
+                                    .find_row
+                                    .map(|row| row.get())
+                                    .unwrap_or_default();
+                                let document = blocks
+                                    .first()
+                                    .and_then(|block| block["findDocument"].as_u64())
+                                    .unwrap_or_default()
+                                    as usize;
+                                let query = if row.is_empty() {
+                                    String::new()
+                                } else {
+                                    surroundings.find.highlighted()
+                                };
+                                let active = surroundings.find.active(&row, document);
                                 let width = if code && !wrap.get() {
                                     1_000_000.0
                                 } else {
                                     (width - if code { 2.0 * CODE_INSET } else { 0.0 }).max(0.0)
                                 };
                                 json!({
-                                    "find": surroundings.find.highlighted(),
+                                    "findKey": if active.is_some() { surroundings.find.key() } else { None },
                                     "foreground": crate::ui::colors::contrasted(match kind {
                                         Kind::Activity => 0x8c8c8c,
                                         Kind::User => 0xdadada,
                                         _ => 0xd4d4d4,
                                     }),
-                                    "blocks": blocks,
+                                    "blocks": search::decorate(blocks.clone(), &query, active),
                                     "secondary": kind == Kind::Activity,
                                     "role": if kind == Kind::User { "user" } else { "assistant" },
                                     "target": target,
@@ -455,7 +495,12 @@ fn view_parts(
                             })
                         })
                         .on_native_event(move |event: &NativeEvent| {
-                            action(surroundings, &event.data)
+                            if let Some(y) = event.data["findY"].as_f64()
+                                && let Some(key) = event.data["findKey"].as_str() {
+                                surroundings.find.reveal(reference, y as f32, key.to_owned());
+                            } else {
+                                action(surroundings, &event.data)
+                            }
                         })
                         .min_h(px(20.0))
                 };
@@ -952,16 +997,42 @@ mod drawn {
         message.child(each(
             move || {
                 part.with(|(_, part)| match part {
-                    Part::Text(blocks) | Part::Code { blocks, .. } => blocks
-                        .iter()
+                    Part::Text(blocks) | Part::Code { blocks, .. } => {
+                        let row = surroundings
+                            .find_row
+                            .map(|row| row.get())
+                            .unwrap_or_default();
+                        let document = blocks
+                            .first()
+                            .and_then(|block| block["findDocument"].as_u64())
+                            .unwrap_or_default() as usize;
+                        let query = if row.is_empty() {
+                            String::new()
+                        } else {
+                            surroundings.find.highlighted()
+                        };
+                        super::search::decorate(
+                            blocks.clone(),
+                            &query,
+                            surroundings.find.active(&row, document),
+                        )
+                        .into_iter()
                         .enumerate()
-                        .map(|(index, block)| (index, block.clone()))
-                        .collect(),
+                        .collect()
+                    }
                     _ => Vec::new(),
                 })
             },
             |(index, block): &(usize, Value)| (*index, block.to_string()),
-            move |block, _| paragraph(block.get_untracked().1, secondary(), links, cell),
+            move |block, _| {
+                paragraph(
+                    block.get_untracked().1,
+                    secondary(),
+                    links,
+                    cell,
+                    surroundings.find,
+                )
+            },
         ))
     }
 
@@ -1038,6 +1109,7 @@ mod drawn {
         secondary: bool,
         links: Links<O, C>,
         cell: Option<&'static str>,
+        find: crate::find::Find,
     ) -> View
     where
         O: Fn(String, bool) + Copy + 'static,
@@ -1069,10 +1141,11 @@ mod drawn {
             _ => line,
         };
         if let Some(marker) = block["marker"].as_str() {
-            line = line.child(text(format!("{marker} ")).text_color(colors::muted()));
+            let marker = serde_json::json!({"text": format!("{marker} "), "highlights": block["markerHighlights"]});
+            line = line.child(highlighted_run(&marker, find).text_color(colors::muted()));
         }
         for run in block["runs"].as_array().into_iter().flatten() {
-            let mut span = text(run["text"].as_str().unwrap_or_default().to_owned());
+            let mut span = highlighted_run(run, find);
             if run["strong"].as_bool().unwrap_or(false) {
                 span = span.font_weight(FontWeight::BOLD);
             }
@@ -1117,6 +1190,42 @@ mod drawn {
                 |s| s.border_l_1().border_l_color(colors::border()),
             )
             .child(line)
+    }
+
+    fn highlighted_run(run: &Value, find: crate::find::Find) -> Text {
+        let mut span = text("");
+        for fragment in super::search::fragments(run) {
+            let highlight = fragment.highlighted;
+            let active = fragment.active;
+            let reveal = fragment.reveal;
+            let fragment = text(fragment.text).style_when(
+                move || highlight,
+                |style| {
+                    style
+                        .bg(rgb(if active { 0xf97316 } else { 0xf59e0b }))
+                        .text_color(rgb(0x000000))
+                },
+            );
+            if reveal {
+                // A zero-width inline anchor measures the first selected glyph
+                // without changing how the highlighted text wraps.
+                let reference = element_ref();
+                let key = find.key();
+                span = span.child(
+                    view()
+                        .element_ref(&reference)
+                        .w(px(0.0))
+                        .h(px(1.0))
+                        .on_layout(move |_: &Bounds<Points>| {
+                            if let Some(key) = key.clone() {
+                                find.reveal(reference, 0.0, key);
+                            }
+                        }),
+                );
+            }
+            span = span.child(fragment);
+        }
+        span
     }
 
     /// A file chip as the desktop client's: its glyph and label in the file's accent, at

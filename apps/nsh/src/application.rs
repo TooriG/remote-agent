@@ -458,7 +458,7 @@ impl Application {
     }
 
     /// Saves the interface contrast, then publishes it so the root is made again.
-    #[cfg(any(desktop, test))]
+    #[cfg(desktop)]
     pub fn select_contrast(&self, contrast: u32) {
         if let Err(reason) = self.client.device.select_contrast(contrast) {
             self.fail(reason.to_string());
@@ -531,6 +531,7 @@ impl Application {
         );
     }
 
+    #[cfg(any(desktop, test))]
     pub fn set_panel_maximized(&self, scope: PanelScope, maximized: bool) {
         self.state.send_modify(|state| {
             let panels = state.panels.clone().set_maximized(scope, maximized);

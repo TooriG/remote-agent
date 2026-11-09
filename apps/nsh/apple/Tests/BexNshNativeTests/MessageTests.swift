@@ -7,6 +7,23 @@ import XCTest
 
 final class MessageTests: XCTestCase {
     #if os(macOS)
+        @MainActor func testCoreHighlightByteRangesPreserveUnicodeAndStyles() throws {
+            let data = Data(#"{"blocks":[{"header":null,"marker":null,"code":false,"quoted":false,"depth":0,"alignment":"left","runs":[{"text":"😀é ","strong":false,"emphasis":false,"strikethrough":false,"code":false,"link":null,"darkColor":null,"lightColor":null,"highlights":[{"start":4,"end":6,"active":true}]},{"text":"bold","strong":true,"emphasis":false,"strikethrough":false,"code":false,"link":null,"darkColor":null,"lightColor":null,"highlights":[{"start":0,"end":4,"active":false}]}]}],"secondary":false,"role":"assistant","target":"","sideChat":false,"maxWidth":500,"menu":{"quote":"","sideChat":""}}"#
+                .utf8)
+            let document = try JSONDecoder().decode(MessageDocument.self, from: data)
+            let content = MessageAttributes.text(document.blocks, secondary: false, dark: true)
+            XCTAssertEqual(content.string, "😀é bold")
+            let accented = (content.string as NSString).range(of: "é").location
+            XCTAssertNotNil(content.attribute(.backgroundColor, at: accented, effectiveRange: nil))
+            XCTAssertEqual(content.attribute(.messageFindActive, at: accented, effectiveRange: nil) as? Bool, true)
+            XCTAssertNil(content.attribute(.messageFindActive, at: 0, effectiveRange: nil))
+            let bold = (content.string as NSString).range(of: "bold").location
+            XCTAssertNotNil(content.attribute(.backgroundColor, at: bold, effectiveRange: nil))
+            XCTAssertNil(content.attribute(.messageFindActive, at: bold, effectiveRange: nil))
+            let font = try XCTUnwrap(content.attribute(.font, at: bold, effectiveRange: nil) as? NSFont)
+            XCTAssertTrue(NSFontManager.shared.traits(of: font).contains(.boldFontMask))
+        }
+
         @MainActor func testTextKitVisibilityFollowsLayerScrollingBeforeAppKitBoundsCommit() {
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 200),
                                   styleMask: [], backing: .buffered, defer: false)
