@@ -6,6 +6,9 @@ type "AI に依頼する" "[generated-images] [immediate] 生成画像を表示�
 press 送信
 expect "生成画像を表示しました。" 30000
 expect_absent "画像を読み込み中…" 20000
+# The answer's first image, shown at its own size as T3 Code's, is above the
+# view at the answer's end.
+scroll この会話 -60
 menu 画像を拡大
 press 画像を名前を付けて保存…
 choose "$AGENT_STATE_DIR/menu image.png"

@@ -350,6 +350,11 @@ fn app_content(
             .style_when(move || welcome.get(), |s| s.justify_center())
             .child(when(move || !welcome.get(), move || timeline.list()))
             .child(when(move || welcome.get(), hero))
+            // Under the composer, as T3 Code's overlay lies over the timeline.
+            .child(when(
+                move || !welcome.get(),
+                move || timeline.minimap(canvas),
+            ))
             .child(
                 view()
                     .style_when(
@@ -361,10 +366,6 @@ fn app_content(
                     })
                     .child(composer::composer(following)),
             )
-            .child(when(
-                move || !welcome.get(),
-                move || timeline.minimap(canvas),
-            ))
     };
     let notices = move || {
         view()

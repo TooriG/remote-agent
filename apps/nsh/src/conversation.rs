@@ -452,9 +452,13 @@ pub(crate) struct Timeline {
     viewable: Signal<Option<(usize, usize)>>,
     /// The timeline's width, its lane centred in it.
     width: Signal<f32>,
-    /// The height of what lies over the timeline's end (the composer), which
-    /// the end scrolls clear of.
+    /// The space the timeline's end keeps clear of what lies over it (the
+    /// composer): as T3 Code's reservation, the tallest it was in this
+    /// conversation, so that it shrinking never pulls a reader to the end.
     inset: Signal<f32>,
+    /// How tall what lies over the end is now, which a conversation opened
+    /// next starts its reservation from.
+    covered: Stored<f32>,
 }
 
 impl Timeline {
@@ -487,13 +491,15 @@ impl Timeline {
             viewable: signal(None),
             width: signal(0.0),
             inset: signal(0.0),
+            covered: stored(0.0),
         }
     }
 
     /// As T3 Code's composer overlay: what lies over the timeline's end,
     /// `height` tall, which the timeline's end and its way back clear.
     pub(crate) fn cover(self, height: f32) {
-        if self.inset.get_untracked() != height {
+        self.covered.replace(height);
+        if self.inset.get_untracked() < height {
             self.inset.set(height);
         }
     }
@@ -524,6 +530,7 @@ fn list(timeline: Timeline) -> impl IntoElement {
         viewable,
         width,
         inset,
+        covered,
     } = timeline;
     let surroundings = crate::rich_text::Surroundings::current();
     let connection = surroundings.connection;
@@ -564,6 +571,8 @@ fn list(timeline: Timeline) -> impl IntoElement {
         expanded.set(HashMap::new());
         groups.set(HashSet::new());
         expanded_items.set(HashSet::new());
+        // A reservation held for another conversation's draft is not this one's.
+        inset.set(covered.get());
     });
     // A conversation opening or changing rows goes to its end while it
     // follows. A reader who scrolls back to the end is there already.

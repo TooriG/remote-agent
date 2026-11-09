@@ -43,8 +43,9 @@ scroll 会話の履歴 -200
 paint "Render turn 46, paragraph 1." 100
 screenshot first-page
 scroll 会話の履歴 -200
-# With following stopped, these scrolls reach turn 43 at this viewport.
-paint "Render turn 43, paragraph 1." 100
+# With following stopped, these scrolls reach the first page's start, turn
+# 42, at this viewport, which runs on under the composer.
+paint "Render turn 42, paragraph 1." 100
 screenshot boundary
 press 以前のターンを読み込む
 scroll 会話の履歴 -200
