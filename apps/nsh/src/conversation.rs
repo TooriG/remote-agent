@@ -770,8 +770,10 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                 // T3 Code's spacer above the first row: the
                                 // top bar's fade, or less under the error
                                 // banner, which takes the fade's place.
+                                // A cell can outlive the list while its
+                                // conversation closes.
                                 px(match at.index() {
-                                    0 if banner.get() => 16.0,
+                                    0 if banner.try_get().unwrap_or(false) => 16.0,
                                     0 => 24.0,
                                     _ => 0.0,
                                 })
