@@ -81,10 +81,8 @@ test('build numbers advance past source, uploaded Apple builds and published rel
   assert.throws(() => nextBuildNumber(['9999'], [], []));
 });
 
-test('Nightly uses an internally distributed Preview app and stable uses the production store app', () => {
-  assert.deepEqual(iosDistribution('nightly'), { bundleId: 'dev.remoteagent.mobile.ios.preview', profileType: 'IOS_APP_ADHOC', method: 'release-testing', product: 'BEX Preview' });
-  assert.deepEqual(iosDistribution('stable'), { bundleId: 'dev.remoteagent.mobile.ios', profileType: 'IOS_APP_STORE', method: 'app-store-connect', product: 'Bex' });
-  assert.throws(() => iosDistribution('development'), /channel/);
+test('Nightly uses the production app identity and TestFlight signing', () => {
+  assert.deepEqual(iosDistribution, { bundleId: 'dev.remoteagent.mobile.ios', profileType: 'IOS_APP_STORE', method: 'app-store-connect', product: 'Bex' });
 });
 
 test('processing succeeds only when all three Apple delivery checks are valid', () => {
@@ -137,6 +135,37 @@ test('TestFlight assigns the existing group and submits only builds needing beta
   }
 });
 
+test('an approved build starts external testing and notification failure remains retryable', async () => {
+  for (const approved of ['BETA_APPROVED', 'READY_FOR_BETA_TESTING']) {
+    let state = approved;
+    let fail = true;
+    let assigned = false;
+    const mutations = [];
+    const request = async (path, options = {}) => {
+      if (options.method) {
+        mutations.push({ path, data: options.data });
+        if (path === '/v1/betaGroups/external/relationships/builds') assigned = true;
+        if (path === '/v1/buildBetaNotifications') {
+          assert.equal(assigned, true);
+          if (fail) { fail = false; throw new Error('Apple temporarily unavailable'); }
+          assert.equal(options.data.data.relationships.build.data.id, 'build');
+          state = 'IN_BETA_TESTING';
+        }
+        return null;
+      }
+      if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'external', attributes: { name: 'BEX External', isInternalGroup: false } }] };
+      if (path.endsWith('/betaBuildLocalizations')) return { data: [{ id: 'locale', attributes: { locale: 'ja', whatsNew: 'Changes' } }] };
+      return { data: { id: 'detail', attributes: { externalBuildState: state, autoNotifyEnabled: true } } };
+    };
+    await assert.rejects(distributeBuild(request, 'app', 'build', 'BEX External', 'Changes', 'ja'), /temporarily unavailable/);
+    assert.equal((await distributeBuild(request, 'app', 'build', 'BEX External', 'Changes', 'ja')).state, 'IN_BETA_TESTING');
+    const delivered = mutations.filter(call => call.path === '/v1/buildBetaNotifications').length;
+    await distributeBuild(request, 'app', 'build', 'BEX External', 'Changes', 'ja');
+    assert.equal(mutations.filter(call => call.path === '/v1/buildBetaNotifications').length, delivered);
+    assert.ok(!mutations.some(call => call.path === '/v1/betaAppReviewSubmissions'));
+  }
+});
+
 test('missing groups and rejected builds cannot be reported as distributed', async () => {
   await assert.rejects(distributeBuild(async () => ({ data: [] }), 'app', 'build', 'missing', 'changes', 'ja'), /missing/);
   const request = async (path, options = {}) => {
@@ -147,24 +176,16 @@ test('missing groups and rejected builds cannot be reported as distributed', asy
   await assert.rejects(distributeBuild(request, 'app', 'build', 'external', 'changes', 'ja'), /blocked/);
 });
 
-test('internal groups with automatic access do not need manual build assignment', async () => {
-  for (const automatic of [false, true]) {
-    const mutations = [];
-    const request = async (path, options = {}) => {
-      if (options.method) { mutations.push(path); return null; }
-      if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'internal', attributes: {
-        name: 'BEX Internal', isInternalGroup: true, hasAccessToAllBuilds: automatic,
-      } }] };
-      if (path.endsWith('/betaBuildLocalizations')) return { data: [] };
-      return { data: { attributes: { internalBuildState: 'IN_BETA_TESTING' } } };
-    };
-    assert.equal(await distributeBuild(request, 'app', 'build', 'BEX Internal', 'Changes', 'ja'), 'IN_BETA_TESTING');
-    assert.ok(mutations.includes('/v1/betaBuildLocalizations'));
-    assert.equal(mutations.includes('/v1/betaGroups/internal/relationships/builds'), !automatic);
-    assert.ok(!mutations.includes('/v1/betaAppReviewSubmissions'));
-  }
+test('an internal group with the expected name is rejected before any build mutation', async () => {
+  const calls = [];
+  const request = async (path, options) => {
+    calls.push({ path, options });
+    return { data: [{ id: 'internal', attributes: { name: 'external', isInternalGroup: true } }] };
+  };
+  await assert.rejects(distributeBuild(request, 'app', 'build', 'external', 'Changes', 'ja'), /External TestFlight group.*missing/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options, undefined);
 });
-
 
 test('Xcode receipts must identify one unambiguous delivery', () => {
   const a = '12345678-1234-1234-1234-123456789abc';
@@ -217,15 +238,15 @@ test('receipt recording reads recent Xcode bundles and preserves the plan on amb
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('future candidates advance past approved versions without replacing their builds', () => {
+test('later Nightlies reserve versions even before an earlier candidate is promoted', () => {
   assert.equal(nextMarketingVersion('1.0', []), '1.0.0');
   assert.equal(nextMarketingVersion('1.0', ['1.0']), '1.0.1');
-  assert.equal(nextMarketingVersion('1.0', ['1.0']), '1.0.1');
+  assert.equal(nextMarketingVersion('1.0', ['1.0', '1.0.1']), '1.0.2');
   assert.equal(nextMarketingVersion('2.0', ['1.9.9']), '2.0.0');
   assert.throws(() => nextMarketingVersion('invalid', []));
 });
 
-test('planning separates Preview and stable identities and preserves an approved initial App Store version', t => {
+test('planning uploads Nightly to production TestFlight without replacing an App Store review', t => {
   const root = mkdtempSync(join(tmpdir(), 'release-plan-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   assert.equal(spawnSync('git', ['init', '-q', root]).status, 0);
@@ -245,6 +266,7 @@ test('planning separates Preview and stable identities and preserves an approved
     const path = new URL(url).pathname;
     const data = path === '/v1/apps' ? [{ id: '6816015343', attributes: { bundleId: 'dev.remoteagent.mobile.ios', primaryLocale: 'ja' } }]
       : path === '/v1/builds' ? [{ attributes: { version: '77' } }]
+      : path === '/v1/preReleaseVersions' ? [{ attributes: { version: '1.0.2' } }]
       : [{ attributes: { platform: 'IOS', versionString: '1.0', appStoreState: process.env.APPLE_PLAN_STATE } }];
     return { ok: true, status: 200, json: async () => ({ data }) };
   };`);
@@ -253,25 +275,19 @@ test('planning separates Preview and stable identities and preserves an approved
   writeFileSync(key, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
   const script = fileURLToPath(new URL('./apple-release.ts', import.meta.url));
   const planPath = join(root, 'target/apple-release/plan.json');
-  for (const [channel, state, status] of [['nightly', 'PENDING_DEVELOPER_RELEASE', 0], ['stable', 'PENDING_DEVELOPER_RELEASE', 1], ['stable', 'READY_FOR_DISTRIBUTION', 0]]) {
-    const before = channel === 'stable' ? readFileSync(planPath, 'utf8') : null;
+  for (const state of ['PENDING_DEVELOPER_RELEASE', 'WAITING_FOR_REVIEW', 'READY_FOR_DISTRIBUTION']) {
     const result = spawnSync(process.execPath, ['--import', stub, script, 'plan'], { cwd: root, encoding: 'utf8', env: {
-      ...process.env, AGENT_RELEASE_CHANNEL: channel, APPLE_PLAN_STATE: state, AGENT_SOURCE_TAG: 'nightly-81',
+      ...process.env, APPLE_PLAN_STATE: state,
       AGENT_RELEASE_SHA: 'a'.repeat(40), AGENT_ASC_KEY_ID: 'fixture', AGENT_ASC_ISSUER_ID: 'fixture', AGENT_ASC_PRIVATE_KEY_FILE: key,
       GITHUB_ENV: join(root, 'environment'),
     } });
-    assert.equal(result.status, status, result.stderr);
-    if (status) {
-      assert.match(result.stderr, /already approved/);
-      assert.equal(readFileSync(planPath, 'utf8'), before);
-      continue;
-    }
+    assert.equal(result.status, 0, result.stderr);
     const plan = JSON.parse(readFileSync(planPath));
-    assert.equal(plan.tag, channel === 'nightly' ? 'nightly-82' : 'prd-82');
-    assert.equal(plan.versionName, '1.0.1');
-    assert.equal(plan.bundleId, channel === 'nightly' ? 'dev.remoteagent.mobile.ios.preview' : 'dev.remoteagent.mobile.ios');
-    assert.equal(plan.sourceTag, channel === 'nightly' ? undefined : 'nightly-81');
-    assert.equal(plan.appId, channel === 'nightly' ? undefined : '6816015343');
+    assert.equal(plan.tag, 'nightly-82');
+    assert.equal(plan.versionName, '1.0.3');
+    assert.equal(plan.bundleId, 'dev.remoteagent.mobile.ios');
+    assert.equal(plan.sourceTag, undefined);
+    assert.equal(plan.appId, '6816015343');
   }
 });
 
@@ -281,11 +297,67 @@ test('Apple beta-review capacity waits remain retryable and never claim distribu
     const request = async (path, options = {}) => {
       if (path === '/v1/betaAppReviewSubmissions') { attempts++; if (attempts === 1) throw Object.assign(new Error('Capacity'), { status }); return {}; }
       if (options.method) return {};
-      if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'group', attributes: { name: 'external', isInternalGroup: false, hasAccessToAllBuilds: true } }] };
+      if (path.startsWith('/v1/betaGroups?')) return { data: [{ id: 'group', attributes: { name: 'external', isInternalGroup: false } }] };
       if (path.endsWith('/betaBuildLocalizations')) return { data: [] };
       return { data: { id: 'detail', attributes: { externalBuildState: 'READY_FOR_BETA_SUBMISSION', autoNotifyEnabled: true } } };
     };
-    assert.equal(await distributeBuild(request, 'app', 'build', 'external', 'Changes', 'ja'), 'Waiting for TestFlight review capacity');
-    assert.equal(await distributeBuild(request, 'app', 'build', 'external', 'Changes', 'ja'), 'Submitted for TestFlight beta review');
+    assert.equal((await distributeBuild(request, 'app', 'build', 'external', 'Changes', 'ja')).state, 'Waiting for TestFlight review capacity');
+    assert.equal((await distributeBuild(request, 'app', 'build', 'external', 'Changes', 'ja')).state, 'Submitted for TestFlight beta review');
   }
+});
+
+test('Nightly verification waits for Apple import and submits its exact build for external review', t => {
+  const root = mkdtempSync(join(tmpdir(), 'nightly-import-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const output = join(root, 'target/apple-release');
+  mkdirSync(output, { recursive: true });
+  const plan = { channel: 'nightly', appId: '6816015343', bundleId: 'dev.remoteagent.mobile.ios', version: '145',
+    tag: 'nightly-145', versionName: '1.0.1', deliveryId: 'receipt', sha: 'a'.repeat(40), locale: 'ja', notes: 'Changes' };
+  writeFileSync(join(output, 'plan.json'), JSON.stringify(plan));
+  writeFileSync(join(root, 'xcrun'), `#!${process.execPath}
+const assert = require('node:assert/strict');
+assert.deepEqual(process.argv.slice(2, 8), ['altool', '--build-status', '--delivery-id', 'receipt', '--wait', '--apiKey']);
+console.log(process.env.APPLE_IMPORT_REPORT);
+`);
+  chmodSync(join(root, 'xcrun'), 0o755);
+  const stub = join(root, 'apple.mjs');
+  writeFileSync(stub, `
+import { appendFileSync } from 'node:fs';
+globalThis.fetch = async (url, options) => {
+ const parsed = new URL(url), path = parsed.pathname;
+ if (options.method === 'POST') {
+  appendFileSync(process.env.APPLE_REVIEW_LOG, JSON.stringify({ path, body: JSON.parse(options.body) }) + '\\n');
+  return { ok: true, status: 204 };
+ }
+ let data;
+ if (path === '/v1/builds') {
+  if (parsed.searchParams.get('filter[app]') !== '6816015343' || parsed.searchParams.get('filter[version]') !== '145') throw new Error('Wrong Apple candidate');
+  data = [{ id: 'uploaded-nightly', attributes: { version: '145', processingState: process.env.APPLE_IMPORT_PROCESSING } }];
+ } else if (path === '/v1/betaGroups') data = [{ id: 'nightly-group', attributes: { name: 'BEX Nightly', isInternalGroup: false, publicLinkEnabled: process.env.APPLE_PUBLIC_LINK === 'true', publicLink: 'https://testflight.apple.com/join/xdk6J9qr' } }];
+ else if (path.endsWith('/buildBetaDetail')) data = { id: 'detail', attributes: { externalBuildState: 'READY_FOR_BETA_SUBMISSION', autoNotifyEnabled: true } };
+ else if (path.endsWith('/betaBuildLocalizations')) data = [{ attributes: { locale: 'ja', whatsNew: 'Changes' } }];
+ else throw new Error('Unexpected Apple request');
+ return { ok: true, status: 200, json: async () => ({ data }) };
+};`);
+  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const key = join(root, 'fixture.p8');
+  writeFileSync(key, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  const valid = 'BUILD-STATUS: VALID\nIMPORT-STATUS: VALID\nIS-ON-APP-STORE-CONNECT: true';
+  for (const [report, processing, link, expected] of [
+    [valid.replace('IMPORT-STATUS: VALID', 'IMPORT-STATUS: PROCESSING'), 'VALID', 'true', 1],
+    [valid, 'PROCESSING', 'true', 1], [valid, 'VALID', 'false', 1], [valid, 'VALID', 'true', 0],
+  ]) {
+    const result = spawnSync(process.execPath, ['--import', stub, fileURLToPath(new URL('./apple-release.ts', import.meta.url)), 'verify'], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${root}:${process.env.PATH}`, AGENT_ASC_KEY_ID: 'fixture', AGENT_ASC_ISSUER_ID: 'fixture',
+        AGENT_ASC_PRIVATE_KEY_FILE: key, GITHUB_STEP_SUMMARY: join(root, 'summary'), APPLE_REVIEW_LOG: join(root, 'reviews'),
+        APPLE_IMPORT_REPORT: report, APPLE_IMPORT_PROCESSING: processing, APPLE_PUBLIC_LINK: link },
+    });
+    assert.equal(result.status, expected, result.stderr);
+    if (expected) assert.throws(() => readFileSync(join(output, 'apple-build.json')), { code: 'ENOENT' });
+  }
+  const verified = JSON.parse(readFileSync(join(output, 'apple-build.json')));
+  assert.equal(verified.buildId, 'uploaded-nightly');
+  assert.equal(verified.testflightUrl, 'https://testflight.apple.com/join/xdk6J9qr');
+  const reviews = readFileSync(join(root, 'reviews'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(reviews.some(call => call.path === '/v1/betaAppReviewSubmissions' && call.body.data.relationships.build.data.id === 'uploaded-nightly'));
 });

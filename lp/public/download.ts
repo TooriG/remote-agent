@@ -130,13 +130,6 @@ declare global {
         target.source = false;
         target.file = { ja: description, en: description };
       }
-      // New production releases publish only after the selected App Store build
-      // is available. Preserve the current public links until that first release.
-      if (assets.some(asset => asset.name === 'release.json' && asset.state === 'uploaded')) {
-        DL.ios = { name: 'iPhone', file: { ja: 'iOS 26 · App Store', en: 'iOS 26 · App Store' },
-          url: 'https://apps.apple.com/app/id6816015343', ready: true,
-          cta: { ja: 'App Storeで入手', en: 'Get on the App Store' } };
-      }
       render();
     } catch { /* Keep the pinned, published download. */ }
   }

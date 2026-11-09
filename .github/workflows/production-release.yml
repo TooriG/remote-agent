@@ -1,6 +1,11 @@
 name: Production release
 on:
   workflow_dispatch:
+    inputs:
+      nightly-tag:
+        description: 'Published Nightly to promote unchanged (empty selects the latest)'
+        type: string
+        default: ''
   schedule:
     - cron: '17,47 * * * *'
 permissions:
@@ -9,34 +14,49 @@ concurrency:
   group: production-release
   cancel-in-progress: false
 jobs:
-  source:
+  promote:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    outputs:
-      sha: ${{ steps.source.outputs.sha }}
-      tag: ${{ steps.source.outputs.source-tag }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
-      - id: source
-        name: Select the latest published Nightly source
+      - name: Initialize pinned tooling before loading credentials
+        run: scripts/dev-env.sh true
+      - name: Load App Store Connect credentials
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.BEX_ASC_PRIVATE_KEY }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/bex-asc.p8"
+          printf '%s' "$ASC_PRIVATE_KEY" > "$key"
+          echo "AGENT_ASC_PRIVATE_KEY_FILE=$key" >> "$GITHUB_ENV"
+      - id: promote
+        name: Promote the approved Nightly without rebuilding
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/dev-env.sh node scripts/release-candidate.ts resolve
-  build:
-    needs: source
-    permissions:
-      actions: write
-      contents: write
-    uses: ./.github/workflows/build-release.yml
-    with:
-      source-sha: ${{ needs.source.outputs.sha }}
-      source-tag: ${{ needs.source.outputs.tag }}
-      channel: stable
-    secrets: inherit
+          AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
+          AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
+          NIGHTLY_TAG: ${{ inputs.nightly-tag }}
+        run: scripts/dev-env.sh node scripts/release-candidate.ts promote "$NIGHTLY_TAG"
+      # The public production downloads and external TestFlight are already available.
+      # App Review uses the same Apple build and does not gate that promotion.
+      - name: Submit the same promoted build to App Review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
+          AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
+          PRODUCTION_TAG: ${{ steps.promote.outputs.tag }}
+        run: |
+          gh release download "$PRODUCTION_TAG" --repo "$GITHUB_REPOSITORY" --pattern release.json --dir "$RUNNER_TEMP/promoted"
+          scripts/dev-env.sh node scripts/app-store-release.ts "$RUNNER_TEMP/promoted/release.json"
+      - name: Remove App Store credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/bex-asc.p8"
   approvals:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-24.04
@@ -50,7 +70,7 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - name: Initialize pinned tooling before loading credentials
         run: scripts/dev-env.sh true
-      - name: Load the App Store Connect API credential
+      - name: Load App Store Connect credentials
         env:
           ASC_PRIVATE_KEY: ${{ secrets.BEX_ASC_PRIVATE_KEY }}
         run: |
@@ -58,12 +78,12 @@ jobs:
           key="$RUNNER_TEMP/bex-asc.p8"
           printf '%s' "$ASC_PRIVATE_KEY" > "$key"
           echo "AGENT_ASC_PRIVATE_KEY_FILE=$key" >> "$GITHUB_ENV"
-      - name: Finish approved stable releases
+      - name: Publish Nightly builds approved for external TestFlight
         env:
           GH_TOKEN: ${{ github.token }}
           AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}
           AGENT_ASC_ISSUER_ID: ${{ secrets.BEX_ASC_ISSUER_ID }}
         run: scripts/dev-env.sh node scripts/release-candidate.ts sync
-      - name: Remove the API credential
+      - name: Remove App Store credentials
         if: always()
         run: rm -f "$RUNNER_TEMP/bex-asc.p8"

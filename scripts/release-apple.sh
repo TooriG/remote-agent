@@ -5,12 +5,6 @@ cd "$(dirname "$0")/.."
 : "${AGENT_RELEASE_SHA:?Release revision is required}"
 : "${AGENT_CODE_SIGN_KEYCHAIN:?Dedicated signing keychain is required}"
 : "${AGENT_ASC_PRIVATE_KEY_FILE:?App Store Connect key file is required}"
-: "${AGENT_RELEASE_CHANNEL:?Release channel is required}"
-case "$AGENT_RELEASE_CHANNEL" in
-    nightly) ios_config=(-xcconfig "$PWD/apps/mobile/iosApp/Config/Preview.xcconfig") ;;
-    stable) ios_config=() ;;
-    *) echo 'Release channel must be nightly or stable.' >&2; exit 1 ;;
-esac
 [[ $(git rev-parse HEAD) == "$AGENT_RELEASE_SHA" ]]
 git diff --quiet HEAD --
 output="$PWD/target/apple-release"
@@ -32,7 +26,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-# Each channel builds the selected source with its own release build number.
+# Nightly builds once; production promotion reuses these signed products.
 name=bex-macOS-arm64
 just build-desktop-macos
 mkdir -p "$mac_output/$name"
@@ -55,7 +49,6 @@ export_method=$(jq -er .method "$output/provisioning.json")
 profile_specifier="AGENT_IOS_PROFILE_SPECIFIER=$(jq -er .prefix "$output/provisioning.json") \$(PRODUCT_BUNDLE_IDENTIFIER)"
 # Only the app and extension consume these settings; Swift package build plugins keep their defaults.
 just ios-archive "$archive" "$output/DerivedData" "${auth[@]}" \
-    "${ios_config[@]}" \
     "CURRENT_PROJECT_VERSION=$AGENT_BUILD_NUMBER" "MARKETING_VERSION=${AGENT_MARKETING_VERSION:?}" AGENT_IOS_CODE_SIGN_STYLE=Manual \
     'AGENT_IOS_CODE_SIGN_IDENTITY=Apple Distribution' "$profile_specifier" \
     "OTHER_CODE_SIGN_FLAGS=--keychain $AGENT_CODE_SIGN_KEYCHAIN"
@@ -77,8 +70,7 @@ ditto -c -k --sequesterRsrc --keepParent "$bundle" "$mac_output/$name/notarized.
 mv "$mac_output/$name/notarized.zip" "$output/$name.zip"
 (cd "$output" && shasum -a 256 "$name.zip" > "$name.zip.sha256")
 # Prove distribution signing locally before sending the archive to Apple.
-destinations=(export)
-if [[ $AGENT_RELEASE_CHANNEL == stable ]]; then destinations+=(upload); fi
+destinations=(export upload)
 for destination in "${destinations[@]}"; do
     if [[ $destination == upload ]]; then touch "$output/upload-start"; fi
     options="$output/export-$destination.plist"
@@ -90,11 +82,4 @@ for destination in "${destinations[@]}"; do
         -exportOptionsPlist "$options" -allowProvisioningUpdates "${auth[@]}" \
         "OTHER_CODE_SIGN_FLAGS=--keychain $AGENT_CODE_SIGN_KEYCHAIN"
 done
-if [[ $AGENT_RELEASE_CHANNEL == stable ]]; then
-    node scripts/apple-release.ts record-delivery "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" "$output/upload-start"
-else
-    ipas=("$output/export/"*.ipa)
-    [[ ${#ipas[@]} == 1 && -f ${ipas[0]} ]]
-    mv "${ipas[0]}" "$output/bex-iOS-preview.ipa"
-    (cd "$output" && shasum -a 256 bex-iOS-preview.ipa > bex-iOS-preview.ipa.sha256)
-fi
+node scripts/apple-release.ts record-delivery "$(/usr/bin/getconf DARWIN_USER_TEMP_DIR)" "$output/upload-start"

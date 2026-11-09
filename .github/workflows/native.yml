@@ -481,6 +481,7 @@ jobs:
       rounds: ${{ fromJSON(format('{0}', inputs.ios-test-rounds || 1)) }}
   wsl-runtime:
     permissions:
+      actions: read
       contents: write
     needs: toolchain
     if: ${{ !cancelled() && needs.toolchain.result == 'success' }}
@@ -490,6 +491,21 @@ jobs:
       WSL_PROFILE: ${{ (inputs.release-tag != '') && 'release' || 'dev' }}
     steps:
       - *windows-checkout
+      - name: Require a verified draft Nightly for Linux packaging
+        if: inputs.release-tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          [[ $CANDIDATE_TAG =~ ^nightly-[1-9][0-9]*$ ]]
+          test "$(gh release view "$CANDIDATE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+          revision=$(git rev-parse HEAD)
+          for workflow in portable.yml native.yml; do
+            verified=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch main \
+              --event push --commit "$revision" --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+            test "$verified" = "$revision"
+          done
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -532,7 +548,7 @@ jobs:
     needs: [toolchain, wsl-runtime]
     permissions:
       actions: read
-      contents: write # Attach the verified Windows package to a published release.
+      contents: write # Attach Windows packages to a draft Nightly.
     # Latest stable Windows Server major; Windows 11 UI acceptance is separate.
     runs-on: windows-2025
     timeout-minutes: 60
@@ -547,7 +563,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:AGENT_RELEASE_TAG -notmatch '^(nightly|prd)-[1-9][0-9]*$') { throw "A Nightly or stable release tag is required." }
+          if ($env:AGENT_RELEASE_TAG -notmatch '^nightly-[1-9][0-9]*$') { throw "A Nightly release tag is required." }
+          $draft = gh release view "$env:AGENT_RELEASE_TAG" --repo "$env:GITHUB_REPOSITORY" --json isDraft --jq '.isDraft'
+          if ($LASTEXITCODE -ne 0 -or $draft -ne 'true') { throw "Only an unpublished Nightly can be built." }
           $revision = git rev-parse HEAD
           foreach ($workflow in 'portable.yml', 'native.yml') {
             $verified = gh run list --repo "$env:GITHUB_REPOSITORY" --workflow $workflow --branch main --event push --commit "$revision" --status success --limit 1 --json headSha --jq '.[0].headSha // ""'
@@ -619,7 +637,7 @@ jobs:
       - name: Build and package Windows release
         if: inputs.release-tag != ''
         run: |
-          if ($env:AGENT_RELEASE_TAG -match '^(?:nightly|prd)-([1-9][0-9]*)$') { $env:AGENT_BUILD_NUMBER = $Matches[1] }
+          if ($env:AGENT_RELEASE_TAG -match '^nightly-([1-9][0-9]*)$') { $env:AGENT_BUILD_NUMBER = $Matches[1] }
           ./scripts/package-windows.ps1 -Profile release
       - name: Retain the Windows package and checksum
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -628,7 +646,7 @@ jobs:
           path: target/windows-packages/bex-windows-x86_64-*
           if-no-files-found: error
           retention-days: 14
-      - name: Attach Windows package to the published release
+      - name: Attach Windows package to the draft Nightly
         if: inputs.release-tag != ''
         env:
           GH_TOKEN: ${{ github.token }}

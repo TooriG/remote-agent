@@ -48,4 +48,4 @@ Development and integration rules are in [AGENTS.md](AGENTS.md); build and test 
 - [Privacy](docs/PRIVACY.md)
 - [Report a security issue](SECURITY.md)
 - [Windows development and installation](docs/WINDOWS.md)
-- [Nightly, Stable and iPhone Preview/Dev distribution](docs/RELEASES.md)
+- [Nightly, Stable and iPhone TestFlight/Dev distribution](docs/RELEASES.md)
