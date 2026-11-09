@@ -435,6 +435,14 @@ pub struct StartTerminal {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartAccountTerminal {
+    pub handle: String,
+    pub provider: crate::session::ProviderKind,
+    pub id: String,
+    pub size: TerminalSize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewWorkspace {
     pub cwd: String,
 }

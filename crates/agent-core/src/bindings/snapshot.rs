@@ -3,9 +3,7 @@ use super::{AgentError, error};
 use crate::presentation::files::Files;
 use crate::{
     models::{FileContent, ListQuery, WorktreeSettings},
-    presentation::conversation::{
-        ItemPresentation, RenderedConversation, RenderedItem, RenderedTurn,
-    },
+    presentation::conversation::{ItemPresentation, RenderedConversation, RenderedItem},
     state::{Draft, FileDraft, Snapshot},
 };
 use std::sync::Arc;
@@ -80,24 +78,9 @@ impl RenderedConversation {
     pub fn unchanged(&self, other: Arc<Self>) -> bool {
         std::ptr::eq(self, other.as_ref())
     }
-    pub fn turns(&self) -> Vec<Arc<RenderedTurn>> {
-        self.turns.clone()
-    }
-    pub fn queued(&self) -> Vec<Arc<RenderedItem>> {
-        self.queued.clone()
-    }
-}
-#[uniffi::export]
-impl RenderedTurn {
-    pub fn unchanged(&self, other: Arc<Self>) -> bool {
-        std::ptr::eq(self, other.as_ref())
-    }
 }
 #[uniffi::export]
 impl RenderedItem {
-    pub fn id(&self) -> String {
-        self.data.id.clone()
-    }
     pub fn unchanged(&self, other: Arc<Self>) -> bool {
         std::ptr::eq(self, other.as_ref())
     }

@@ -330,6 +330,7 @@ impl Claude {
         &self,
         search: &str,
         cursor: Option<String>,
+        include_print_mode: bool,
         limit: u32,
     ) -> anyhow::Result<SessionPage> {
         let home = self.native_home.clone();
@@ -345,7 +346,14 @@ impl Claude {
             .collect();
         let search = search.to_owned();
         tokio::task::spawn_blocking(move || {
-            history::list_page(&home, running, &search, cursor.as_deref(), limit)
+            history::list_page(
+                &home,
+                running,
+                &search,
+                cursor.as_deref(),
+                include_print_mode,
+                limit,
+            )
         })
         .await?
     }
@@ -1939,6 +1947,13 @@ fn now_ms() -> u64 {
 
 #[async_trait::async_trait]
 impl crate::providers::Identity for Claude {
+    async fn account_terminal(&self, id: &str) -> Result<crate::terminals::Launch, Failure> {
+        self.accounts
+            .lock()
+            .await
+            .terminal(id)
+            .map_err(|error| Failure::new("account_operation_failed", error))
+    }
     async fn list(&self) -> Result<op::Accounts, crate::providers::Failure> {
         // Serialize native identity discovery without holding the account state
         // lock across CLI/OAuth I/O. Cached models and skills still need to read
@@ -1973,7 +1988,7 @@ impl crate::providers::Identity for Claude {
             .await
             .request(command)
             .await
-            .map_err(|e| crate::providers::Failure::new("account_operation_failed", e))
+            .map_err(crate::providers::Failure::from)
     }
     async fn usage(&self, id: &str) -> Result<op::AccountUsage, crate::providers::Failure> {
         let fetch = self
@@ -2126,7 +2141,8 @@ impl Agent for Claude {
             });
             return Ok(SessionPage { data, next_cursor });
         }
-        Claude::list(self, search, cursor, limit)
+        let include_print_mode = matches!(scope, SessionListScope::All);
+        Claude::list(self, search, cursor, include_print_mode, limit)
             .await
             .map_err(|e| Failure::new("session_list_failed", e))
     }
@@ -2721,6 +2737,41 @@ mod execution_tests {
         );
         assert_eq!(recent.data[0].thread.id.as_ref().unwrap().id, expected[0]);
         assert_eq!(recent.data[0].thread.status, SessionStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn only_complete_listings_include_print_mode_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let project = root.join("native/projects/p");
+        std::fs::create_dir_all(&project).unwrap();
+        for (index, entrypoint) in [(1u128, "sdk-ts"), (2, "sdk-cli")] {
+            let id = Uuid::from_u128(index).to_string();
+            let row = serde_json::json!({"type":"user","sessionId":id,"cwd":"/fixture","entrypoint":entrypoint,"message":{"content":entrypoint}});
+            std::fs::write(project.join(format!("{id}.jsonl")), format!("{row}\n")).unwrap();
+        }
+        let claude = Claude::load(
+            root.join("unused"),
+            root.join("adapter"),
+            Some(root.join("native")),
+        )
+        .await
+        .unwrap();
+        for (scope, expected) in [
+            (SessionListScope::Roots, vec!["sdk-ts"]),
+            (SessionListScope::WithSubagents, vec!["sdk-ts"]),
+            (SessionListScope::All, vec!["sdk-cli", "sdk-ts"]),
+        ] {
+            let mut listed: Vec<_> = Agent::list(&claude, "sdk", None, scope, 10)
+                .await
+                .unwrap()
+                .data
+                .into_iter()
+                .map(|summary| summary.thread.preview.unwrap())
+                .collect();
+            listed.sort();
+            assert_eq!(listed, expected);
+        }
     }
 
     #[tokio::test]

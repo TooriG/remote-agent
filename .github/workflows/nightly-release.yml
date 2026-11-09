@@ -58,5 +58,4 @@ jobs:
     uses: ./.github/workflows/build-release.yml
     with:
       source-sha: ${{ github.event.workflow_run.head_sha || github.sha }}
-      channel: nightly
     secrets: inherit

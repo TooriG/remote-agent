@@ -1,7 +1,7 @@
 //! Pure ACP model and option normalization; no provider process or client state.
 use super::{Failure, PROVIDER, failure};
 use agent_protocol::{
-    dsh::KeyProvider,
+    dsh::{CredentialRoute, CredentialSource, KeyProvider},
     models::{Model, ModelRef, ReasoningEffort},
 };
 use serde_json::{Value, json};
@@ -67,7 +67,27 @@ pub(super) fn provider_profile(provider: KeyProvider) -> Value {
     profile
 }
 
-pub(super) fn catalog(created: &Value) -> Vec<Model> {
+pub(super) fn catalog(created: &Value, credentials: &[CredentialRoute]) -> Vec<Model> {
+    let mut models: Vec<_> = models(created)
+        .into_iter()
+        .filter(|model| {
+            credentials.iter().any(|route| {
+                model.credential_route == Some(route.provider)
+                    && route.source != CredentialSource::Missing
+                    && !route.needs_attention
+            })
+        })
+        .collect();
+    // ACP's current model can belong to an unconfigured built-in route.
+    if !models.iter().any(|model| model.is_default == Some(true))
+        && let Some(first) = models.first_mut()
+    {
+        first.is_default = Some(true);
+    }
+    models
+}
+
+fn models(created: &Value) -> Vec<Model> {
     let options = created["configOptions"].as_array();
     let model = options.into_iter().flatten().find(|o| o["id"] == "model");
     let reasoning = options
@@ -127,7 +147,7 @@ pub(super) fn resolved_model_settings(
     model_id: &str,
     config: &Value,
 ) -> Result<agent_protocol::models::ModelSettings, Failure> {
-    catalog(config)
+    models(config)
         .into_iter()
         .find(|model| model.model.id == model_id)
         .and_then(|model| model.settings)
@@ -138,6 +158,106 @@ pub(super) fn resolved_model_settings(
 mod tests {
     use super::super::DEFAULT_MODEL;
     use super::*;
+
+    #[test]
+    fn only_configured_routes_are_listed_and_an_available_model_is_the_default() {
+        let official = DEFAULT_MODEL;
+        let go = r#"["opencode-go","deepseek-v4.1-flash"]"#;
+        let zen = r#"["opencode","deepseek-v4.1-flash"]"#;
+        let mut value = json!({"configOptions":[
+            {"id":"model","currentValue":official,"options":[
+                {"value":official}, {"value":go}, {"value":zen},
+                {"value":r#"["openrouter","deepseek/flash"]"#},
+                {"value":"unknown-route"}
+            ]},
+            {"id":"reasoning_effort","currentValue":"high","options":[{"value":"high"}]}
+        ]});
+        let mut credentials = vec![CredentialRoute {
+            provider: KeyProvider::OpenCode,
+            source: CredentialSource::Managed,
+            needs_attention: false,
+        }];
+        let models = catalog(&value, &credentials);
+        assert_eq!(
+            models
+                .iter()
+                .map(|m| m.model.id.as_str())
+                .collect::<Vec<_>>(),
+            [go, zen]
+        );
+        assert_eq!(models[0].is_default, Some(true));
+        assert_eq!(models[1].is_default, Some(false));
+        assert!(
+            models.iter().all(|model| model.settings.is_none()),
+            "a new default must discover its own settings"
+        );
+
+        credentials.push(CredentialRoute {
+            provider: KeyProvider::DeepSeek,
+            source: CredentialSource::External,
+            needs_attention: false,
+        });
+        let models = catalog(&value, &credentials);
+        assert_eq!(
+            models
+                .iter()
+                .map(|m| m.model.id.as_str())
+                .collect::<Vec<_>>(),
+            [official, go, zen]
+        );
+        assert_eq!(
+            models
+                .iter()
+                .filter(|m| m.is_default == Some(true))
+                .map(|m| m.model.id.as_str())
+                .collect::<Vec<_>>(),
+            [official]
+        );
+        assert_eq!(
+            models[0]
+                .settings
+                .as_ref()
+                .unwrap()
+                .default_reasoning_effort,
+            "high"
+        );
+        value["configOptions"][0]["currentValue"] = json!(go);
+        let models = catalog(&value, &credentials);
+        assert_eq!(
+            models
+                .iter()
+                .filter(|m| m.is_default == Some(true))
+                .map(|m| m.model.id.as_str())
+                .collect::<Vec<_>>(),
+            [go],
+            "an available native default must remain selected even when it is not first"
+        );
+    }
+
+    #[test]
+    fn missing_and_misplaced_credentials_never_enable_a_model() {
+        let value = json!({"configOptions":[{"id":"model","currentValue":DEFAULT_MODEL,"options":[{"value":DEFAULT_MODEL}]}]});
+        for (source, needs_attention, count) in [
+            (CredentialSource::Missing, false, 0),
+            (CredentialSource::Managed, true, 0),
+            (CredentialSource::External, true, 0),
+            (CredentialSource::Managed, false, 1),
+            (CredentialSource::External, false, 1),
+        ] {
+            let credentials = [CredentialRoute {
+                provider: KeyProvider::DeepSeek,
+                source,
+                needs_attention,
+            }];
+            assert_eq!(
+                catalog(&value, &credentials).len(),
+                count,
+                "{source:?}, attention={needs_attention}"
+            );
+        }
+        assert!(catalog(&value, &[]).is_empty());
+    }
+
     #[test]
     fn model_routes_preserve_provider_boundaries() {
         for provider in KeyProvider::ALL {
@@ -177,7 +297,7 @@ mod tests {
             {"id":"model","currentValue":"official","options":[{"value":"official"},{"value":"router"},{"value":"plain"}]},
             {"id":"reasoning_effort","currentValue":"high","options":[{"value":"off"},{"value":"high"},{"value":"max"}]}
         ]});
-        let mut models = catalog(&initial);
+        let mut models = models(&initial);
         let router = json!({"configOptions":[
             {"id":"model","currentValue":"router","options":[{"value":"router"}]},
             {"id":"reasoning_effort","currentValue":"","options":[{"value":""},{"value":"low"},{"value":"high"}]}
@@ -222,7 +342,7 @@ mod tests {
             {"value":r#"["opencode-go","glm-5.3"]"#,"name":"GLM-5.3"},
             {"value":r#"["opencode","glm-5.3"]"#,"name":"GLM-5.3"}
         ]}]});
-        let models = catalog(&value);
+        let models = models(&value);
         assert_eq!(models[0].display_name, "OpenCode Go · GLM-5.3");
         assert_eq!(models[1].display_name, "OpenCode Zen · GLM-5.3");
         assert!(
@@ -239,7 +359,7 @@ mod tests {
     #[test]
     fn catalog_preserves_opaque_model_routes_and_native_reasoning() {
         let value = json!({"configOptions":[{"id":"model","currentValue":DEFAULT_MODEL,"options":[{"name":"DeepSeek","options":[{"value":DEFAULT_MODEL,"name":"deepseek-flash"},{"value":"other-route","name":"Other"}]}]},{"id":"reasoning_effort","currentValue":"high","options":[{"value":"off"},{"value":"high"},{"value":"max"}]}]});
-        let models = catalog(&value);
+        let models = models(&value);
         assert_eq!(models[0].model.id, DEFAULT_MODEL);
         assert_eq!(models[0].display_name, "DeepSeek公式 · deepseek-flash");
         assert_eq!(

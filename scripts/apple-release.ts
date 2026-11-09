@@ -8,9 +8,9 @@ export type AscRequest = <T>(path: string, options?: { method?: string; data?: u
 export type AscResource<A> = { id: string; attributes: A };
 export type AppleBuild = AscResource<{ version: string; processingState: string; expired: boolean }>;
 export type StoreVersion = AscResource<{ versionString: string; appStoreState: string; platform: string }>;
-export type AppleBuildPlan = { channel: 'nightly' | 'stable'; sourceTag?: string; bundleId: string; appId?: string;
+export type AppleBuildPlan = { channel: 'nightly' | 'stable'; sourceTag?: string; bundleId: string; appId: string;
   version: string; versionName: string; tag: string; sha: string; locale: string; notes: string;
-  deliveryId?: string; buildId?: string };
+  deliveryId?: string; buildId?: string; testflightUrl?: string };
 
 export function nextBuildNumber(sourceVersions: readonly (string | undefined)[], appleVersions: readonly string[], releaseTags: readonly string[]) {
   const source = new Set(sourceVersions);
@@ -22,26 +22,45 @@ export function nextBuildNumber(sourceVersions: readonly (string | undefined)[],
   return String(next);
 }
 
-// Apple versions already approved for distribution keep their existing build.
-// All subsequent candidates use the next patch until that version is released.
-export function nextMarketingVersion(source: string | undefined, approvedVersions: readonly string[]) {
-  const parts = (value: string | undefined) => {
-    if (!/^\d+\.\d+(?:\.\d+)?$/.test(value ?? '')) throw new Error('Invalid marketing version.');
-    return value!.split('.').map(Number).concat([0]).slice(0, 3);
-  };
-  const compare = (a: number[], b: number[]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-  let next = parts(source);
-  for (const version of approvedVersions) {
-    const released = parts(version);
-    if (compare(next, released) <= 0) next = [released[0], released[1], released[2] + 1];
+// Every uploaded Nightly reserves its marketing version, so a later candidate
+// can reach App Review unchanged even after an earlier candidate is released.
+export function nextMarketingVersion(source: string | undefined, reservedVersions: readonly string[]) {
+  let next = marketingVersionParts(source).join('.');
+  for (const version of reservedVersions) {
+    if (compareMarketingVersions(next, version) <= 0) {
+      const [major, minor, patch] = marketingVersionParts(version);
+      next = `${major}.${minor}.${patch + 1}`;
+    }
   }
-  return next.join('.');
+  marketingVersionParts(next);
+  return next;
 }
 
-export function iosDistribution(channel: string | undefined) {
-  if (channel === 'nightly') return { bundleId: 'dev.remoteagent.mobile.ios.preview', profileType: 'IOS_APP_ADHOC', method: 'release-testing', product: 'BEX Preview' };
-  if (channel === 'stable') return { bundleId: 'dev.remoteagent.mobile.ios', profileType: 'IOS_APP_STORE', method: 'app-store-connect', product: 'Bex' };
-  throw new Error('Release channel must be nightly or stable.');
+function marketingVersionParts(value: string | undefined) {
+  if (!/^\d+\.\d+(?:\.\d+)?$/.test(value ?? '')) throw new Error('Invalid marketing version.');
+  const parts = value!.split('.').map(Number).concat([0]).slice(0, 3);
+  if (parts.some(part => !Number.isSafeInteger(part))) throw new Error('Invalid marketing version.');
+  return parts;
+}
+
+export function compareMarketingVersions(left: string, right: string) {
+  const a = marketingVersionParts(left), b = marketingVersionParts(right);
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+export function storeBuildSelection(state: string) {
+  if (['REJECTED', 'METADATA_REJECTED', 'DEVELOPER_REJECTED', 'INVALID_BINARY'].includes(state)) return 'needs-correction';
+  return ['PREPARE_FOR_SUBMISSION', 'READY_FOR_REVIEW'].includes(state) ? 'editable' : 'preserve';
+}
+
+export const testflightGroups = {
+  nightly: { name: 'BEX Nightly', url: 'https://testflight.apple.com/join/xdk6J9qr' },
+  production: { name: 'BEX External', url: 'https://testflight.apple.com/join/UJbK9Ww7' },
+} as const;
+export const iosDistribution = { bundleId: 'dev.remoteagent.mobile.ios', profileType: 'IOS_APP_STORE', method: 'app-store-connect', product: 'Bex' } as const;
+
+export function externalTestingAvailable(state: string | undefined) {
+  return state === 'BETA_APPROVED' || state === 'IN_BETA_TESTING';
 }
 
 const required = (name: string) => { const value = process.env[name]; if (!value) throw new Error(`${name} is required.`); return value; };
@@ -104,15 +123,20 @@ export async function appForBundleId(request: AscRequest, bundleId: string) {
 }
 
 export async function distributeBuild(request: AscRequest, appId: string, buildId: string, groupName: string, notes: string, locale: string) {
-  const groups = await listAll<AscResource<{ name: string; isInternalGroup: boolean; hasAccessToAllBuilds: boolean }>>(request, `/v1/betaGroups?filter[app]=${appId}`);
-  const group = groups.find(group => group.attributes.name === groupName);
-  if (!group) throw new Error(`TestFlight group ${groupName} is missing.`);
-  const detail = await request<{ data: AscResource<{ internalBuildState?: string; externalBuildState?: string; autoNotifyEnabled: boolean }> }>(`/v1/builds/${buildId}/buildBetaDetail`);
-  const state = detail.data.attributes[group.attributes.isInternalGroup ? 'internalBuildState' : 'externalBuildState'];
+  const groups = await listAll<AscResource<{ name: string; isInternalGroup: boolean; publicLinkEnabled?: boolean; publicLink?: string }>>(request, `/v1/betaGroups?filter[app]=${appId}`);
+  const group = groups.find(group => group.attributes.name === groupName && !group.attributes.isInternalGroup);
+  if (!group) throw new Error(`External TestFlight group ${groupName} is missing.`);
+  const url = group.attributes.publicLinkEnabled ? group.attributes.publicLink : undefined;
+  const detail = await request<{ data: AscResource<{ externalBuildState?: string; autoNotifyEnabled: boolean }> }>(`/v1/builds/${buildId}/buildBetaDetail`);
+  const state = detail.data.attributes.externalBuildState;
   if (!state || ['BETA_REJECTED', 'EXPIRED', 'PROCESSING_EXCEPTION', 'MISSING_EXPORT_COMPLIANCE'].includes(state)) throw new Error(`TestFlight distribution is blocked (${state ?? 'unknown state'}).`);
-  if (!group.attributes.isInternalGroup && !detail.data.attributes.autoNotifyEnabled) {
+  // Keep automatic notification enabled until beta review approves the build.
+  // Approved and active builds are already externally available; changing their
+  // notification setting is unnecessary and can conflict with Apple's API.
+  const desiredAutoNotify = externalTestingAvailable(state) ? undefined : true;
+  if (desiredAutoNotify !== undefined && detail.data.attributes.autoNotifyEnabled !== desiredAutoNotify) {
     await request(`/v1/buildBetaDetails/${detail.data.id}`, { method: 'PATCH', data: {
-      data: { type: 'buildBetaDetails', id: detail.data.id, attributes: { autoNotifyEnabled: true } },
+      data: { type: 'buildBetaDetails', id: detail.data.id, attributes: { autoNotifyEnabled: desiredAutoNotify } },
     } });
   }
   const localized = (await request<{ data: AscResource<{ locale: string; whatsNew: string }>[] }>(`/v1/builds/${buildId}/betaBuildLocalizations`)).data;
@@ -122,21 +146,19 @@ export async function distributeBuild(request: AscRequest, appId: string, buildI
   } else {
     await request('/v1/betaBuildLocalizations', { method: 'POST', data: { data: { type: 'betaBuildLocalizations', attributes: { locale, whatsNew: notes }, relationships: { build: { data: { type: 'builds', id: buildId } } } } } });
   }
-  if (!group.attributes.hasAccessToAllBuilds) {
-    await request(`/v1/betaGroups/${group.id}/relationships/builds`, { method: 'POST', data: { data: [{ type: 'builds', id: buildId }] } });
-  }
-  const submit = !group.attributes.isInternalGroup && state === 'READY_FOR_BETA_SUBMISSION';
+  await request(`/v1/betaGroups/${group.id}/relationships/builds`, { method: 'POST', data: { data: [{ type: 'builds', id: buildId }] } });
+  const submit = state === 'READY_FOR_BETA_SUBMISSION';
   if (submit) {
     try {
       await request('/v1/betaAppReviewSubmissions', { method: 'POST', data: { data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: buildId } } } } } });
     } catch (error) {
-      // Apple limits concurrent beta reviews and submissions per day. App
-      // Review can proceed independently while TestFlight submission waits.
-      if ((error as Error & { status?: number }).status === 409 || (error as Error & { status?: number }).status === 429) return 'Waiting for TestFlight review capacity';
+      // Apple limits concurrent beta reviews and submissions per day. Keep
+      // the candidate in draft so the scheduled approval job can retry.
+      if ((error as Error & { status?: number }).status === 409 || (error as Error & { status?: number }).status === 429) return { state: 'Waiting for TestFlight review capacity', url };
       throw error;
     }
   }
-  return submit ? 'Submitted for TestFlight beta review' : state;
+  return { state: submit ? 'Submitted for TestFlight beta review' : state, url };
 }
 
 async function main(command: string | undefined) {
@@ -162,9 +184,7 @@ async function main(command: string | undefined) {
   const keyPath = required('AGENT_ASC_PRIVATE_KEY_FILE');
   const request = requestFromEnvironment();
   if (command === 'plan') {
-    const channel = required('AGENT_RELEASE_CHANNEL');
-    const distribution = iosDistribution(channel);
-    const app = await appForBundleId(request, 'dev.remoteagent.mobile.ios');
+    const app = await appForBundleId(request, iosDistribution.bundleId);
     const builds = await listAll<AppleBuild>(request, `/v1/builds?filter[app]=${app.id}&limit=200`);
     const source = readFileSync('apps/mobile/iosApp/Bex.xcodeproj/project.pbxproj', 'utf8');
     const versions = [...source.matchAll(/CURRENT_PROJECT_VERSION = (\d+);/g)].map(match => match[1]);
@@ -173,19 +193,13 @@ async function main(command: string | undefined) {
     const releases = JSON.parse(readFileSync('target/apple-release/releases.json', 'utf8')) as { tagName: string }[];
     const version = nextBuildNumber([...versions, macVersion], builds.map(build => build.attributes.version), releases.map(release => release.tagName));
     const storeVersions = await listAll<StoreVersion>(request, `/v1/apps/${app.id}/appStoreVersions?limit=200`);
-    if (channel === 'stable' && storeVersions.some(version => version.attributes.platform === 'IOS'
-      && version.attributes.appStoreState === 'PENDING_DEVELOPER_RELEASE')) {
-      throw new Error('Publish the already approved App Store version before building the next stable release.');
-    }
     const sourceVersion = /MARKETING_VERSION = ([\d.]+);/.exec(source)?.[1];
-    const approvedVersions = storeVersions.filter(version => version.attributes.platform === 'IOS'
-      && ['PENDING_DEVELOPER_RELEASE', 'READY_FOR_DISTRIBUTION', 'READY_FOR_SALE'].includes(version.attributes.appStoreState))
-      .map(version => version.attributes.versionString);
-    const versionName = nextMarketingVersion(sourceVersion, approvedVersions);
-    const sourceTag = channel === 'stable' ? required('AGENT_SOURCE_TAG') : undefined;
-    if (sourceTag && !/^nightly-[1-9]\d*$/.test(sourceTag)) throw new Error('Stable must rebuild a selected Nightly.');
-    const plan = { channel, sourceTag, bundleId: distribution.bundleId, ...(channel === 'stable' ? { appId: app.id } : {}),
-      version, versionName, tag: `${channel === 'nightly' ? 'nightly' : 'prd'}-${version}`,
+    const betaVersions = await listAll<AscResource<{ version: string }>>(request, `/v1/preReleaseVersions?filter[app]=${app.id}&filter[platform]=IOS&limit=200`);
+    const reservedVersions = [...storeVersions.filter(version => version.attributes.platform === 'IOS').map(version => version.attributes.versionString),
+      ...betaVersions.map(version => version.attributes.version)];
+    const versionName = nextMarketingVersion(sourceVersion, reservedVersions);
+    const plan = { channel: 'nightly', bundleId: iosDistribution.bundleId, appId: app.id,
+      version, versionName, tag: `nightly-${version}`,
       sha: required('AGENT_RELEASE_SHA'), locale: app.attributes.primaryLocale,
       notes: execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim() };
     writeFileSync(planPath, JSON.stringify(plan) + '\n');
@@ -193,13 +207,6 @@ async function main(command: string | undefined) {
     console.log(`Apple release build ${version} planned for ${plan.sha}.`);
   } else if (command === 'verify') {
     const plan = JSON.parse(readFileSync(planPath, 'utf8')) as AppleBuildPlan;
-    if (plan.channel === 'nightly') {
-      const ipa = 'target/apple-release/bex-iOS-preview.ipa';
-      if (!statSync(ipa).size) throw new Error('The signed iPhone Preview package is missing.');
-      writeFileSync('target/apple-release/apple-build.json', JSON.stringify(plan) + '\n');
-      appendFileSync(required('GITHUB_STEP_SUMMARY'), `iPhone **BEX Preview ${plan.version}**: signed internal-distribution IPA for registered devices.\n\nSource: \`${plan.sha}\`.\n`);
-      return;
-    }
     let output;
     try {
       if (!plan.deliveryId) throw new Error('Missing delivery receipt.');
@@ -212,10 +219,12 @@ async function main(command: string | undefined) {
     const build = builds.find(build => build.attributes.version === plan.version && build.attributes.processingState === 'VALID');
     if (!build) throw new Error('The processed BEX build could not be verified.');
     plan.buildId = build.id;
+    const distribution = await distributeBuild(request, plan.appId, build.id, testflightGroups.nightly.name, plan.notes, plan.locale);
+    if (distribution.url !== testflightGroups.nightly.url) throw new Error('Nightly requires an enabled public TestFlight link.');
+    plan.testflightUrl = distribution.url;
     writeFileSync('target/apple-release/apple-build.json', JSON.stringify(plan) + '\n');
-    const distribution = await distributeBuild(request, plan.appId!, build.id, process.env.AGENT_TESTFLIGHT_GROUP || 'BEX External', plan.notes, plan.locale);
-    console.log(`TestFlight ${plan.version}: ${distribution}.`);
-    appendFileSync(required('GITHUB_STEP_SUMMARY'), `TestFlight build **${plan.version}**: ${distribution}.\n\nSource: \`${plan.sha}\`.\n`);
+    console.log(`TestFlight ${plan.version}: ${distribution.state}.`);
+    appendFileSync(required('GITHUB_STEP_SUMMARY'), `TestFlight build **${plan.version}**: ${distribution.state}.\n\n${plan.testflightUrl}\n\nSource: \`${plan.sha}\`.\n`);
   } else throw new Error('Use apple-release.ts plan, record-delivery or verify.');
 }
 

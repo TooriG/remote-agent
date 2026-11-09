@@ -20,6 +20,37 @@ use tokio::{
     task::JoinHandle,
 };
 
+const EXPIRED_LOGIN: &str = "Claude のログインが期限切れになりました。もう一度お試しください。";
+
+#[derive(Debug)]
+pub(super) enum Error {
+    Operation(String),
+    LoginEnded(String),
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Self::Operation(message)
+    }
+}
+
+impl From<&str> for Error {
+    fn from(message: &str) -> Self {
+        Self::Operation(message.into())
+    }
+}
+
+impl From<Error> for crate::providers::Failure {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Operation(message) => Self::new("account_operation_failed", message),
+            Error::LoginEnded(message) => {
+                Self::new(agent_protocol::error::ACCOUNT_LOGIN_ENDED, message)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Registry {
@@ -30,16 +61,16 @@ struct Registry {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Info {
+    logged_in: bool,
+    auth_method: String,
     email: Option<String>,
     subscription_type: Option<String>,
-    token_source: Option<String>,
-    api_key_source: Option<String>,
 }
 
 impl Info {
     fn account(self, id: String) -> Option<Account> {
         let plan = self.subscription_type.filter(|plan| !plan.is_empty())?;
-        if self.token_source.as_deref() == Some("none") {
+        if !self.logged_in || self.auth_method != "claude.ai" {
             return None;
         }
         Some(Account {
@@ -52,8 +83,7 @@ impl Info {
     }
 
     fn logged_out(&self) -> bool {
-        self.token_source.as_deref() == Some("none")
-            && self.api_key_source.as_deref() == Some("none")
+        !self.logged_in && self.auth_method == "none"
     }
 }
 
@@ -81,12 +111,13 @@ struct Login {
     started: Instant,
     id: String,
     home: PathBuf,
+    state: String,
     process: Cli,
 }
 struct Cli {
     child: Child,
     input: Option<ChildStdin>,
-    output: JoinHandle<Result<(), String>>,
+    output: JoinHandle<Result<Vec<u8>, String>>,
 }
 impl Drop for Cli {
     fn drop(&mut self) {
@@ -153,6 +184,29 @@ impl Accounts {
         Ok(self.directory.join(uuid.to_string()))
     }
 
+    pub(super) fn terminal(&self, id: &str) -> Result<crate::terminals::Launch, String> {
+        let home = self.account_home(id)?;
+        let path = std::env::var_os("PATH");
+        let program = super::process::executable(&self.program, path.as_deref())?;
+        // Setup and status use the same account-specific config and credentials.
+        let scoped = super::process::homes(&self.native_home, self.native_inherited, &home)
+            .map(|(_, home)| home);
+        let environment = authentication_environment(scoped);
+        Ok(crate::terminals::Launch {
+            directory: home,
+            arguments: [
+                program.to_string_lossy().into_owned(),
+                "--safe-mode".into(),
+                "--tools".into(),
+                String::new(),
+                "--permission-mode".into(),
+                "dontAsk".into(),
+            ]
+            .into(),
+            environment,
+        })
+    }
+
     async fn save(&self) -> Result<(), String> {
         let path = self.directory.join("accounts.json");
         let value = self.registry.clone();
@@ -163,19 +217,25 @@ impl Accounts {
     }
 
     fn info(&self, home: &Path) -> impl Future<Output = Result<Info, String>> + use<> {
-        let (program, directory) = (self.program.clone(), self.directory.clone());
+        let program = self.program.clone();
         let home = super::process::homes(&self.native_home, self.native_inherited, home)
             .map(|(_, home)| home.to_owned());
         async move {
-            let cwd = tempfile::tempdir_in(directory).map_err(|error| error.to_string())?;
-            let probe = super::process::Process::probe(
+            // Authentication status does not start an agent, load project
+            // settings, fetch usage, or require interactive onboarding consent.
+            let mut cli = Cli::start(
                 &program,
-                home.as_deref().map(|home| (home, home)),
-                cwd.path(),
-            )
-            .await?;
-            serde_json::from_value(probe.initialized["account"].clone())
-                .map_err(|_| "Claude の認証状態を読み取れません。".into())
+                home.as_deref(),
+                &["auth", "status", "--json"],
+                None,
+            )?;
+            let output = cli.finish().await?;
+            let info: Info = serde_json::from_slice(&output.stdout)
+                .map_err(|_| "Claude の認証状態を読み取れません。".to_owned())?;
+            if !output.status.success() && !info.logged_out() {
+                return Err("Claude の認証状態を確認できません。".into());
+            }
+            Ok(info)
         }
     }
 
@@ -258,10 +318,7 @@ impl Accounts {
         })
     }
 
-    pub(crate) async fn request(
-        &mut self,
-        command: AccountCommand,
-    ) -> Result<AccountReply, String> {
+    pub(super) async fn request(&mut self, command: AccountCommand) -> Result<AccountReply, Error> {
         match command {
             AccountCommand::Select { id } => {
                 let home = self.account_home(&id)?;
@@ -272,7 +329,7 @@ impl Accounts {
                 let previous = self.registry.selected_id.replace(id.clone());
                 if let Err(error) = self.save().await {
                     self.registry.selected_id = previous;
-                    return Err(error);
+                    return Err(error.into());
                 }
                 self.revision += 1;
                 Ok(AccountSelection {
@@ -292,7 +349,7 @@ impl Accounts {
                     self.registry.selected_id = None;
                     if let Err(error) = self.save().await {
                         self.registry.selected_id = Some(id);
-                        return Err(error);
+                        return Err(error.into());
                     }
                 }
                 self.revision += 1;
@@ -303,7 +360,7 @@ impl Accounts {
                     &["auth", "logout"],
                     None,
                 )?;
-                if !process.finish().await? {
+                if !process.finish().await?.status.success() {
                     return Err("Claude のログアウトに失敗しました。".into());
                 }
                 self.registry.accounts.retain(|account| account.id != id);
@@ -327,6 +384,7 @@ impl Accounts {
                     started: Instant::now(),
                     id: id.clone(),
                     home,
+                    state: String::new(),
                     process,
                 });
                 let result = tokio::time::timeout(Duration::from_secs(30), url)
@@ -335,13 +393,14 @@ impl Accounts {
                     .and_then(|result| {
                         result.map_err(|_| "Claude のログインを開始できません。".to_owned())
                     });
-                let verification_url = match result {
+                let (verification_url, state) = match result {
                     Ok(url) => url,
                     Err(error) => {
                         self.cancel().await?;
-                        return Err(error);
+                        return Err(error.into());
                     }
                 };
+                self.login.as_mut().unwrap().state = state;
                 Ok(AccountLogin {
                     provider: ProviderKind::Claude,
                     login_id: id,
@@ -356,10 +415,16 @@ impl Accounts {
                     .login
                     .as_mut()
                     .filter(|login| login.id == id)
-                    .ok_or("ログイン手続きが一致しません。")?;
+                    .ok_or_else(|| Error::LoginEnded(EXPIRED_LOGIN.into()))?;
                 let code = zeroize::Zeroizing::new(code);
                 let code = code.trim();
-                if code.is_empty() || code.len() > 4096 || code.contains(['\r', '\n']) {
+                let expected_state = login.state.as_str();
+                if code.len() > 4096
+                    || code.contains(['\r', '\n'])
+                    || !code
+                        .split_once('#')
+                        .is_some_and(|(code, state)| !code.is_empty() && state == expected_state)
+                {
                     return Err("認証コードが無効です。".into());
                 }
                 let input = login
@@ -398,12 +463,10 @@ impl Accounts {
                     .login
                     .as_mut()
                     .filter(|login| login.id == id)
-                    .ok_or("ログイン手続きが一致しません。")?;
+                    .ok_or_else(|| Error::LoginEnded(EXPIRED_LOGIN.into()))?;
                 if login.started.elapsed() > Duration::from_secs(600) {
                     self.cancel().await?;
-                    return Err(
-                        "Claude のログインが期限切れになりました。もう一度お試しください。".into(),
-                    );
+                    return Err(Error::LoginEnded(EXPIRED_LOGIN.into()));
                 }
                 let Some(status) = login
                     .process
@@ -419,7 +482,9 @@ impl Accounts {
                 };
                 if !status.success() {
                     self.cancel().await?;
-                    return Err("Claude のログインに失敗しました。もう一度お試しください。".into());
+                    return Err(Error::LoginEnded(
+                        "Claude のログインに失敗しました。もう一度お試しください。".into(),
+                    ));
                 }
                 let home = login.home.clone();
                 let account = self
@@ -430,7 +495,7 @@ impl Accounts {
                 self.registry.accounts.push(account);
                 if let Err(error) = self.save().await {
                     self.registry.accounts.pop();
-                    return Err(error);
+                    return Err(error.into());
                 }
                 self.login = None;
                 Ok(AccountLoginStatus {
@@ -440,10 +505,9 @@ impl Accounts {
                 .into())
             }
             AccountCommand::CancelLogin { id } => {
-                if self.login.as_ref().is_some_and(|login| login.id != id) {
-                    return Err("ログイン手続きが一致しません。".into());
+                if self.login.as_ref().is_some_and(|login| login.id == id) {
+                    self.cancel().await?;
                 }
-                self.cancel().await?;
                 Ok(Empty {}.into())
             }
         }
@@ -456,10 +520,10 @@ impl Accounts {
             let home = login.home.clone();
             // A completion can race cancellation; let the CLI remove its credentials.
             let mut process = Cli::start(&self.program, Some(&home), &["auth", "logout"], None)?;
-            // A failed logout is harmless only when the SDK explicitly confirms
+            // A failed logout is harmless only when the CLI explicitly confirms
             // there are no credentials. Keep the login available for retry on
             // every other failure, including an unreadable status response.
-            if !process.finish().await? && !self.info(&home).await?.logged_out() {
+            if !process.finish().await?.status.success() && !self.info(&home).await?.logged_out() {
                 return Err("Claude の認証手続きを破棄できません。".into());
             }
             tokio::fs::remove_dir_all(&home)
@@ -471,22 +535,48 @@ impl Accounts {
     }
 }
 
+fn authentication_environment(home: Option<&Path>) -> Vec<(String, Option<String>)> {
+    let mut environment: Vec<_> = [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+        "CLAUDECODE",
+    ]
+    .into_iter()
+    .map(|key| (key.into(), None))
+    .collect();
+    if let Some(home) = home {
+        for key in ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"] {
+            environment.push((key.into(), Some(home.to_string_lossy().into_owned())));
+        }
+    }
+    environment
+}
+
 impl Cli {
     fn start(
         program: &Path,
         home: Option<&Path>,
         args: &[&str],
-        url: Option<oneshot::Sender<String>>,
+        url: Option<oneshot::Sender<(String, String)>>,
     ) -> Result<Self, String> {
+        let path = std::env::var_os("PATH");
+        let program = super::process::executable(program, path.as_deref())?;
         let mut command =
-            agent_process::command(program).map_err(|_| "Claude の認証処理を起動できません。")?;
-        super::process::set_homes(&mut command, home.map(|home| (home, home)));
+            agent_process::command(&program).map_err(|_| "Claude の認証処理を起動できません。")?;
+        for (key, value) in authentication_environment(home) {
+            match value {
+                Some(value) => {
+                    command.env(key, value);
+                }
+                None => {
+                    command.env_remove(key);
+                }
+            }
+        }
         command
             .args(args)
-            .env_remove("ANTHROPIC_API_KEY")
-            .env_remove("ANTHROPIC_AUTH_TOKEN")
-            .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
-            .env_remove("CLAUDE_CODE_OAUTH_REFRESH_TOKEN")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -505,22 +595,26 @@ impl Cli {
         })
     }
 
-    async fn finish(&mut self) -> Result<bool, String> {
+    async fn finish(&mut self) -> Result<std::process::Output, String> {
         let status = tokio::time::timeout(Duration::from_secs(30), self.child.wait())
             .await
             .map_err(|_| "Claude の認証処理がタイムアウトしました。")?
             .map_err(|_| "Claude の認証処理が終了しました。")?;
         self.input.take();
-        (&mut self.output)
+        let stdout = (&mut self.output)
             .await
             .map_err(|_| "Claude の認証応答を読み取れません。")??;
-        Ok(status.success())
+        Ok(std::process::Output {
+            status,
+            stdout,
+            stderr: Vec::new(),
+        })
     }
 }
 async fn read_output(
     mut reader: impl AsyncRead + Unpin,
-    mut url: Option<oneshot::Sender<String>>,
-) -> Result<(), String> {
+    mut url: Option<oneshot::Sender<(String, String)>>,
+) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     let mut buffer = [0; 4096];
     loop {
@@ -552,15 +646,17 @@ async fn read_output(
                                 | "platform.claude.com"
                         )
                     )
-                    && parsed.query_pairs().any(|(key, _)| key == "state")
+                    && let Some((_, state)) = parsed
+                        .query_pairs()
+                        .find(|(key, value)| key == "state" && !value.is_empty())
                 {
-                    let _ = url.take().unwrap().send(word.into());
+                    let _ = url.take().unwrap().send((word.into(), state.into_owned()));
                     break;
                 }
             }
         }
     }
-    Ok(())
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -569,57 +665,63 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn sdk_identity_requires_a_subscription_and_explicit_logout_requires_no_credentials() {
+    fn cli_status_requires_a_logged_in_subscription_and_explicit_logout() {
         for (value, subscribed, logged_out) in [
             (
-                json!({"email":"account@example.invalid","subscriptionType":"max","tokenSource":"oauth","apiKeySource":"none"}),
+                json!({"loggedIn":true,"authMethod":"claude.ai","email":"account@example.invalid","subscriptionType":"max"}),
                 true,
                 false,
             ),
-            (json!({"subscriptionType":"max"}), true, false),
             (
-                json!({"subscriptionType":"max","tokenSource":"none","apiKeySource":"none"}),
-                false,
-                true,
-            ),
-            (
-                json!({"tokenSource":"none","apiKeySource":"none"}),
+                json!({"loggedIn":false,"authMethod":"none","subscriptionType":"max"}),
                 false,
                 true,
             ),
             (
-                json!({"subscriptionType":"","tokenSource":"oauth"}),
+                json!({"loggedIn":true,"authMethod":"api_key","subscriptionType":"max"}),
+                false,
+                false,
+            ),
+            // A reported auth method is not an explicit logout confirmation.
+            (
+                json!({"loggedIn":false,"authMethod":"claude.ai"}),
                 false,
                 false,
             ),
             (
-                json!({"tokenSource":"none","apiKeySource":"ANTHROPIC_API_KEY"}),
+                json!({"loggedIn":true,"authMethod":"claude.ai"}),
                 false,
                 false,
             ),
-            (json!({"tokenSource":"none"}), false, false),
-            (json!({}), false, false),
+            (
+                json!({"loggedIn":true,"authMethod":"claude.ai","subscriptionType":""}),
+                false,
+                false,
+            ),
         ] {
             let info: Info = serde_json::from_value(value.clone()).unwrap();
             assert_eq!(info.logged_out(), logged_out, "{value}");
             let account = info.account("claude:test".into());
             assert_eq!(account.is_some(), subscribed, "{value}");
             if let Some(account) = account {
-                assert_eq!(account.id, "claude:test");
-                assert_eq!(account.provider, ProviderKind::Claude);
                 assert_eq!(account.email.as_deref(), value["email"].as_str());
                 assert_eq!(account.plan_type.as_deref(), Some("max"));
-                assert!(account.usage.is_none());
             }
         }
-        for invalid in [json!(null), json!([]), json!({"tokenSource":false})] {
+        for invalid in [
+            json!(null),
+            json!([]),
+            json!({}),
+            json!({"loggedIn":true}),
+            json!({"loggedIn":"true","authMethod":"none"}),
+        ] {
             assert!(serde_json::from_value::<Info>(invalid).is_err());
         }
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn slow_status_keeps_cached_metadata_readable_and_preserves_identity_when_usage_fails() {
+    async fn account_status_is_independent_of_sdk_onboarding_and_usage() {
         use std::os::unix::fs::PermissionsExt;
         tokio::time::timeout(Duration::from_secs(30), async {
             let directory = tempfile::tempdir().unwrap();
@@ -628,62 +730,40 @@ mod tests {
             let program = directory.path().join("claude.mjs");
             std::fs::write(&program, r#"#!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { createInterface } from 'node:readline';
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-assert.ok(!process.argv.includes('auth'));
-assert.equal(process.env.CLAUDE_CONFIG_DIR, process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR);
 const home = process.env.CLAUDE_CONFIG_DIR;
-for await (const line of createInterface({ input: process.stdin })) {
-  const message = JSON.parse(line);
-  assert.equal(message.type, 'control_request');
-  const operation = message.request.subtype;
-  appendFileSync(join(home, 'operations'), `${operation}\n`);
-  let response;
-  if (operation === 'initialize') {
-    response = { account: existsSync(join(home, 'invalid-account')) ? null : {
-      email: 'sdk@example.invalid', subscriptionType: 'max', tokenSource: 'oauth', apiKeySource: 'none'
-    } };
-  } else {
-    assert.equal(operation, 'get_usage');
-    assert.equal(message.request.skip_behaviors, true);
-    writeFileSync(join(home, 'usage-requested'), '');
-    while (!existsSync(join(home, 'usage-release'))) await new Promise(resolve => setTimeout(resolve, 10));
-    response = {};
-  }
-  const error = operation === 'get_usage' && existsSync(join(home, 'usage-error'));
-  process.stdout.write(`${JSON.stringify({ type: 'control_response', response: {
-    request_id: message.request_id, subtype: error ? 'error' : 'success',
-    ...(error ? { error: 'usage unavailable' } : { response })
-  } })}\n`);
+assert.equal(home, process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR);
+if (process.argv[2] !== 'auth') {
+  console.error('[ACTION REQUIRED] Run claude to review the updated Consumer Terms.');
+  process.exit(1);
 }
+assert.deepEqual(process.argv.slice(2), ['auth', 'status', '--json']);
+appendFileSync(join(home, 'operations'), 'auth status\n');
+while (existsSync(join(home, 'status-paused'))) await new Promise(resolve => setTimeout(resolve, 10));
+console.log(existsSync(join(home, 'invalid-account')) ? 'null' : JSON.stringify({
+  loggedIn: true, authMethod: 'claude.ai', email: 'status@example.invalid', subscriptionType: 'max'
+}));
 "#).unwrap();
             std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
             let mut accounts = Accounts::load(program.clone(), directory.path().join("accounts"), native.clone(), false).await.unwrap();
-            let mut info = Box::pin(accounts.info(&native));
-            tokio::select! {
-                _ = &mut info => panic!("status returned before usage completed"),
-                _ = async {
-                    while !native.join("usage-requested").exists() {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                } => {}
-            }
-            std::fs::write(native.join("usage-release"), "").unwrap();
-            let account = info.await.unwrap().account("claude:desktop".into()).unwrap();
-            assert_eq!(account.email.as_deref(), Some("sdk@example.invalid"));
-            assert_eq!(account.plan_type.as_deref(), Some("max"));
-            assert_eq!(std::fs::read_to_string(native.join("operations")).unwrap(), "initialize\nget_usage\n");
+            let account = accounts.info(&native).await.unwrap().account("claude:desktop".into()).unwrap();
+            assert_eq!(account.email.as_deref(), Some("status@example.invalid"));
+            assert_eq!(std::fs::read_to_string(native.join("operations")).unwrap(), "auth status\n");
+            accounts.accept_native(0, accounts.info(&native).await.unwrap());
+            let usage = accounts.usage_request("claude:desktop").unwrap().await;
+            assert!(usage.error.is_some(), "SDK setup failures stay scoped to usage");
+            assert_eq!(accounts.list().0, vec![account.clone()]);
 
-            std::fs::remove_file(native.join("usage-requested")).unwrap();
-            std::fs::remove_file(native.join("usage-release")).unwrap();
+            std::fs::write(native.join("status-paused"), "").unwrap();
+            std::fs::remove_file(native.join("operations")).unwrap();
             let claude = super::super::Claude::load(program, directory.path().join("adapter"), Some(native.clone())).await.unwrap();
             claude.models.read(native.clone(), || async { Ok(Vec::new()) }).await.unwrap();
             let mut listing = Box::pin(crate::providers::Identity::list(&claude));
             tokio::select! {
-                _ = &mut listing => panic!("status returned before usage completed"),
+                _ = &mut listing => panic!("status returned before release"),
                 _ = async {
-                    while !native.join("usage-requested").exists() {
+                    while !native.join("operations").exists() {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 } => {}
@@ -691,19 +771,10 @@ for await (const line of createInterface({ input: process.stdin })) {
             let mut models = Box::pin(claude.models());
             assert!(matches!(futures_util::poll!(&mut models), std::task::Poll::Ready(Ok(value)) if value.is_empty()),
                 "a native identity check must not block cached model reads");
-            std::fs::write(native.join("usage-release"), "").unwrap();
-            assert_eq!(listing.await.unwrap().accounts, vec![account.clone()]);
-
-            std::fs::write(native.join("usage-error"), "").unwrap();
-            let (revision, refresh) = accounts.native_refresh().unwrap();
-            accounts.accept_native(revision, refresh.await.unwrap());
-            let (listed, selected) = accounts.list();
-            assert_eq!(listed, vec![account]);
-            assert_eq!(selected.as_deref(), Some("claude:desktop"));
+            std::fs::remove_file(native.join("status-paused")).unwrap();
+            assert_eq!(listing.await.unwrap().accounts, vec![account]);
             std::fs::write(native.join("invalid-account"), "").unwrap();
-            accounts.native_checked_at = None;
-            assert!(accounts.native_refresh().unwrap().1.await.is_err());
-            assert_eq!(accounts.registry.accounts, listed);
+            assert!(accounts.info(&native).await.is_err());
         }).await.unwrap();
     }
 
@@ -814,8 +885,8 @@ for await (const line of createInterface({ input: process.stdin })) {
             Info {
                 email: Some("stale@example.invalid".into()),
                 subscription_type: Some("max".into()),
-                token_source: Some("oauth".into()),
-                api_key_source: Some("none".into()),
+                logged_in: true,
+                auth_method: "claude.ai".into(),
             },
         );
         assert!(accounts.registry.selected_id.is_none());

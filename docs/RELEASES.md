@@ -2,7 +2,9 @@
 
 Develop on `main`. A revision that passes both Portable checks and Native clients
 produces a numbered GitHub prerelease, `nightly-N`, containing Mac, Windows,
-Android, Linux Host/CLI and iPhone Preview packages.
+Android and Linux Host/CLI packages, plus an externally approved iPhone TestFlight
+build. Nightly stays in draft while Apple beta review is pending. The scheduled
+Production workflow finishes these pending Nightly approvals.
 
 On macOS and Windows, select **Nightly** in Settings → Update channel to receive
 these candidates. **Stable** is the default. Returning to Stable waits for a newer
@@ -19,23 +21,20 @@ caches and project worktrees keep their existing shared locations.
 
 | App | Bundle ID | Distribution |
 | --- | --- | --- |
-| BEX | `dev.remoteagent.mobile.ios` | App Store and production TestFlight |
-| BEX Preview | `dev.remoteagent.mobile.ios.preview` | Nightly IPA, signed for registered iPhones |
+| BEX | `dev.remoteagent.mobile.ios` | Nightly and production TestFlight, and App Store |
 | BEX Dev | `dev.remoteagent.mobile.ios.dev` | Local development builds |
 
-All three can coexist, with separate preferences, snapshots, Keychain access
-and URL schemes (`bex`, `bex-preview`, `bex-dev`). TestFlight for the production
-ID replaces the App Store app; Preview does not. The existing production beta
-link remains https://testflight.apple.com/join/UJbK9Ww7.
+Nightly and production use the same BEX app and Apple build. Nightly's external
+TestFlight group is **BEX Nightly**:
+https://testflight.apple.com/join/xdk6J9qr. The production external group is
+**BEX External**: https://testflight.apple.com/join/UJbK9Ww7. The release notes
+link to the appropriate group. Both groups require external beta review; only
+approved builds are published or promoted. TestFlight replaces the App Store app.
 
-Download `bex-iOS-preview.ipa` from a Nightly and install it using Apple
-Configurator or Xcode. Preview uses Ad Hoc distribution, so the iPhone must be
-registered and enabled in the Apple Developer account before the release builds.
-A later device registration takes effect in the next Nightly; existing profiles
-are retained for already installed versions. Preview does not require an App Store
-Connect app record or beta review. Enable Push Notifications on the Preview app's
-registered bundle ID. APNs on a Host uses its configured `bundle_id`; a Host
-configured for a different variant cannot send background updates to Preview.
+BEX Dev can coexist with BEX. It has separate preferences, snapshots, Keychain
+access and URL scheme (`bex-dev`, compared with `bex`). Pair it with the development
+Host explicitly. APNs on a Host uses its configured `bundle_id`, which must match
+the installed app variant.
 
 To archive the local development app, use the signing-keychain preflight and:
 
@@ -52,32 +51,49 @@ higher than its existing uploads. Pair Dev with the development Host explicitly.
 
 ## Stable release
 
-After testing Nightly, run **Production release → Run workflow** on `main`. It
-selects the latest published Nightly's exact source commit and rebuilds every
-platform for Stable with a new release build number. It creates a new `prd-N` tag;
-its number does not have to match the selected Nightly. `release.json` records
-both the source commit and the selected Nightly tag. Do not manually create or
-move production tags, or replace published assets.
+After deciding a Nightly is ready, run **Production release → Run workflow** on
+`main`, optionally specifying its `nightly-N` tag. An empty selection uses the
+latest published Nightly. The workflow creates `prd-N` at the same source commit,
+preserving the build number, every platform package byte for byte, and the exact
+Apple build ID. It verifies downloaded checksums before publishing. Do not move
+production tags or replace published assets. A failed upload can be retried with
+the same selection; an existing published promotion is verified without rewriting it.
 
-The iPhone Stable rebuild uses the production bundle ID and is uploaded to its
-existing TestFlight groups and submitted for App Review. The rebuilt binary does
-not need another external beta review before App Review. Release after approval
-is enabled for this selected build. The scheduled Production workflow finishes
-pending approvals and publishes the matching GitHub release, advancing Stable.
-An already approved version keeps its selected build: publish a pending initial
-version before releasing the next version. The first new production release
-switches the public iPhone download from TestFlight to App Store.
+Promotion adds the already approved Apple build to **BEX External** and publishes
+the production GitHub release immediately. The landing page and Stable updater
+then select those promoted packages; the iPhone download remains the production
+TestFlight link. Nightly uploads do not enter the production TestFlight group.
+
+Each Nightly reserves a new marketing version beyond all existing App Store and
+TestFlight versions, including candidates built before any promotion. The same
+promoted Apple build is also submitted to App Review with automatic
+release after approval. This separate review does not hold back the production
+GitHub release, landing page or external TestFlight. An ongoing App Store review
+keeps its selected build; never replace it with a different candidate. If App
+Review submission is blocked by an earlier in-flight version, wait for that
+version to finish and retry Production with the same Nightly tag. A corrected
+Nightly can replace a rejected or otherwise editable App Store version; the
+rejected binary itself is never resubmitted. A promotion older than the current
+App Store version can still complete on GitHub and TestFlight, but its App Review
+step cannot succeed as an update; choose a newer Nightly.
 
 Retry failed build jobs through GitHub Actions. Never move a published tag. For
 an App Review rejection, inspect the rejection and create a corrected Nightly.
 If Android failed after the other packages were staged, run **Android candidate**
 on `main` with the existing draft tag. It rebuilds the same verified source with
 the current packaging workflow. After it succeeds, resume package verification
-and publication with:
+and publication after initializing pinned tools and setting `AGENT_ASC_KEY_ID`,
+`AGENT_ASC_ISSUER_ID` and `AGENT_ASC_PRIVATE_KEY_FILE` to the authorized App Store
+Connect credential (keep the private key outside the repository and Nix store):
 
 ```sh
 GITHUB_REPOSITORY=ttizze/remote-agent scripts/dev-env.sh node scripts/release-candidate.ts seal nightly-N
 ```
+
+A TestFlight rejection leaves its Nightly in draft. Inspect the rejection, remove
+the rejected draft release while preserving its tag, and create a corrected
+Nightly. Scheduled approval checks remain failed until the rejected draft is
+removed so the rejection stays visible.
 
 Android Nightly and Stable use the same distribution key and package ID. Older
 APKs signed with another key require reinstallation before entering this channel.

@@ -16,12 +16,9 @@ let context = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 
     bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
     bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
 let bounds = CGRect(x: 0, y: 0, width: 1024, height: 1024)
-let color = CommandLine.arguments.count > 3 ? CommandLine.arguments[3] : "release"
-let background: CGColor = switch color {
-case "preview": CGColor(red: 0.74, green: 0.67, blue: 1, alpha: 1)
-case "dev": CGColor(red: 1, green: 0.78, blue: 0.36, alpha: 1)
-default: CGColor(gray: 1, alpha: 1)
-}
+let background = CommandLine.arguments.count > 3 && CommandLine.arguments[3] == "dev"
+    ? CGColor(red: 1, green: 0.78, blue: 0.36, alpha: 1)
+    : CGColor(gray: 1, alpha: 1)
 context.setFillColor(background)
 context.fill(bounds)
 context.draw(image, in: bounds)
@@ -34,12 +31,10 @@ xcrun swiftc "$temporary/app-icon.swift" -o "$temporary/app-icon"
 icon=apps/nsh/assets/icon.png
 "$temporary/app-icon" "$source" "$icon"
 cp "$icon" apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/AppIcon.png
-for variant in Preview Dev; do
-    app_icon="apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon$variant.appiconset"
-    mkdir -p "$app_icon"
-    cp apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/Contents.json "$app_icon/Contents.json"
-    "$temporary/app-icon" "$source" "$app_icon/AppIcon.png" "$(printf '%s' "$variant" | tr '[:upper:]' '[:lower:]')"
-done
+app_icon=apps/mobile/iosApp/Bex/Assets.xcassets/AppIconDev.appiconset
+mkdir -p "$app_icon"
+cp apps/mobile/iosApp/Bex/Assets.xcassets/AppIcon.appiconset/Contents.json "$app_icon/Contents.json"
+"$temporary/app-icon" "$source" "$app_icon/AppIcon.png" dev
 sips -z 192 192 "$icon" --out apps/mobile/src/main/res/drawable/agent_icon.png >/dev/null
 create_icns() {
     local image=$1 destination=$2 iconset="$temporary/Bex.iconset" size doubled

@@ -1,6 +1,6 @@
 use super::*;
 
-pub use agent_protocol::operations::StartTerminal;
+pub use agent_protocol::operations::{StartAccountTerminal, StartTerminal};
 
 impl Operation for StartTerminal {
     fn navigation_bound(&self) -> bool {
@@ -14,46 +14,90 @@ impl Operation for StartTerminal {
         }
     }
     fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
-        if snapshot
-            .terminals
-            .get(&self.handle)
-            .is_some_and(|terminal| terminal.phase == TerminalPhase::Starting)
-        {
-            return Err("terminal is already starting".into());
-        }
-        let sequence = snapshot
-            .terminals
-            .get(&self.handle)
-            .map_or(0, |terminal| terminal.sequence);
-        Arc::make_mut(&mut snapshot.terminals).insert(
-            self.handle.clone(),
-            Arc::new(Terminal {
+        prepare_terminal_start(
+            snapshot,
+            &self.handle,
+            crate::state::TerminalTarget::Shell {
                 cwd: self.cwd.clone(),
-                size: self.size,
-                phase: TerminalPhase::Starting,
-                output: VecDeque::new(),
-                sequence,
-            }),
-        );
-        Ok(())
+            },
+            self.size,
+        )
     }
     fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
-        if snapshot
-            .terminals
-            .get(&self.handle)
-            .is_some_and(|terminal| {
-                matches!(
-                    terminal.phase,
-                    TerminalPhase::Starting | TerminalPhase::Suspended
-                )
-            })
-            && let Some(terminal) = shared_mut(&mut snapshot.terminals, &self.handle)
-        {
-            terminal.phase = TerminalPhase::Running;
-        }
-        Vec::new()
+        complete_terminal_start(snapshot, &self.handle)
     }
     const STALE_POLICY: StalePolicy = StalePolicy::Apply;
+}
+
+impl Operation for StartAccountTerminal {
+    fn navigation_bound(&self) -> bool {
+        false
+    }
+    rpc_operation!();
+    fn scheduling(&self) -> Scheduling {
+        Scheduling::Terminal {
+            handle: self.handle.clone(),
+            starts: true,
+        }
+    }
+    fn prepare(&mut self, snapshot: &mut Snapshot, _pane_id: &str) -> Result<(), String> {
+        prepare_terminal_start(
+            snapshot,
+            &self.handle,
+            crate::state::TerminalTarget::Account {
+                provider: self.provider,
+                id: self.id.clone(),
+            },
+            self.size,
+        )
+    }
+    fn apply(self, snapshot: &mut Snapshot, _pane_id: &str, _output: Self::Output) -> Vec<Effect> {
+        complete_terminal_start(snapshot, &self.handle)
+    }
+    const STALE_POLICY: StalePolicy = StalePolicy::Apply;
+}
+
+fn prepare_terminal_start(
+    snapshot: &mut Snapshot,
+    handle: &str,
+    target: crate::state::TerminalTarget,
+    size: agent_protocol::operations::TerminalSize,
+) -> Result<(), String> {
+    if snapshot
+        .terminals
+        .get(handle)
+        .is_some_and(|terminal| terminal.phase == TerminalPhase::Starting)
+    {
+        return Err("terminal is already starting".into());
+    }
+    let sequence = snapshot
+        .terminals
+        .get(handle)
+        .map_or(0, |terminal| terminal.sequence);
+    Arc::make_mut(&mut snapshot.terminals).insert(
+        handle.into(),
+        Arc::new(Terminal {
+            target,
+            size,
+            phase: TerminalPhase::Starting,
+            output: VecDeque::new(),
+            sequence,
+        }),
+    );
+    Ok(())
+}
+
+fn complete_terminal_start(snapshot: &mut Snapshot, handle: &str) -> Vec<Effect> {
+    if snapshot.terminals.get(handle).is_some_and(|terminal| {
+        matches!(
+            terminal.phase,
+            TerminalPhase::Starting | TerminalPhase::Suspended
+        )
+    }) && let Some(terminal) = shared_mut(&mut snapshot.terminals, handle)
+    {
+        terminal.phase = TerminalPhase::Running;
+    }
+    Vec::new()
 }
 
 pub use agent_protocol::operations::ResizeTerminal;
@@ -188,7 +232,9 @@ mod tests {
             (TerminalPhase::Detached, false),
         ] {
             let terminal = Arc::new(Terminal {
-                cwd: "/fixture".into(),
+                target: crate::state::TerminalTarget::Shell {
+                    cwd: "/fixture".into(),
+                },
                 size: agent_protocol::operations::TerminalSize { rows: 24, cols: 80 },
                 phase,
                 sequence: 0,

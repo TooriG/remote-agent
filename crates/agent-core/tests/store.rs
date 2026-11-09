@@ -3163,6 +3163,111 @@ async fn account_selection_publishes_the_selected_account_and_persistence_warnin
     store.close().await.unwrap();
 }
 
+async fn start_claude_login(
+    store: &Store,
+    reader: &mut host_fixture::Reader,
+    writer: &host_fixture::Writer,
+) {
+    let starting = store.dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
+        provider: ProviderKind::Claude,
+        thread_id: None,
+    }));
+    let request = read(reader).await;
+    writer.reply(&request, json!({"result":{"provider":"claude","loginId":"login","userCode":"","requiresCodeSubmission":true,"verificationUrl":"https://example.invalid/authorize?state=fixture"}})).await.unwrap();
+    starting.await.unwrap();
+}
+
+#[tokio::test]
+async fn ended_account_login_clears_only_its_own_form_and_can_be_started_again() {
+    for submitting in [false, true] {
+        for (code, provider, id, cleared) in [
+            ("account_login_ended", ProviderKind::Claude, "login", true),
+            (
+                "account_operation_failed",
+                ProviderKind::Claude,
+                "login",
+                false,
+            ),
+            ("account_login_ended", ProviderKind::Claude, "other", false),
+            ("account_login_ended", ProviderKind::Codex, "login", false),
+        ] {
+            let (store, mut reader, writer) = setup(Snapshot::default()).await;
+            start_claude_login(&store, &mut reader, &writer).await;
+            let intent = if submitting {
+                Intent::SubmitAccountLogin(op::SubmitAccountLogin {
+                    provider,
+                    id: id.into(),
+                    code: "fixture#fixture".into(),
+                })
+            } else {
+                Intent::ReadAccountLogin(op::ReadAccountLogin {
+                    provider,
+                    id: id.into(),
+                })
+            };
+            let receipt = store.dispatch(intent);
+            let request = read(&mut reader).await;
+            writer
+                .reply(
+                    &request,
+                    json!({"error":{"code":code,"message":"sign-in ended","delivery":"notSent"}}),
+                )
+                .await
+                .unwrap();
+            assert!(receipt.await.is_err());
+            assert_eq!(store.snapshot().catalog.account.login.is_none(), cleared);
+            assert!(
+                store
+                    .snapshot()
+                    .operation_error(agent_core::state::operations::OperationKey::AccountLogin {
+                        provider
+                    })
+                    .is_some()
+            );
+            let retry = store.dispatch(Intent::StartAccountLogin(op::StartAccountLogin {
+                provider,
+                thread_id: None,
+            }));
+            let request = read(&mut reader).await;
+            writer.reply(&request, json!({"result":{"provider":provider,"loginId":"retry","userCode":"","requiresCodeSubmission":true,"verificationUrl":"https://example.invalid/authorize?state=retry"}})).await.unwrap();
+            retry.await.unwrap();
+            assert_eq!(
+                store
+                    .snapshot()
+                    .catalog
+                    .account
+                    .login
+                    .as_ref()
+                    .unwrap()
+                    .login_id,
+                "retry"
+            );
+            store.close().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelling_an_obsolete_form_keeps_confirming_the_current_login() {
+    let (store, mut reader, writer) = setup(Snapshot::default()).await;
+    start_claude_login(&store, &mut reader, &writer).await;
+    let cancelling = store.dispatch(Intent::CancelAccountLogin(op::CancelAccountLogin {
+        provider: ProviderKind::Claude,
+        id: "obsolete".into(),
+    }));
+    let request = read(&mut reader).await;
+    writer.reply(&request, json!({"result":{}})).await.unwrap();
+    cancelling.await.unwrap();
+    assert!(store.snapshot().catalog.account.login.is_some());
+    let status = read_login_poll(&mut reader).await;
+    assert_eq!(status["method"], "host/account/login/status");
+    assert_eq!(
+        status["params"],
+        json!({"provider":"claude","loginId":"login"})
+    );
+    store.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn concurrent_account_listing_preserves_login_and_cancellation_ignores_late_status() {
     let (store, mut reader, writer) = setup(Snapshot::default()).await;

@@ -91,7 +91,9 @@ mod tests {
         Arc::make_mut(&mut state.terminals).insert(
             "shell".into(),
             Arc::new(Terminal {
-                cwd: "/project".into(),
+                target: crate::state::TerminalTarget::Shell {
+                    cwd: "/project".into(),
+                },
                 size: agent_protocol::operations::TerminalSize { cols: 80, rows: 24 },
                 phase: TerminalPhase::Starting,
                 output: [Arc::new(TerminalOutput {

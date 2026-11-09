@@ -101,8 +101,8 @@ test('the latest production release supplies the same packages for every platfor
     .map(name => ({ name, state: 'uploaded', browser_download_url: prefix + name }));
   const result = await renderDownloads({ assets });
   for (const asset of assets.filter(asset => asset.name !== 'release.json')) assert.ok(result.grid.includes(`href="${asset.browser_download_url}"`));
-  assert.ok(result.grid.includes('https://apps.apple.com/app/id6816015343'));
-  assert.doesNotMatch(result.grid, /testflight.apple.com/);
+  assert.ok(result.grid.includes('https://testflight.apple.com/join/UJbK9Ww7'));
+  assert.doesNotMatch(result.grid, /apps.apple.com/);
 });
 
 for (const release of [

@@ -1807,8 +1807,22 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         let login = store.snapshot().catalog.account.login.clone().unwrap();
         assert!(login.requires_code_submission);
         assert!(login.verification_url.starts_with("https://claude.com/"));
-        assert!(store.dispatch(Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: "claude:wrong".into(), code: "fixture-code".into() })).await.is_err());
-        store.dispatch(Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: login.login_id.clone(), code: "fixture-code".into() })).await.unwrap();
+        for code in ["fixture-code", "fixture-code#other-sign-in", "#fixture-only"] {
+            assert!(store.dispatch(Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: login.login_id.clone(), code: code.into() })).await.is_err());
+            assert_eq!(store.snapshot().catalog.account.login.as_ref().unwrap().login_id, login.login_id);
+        }
+        // Cancelling an obsolete client form must not cancel the current flow.
+        store.dispatch(Intent::CancelAccountLogin(op::CancelAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: "claude:obsolete".into() })).await.unwrap();
+        assert_eq!(store.snapshot().catalog.account.login.as_ref().unwrap().login_id, login.login_id);
+        for intent in [
+            Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider: ProviderKind::Claude, id: "claude:wrong".into(), code: "fixture-code#fixture-only".into() }),
+            Intent::ReadAccountLogin(op::ReadAccountLogin { provider: ProviderKind::Claude, id: "claude:wrong".into() }),
+        ] {
+            let agent_protocol::error::PeerError::Remote { error, .. } = store.dispatch(intent).await.unwrap_err() else { panic!("expected Host failure") };
+            assert_eq!(serde_json::from_str::<Value>(&error).unwrap()["code"], "account_login_ended");
+            assert_eq!(store.snapshot().catalog.account.login.as_ref().unwrap().login_id, login.login_id);
+        }
+        store.dispatch(Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: login.login_id.clone(), code: "fixture-code#fixture-only".into() })).await.unwrap();
         // The Store confirms the submitted login without a client loop.
         until(&store, |snapshot| snapshot.catalog.account.login.is_none()).await;
         until(&store, |snapshot| snapshot.catalog.account.accounts.as_ref().is_some_and(|accounts| accounts.selected.get(&agent_protocol::session::ProviderKind::Claude) == Some(&login.login_id))).await;
@@ -1816,6 +1830,25 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         completed(&store, &thread, 2, "completed").await;
         let profile = root.join("claude").join("accounts").join(login.login_id.strip_prefix("claude:").unwrap());
         assert!(!profile.join("projects").exists(), "credential helpers do not own conversation history");
+        store.dispatch(Intent::StartAccountTerminal(op::StartAccountTerminal {
+            handle: "account-review".into(),
+            provider: ProviderKind::Claude, id: login.login_id.clone(),
+            size: rpc::TerminalSize { cols: 80, rows: 24 },
+        })).await.unwrap();
+        until(&store, |snapshot| snapshot.terminals.get("account-review").is_some_and(|terminal| {
+            terminal.output.iter().any(|chunk| String::from_utf8_lossy(&chunk.data).contains("Review account terms"))
+        })).await;
+        let setup: Value = serde_json::from_slice(&std::fs::read(profile.join("fixture-setup-started.json")).unwrap()).unwrap();
+        assert_eq!(setup["config"], profile.to_string_lossy().as_ref());
+        assert_eq!(setup["credentials"], profile.to_string_lossy().as_ref());
+        store.dispatch(Intent::CloseTerminal { handle: "account-review".into() }).await.unwrap();
+        assert!(!profile.join("fixture-terms-accepted").exists(), "opening setup never supplies consent");
+        assert!(profile.join("fixture-auth.json").exists(), "closing setup preserves the signed-in account");
+        assert!(store.dispatch(Intent::StartAccountTerminal(op::StartAccountTerminal {
+            handle: "missing-account-review".into(),
+            provider: ProviderKind::Claude, id: "claude:missing".into(),
+            size: rpc::TerminalSize { cols: 80, rows: 24 },
+        })).await.is_err());
         let snapshot = (*store.snapshot()).clone();
         drop(store); endpoint.close().await; fixture.close().await.unwrap();
         let fixture = start().await.unwrap();
@@ -1825,6 +1858,12 @@ async fn claude_accounts_login_switch_resume_cancel_and_logout_without_codex() {
         send(&store, "resumed after restart", "account-third").await;
         completed(&store, &thread, 3, "completed").await;
 
+        store.dispatch(Intent::StartAccountLogin(op::StartAccountLogin { provider: ProviderKind::Claude, thread_id: None })).await.unwrap();
+        let failed = store.snapshot().catalog.account.login.clone().unwrap();
+        store.dispatch(Intent::SubmitAccountLogin(op::SubmitAccountLogin { provider: ProviderKind::Claude, id: failed.login_id.clone(), code: "fixture-fail#fixture-only".into() })).await.unwrap();
+        // Only the Host's ended-login failure clears the pending form.
+        until(&store, |snapshot| snapshot.catalog.account.login.is_none()).await;
+        assert_eq!(store.snapshot().catalog.account.accounts.as_ref().unwrap().selected.get(&ProviderKind::Claude), Some(&login.login_id));
         store.dispatch(Intent::StartAccountLogin(op::StartAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, thread_id: None })).await.unwrap();
         let canceled = store.snapshot().catalog.account.login.clone().unwrap();
         store.dispatch(Intent::CancelAccountLogin(op::CancelAccountLogin { provider: agent_protocol::session::ProviderKind::Claude, id: canceled.login_id.clone() })).await.unwrap();

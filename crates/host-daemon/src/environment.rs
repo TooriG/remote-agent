@@ -3,7 +3,6 @@ use std::{
     path::Path,
 };
 
-#[cfg(target_os = "macos")]
 pub(crate) fn initialize() {
     let executable = std::env::current_exe().expect("Host executable path");
     let base = directories::BaseDirs::new();
@@ -19,6 +18,15 @@ pub(crate) fn initialize() {
     // main calls this before starting Tokio or any other threads. The Host
     // owns its environment, including when launched directly by an updater.
     unsafe { std::env::set_var("PATH", path) };
+    // Node/Bun providers do not automatically use Nix's configured CA bundle.
+    // Expose it for OAuth token exchange and refresh without replacing an
+    // explicitly configured Node trust store.
+    if std::env::var_os("NODE_EXTRA_CA_CERTS").is_none()
+        && let Some(certificates) =
+            std::env::var_os("SSL_CERT_FILE").or_else(|| std::env::var_os("NIX_SSL_CERT_FILE"))
+    {
+        unsafe { std::env::set_var("NODE_EXTRA_CA_CERTS", certificates) };
+    }
 }
 
 fn provider_path(
@@ -62,6 +70,62 @@ fn provider_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn providers_inherit_configured_ca_certificates() {
+        if let Some(expected) = std::env::var_os("AGENT_TEST_PROVIDER_CA") {
+            initialize();
+            assert_eq!(
+                std::env::var_os("NODE_EXTRA_CA_CERTS"),
+                (expected != "unset").then_some(expected)
+            );
+            return;
+        }
+        for (node, ssl, nix, expected) in [
+            (None, None, None, "unset"),
+            (None, None, Some("/nix-ca.pem"), "/nix-ca.pem"),
+            (
+                None,
+                Some("/ssl-ca.pem"),
+                Some("/nix-ca.pem"),
+                "/ssl-ca.pem",
+            ),
+            (
+                Some("/node-ca.pem"),
+                Some("/ssl-ca.pem"),
+                Some("/nix-ca.pem"),
+                "/node-ca.pem",
+            ),
+            (Some(""), Some("/ssl-ca.pem"), Some("/nix-ca.pem"), ""),
+        ] {
+            // Environment initialization runs before threads in the Host. Use
+            // an isolated process so concurrent tests retain their own trust.
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "environment::tests::providers_inherit_configured_ca_certificates",
+                ])
+                .env("AGENT_TEST_PROVIDER_CA", expected);
+            for (key, value) in [
+                ("NODE_EXTRA_CA_CERTS", node),
+                ("SSL_CERT_FILE", ssl),
+                ("NIX_SSL_CERT_FILE", nix),
+            ] {
+                command.env_remove(key);
+                if let Some(value) = value {
+                    command.env(key, value);
+                }
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     #[test]
     fn direct_host_launch_finds_user_tools_and_bundled_node_with_a_minimal_path() {

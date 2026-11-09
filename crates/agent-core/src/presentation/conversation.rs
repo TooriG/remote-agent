@@ -60,7 +60,6 @@ pub struct RenderedConversation {
     pub source_paths: Arc<Vec<String>>,
 }
 
-#[cfg_attr(feature = "bindings", derive(uniffi::Object))]
 pub struct RenderedTurn {
     language: UiLanguage,
     pub source: Arc<models::Turn>,
@@ -70,7 +69,7 @@ pub struct RenderedTurn {
     requests: Vec<Arc<WireRequest>>,
     pub rows: Vec<ConversationRow>,
 }
-/// Native clients cache this layout per unchanged turn; expansion only filters activity rows.
+/// Immutable turn layout; pane projection filters activity before native bridging.
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "bindings", derive(uniffi::Record))]
 pub struct ConversationRow {
@@ -282,13 +281,9 @@ pub fn should_load_history(
     has_more && !loading && oldest_visible && (!following_latest || latest_visible)
 }
 
-#[cfg_attr(feature = "bindings", uniffi::export)]
 impl RenderedTurn {
     pub fn key(&self) -> String {
         turn_key(self.source.id.as_str(), self.occurrence)
-    }
-    pub fn conversation_rows(&self) -> Vec<ConversationRow> {
-        self.rows.clone()
     }
 }
 
@@ -1965,8 +1960,8 @@ mod tests {
         let live_ids: Vec<_> = live
             .turns
             .iter()
-            .flat_map(|turn| turn.conversation_rows())
-            .map(|row| row.id)
+            .flat_map(|turn| &turn.rows)
+            .map(|row| row.id.clone())
             .collect();
         for previous in [None, Some(live.clone())] {
             let reopened = project_conversation(
@@ -1979,7 +1974,7 @@ mod tests {
             let rows = reopened
                 .turns
                 .iter()
-                .flat_map(|turn| turn.conversation_rows())
+                .flat_map(|turn| &turn.rows)
                 .collect::<Vec<_>>();
             let answers = rows
                 .iter()
@@ -2296,7 +2291,7 @@ mod tests {
         let initial = project_snapshot(snapshot.clone(), None);
         assert!(
             !initial.turns[0]
-                .conversation_rows()
+                .rows
                 .iter()
                 .any(|row| matches!(row.content, ConversationRowContent::ProviderHandoff { .. }))
         );
@@ -2308,7 +2303,7 @@ mod tests {
         thread.turns.as_mut().unwrap().insert(0, old);
         let loaded = project_snapshot(snapshot.clone(), Some(&initial));
         assert!(
-            matches!(&loaded.turns[1].conversation_rows()[0].content, ConversationRowContent::ProviderHandoff { text } if text == "Codex → Claude に切り替えました")
+            matches!(&loaded.turns[1].rows[0].content, ConversationRowContent::ProviderHandoff { text } if text == "Codex → Claude に切り替えました")
         );
         assert!(!Arc::ptr_eq(&initial.turns[0], &loaded.turns[1]));
         let thread = Arc::make_mut(
@@ -2356,7 +2351,7 @@ mod tests {
         turn.items.as_mut().unwrap()[index] = Arc::new(edit);
         let loaded = project_snapshot(snapshot, Some(&projection));
         for (rendered, deferred) in [(&projection, true), (&loaded, false)] {
-            let rows = rendered.turns[1].conversation_rows();
+            let rows = &rendered.turns[1].rows;
             assert_eq!(rows[0].timestamp_ms, Some(1_000));
             let response = rows.last().unwrap();
             assert_eq!(response.timestamp_ms, Some(6_000));
@@ -2842,7 +2837,7 @@ mod tests {
             ..Default::default()
         });
         let rendered = project_snapshot(snapshot.clone(), None);
-        let rows = rendered.turns[1].conversation_rows();
+        let rows = &rendered.turns[1].rows;
         let ids: Vec<_> = rows.iter().map(|row| row.id.as_str()).collect();
         assert!(
             matches!(&rows[0].content, ConversationRowContent::User { item } if item.data.native_id.as_deref() == Some("user"))
@@ -2872,13 +2867,13 @@ mod tests {
         Arc::make_mut(&mut thread.turns.as_mut().unwrap()[1]).status =
             models::TurnStatus::Completed;
         let completed = project_snapshot(snapshot, Some(&rendered));
-        let rows = completed.turns[1].conversation_rows();
+        let rows = &completed.turns[1].rows;
         assert!(
             matches!(&rows.last().unwrap().content, ConversationRowContent::Response { item, fork_turn_id: Some(id), .. } if id.as_str() == "live" && item.data.native_id.as_deref() == Some("stream"))
         );
         assert!(rows.iter().any(|row| row.id == accepted_id));
         for row in rows {
-            if let ConversationRowContent::ActivityHeader { activity } = row.content {
+            if let ConversationRowContent::ActivityHeader { activity } = &row.content {
                 assert!(!activity_is_expanded(&activity.status, None));
                 assert!(activity_is_expanded(
                     &activity.status,
@@ -3123,11 +3118,7 @@ mod tests {
             source,
             &None,
         );
-        let rows: Vec<_> = rendered
-            .turns
-            .iter()
-            .flat_map(|turn| turn.conversation_rows())
-            .collect();
+        let rows: Vec<_> = rendered.turns.iter().flat_map(|turn| &turn.rows).collect();
         assert_eq!(
             rows.iter().map(|row| &row.id).collect::<HashSet<_>>().len(),
             rows.len()
@@ -3144,8 +3135,8 @@ mod tests {
         let again: Vec<_> = rendered
             .turns
             .iter()
-            .flat_map(|turn| turn.conversation_rows())
-            .map(|row| row.id)
+            .flat_map(|turn| &turn.rows)
+            .map(|row| row.id.clone())
             .collect();
         assert_eq!(
             again,

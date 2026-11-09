@@ -21,7 +21,6 @@ struct ThreadScreen: View {
     @State var mediaPresentation = ConversationMediaPresentation()
     @State var scroll = ConversationScrollState()
     @State var expandedItemIds = Set<String>()
-    @State var activityExpansionOverrides = [String: String]()
 
     var body: some View {
         chatContent
@@ -29,7 +28,6 @@ struct ThreadScreen: View {
             .onDisappear(perform: mediaPresentation.cancelPending)
             .onChange(of: model.draftKey) {
                 expandedItemIds.removeAll()
-                activityExpansionOverrides.removeAll()
                 scroll.following = true
                 openedDirectory = nil
                 mediaPresentation.reset()
@@ -75,8 +73,7 @@ struct ThreadScreen: View {
                 AppNotice(text: notice).padding(.horizontal).padding(.top, 8)
             }
             if let thread = conversation {
-                let projection = model.conversationRows(thread, expansion: activityExpansionOverrides)
-                let rows = projection.rows
+                let rows = thread.rows
                 let hasHistory = thread.id != nil && history != nil
                 let ids: [ConversationList.RowID] = (hasHistory ? [.history] : []) + rows.map { .message($0.id) }
                 let showLatest = !scroll.latestVisible && !rows.isEmpty
@@ -84,7 +81,7 @@ struct ThreadScreen: View {
                     ConversationList(ids: ids, scroll: scroll, following: scroll.following,
                                      accessibilityValue: threadAccessibilityValue(
                                          thread,
-                                         itemCount: projection.sourceItemCount
+                                         itemCount: thread.projection.sourceItemCount()
                                      ),
                                      viewportHeight: geometry.size.height) { index in
                         let row = index - (hasHistory ? 1 : 0)

@@ -5,21 +5,10 @@ on:
       source-sha:
         type: string
         required: true
-      channel:
-        type: string
-        required: true
-      source-tag:
-        type: string
-        default: ''
-    outputs:
-      tag:
-        value: ${{ jobs.release.outputs.tag }}
 permissions:
   contents: read
 env:
   AGENT_RELEASE_SHA: ${{ inputs.source-sha }}
-  AGENT_RELEASE_CHANNEL: ${{ inputs.channel }}
-  AGENT_SOURCE_TAG: ${{ inputs.source-tag }}
 jobs:
   release:
     # Skipped PR and failed-build notifications must not replace a queued release.
@@ -113,15 +102,11 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/git/refs" --method POST \
             -f "ref=refs/tags/$AGENT_RELEASE_TAG" -f "sha=$AGENT_RELEASE_SHA" > /dev/null
           files=(target/apple-release/bex-macOS-arm64.zip target/apple-release/bex-macOS-arm64.zip.sha256 target/apple-release/apple-build.json)
-          flags=(--draft)
-          if [[ $AGENT_RELEASE_CHANNEL == nightly ]]; then
-            files+=(target/apple-release/bex-iOS-preview.ipa target/apple-release/bex-iOS-preview.ipa.sha256)
-            flags+=(--prerelease)
-          fi
-          gh release create "$AGENT_RELEASE_TAG" "${files[@]}" "${flags[@]}" \
+          notes="$RUNNER_TEMP/bex-nightly-notes.md"
+          jq -r '"Source: \(.sha).\n\niPhone: [Install Nightly with TestFlight](\(.testflightUrl))"' target/apple-release/apple-build.json > "$notes"
+          gh release create "$AGENT_RELEASE_TAG" "${files[@]}" --draft --prerelease \
             --repo "$GITHUB_REPOSITORY" --target "$AGENT_RELEASE_SHA" \
-            --title "BEX $AGENT_RELEASE_CHANNEL $AGENT_BUILD_NUMBER" \
-            --notes "Source: $AGENT_RELEASE_SHA. Channel: $AGENT_RELEASE_CHANNEL."
+            --title "BEX nightly $AGENT_BUILD_NUMBER" --notes-file "$notes"
           echo "tag=$AGENT_RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - name: Remove signing credentials
         if: always()
@@ -155,8 +140,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
-      - name: Load App Store credentials for stable release submission
-        if: inputs.channel == 'stable'
+      - name: Initialize pinned tooling before loading credentials
+        run: scripts/dev-env.sh true
+      - name: Load TestFlight credentials
         env:
           ASC_PRIVATE_KEY: ${{ secrets.BEX_ASC_PRIVATE_KEY }}
         run: |
@@ -164,7 +150,7 @@ jobs:
           key="$RUNNER_TEMP/bex-asc.p8"
           printf '%s' "$ASC_PRIVATE_KEY" > "$key"
           echo "AGENT_ASC_PRIVATE_KEY_FILE=$key" >> "$GITHUB_ENV"
-      - name: Verify packages and publish Nightly or submit stable for review
+      - name: Verify packages and publish the externally approved Nightly
         env:
           GH_TOKEN: ${{ github.token }}
           AGENT_ASC_KEY_ID: ${{ secrets.BEX_ASC_KEY_ID }}

@@ -1128,7 +1128,9 @@ fn terminal_presentation_only_shows_loading_or_exceptional_status() {
         std::sync::Arc::make_mut(&mut snapshot.terminals).insert(
             "test".into(),
             std::sync::Arc::new(Terminal {
-                cwd: "/fixture".into(),
+                target: agent_core::state::TerminalTarget::Shell {
+                    cwd: "/fixture".into(),
+                },
                 size: agent_protocol::operations::TerminalSize { cols: 80, rows: 24 },
                 phase,
                 output: Default::default(),
@@ -1161,9 +1163,10 @@ fn terminal_disconnect_keeps_resumption_and_host_switch_drops_old_handles() {
     let (starting, _) = reduce(
         &snapshot,
         "",
-        Event::Intent(Intent::StartTerminal(op::StartTerminal {
+        Event::Intent(Intent::StartAccountTerminal(op::StartAccountTerminal {
             handle: "test".into(),
-            cwd: "/fixture".into(),
+            provider: ProviderKind::Claude,
+            id: "claude:account".into(),
             size: agent_protocol::operations::TerminalSize { cols: 80, rows: 24 },
         })),
     );
@@ -1187,6 +1190,10 @@ fn terminal_disconnect_keeps_resumption_and_host_switch_drops_old_handles() {
             )
             .unwrap()
             .accepts_input
+    );
+    assert_eq!(
+        disconnected.terminals["test"].target, starting.terminals["test"].target,
+        "disconnect must retain the chosen account scope"
     );
     let (late_failure, _) = reduce(
         &disconnected,

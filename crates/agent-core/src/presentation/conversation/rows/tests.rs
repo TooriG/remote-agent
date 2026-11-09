@@ -442,7 +442,9 @@ fn toggling_returns_choices_and_loads_without_mutating_the_frame_or_accepting_st
     let raw = render(thread, None);
     let collapsed = project(raw.clone(), TIMELINE, None);
     let id = header(&collapsed).id.clone();
-    let change = collapsed.toggle_activity(id.clone()).unwrap();
+    let change = collapsed
+        .toggle_activity(id.clone(), HashMap::new())
+        .unwrap();
     let load = change.load_items.unwrap();
     assert_eq!(load.thread_id.id, "thread");
     assert_eq!(load.turn_id.as_str(), "turn");
@@ -450,15 +452,24 @@ fn toggling_returns_choices_and_loads_without_mutating_the_frame_or_accepting_st
     assert!(!header(&collapsed).expanded);
     let opened = expanded(raw.clone(), change.expansion, Some(collapsed.clone()));
     assert!(header(&opened).expanded);
-    let close = opened.toggle_activity(id.clone()).unwrap();
+    let close = opened
+        .toggle_activity(id.clone(), opened.expansion.clone())
+        .unwrap();
     assert!(!close.expansion.contains_key(&id));
     assert!(close.load_items.is_none(), "closing never loads details");
     assert!(
         opened
-            .toggle_activity(first(&opened, RESPONSE).id.clone())
+            .toggle_activity(
+                first(&opened, RESPONSE).id.clone(),
+                opened.expansion.clone()
+            )
             .is_none()
     );
-    assert!(opened.toggle_activity("missing".into()).is_none());
+    assert!(
+        opened
+            .toggle_activity("missing".into(), HashMap::new())
+            .is_none()
+    );
     let other = ConversationRows::project(
         raw,
         PanelScope {
@@ -470,7 +481,7 @@ fn toggling_returns_choices_and_loads_without_mutating_the_frame_or_accepting_st
         Some(opened),
     );
     assert!(
-        other.toggle_activity(id).is_none(),
+        other.toggle_activity(id, HashMap::new()).is_none(),
         "retired host/window actions cannot load into another scope"
     );
 }
@@ -567,4 +578,90 @@ fn scope_components_are_unambiguous_even_when_they_contain_key_delimiters() {
     let other = ConversationRows::project(raw, other_scope, choices, TIMELINE, Some(first.clone()));
     assert_ne!(header(&first).id, header(&other).id);
     assert!(!header(&other).expanded);
+}
+
+#[test]
+fn rapid_activity_clicks_use_the_owners_pending_choices() {
+    let mut thread = source(true);
+    let completed = turn(&mut thread);
+    completed.items_summary = true;
+    completed.status = TurnStatus::Completed;
+    let raw = render(thread, None);
+    let collapsed = project(raw, DOCKED, None);
+    let id = header(&collapsed).id.clone();
+    let first = collapsed
+        .toggle_activity(id.clone(), HashMap::new())
+        .unwrap();
+    assert!(first.load_items.is_some());
+    let second = collapsed
+        .toggle_activity(id.clone(), first.expansion)
+        .unwrap();
+    assert!(
+        second.expansion.is_empty(),
+        "a second click closes before the frame is published"
+    );
+    assert!(
+        second.load_items.is_none(),
+        "closing must not start another history read"
+    );
+    let third = collapsed
+        .toggle_activity(id.clone(), [(id, "running".into())].into())
+        .unwrap();
+    assert!(
+        third.load_items.is_some(),
+        "a stale running choice does not expand completed work"
+    );
+}
+
+#[test]
+fn long_collapsed_activity_does_not_retain_hidden_native_render_values() {
+    let mut thread = source(true);
+    let command = items(&mut thread)[0].clone();
+    for index in 1..2000 {
+        let mut next = command.as_ref().clone();
+        next.id = format!("command-{index}").into();
+        items(&mut thread).insert(index, Arc::new(next));
+    }
+    let raw = render(thread, None);
+    let hidden: Vec<_> = raw.turns[0]
+        .rows
+        .iter()
+        .filter_map(|row| match &row.content {
+            ConversationRowContent::Activity { item, .. } => Some(item),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(hidden.len(), 2000);
+    let references: Vec<_> = hidden.iter().map(|item| Arc::strong_count(item)).collect();
+    let collapsed = project(raw.clone(), DOCKED, None);
+    assert_eq!(collapsed.source_item_count(), 2001);
+    assert_eq!(
+        collapsed.rows.len(),
+        2,
+        "only the activity header and response are native rows"
+    );
+    // Retained references measure hidden render allocation deterministically,
+    // without a device-dependent wall-clock performance threshold.
+    assert_eq!(
+        hidden
+            .iter()
+            .map(|item| Arc::strong_count(item))
+            .collect::<Vec<_>>(),
+        references
+    );
+    let opened = expanded(raw.clone(), expand(header(&collapsed)), Some(collapsed));
+    assert_eq!(rows(&opened, ACTIVITY).count(), 2000);
+    let closed = project(raw.clone(), DOCKED, Some(opened.clone()));
+    assert_eq!(closed.rows.len(), 2);
+    drop(opened);
+    assert_eq!(
+        hidden
+            .iter()
+            .map(|item| Arc::strong_count(item))
+            .collect::<Vec<_>>(),
+        references,
+        "closing releases native activity rows instead of caching hidden content"
+    );
+    let reopened = expanded(raw.clone(), expand(header(&closed)), Some(closed));
+    assert_eq!(rows(&reopened, ACTIVITY).count(), 2000);
 }

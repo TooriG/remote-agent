@@ -164,7 +164,7 @@ extension LaunchUITests {
         XCTAssertTrue(code.waitUntilExists(timeout: 15))
         XCTAssertTrue(app.navigationBars["Claude Code"].exists)
         captureScreen(app, named: "Claude sign in from account management")
-        code.tap(); code.typeText("fixture-code")
+        code.tap(); code.typeText("fixture-code#fixture-only")
         app.buttons["model.login.submit"].tap()
         let logout = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH 'model.account.claude:' AND NOT (identifier IN %@)", existingIDs
