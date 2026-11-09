@@ -282,6 +282,12 @@ pub(crate) trait Identity: Send + Sync {
     async fn list(&self) -> Result<op::Accounts, Failure>;
     async fn account(&self, command: AccountCommand) -> Result<AccountReply, Failure>;
     async fn usage(&self, id: &str) -> Result<op::AccountUsage, Failure>;
+    async fn account_terminal(&self, _id: &str) -> Result<crate::terminals::Launch, Failure> {
+        Err(Failure::new(
+            "unsupported",
+            "This provider has no interactive account setup",
+        ))
+    }
     async fn dsh_credentials(&self) -> Result<agent_protocol::dsh::Credentials, Failure> {
         Err(Failure::new(
             "unsupported",

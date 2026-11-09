@@ -15,6 +15,27 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 type Receipt = oneshot::Sender<Result<(), String>>;
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Launch {
+    pub directory: PathBuf,
+    pub arguments: Vec<String>,
+    pub environment: Vec<(String, Option<String>)>,
+}
+
+impl Launch {
+    pub(crate) fn shell(directory: String) -> Self {
+        Self {
+            directory: directory.into(),
+            arguments: crate::platform::terminal_command()
+                .iter()
+                .map(|value| (*value).into())
+                .collect(),
+            environment: Vec::new(),
+        }
+    }
+}
+
 struct Command {
     action: Action,
     complete: Receipt,
@@ -28,7 +49,7 @@ struct Record {
     handle: String,
     attached: Arc<Mutex<Option<SessionId>>>,
     started: Arc<std::sync::atomic::AtomicBool>,
-    cwd: PathBuf,
+    launch: Launch,
     input: mpsc::Sender<Command>,
     stop: CancellationToken,
     finished: watch::Receiver<Option<Result<(), String>>>,
@@ -50,7 +71,7 @@ impl Terminals {
         router: SessionRouter,
         owner: SessionId,
         handle: String,
-        cwd: String,
+        mut launch: Launch,
         size: TerminalSize,
     ) -> Result<agent_protocol::models::Empty, String> {
         if handle.is_empty()
@@ -62,18 +83,19 @@ impl Terminals {
         {
             return Err("invalid terminal handle or size".into());
         }
-        let cwd = tokio::fs::canonicalize(cwd)
+        let cwd = tokio::fs::canonicalize(&launch.directory)
             .await
             .map_err(|error| error.to_string())?;
         let cwd = dunce::simplified(&cwd).to_owned();
         if !cwd.is_dir() {
             return Err("terminal directory is unavailable".into());
         }
+        launch.directory = cwd;
         let key = format!("{}:{handle}", router.principal(owner)?);
         let existing = {
             let records = self.records.lock().unwrap();
             if let Some(record) = records.get(&key) {
-                if record.cwd != cwd {
+                if record.launch != launch {
                     return Err("terminal belongs to another device or directory".into());
                 }
                 Some(record.input.clone())
@@ -113,7 +135,7 @@ impl Terminals {
                     handle: handle.clone(),
                     attached: attached.clone(),
                     started: is_started.clone(),
-                    cwd: cwd.clone(),
+                    launch: launch.clone(),
                     input,
                     stop: stop.clone(),
                     finished,
@@ -133,7 +155,7 @@ impl Terminals {
                 input: receiver,
                 ready: Some(ready),
             };
-            let cleanup = worker.run(cwd, size).await;
+            let cleanup = worker.run(launch, size).await;
             if cleanup.is_ok()
                 && let Some(records) = records.upgrade()
             {
@@ -252,7 +274,7 @@ impl Terminals {
             .lock()
             .unwrap()
             .values()
-            .any(|record| record.cwd.starts_with(path))
+            .any(|record| record.launch.directory.starts_with(path))
     }
     pub(crate) async fn shutdown(&self) {
         let records: Vec<_> = self
@@ -289,15 +311,19 @@ mod tests {
             let terminals = Terminals::default();
             let first = router.open_authenticated_session(Some("phone".into()));
             for handle in ["one", "two"] {
-                terminals.start(router.clone(), first.id(), handle.into(), cwd.clone(), size).await.unwrap();
+                terminals.start(router.clone(), first.id(), handle.into(), Launch::shell(cwd.clone()), size).await.unwrap();
             }
+            let mut different_account = Launch::shell(cwd.clone());
+            different_account.environment.push(("CLAUDE_CONFIG_DIR".into(), Some("other-account".into())));
+            assert!(terminals.start(router.clone(), first.id(), "one".into(), different_account, size).await.is_err(),
+                "reattachment must not reuse a terminal with another credential scope");
             terminals.request(first.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "one".into(), data: "AGENT_RETAINED=survived\n".as_bytes().to_vec() })).await.unwrap();
             terminals.request(first.id(), &Call::DetachTerminal(agent_protocol::operations::DetachTerminal { handle: "one".into() })).await.unwrap();
             assert!(terminals.request(first.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "one".into(), data: b"a".to_vec() })).await.is_err());
             terminals.request(first.id(), &Call::WriteTerminal(agent_protocol::operations::TerminalWrite { process_handle: "two".into(), data: "true\n".as_bytes().to_vec() })).await.unwrap();
             router.close_session(first.id()); terminals.close_session(first.id());
             let mut second = router.open_authenticated_session(Some("phone".into()));
-            terminals.start(router.clone(), second.id(), "one".into(), cwd.clone(), size).await.unwrap();
+            terminals.start(router.clone(), second.id(), "one".into(), Launch::shell(cwd.clone()), size).await.unwrap();
             let mut restored = false;
             while let Some(line) = second.recv().await {
                 if matches!(agent_protocol::protocol::decode::<Notification>(&line).unwrap(), Notification::TerminalRestored { .. }) { restored=true; break; }
@@ -316,7 +342,7 @@ mod tests {
             }
             let stranger=router.open_authenticated_session(Some("other-phone".into()));
             assert!(terminals.request(stranger.id(),&Call::KillTerminal(agent_protocol::operations::TerminalKill { process_handle: "one".into() })).await.is_err());
-            terminals.start(router.clone(),stranger.id(),"one".into(),cwd,size).await.unwrap();
+            terminals.start(router.clone(),stranger.id(),"one".into(),Launch::shell(cwd),size).await.unwrap();
             assert_eq!(terminals.records.lock().unwrap().len(),3);
             terminals.shutdown().await;
         }).await.expect("reattach stalled");
@@ -332,7 +358,7 @@ mod tests {
                 let terminals = Terminals::default();
                 let router = SessionRouter::new();
                 let connection = router.open_session();
-                terminals.start(router, connection.id(), "jobs".into(), directory.path().to_string_lossy().into_owned(), TerminalSize {rows:24, cols:80}).await.unwrap();
+                terminals.start(router, connection.id(), "jobs".into(), Launch::shell(directory.path().to_string_lossy().into_owned()), TerminalSize {rows:24, cols:80}).await.unwrap();
                 // Disable interactive history expansion for Bash and Zsh;
                 // POSIX shells can run the job PID commands unchanged.
                 let command = "[ -z \"${BASH_VERSION-}\" ] || set +H\n[ -z \"${ZSH_VERSION-}\" ] || unsetopt BANG_HIST\nsleep 120 & first=$!; sleep 120 & printf '%s %s %s\\n' \"$$\" \"$first\" \"$!\" > owned-pids; wait\n";
@@ -389,7 +415,7 @@ mod tests {
             router.clone(),
             connection.id(),
             "starting".into(),
-            directory.path().to_string_lossy().into_owned(),
+            Launch::shell(directory.path().to_string_lossy().into_owned()),
             TerminalSize { rows: 24, cols: 80 },
         ));
         tokio::time::timeout(std::time::Duration::from_secs(5), async {

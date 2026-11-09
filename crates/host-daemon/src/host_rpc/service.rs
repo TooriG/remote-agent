@@ -277,6 +277,7 @@ impl HostRpcService {
                     | Call::ForkSession(_)
                     | Call::AnswerSession(_)
                     | Call::StartTerminal(_)
+                    | Call::StartAccountTerminal(_)
                     | Call::WriteFile(_)
                     | Call::Upload(_)
                     | Call::ReviewWorkspace(_)
@@ -458,19 +459,42 @@ impl HostRpcService {
             Call::RetryPreparation(params) => {
                 self.retry_preparation(&params.thread_id).await?.into()
             }
-            Call::StartTerminal(params) => (self
-                .inner
-                .terminals
-                .start(
-                    self.inner.router.clone(),
-                    session,
-                    params.handle.clone(),
-                    params.cwd.clone(),
-                    params.size,
-                )
-                .await
-                .map_err(|error| Failure::new("terminal_start_failed", error))?)
-            .into(),
+            Call::StartTerminal(params) => {
+                let launch = crate::terminals::Launch::shell(params.cwd.clone());
+                (self
+                    .inner
+                    .terminals
+                    .start(
+                        self.inner.router.clone(),
+                        session,
+                        params.handle.clone(),
+                        launch,
+                        params.size,
+                    )
+                    .await
+                    .map_err(|error| Failure::new("terminal_start_failed", error))?)
+                .into()
+            }
+            Call::StartAccountTerminal(params) => {
+                let launch = self
+                    .inner
+                    .providers
+                    .get(params.provider)?
+                    .account_terminal(&params.id)
+                    .await?;
+                self.inner
+                    .terminals
+                    .start(
+                        self.inner.router.clone(),
+                        session,
+                        params.handle.clone(),
+                        launch,
+                        params.size,
+                    )
+                    .await
+                    .map_err(|error| Failure::new("terminal_start_failed", error))?
+                    .into()
+            }
             Call::WriteTerminal(_)
             | Call::ResizeTerminal(_)
             | Call::KillTerminal(_)

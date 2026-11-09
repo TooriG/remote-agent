@@ -82,6 +82,7 @@ pub enum Intent {
     CancelAccountLogin(CancelAccountLogin),
     ForkSession(ForkSession),
     StartTerminal(StartTerminal),
+    StartAccountTerminal(StartAccountTerminal),
     DetachTerminal(DetachTerminal),
     KillTerminal(KillTerminal),
     CloseTerminal {

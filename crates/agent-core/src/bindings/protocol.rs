@@ -781,6 +781,13 @@ struct StartTerminal {
     pub size: TerminalSize,
 }
 #[uniffi::remote(Record)]
+struct StartAccountTerminal {
+    pub handle: String,
+    pub provider: ProviderKind,
+    pub id: String,
+    pub size: TerminalSize,
+}
+#[uniffi::remote(Record)]
 struct ReviewWorkspace {
     pub cwd: String,
 }

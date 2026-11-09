@@ -56,7 +56,7 @@ pub(crate) struct Terminal {
     runtime: tokio::runtime::Handle,
     events: async_channel::Sender<Event>,
     handle: String,
-    cwd: String,
+    target: agent_core::state::TerminalTarget,
     started: bool,
     sequence: u64,
     size: TerminalSize,
@@ -73,7 +73,7 @@ pub(crate) struct Terminal {
 impl Terminal {
     pub(crate) fn new(
         store: Arc<Store>,
-        cwd: String,
+        target: agent_core::state::TerminalTarget,
         handle: String,
         window: &mut Window,
         cx: &mut App,
@@ -101,7 +101,7 @@ impl Terminal {
                 _snapshots: snapshots,
                 runtime,
                 handle,
-                cwd,
+                target,
                 started: false,
                 sequence: 0,
                 size,
@@ -206,11 +206,23 @@ impl Terminal {
         self.snapshot = snapshot;
         if self.snapshot.connection.connected && !self.started {
             self.started = true;
-            self.dispatch(Intent::StartTerminal(op::StartTerminal {
-                handle: self.handle.clone(),
-                cwd: self.cwd.clone(),
-                size: self.size,
-            }));
+            self.dispatch(match &self.target {
+                agent_core::state::TerminalTarget::Shell { cwd } => {
+                    Intent::StartTerminal(op::StartTerminal {
+                        handle: self.handle.clone(),
+                        cwd: cwd.clone(),
+                        size: self.size,
+                    })
+                }
+                agent_core::state::TerminalTarget::Account { provider, id } => {
+                    Intent::StartAccountTerminal(op::StartAccountTerminal {
+                        handle: self.handle.clone(),
+                        provider: *provider,
+                        id: id.clone(),
+                        size: self.size,
+                    })
+                }
+            });
         }
         if let Some(terminal) = self.snapshot.terminals.get(&self.handle) {
             let chunks: Vec<_> = terminal
@@ -446,7 +458,12 @@ impl Render for Terminal {
                     .py_2()
                     .text_xs()
                     .text_color(rgb(crate::appearance::MUTED))
-                    .child(div().flex_1().child(self.cwd.clone()))
+                    .child(div().flex_1().child(match &self.target {
+                        agent_core::state::TerminalTarget::Shell { cwd } => cwd.clone(),
+                        agent_core::state::TerminalTarget::Account { .. } => {
+                            language.text("Claude Code のアカウント確認").into()
+                        }
+                    }))
                     .child(status)
                     .child(
                         div()
@@ -862,7 +879,9 @@ mod tests {
             terminals: Arc::new(std::collections::BTreeMap::from([(
                 "retained-shell".into(),
                 Arc::new(agent_core::state::Terminal {
-                    cwd: "/fixture".into(),
+                    target: agent_core::state::TerminalTarget::Shell {
+                        cwd: "/fixture".into(),
+                    },
                     size,
                     phase: TerminalPhase::Detached,
                     sequence,
@@ -906,7 +925,9 @@ mod tests {
         let terminal = window.update(|window, cx| {
             Terminal::new(
                 store.clone(),
-                "/fixture".into(),
+                agent_core::state::TerminalTarget::Shell {
+                    cwd: "/fixture".into(),
+                },
                 "retained-shell".into(),
                 window,
                 cx,

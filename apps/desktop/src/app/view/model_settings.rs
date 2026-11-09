@@ -213,6 +213,22 @@ impl Preferences {
                 .child(language.text("利用枠は表示時刻に自動リセットされます。上限の変更・追加クレジットは管理画面で行えます。"));
             row = row.child(manage_usage).child(hint);
         }
+        if provider == ProviderKind::Claude {
+            let id = account.id.clone();
+            row = row.child(button(
+                format!("account-setup-{index}"),
+                language.text("Claude Code を開いて確認"),
+                cx,
+                move |s, _, cx| {
+                    s.opened = false;
+                    cx.emit(super::super::preferences::PreferencesEvent::OpenAccountTerminal {
+                        provider, id: id.clone(),
+                    });
+                },
+            ).disabled(disabled))
+            .child(div().text_xs().text_color(rgb(appearance::MUTED))
+                .child(language.text("このアカウントの規約・初期設定を確認できます。完了後、アカウントを選び直してください。")));
+        }
         if confirming {
             row = row
                 .child(div().text_sm().child(

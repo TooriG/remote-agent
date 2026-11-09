@@ -10,6 +10,10 @@ pub(super) enum PreferencesEvent {
     Notice(errors::NoticeAction),
     Failed(String),
     OpenBrowser(String),
+    OpenAccountTerminal {
+        provider: agent_protocol::session::ProviderKind,
+        id: String,
+    },
     OpenChat(SessionRef),
     Completed {
         epoch: u64,

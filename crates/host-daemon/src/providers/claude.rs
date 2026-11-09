@@ -1707,6 +1707,13 @@ fn now_ms() -> u64 {
 
 #[async_trait::async_trait]
 impl crate::providers::Identity for Claude {
+    async fn account_terminal(&self, id: &str) -> Result<crate::terminals::Launch, Failure> {
+        self.accounts
+            .lock()
+            .await
+            .terminal(id)
+            .map_err(|error| Failure::new("account_operation_failed", error))
+    }
     async fn list(&self) -> Result<op::Accounts, crate::providers::Failure> {
         // Serialize native identity discovery without holding the account state
         // lock across CLI/OAuth I/O. Cached models and skills still need to read
@@ -1741,7 +1748,7 @@ impl crate::providers::Identity for Claude {
             .await
             .request(command)
             .await
-            .map_err(|e| crate::providers::Failure::new("account_operation_failed", e))
+            .map_err(crate::providers::Failure::from)
     }
     async fn usage(&self, id: &str) -> Result<op::AccountUsage, crate::providers::Failure> {
         let fetch = self

@@ -216,6 +216,8 @@ private fun AccountSettings(
     ) {
         Text(language.text("アカウントを追加"))
     }
+    // An ended login has no form left to show why it ended.
+    settings.accountLoginError(provider)?.let { ErrorTextView(it) }
     signingOut?.let { account ->
         AlertDialog(
             onDismissRequest = { signingOut = null },

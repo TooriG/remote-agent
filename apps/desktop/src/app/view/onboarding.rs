@@ -687,10 +687,9 @@ mod tests {
         window.update(|window, cx| {
             view.read(cx).0.clone().update(cx, |view, cx| {
                 view.preferences.update(cx, |preferences, cx| {
-                    preferences
-                        .account
-                        .code
-                        .update(cx, |input, cx| input.set_value("fixture-code", window, cx));
+                    preferences.account.code.update(cx, |input, cx| {
+                        input.set_value("fixture-code#fixture-only", window, cx)
+                    });
                 });
             })
         });

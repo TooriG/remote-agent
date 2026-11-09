@@ -357,6 +357,26 @@ impl Desktop {
                         preferences::PreferencesEvent::OpenBrowser(url) => {
                             view.open_browser(view.panel_scope(), url, cx)
                         }
+                        preferences::PreferencesEvent::OpenAccountTerminal { provider, id } => {
+                            if let Some(session) = &view.session {
+                                let terminal = crate::terminal::Terminal::new(
+                                    session.host.store.clone(),
+                                    agent_core::state::TerminalTarget::Account {
+                                        provider: *provider,
+                                        id: id.clone(),
+                                    },
+                                    format!("account-setup-{}", uuid::Uuid::new_v4()),
+                                    window,
+                                    cx,
+                                );
+                                let id =
+                                    view.open_surface(view.panel_scope(), Panel::Terminal, None);
+                                view.surface_resources
+                                    .insert(id, SurfaceResource::Terminal(terminal));
+                                view.tab = Tab::Chat;
+                                view.activate_surface(id, window, cx);
+                            }
+                        }
                         preferences::PreferencesEvent::OpenChat(id) => {
                             view.open_chat(id.clone(), window, cx)
                         }
@@ -1485,7 +1505,9 @@ impl Desktop {
                     };
                     let terminal = crate::terminal::Terminal::new(
                         session.host.store.clone(),
-                        self.publication.pane().navigation.cwd.clone(),
+                        agent_core::state::TerminalTarget::Shell {
+                            cwd: self.publication.pane().navigation.cwd.clone(),
+                        },
                         format!("agent-terminal-{}", uuid::Uuid::new_v4()),
                         window,
                         cx,

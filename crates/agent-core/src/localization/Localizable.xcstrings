@@ -16512,6 +16512,54 @@
           }
         }
       }
+    },
+    "Claude Code を開いて確認": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review in Claude Code"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code を開いて確認"
+          }
+        }
+      }
+    },
+    "このアカウントの規約・初期設定を確認できます。完了後、アカウントを選び直してください。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review terms and setup for this account. Select the account again when finished."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアカウントの規約・初期設定を確認できます。完了後、アカウントを選び直してください。"
+          }
+        }
+      }
+    },
+    "Claude Code のアカウント確認": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code account setup"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code のアカウント確認"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
