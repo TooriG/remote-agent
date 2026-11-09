@@ -597,13 +597,22 @@ fn list(timeline: Timeline) -> impl IntoElement {
             }
         }
     });
-    let target = computed(move || {
+    // A signal, not a memo: the rows read it while the conversation changes
+    // under them, and a signal always holds the last conversation it named.
+    let current = move || {
         (
             connection.host.get(),
             connection
                 .composer
                 .with(|p| p.controls.navigation.draft_key.clone()),
         )
+    };
+    let target = signal(untracked(current));
+    effect(move || {
+        let now = current();
+        if target.with_untracked(|target| *target != now) {
+            target.set(now);
+        }
     });
     effect(move || {
         target.get();
