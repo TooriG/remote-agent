@@ -498,7 +498,7 @@ internal class AndroidAppModel(private val context: Context, private val prefere
 
     fun toggleActivity(id: String) {
         val current = conversation ?: return
-        val change = current.toggleActivity(id) ?: return
+        val change = current.toggleActivity(id, activityExpansion) ?: return
         activityExpansion = change.expansion
         projectConversation(current.source(), current.scope())
         change.loadItems?.let { perform(Intent.LoadTurnItems(it)) {} }

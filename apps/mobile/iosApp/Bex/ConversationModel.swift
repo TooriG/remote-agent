@@ -35,8 +35,7 @@ final class ConversationModel {
     @ObservationIgnored private var presentationTask: Task<Void, Never>?
     @ObservationIgnored private var pendingPresentation: ProjectionInput?
     @ObservationIgnored private var recentConversations: [ConversationPresentation] = []
-    @ObservationIgnored private var visibleProjection: ConversationRows?
-    @ObservationIgnored private var visibleRows: [ThreadConversationRow] = []
+    @ObservationIgnored private var activityExpansionOverrides = [String: String]()
 
     var store: AgentStore? {
         session.store()
@@ -311,55 +310,50 @@ extension ConversationModel {
         }
     }
 
-    /// The view owns expansion choices; this owner memoizes the pure Rust result.
-    func conversationRows(_ conversation: ConversationPresentation, expansion: [String: String])
-        -> (rows: [ThreadConversationRow], sourceItemCount: UInt32) {
-        let next = ConversationRows.project(
-            source: conversation.projection, scope: conversation.scope, expansion: expansion,
-            policy: ConversationRowPolicy(requests: false, progress: .hidden), previous: visibleProjection
-        )
-        if let previous = visibleProjection, next.unchanged(other: previous) {
-            return (visibleRows, next.sourceItemCount())
+    func toggleActivity(_ id: String, scope: PanelScope) {
+        guard let conversation, conversation.scope == scope,
+              scope == snapshot.panelScope(host: host, draft: coreDraftKey),
+              let change = conversation.projection.toggleActivity(id: id, expansion: activityExpansionOverrides)
+        else { return }
+        activityExpansionOverrides = change.expansion
+        projectConversation(publication.conversation())
+        if let params = change.loadItems {
+            perform(.loadTurnItems(params))
         }
-        visibleProjection = next
-        visibleRows = conversation.rows(next.rows())
-        return (visibleRows, next.sourceItemCount())
-    }
-
-    func activityExpansion(_ id: String, in conversation: ConversationPresentation,
-                           expansion: [String: String]) -> ActivityExpansionChange? {
-        guard conversation.scope == snapshot.panelScope(host: host, draft: coreDraftKey) else { return nil }
-        _ = conversationRows(conversation, expansion: expansion)
-        return visibleProjection?.toggleActivity(id: id)
     }
 
     private func projectConversation(_ rendered: RenderedConversation?) {
         guard let rendered else {
             conversation = nil
             pendingPresentation = nil
-            visibleProjection = nil
-            visibleRows = []
+            activityExpansionOverrides.removeAll()
             return
         }
         let scope = snapshot.panelScope(host: host, draft: coreDraftKey)
         if conversation?.scope != scope {
-            conversation = recentConversations.first { $0.scope == scope }
+            activityExpansionOverrides.removeAll()
+            conversation = nil
         }
         pendingPresentation = ProjectionInput(
             rendered: rendered,
             scope: scope,
-            connection: snapshot.connectionGeneration()
+            connection: snapshot.connectionGeneration(),
+            expansion: activityExpansionOverrides
         )
         guard presentationTask == nil else { return }
         presentationTask = Task { [weak self] in
             while let self, let input = pendingPresentation {
                 pendingPresentation = nil
-                let rendered = await Task.detached(priority: .userInitiated) { [previous = conversation] in
-                    ConversationPresentation.project(input.rendered, scope: input.scope, previous: previous)
+                let previous = conversation ?? recentConversations.first { $0.scope == input.scope }
+                let rendered = await Task.detached(priority: .userInitiated) {
+                    ConversationPresentation.project(input.rendered, scope: input.scope,
+                                                     expansion: input.expansion, previous: previous)
                 }.value
                 if snapshot.panelScope(host: host, draft: coreDraftKey) == input.scope,
                    snapshot.connectionGeneration() == input.connection,
-                   snapshot.uiLanguage() == input.rendered.language() {
+                   snapshot.uiLanguage() == input.rendered.language(),
+                   activityExpansionOverrides == input.expansion,
+                   publication.conversation() != nil {
                     conversation = rendered
                     if rendered.id != nil {
                         recentConversations.removeAll { $0.scope == rendered.scope }
@@ -379,4 +373,5 @@ private struct ProjectionInput {
     let rendered: RenderedConversation
     let scope: PanelScope
     let connection: UInt64
+    let expansion: [String: String]
 }

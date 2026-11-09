@@ -842,12 +842,12 @@ impl ConversationView {
                         .child(div().flex_1().min_w_0().text_ellipsis().child(content))
                         .child(if expanded { "⌄" } else { "›" })
                         .on_click(cx.listener(move |view, _, _, cx| {
-                            let Some(change) = view
-                                .timeline
-                                .projected
-                                .as_ref()
-                                .and_then(|rows| rows.toggle_activity(toggle.clone()))
-                            else {
+                            let Some(change) = view.timeline.projected.as_ref().and_then(|rows| {
+                                rows.toggle_activity(
+                                    toggle.clone(),
+                                    view.timeline.expanded_work.clone(),
+                                )
+                            }) else {
                                 return;
                             };
                             view.timeline.expanded_work = change.expansion;

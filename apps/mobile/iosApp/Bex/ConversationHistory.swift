@@ -178,12 +178,8 @@ extension ThreadScreen {
         if turn.activityCanCollapse {
             Button {
                 scroll.following = false
-                guard let conversation,
-                      let change = model.activityExpansion(id, in: conversation, expansion: activityExpansionOverrides)
-                else { return }
-                activityExpansionOverrides = change.expansion
-                if let params = change.loadItems {
-                    model.perform(.loadTurnItems(params))
+                if let conversation {
+                    model.toggleActivity(id, scope: conversation.scope)
                 }
             } label: {
                 header

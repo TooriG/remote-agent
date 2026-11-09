@@ -35,13 +35,15 @@ internal fun ThreadDetailFixture(
     composer: @androidx.compose.runtime.Composable (() -> Unit) -> Unit,
 ) {
     var current by remember(projection) { mutableStateOf(projection) }
+    var expansion by remember(projection) { mutableStateOf(emptyMap<String, String>()) }
     ThreadDetailScreen(
         dev.remoteagent.core.Presentation.fromSnapshot(snapshot, "").conversationContext(),
         current,
         perform,
         { id ->
             current?.let { before ->
-                before.toggleActivity(id)?.let { change ->
+                before.toggleActivity(id, expansion)?.let { change ->
+                    expansion = change.expansion
                     current =
                         ConversationRows.project(
                             before.source(),
