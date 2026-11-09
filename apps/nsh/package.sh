@@ -56,7 +56,7 @@ PY
 icon_info="$target/nsh-preview/ios-icon-info.plist"
 xcrun actool apps/mobile/iosApp/Bex/Assets.xcassets --compile "$bundle" \
     --platform iphonesimulator --minimum-deployment-target 26.0 --target-device iphone \
-    --target-device ipad --app-icon AppIconPreview --output-partial-info-plist "$icon_info" > /dev/null
+    --target-device ipad --app-icon AppIconDev --output-partial-info-plist "$icon_info"
 python3 - "$bundle/Info.plist" "$icon_info" <<'PY'
 import plistlib
 import sys
