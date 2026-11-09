@@ -40,6 +40,14 @@ pub(crate) mod colors {
 }
 
 pub(crate) const RADIUS: f32 = 6.0;
+pub(crate) const HEADER_HEIGHT: f32 = 52.0;
+
+/// T3 Code's distance from the window's end to its top-right controls (12
+/// points and a pixel), past the window controls Windows draws over the bar.
+#[cfg(desktop)]
+pub(crate) fn titlebar_end_inset() -> Points {
+    px(13.0 + nsh_core::element::desktop::title_bar().right.0)
+}
 
 /// An icon: its markup, drawn in the current text color. Every platform draws
 /// the same Lucide set, as the existing desktop client did, so icons side by
@@ -63,8 +71,8 @@ impl Icon {
     pub(crate) const ARROW_LEFT: Self = icon!(ArrowLeft);
     pub(crate) const ARROW_RIGHT: Self = icon!(ArrowRight);
     pub(crate) const ARROW_UP: Self = icon!(ArrowUp);
+    pub(crate) const ARROW_DOWN: Self = icon!(ArrowDown);
     pub(crate) const GIT_FORK: Self = icon!(GitFork);
-    pub(crate) const UNDO: Self = icon!(Undo2);
     pub(crate) const WRAP: Self = icon!(TextWrap);
     pub(crate) const MAXIMIZE: Self = icon!(Maximize2);
     pub(crate) const MINIMIZE: Self = icon!(Minimize2);
@@ -92,7 +100,6 @@ impl Icon {
     pub(crate) const FOLDER: Self = icon!(Folder);
     pub(crate) const GLOBE: Self = icon!(Globe);
     pub(crate) const NETWORK: Self = icon!(Network);
-    pub(crate) const LAYOUT: Self = icon!(PanelsRightBottom);
     pub(crate) const KEYBOARD: Self = icon!(Keyboard);
     pub(crate) const FOLDER_PLUS: Self = icon!(FolderPlus);
     pub(crate) const LOADER: Self = icon!(Loader);

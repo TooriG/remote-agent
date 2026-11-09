@@ -34,6 +34,7 @@ mod notices;
 mod onboarding;
 #[cfg(desktop)]
 mod permissions;
+mod plans;
 mod projects;
 mod queue;
 mod requests;
@@ -269,6 +270,8 @@ fn app_content(
     let sidebar = computed(move || {
         sidebar_shown.get() == agent_core::presentation::sidebar::SidebarPresentation::Beside
     });
+    #[cfg(desktop)]
+    let sidebar_width = signal(sidebar::WIDTH);
     let searching = signal(false);
     let query = signal(String::new());
     let primary = area == Area::Mobile;
@@ -328,7 +331,14 @@ fn app_content(
     // T3 Code's chat canvas, the conversation beside the sidebar: its details
     // card floats over it, as Bex's side panel stands beside the timeline.
     #[cfg(desktop)]
-    let canvas = move || window().width.0 - if sidebar.get() { sidebar::WIDTH } else { 0.0 };
+    let canvas = move || {
+        window().width.0
+            - if sidebar.get() {
+                sidebar_width.get()
+            } else {
+                0.0
+            }
+    };
     #[cfg(not(desktop))]
     let canvas = move || window().width.0;
     let content = move || {
@@ -391,7 +401,7 @@ fn app_content(
         #[cfg(desktop)]
         Area::Shell => {
             use nsh_core::{desktop::TitleBarStyle, element::desktop::set_title_bar};
-            set_title_bar(TitleBarStyle::Hidden, Some(px(sidebar::HEADER_HEIGHT)));
+            set_title_bar(TitleBarStyle::Hidden, Some(px(ui::HEADER_HEIGHT)));
             // An update's worker replaces the app once its event loop ends.
             effect(move || {
                 if state.with(|state| state.quitting) {
@@ -407,88 +417,79 @@ fn app_content(
                     && !hosts.with(Vec::is_empty)
                     && workspace.state.with(|s| s.open)
             };
-            let layout = move || workspace.state.with(|s| s.layout);
+            let maximized = move || tools() && workspace.state.with(|s| s.maximized);
+            let tool_width = signal(540.0_f32);
             let details = signal(true);
             let details_inline = move || window().width.0 >= 1080.0 && !tools();
             let main = move || {
-                view()
+                nsh_base::h_resizable()
+                    .handle_class("bg-border group-hover:bg-primary group-active:bg-primary")
+                    .handle_accessibility_label(Some(SharedString::from(tr(
+                        "ツールパネルのサイズを変更",
+                    ))))
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
-                    .flex_row()
-                    .style_when(
-                        move || layout() == agent_core::panels::PanelLayout::Bottom,
-                        |s| s.flex_col(),
-                    )
-                    .child(when(
-                        move || !tools() || layout() != agent_core::panels::PanelLayout::Expanded,
-                        move || {
-                            view()
-                                .flex_1()
-                                .min_w_0()
-                                .child(sidebar::conversation_header(
-                                    sidebar,
-                                    move || navigate(Navigation::ToggleSidebar(window().width.0)),
-                                    sidebar::breadcrumb(title, project, move || {
-                                        toolbar_action("compose")
-                                    }),
-                                    sidebar::panel_toggles(
-                                        details,
-                                        details_inline,
-                                        tools,
+                    .child(
+                        nsh_base::resizable_panel()
+                            .visible(move || !maximized())
+                            .min_size(px(360.0))
+                            .child(
+                                view()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .accessibility_elements_hidden(maximized)
+                                    .child(sidebar::conversation_header(
+                                        sidebar,
                                         move || {
-                                            application.with(|application| {
-                                                application.set_panel_open(
-                                                    workspace.scope.get_untracked(),
-                                                    true,
-                                                )
-                                            })
+                                            navigate(Navigation::ToggleSidebar(window().width.0))
                                         },
+                                        sidebar::breadcrumb(title, project, move || {
+                                            toolbar_action("compose")
+                                        }),
+                                        sidebar::panel_toggles(
+                                            details,
+                                            details_inline,
+                                            tools,
+                                            move || {
+                                                application.with(|application| {
+                                                    application.set_panel_open(
+                                                        workspace.scope.get_untracked(),
+                                                        true,
+                                                    )
+                                                })
+                                            },
+                                        ),
+                                    ))
+                                    .child(
+                                        view()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .flex_row()
+                                            .child(content())
+                                            .child(when(
+                                                move || details.get() && details_inline(),
+                                                desktop_workspace::card,
+                                            ))
+                                            .child(notices::thread_error()),
                                     ),
-                                ))
-                                .child(
-                                    view()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .flex_row()
-                                        .child(content())
-                                        .child(when(
-                                            move || details.get() && details_inline(),
-                                            desktop_workspace::card,
-                                        ))
-                                        .child(notices::thread_error()),
-                                )
-                        },
-                    ))
-                    .child(when(tools, move || {
-                        view()
-                            .style_when(
-                                move || layout() == agent_core::panels::PanelLayout::Right,
-                                |s| {
-                                    s.w(px(540.0))
-                                        .border_l_1()
-                                        .border_l_color(ui::colors::BORDER)
-                                },
-                            )
-                            .style_when(
-                                move || layout() == agent_core::panels::PanelLayout::Bottom,
-                                |s| {
-                                    s.h(px(360.0))
-                                        .border_t_1()
-                                        .border_t_color(ui::colors::BORDER)
-                                },
-                            )
-                            .style_when(
-                                move || layout() == agent_core::panels::PanelLayout::Expanded,
-                                |s| s.flex_1(),
-                            )
-                            .min_w_0()
+                            ),
+                    )
+                    .child(
+                        nsh_base::resizable_panel()
+                            .visible(tools)
+                            .size(move || (!maximized()).then(|| px(tool_width.get())))
+                            .min_size(move || px(if maximized() { 0.0 } else { 360.0 }))
+                            .max_size(move || {
+                                (!maximized()).then(|| {
+                                    px((window().width.0 * 0.7).min(canvas() - 360.0).max(360.0))
+                                })
+                            })
+                            .on_resize(move |size: &Points| tool_width.set(size.0))
                             .child(workbench::screen(Some(
                                 when(
-                                    move || {
-                                        layout() == agent_core::panels::PanelLayout::Expanded
-                                            && !sidebar.get()
-                                    },
+                                    move || maximized() && !sidebar.get(),
                                     move || {
                                         sidebar::header(false, move || {
                                             navigate(Navigation::ToggleSidebar(window().width.0))
@@ -496,8 +497,8 @@ fn app_content(
                                     },
                                 )
                                 .into_element(),
-                            )))
-                    }))
+                            ))),
+                    )
             };
             return view()
                 .flex_1()
@@ -512,43 +513,61 @@ fn app_content(
                     view()
                         .flex_1()
                         .min_w_0()
-                        .flex_row()
                         .accessibility_elements_hidden(move || settings.get())
-                        .child(when(
-                            move || sidebar.get() && !setup.get(),
-                            move || {
-                                sidebar::sidebar(hosts, move || toolbar_action("compose"), false)
-                            },
-                        ))
                         .child(
-                            view()
-                                .flex_1()
-                                .min_w_0()
-                                .child(notices())
-                                .child(when(move || hosts.with(Vec::is_empty), connections::hero))
-                                .child(when(
-                                    move || !hosts.with(Vec::is_empty) && setup.get(),
-                                    move || onboarding::page(hosts),
-                                ))
-                                .child(when(
-                                    move || !hosts.with(Vec::is_empty) && !setup.get(),
-                                    main,
-                                )),
-                        )
-                        .child(when(
-                            move || {
-                                !setup.get()
-                                    && sidebar_shown.get()
-                                        == agent_core::presentation::sidebar::SidebarPresentation::Sheet
-                            },
-                            move || {
-                                sidebar::sheet(
-                                    hosts,
-                                    move || toolbar_action("compose"),
-                                    move || navigate(Navigation::DismissSidebarSheet),
+                            nsh_base::h_resizable()
+                                .handle_class("bg-border group-hover:bg-primary group-active:bg-primary")
+                                .handle_accessibility_label(Some(SharedString::from(tr("サイドバーの幅を変更"))))
+                                .child(
+                                    nsh_base::resizable_panel()
+                                        .visible(move || sidebar.get() && !setup.get())
+                                        .fixed(true)
+                                        .size(move || Some(px(sidebar_width.get())))
+                                        .min_size(px(256.0))
+                                        .max_size(move || Some(px((window().width.0 - 360.0).min(window().width.0 / 2.0).max(256.0))))
+                                        .on_resize(move |size: &Points| sidebar_width.set(size.0))
+                                        .child(
+                                            view()
+                                                .size_full()
+                                                .accessibility_elements_hidden(move || !sidebar.get() || setup.get())
+                                                .child(sidebar::sidebar(hosts, move || toolbar_action("compose"))),
+                                        ),
                                 )
-                            },
-                        )),
+                                .child(
+                                    nsh_base::resizable_panel()
+                                        .min_size(px(360.0))
+                                        .child(
+                                            view()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .min_h_0()
+                                                .child(notices())
+                                                .child(when(move || hosts.with(Vec::is_empty), connections::hero))
+                                                .child(when(
+                                                    move || !hosts.with(Vec::is_empty) && setup.get(),
+                                                    move || onboarding::page(hosts),
+                                                ))
+                                                .child(when(
+                                                    move || !hosts.with(Vec::is_empty) && !setup.get(),
+                                                    main,
+                                                ))
+                                                .child(when(
+                                                    move || {
+                                                        !setup.get()
+                                                            && sidebar_shown.get()
+                                                                == agent_core::presentation::sidebar::SidebarPresentation::Sheet
+                                                    },
+                                                    move || {
+                                                        sidebar::sheet(
+                                                            hosts,
+                                                            move || toolbar_action("compose"),
+                                                            move || navigate(Navigation::DismissSidebarSheet),
+                                                        )
+                                                    },
+                                                )),
+                                        ),
+                                ),
+                        ),
                 )
                 .child(when(
                     move || settings.get(),

@@ -327,6 +327,12 @@ impl Client {
         pane: Option<u64>,
         intent: Intent,
     ) -> Result<Arc<agent_core::client::native::Receipt>, AgentError> {
+        #[cfg(desktop)]
+        if let Intent::ReadThread(read) = &intent
+            && read.open
+        {
+            tracing::info!(target: "agent", operation = "task.open", session = ?read.thread_id, "Task selected");
+        }
         if let Some(id) = pane {
             return self.pane(host, id)?.dispatch(intent);
         }

@@ -19,6 +19,10 @@ final class ConversationModel {
     private(set) var conversationContext: ConversationContext
     private(set) var composer: ComposerPresentation
     private(set) var composerControls: ComposerControls
+    /// The shared core summary for the workspace-change badge. Keep this on
+    /// the observable model because `publication` is intentionally ignored by
+    /// Observation and workspace reviews can change without composer changes.
+    private(set) var composerReview: ComposerReview?
     private(set) var files: AgentCore.Files
     private(set) var terminals = Terminals.empty()
     private(set) var conversation: ConversationPresentation?
@@ -53,6 +57,7 @@ final class ConversationModel {
         self.composer = composer
         composerControls = composer.controls()
         files = empty.snapshot().files(paneId: "")!
+        composerReview = empty.composerReview(isSideChat: pane != nil)
         if let value = try? currentPresentation() {
             publish(value)
         }
@@ -119,6 +124,7 @@ final class ConversationModel {
         if changes.composerControls {
             composerControls = value.composer().controls()
         }
+        composerReview = value.composerReview(isSideChat: pane != nil)
         if changes.context {
             conversationContext = value.conversationContext()
         }

@@ -3,7 +3,6 @@ use crate::{
     Connection,
     shared::Shared,
     ui::{self, Enabled, Icon, colors},
-    workbench::{Reveal, Workbench},
 };
 use agent_core::{
     presentation::{
@@ -105,7 +104,6 @@ pub(crate) fn workspace_summary(
 
 pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
     let connection = use_context::<Connection>().unwrap();
-    let workspace = use_context::<Workbench>().unwrap();
     let cwd = stored(cwd);
     let host = stored(host);
     let review = computed(move || {
@@ -190,6 +188,14 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
         _ => String::new(),
     };
     let list = element_ref();
+    let paths = move || {
+        files.with(|files| {
+            files
+                .as_ref()
+                .map(|files| files.iter().map(|file| file.path.clone()).collect())
+                .unwrap_or_else(Vec::new)
+        })
+    };
     let show_file = move |path: String| {
         collapsed.update(|collapsed| {
             collapsed.remove(&path);
@@ -200,27 +206,6 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
         if let Some(index) = index {
             crate::conversation::reveal_row(list, index as u32);
         }
-    };
-    // The changed-files card's file shows once the files do.
-    effect(move || {
-        if body.get() != DiffBody::Files {
-            return;
-        }
-        if let Some(path) = workspace.take_reveal(|reveal| match reveal {
-            #[cfg(desktop)]
-            Reveal::DiffFile(path) => Some(path.clone()),
-            Reveal::Page(_) => None,
-        }) {
-            show_file(path);
-        }
-    });
-    let paths = move || {
-        files.with(|files| {
-            files
-                .as_ref()
-                .map(|files| files.iter().map(|file| file.path.clone()).collect())
-                .unwrap_or_else(Vec::new)
-        })
     };
     view()
         .flex_1()
