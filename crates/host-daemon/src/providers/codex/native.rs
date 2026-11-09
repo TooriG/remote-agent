@@ -122,6 +122,18 @@ pub(crate) fn item_status(value: Option<&str>) -> ItemStatus {
     }
 }
 
+/// The attempt a retry's message names, as Codex writes it ("Reconnecting...
+/// 2/5"): the first `attempt/max` in it, both from 1.
+fn retry_progress(message: &str) -> Option<(u32, u32)> {
+    message.split_whitespace().find_map(|word| {
+        let (attempt, max) = word
+            .trim_matches(|c: char| !c.is_ascii_digit() && c != '/')
+            .split_once('/')?;
+        let (attempt, max) = (attempt.parse().ok()?, max.parse().ok()?);
+        (attempt > 0 && max > 0).then_some((attempt, max))
+    })
+}
+
 pub(crate) fn execution_error(value: &Value, retrying: bool) -> ExecutionError {
     let info = &value["codexErrorInfo"];
     let code = info.as_str().or_else(|| {
@@ -169,7 +181,11 @@ pub(crate) fn execution_error(value: &Value, retrying: bool) -> ExecutionError {
             .unwrap_or_else(|| "native execution failed without a message".into()),
         details: value["additionalDetails"].as_str().map(str::to_owned),
         provider_code: code.map(str::to_owned),
-        retry: retrying.then_some(RetryEvidence { retrying }),
+        retry: retrying.then(|| {
+            let (attempt, max) = retry_progress(value["message"].as_str().unwrap_or_default())
+                .map_or((None, None), |(attempt, max)| (Some(attempt), Some(max)));
+            RetryEvidence::new(attempt, max)
+        }),
     }
 }
 
@@ -1099,7 +1115,13 @@ mod tests {
             true,
         );
         assert_eq!(error.category, ErrorCategory::RateLimited);
-        assert_eq!(error.retry, Some(RetryEvidence { retrying: true }));
+        assert_eq!(error.retry, Some(RetryEvidence::new(None, None)));
+        // Codex numbers a reconnect only in its message.
+        let error = execution_error(
+            &json!({"message":"Reconnecting... 2/5","codexErrorInfo":"responseStreamDisconnected"}),
+            true,
+        );
+        assert_eq!(error.retry, Some(RetryEvidence::new(Some(2), Some(5))));
         let future = json!({"futureFailure":{"detail":[1,{"unknown":true}]}});
         assert_eq!(
             execution_error(

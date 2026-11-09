@@ -145,7 +145,7 @@ extension LaunchUITests {
         let app = try connectedSimulatorApp()
         startSimulatorConversation(app, promptText: "[retry] Retry stream")
 
-        let retrying = app.staticTexts["プロバイダーを再試行しています"]
+        let retrying = app.staticTexts["プロバイダーを再試行しています（1）"]
         XCTAssertTrue(retrying.waitUntilExists(timeout: 10), "Retrying stream error was not visible")
         XCTAssertFalse(prefixedElement(app, prefix: "item.fixture-command-").exists)
         XCTAssertTrue(prefixedElement(app, prefix: "item.fixture-final-").waitUntilExists(timeout: 15))

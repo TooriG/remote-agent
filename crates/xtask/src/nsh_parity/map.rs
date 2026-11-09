@@ -28,6 +28,11 @@ pub struct Map {
 pub struct Approval {
     pub element: Option<String>,
     pub group: Option<String>,
+    /// A cause instead of an element: positions, in any state, that match
+    /// once measured from this element's top on each side (they move with
+    /// it, as the timeline's end moves with the composer over it).
+    #[serde(default)]
+    pub follows: Option<String>,
     /// The metrics approved, as the report names them (`position`, `text
     /// position (drawn)`, …); none: every metric.
     #[serde(default)]
@@ -221,12 +226,21 @@ impl Map {
         self.elements.iter().find(|element| element.id == id)
     }
 
-    /// The approval that covers `metric` of `element`, if one does.
-    pub fn approval(&self, element: &str, metric: &str) -> Option<&Approval> {
+    /// The approval that covers `metric` of `element`, if one does: one that
+    /// names it, or the cause its difference `follows`.
+    pub fn approval(
+        &self,
+        element: &str,
+        metric: &str,
+        follows: Option<&str>,
+    ) -> Option<&Approval> {
         let group = self
             .element(element)
             .and_then(|element| element.group.as_deref());
         self.approvals.iter().find(|approval| {
+            if approval.follows.is_some() {
+                return approval.follows.as_deref() == follows;
+            }
             let names = approval.element.as_deref() == Some(element)
                 || (approval.group.is_some() && approval.group.as_deref() == group);
             names
@@ -260,9 +274,11 @@ impl Map {
                         byte.is_ascii_digit()
                     }
                 });
-            let names = match (&approval.element, &approval.group) {
-                (Some(element), None) => self.element(element).is_some(),
-                (None, Some(group)) => self
+            let names = match (&approval.element, &approval.group, &approval.follows) {
+                (Some(element), None, None) | (None, None, Some(element)) => {
+                    self.element(element).is_some()
+                }
+                (None, Some(group), None) => self
                     .elements
                     .iter()
                     .any(|element| element.group.as_ref() == Some(group)),
@@ -275,6 +291,7 @@ impl Map {
                         .element
                         .as_ref()
                         .or(approval.group.as_ref())
+                        .or(approval.follows.as_ref())
                         .map_or("nothing", String::as_str)
                 ));
             }

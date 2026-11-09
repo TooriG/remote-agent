@@ -37,7 +37,7 @@ description = "A new chat with three lines typed: the composer grows and the sen
 nsh = ["press \"New chat in this project\"", "type \"Ask AI\" 一行目", "key shift+return", "type \"Ask AI\" 二行目", "key shift+return", "type \"Ask AI\" 三行目"]
 t3 = [{ type = "一行目" }, { key = "Shift+Enter" }, { type = "二行目" }, { key = "Shift+Enter" }, { type = "三行目" }]
 column = "composer"
-elements = ["composer", "composer-text", "composer-send"]
+elements = ["composer", "composer-overlay", "composer-text", "composer-send"]
 
 [[state]]
 name = "model-picker"
@@ -46,7 +46,7 @@ description = "The composer's model picker open."
 nsh = ["press \"New chat in this project\"", "press \"Fixture Model\"", "wait 800"]
 t3 = [{ click = "[data-chat-provider-model-picker]" }, { waitMs = 800 }]
 column = "composer"
-elements = ["composer", "composer-model", "model-menu", "model-menu-row"]
+elements = ["composer", "composer-overlay", "composer-model", "model-menu", "model-menu-row"]
 
 [[state]]
 name = "turn-thinking"
@@ -55,7 +55,7 @@ description = "A running turn before any work or text arrives: T3 shows its work
 nsh = ["send [delayed-input] 考える様子を確認します", "expect \"考える様子を確認します\" 20000", "wait 1500"]
 t3 = [{ send = "[delayed-input] 考える様子を確認します" }, { waitFor = "[data-timeline-row-kind=thinking]" }]
 column = "composer"
-elements = ["composer", "window", "header", "header-project", "header-title", "user-bubble", "user-text", "working-header", "thinking-row", "composer-stop"]
+elements = ["composer", "composer-overlay", "window", "header", "header-project", "header-title", "user-bubble", "user-text", "working-header", "thinking-row", "composer-stop"]
 
 [[state]]
 name = "turn-live"
@@ -64,7 +64,7 @@ description = "A running turn with a command in flight: the working header and t
 nsh = ["send [groups] ライブの作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000"]
 t3 = [{ send = "[groups] ライブの作業を確認します" }, { waitText = "Running pwd" }]
 column = "composer"
-elements = ["composer", "window", "header", "header-project", "header-title", "user-bubble", "user-text", "working-header", "live-row", "live-row-icon", "live-commentary", "live-done-group", "composer-stop", "changed-files-card"]
+elements = ["composer", "composer-overlay", "window", "header", "header-project", "header-title", "user-bubble", "user-text", "working-header", "live-row", "live-row-icon", "live-commentary", "live-done-group", "composer-stop", "changed-files-card"]
 
 [[state]]
 name = "turn-finished"
@@ -73,7 +73,7 @@ description = "A finished turn: the user's message, the folded work row, the ans
 nsh = ["send [groups] 完了した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000"]
 t3 = [{ send = "[groups] 完了した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }, { waitMs = 1500 }]
 column = "composer"
-elements = ["composer", "composer-send", "window", "header", "header-project", "header-title", "header-details-toggle", "header-terminal-toggle", "header-panel-toggle", "user-bubble", "user-text", "user-copy", "user-edit", "user-time", "work-toggle", "assistant-text", "assistant-copy", "assistant-fork", "assistant-time", "changed-files-card"]
+elements = ["composer", "composer-overlay", "composer-send", "window", "header", "header-project", "header-title", "header-details-toggle", "header-terminal-toggle", "header-panel-toggle", "user-bubble", "user-text", "user-copy", "user-edit", "user-time", "work-toggle", "assistant-text", "assistant-copy", "assistant-fork", "assistant-time", "changed-files-card"]
 
 [[state]]
 name = "turn-hover"
@@ -82,7 +82,7 @@ description = "The pointer over the user's message: its hover-only actions."
 nsh = ["send [immediate] ホバーを確認します", "expect \"シミュレータで完了しました。\" 30000", "hover \"message.user-text\""]
 t3 = [{ send = "[immediate] ホバーを確認します" }, { waitText = "シミュレータで完了しました。" }, { waitMs = 1500 }, { hover = "[data-message-role=user] [data-user-message-body]" }]
 column = "composer"
-elements = ["composer", "user-bubble", "user-copy", "user-edit", "user-time"]
+elements = ["composer", "composer-overlay", "user-bubble", "user-copy", "user-edit", "user-time"]
 
 [[state]]
 name = "turn-expanded"
@@ -91,7 +91,7 @@ description = "The finished turn's work expanded down to its tool rows and comme
 nsh = ["send [groups] 展開した作業を確認します", "expect \"最初の確認が終わりました。次のコマンドを確認します。\" 20000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000", "press \"Worked for*\"", "press \"Ran 1 command\"", "expect \"./gradlew test\""]
 t3 = [{ send = "[groups] 展開した作業を確認します" }, { waitText = "Running pwd" }, { release = true }, { waitText = "シミュレータで完了しました。" }, { click = "[data-timeline-row-kind=turn-fold] button" }, { click = "[data-timeline-row-kind=work-toggle] button" }, { waitText = "./gradlew test" }]
 column = "composer"
-elements = ["composer", "work-toggle", "work-group-toggle", "tool-row", "tool-row-icon", "commentary-text", "assistant-text", "scroll-to-bottom"]
+elements = ["composer", "composer-overlay", "work-toggle", "work-group-toggle", "tool-row", "tool-row-icon", "commentary-text", "assistant-text", "scroll-to-bottom"]
 
 [[state]]
 name = "turn-items"
@@ -100,7 +100,7 @@ description = "A finished turn whose work holds every Codex item kind the fixtur
 nsh = ["send [items] [immediate] 項目を確認します", "expect \"シミュレータで完了しました。\" 30000", "press \"Worked for*\"", "wait 800"]
 t3 = [{ send = "[items] [immediate] 項目を確認します" }, { waitText = "シミュレータで完了しました。" }, { click = "[data-timeline-row-kind=turn-fold] button" }, { waitMs = 800 }]
 column = "composer"
-elements = ["composer", "work-toggle", "work-group-toggle", "tool-row", "web-search-row", "plan-row"]
+elements = ["composer", "composer-overlay", "work-toggle", "work-group-toggle", "tool-row", "web-search-row", "plan-row"]
 
 [[state]]
 name = "turn-failed"
@@ -109,7 +109,7 @@ description = "A turn that failed: its work and the error in the timeline, and T
 nsh = ["send [failed] 失敗を確認します", "expect \"context is full\" 20000"]
 t3 = [{ send = "[failed] 失敗を確認します" }, { waitText = "Provider error" }]
 column = "composer"
-elements = ["composer", "window", "header", "user-bubble", "error-banner", "error-title", "error-detail", "error-copy", "tool-row"]
+elements = ["composer", "composer-overlay", "window", "header", "user-bubble", "error-banner", "error-title", "error-detail", "error-copy", "tool-row"]
 
 [[state]]
 name = "turn-interrupted"
@@ -118,7 +118,7 @@ description = "A turn the provider interrupted."
 nsh = ["send [interrupted] 中断を確認します", "wait 4000"]
 t3 = [{ send = "[interrupted] 中断を確認します" }, { waitMs = 4000 }]
 column = "composer"
-elements = ["composer", "user-bubble", "work-toggle", "interrupted-row"]
+elements = ["composer", "composer-overlay", "user-bubble", "work-toggle", "interrupted-row"]
 
 [[state]]
 name = "turn-retry"
@@ -127,7 +127,7 @@ description = "A stream that disconnected and is being retried."
 nsh = ["send [retry] 再接続を確認します", "expect \"再接続を確認します\" 20000", "wait 300"]
 t3 = [{ send = "[retry] 再接続を確認します" }, { waitText = "Retrying" }]
 column = "composer"
-elements = ["composer", "working-header", "retry-notice"]
+elements = ["composer", "composer-overlay", "working-header", "retry-notice"]
 
 [[state]]
 name = "approval"
@@ -136,7 +136,7 @@ description = "A command waiting for approval: the request above the composer."
 nsh = ["send [approval] 承認を確認します", "expect \"結合テストの承認確認\" 20000"]
 t3 = [{ send = "[approval] 承認を確認します" }, { waitText = "Command approval" }]
 column = "composer"
-elements = ["composer", "approval-panel", "approval-title", "approval-command", "approval-accept", "approval-decline", "working-header", "approval-live-row"]
+elements = ["composer", "composer-overlay", "approval-panel", "approval-title", "approval-command", "approval-accept", "approval-decline", "working-header", "approval-live-row"]
 
 [[state]]
 name = "question"
@@ -145,7 +145,7 @@ description = "A question from the agent: its options above the composer."
 nsh = ["send [request] 質問を確認します", "expect \"このまま続けますか？\" 20000"]
 t3 = [{ send = "[request] 質問を確認します" }, { waitText = "このまま続けますか？" }]
 column = "composer"
-elements = ["composer", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-dismiss", "question-submit", "composer-placeholder", "working-header", "question-live-row"]
+elements = ["composer", "composer-overlay", "question-panel", "question-header", "question-text", "question-option", "question-option-detail", "question-dismiss", "question-submit", "composer-placeholder", "working-header", "question-live-row"]
 
 [[state]]
 name = "markdown-document"
@@ -154,7 +154,7 @@ description = "A Markdown answer: heading, emphasis, quote, lists, tasks, a code
 nsh = ["send [markdown-document] [immediate] 文書を確認します", "expect \"見出し\" 30000", "wait 1500"]
 t3 = [{ send = "[markdown-document] [immediate] 文書を確認します" }, { waitText = "見出し" }]
 column = "composer"
-elements = ["composer", "markdown-body", "markdown-code", "markdown-code-language", "markdown-code-copy", "markdown-image-error", "assistant-copy"]
+elements = ["composer", "composer-overlay", "markdown-body", "markdown-code", "markdown-code-language", "markdown-code-copy", "markdown-image-error", "assistant-copy"]
 
 [[state]]
 name = "markdown-table"
@@ -163,7 +163,7 @@ description = "A Markdown table in an answer."
 nsh = ["send [markdown-table] [immediate] 表を確認します", "expect \"構成\" 30000", "wait 1500"]
 t3 = [{ send = "[markdown-table] [immediate] 表を確認します" }, { waitText = "構成" }]
 column = "composer"
-elements = ["composer", "markdown-table", "markdown-table-header"]
+elements = ["composer", "composer-overlay", "markdown-table", "markdown-table-header"]
 
 [[state]]
 name = "images"
@@ -172,7 +172,7 @@ description = "An answer with a Host image and an inline image, and the user's a
 nsh = ["send [images] [immediate] 画像を確認します", "expect \"インライン画像です。\" 30000", "wait 1500"]
 t3 = [{ send = "[images] [immediate] 画像を確認します" }, { waitText = "インライン画像です。" }, { waitMs = 1500 }]
 column = "composer"
-elements = ["composer", "assistant-image"]
+elements = ["composer", "composer-overlay", "assistant-image"]
 
 [[state]]
 name = "changed-files"
@@ -181,7 +181,7 @@ description = "A finished turn that edited files: how each client shows the chan
 nsh = ["send [workspace-edit] 編集を確認します", "wait 4000", "fixture /release-inputs", "expect \"シミュレータで完了しました。\" 30000"]
 t3 = [{ send = "[workspace-edit] 編集を確認します" }, { waitText = "Working for" }, { waitMs = 3000 }, { release = true }, { waitText = "シミュレータで完了しました。" }]
 column = "composer"
-elements = ["composer", "assistant-text", "changed-files-card", "changed-files-row"]
+elements = ["composer", "composer-overlay", "assistant-text", "changed-files-card", "changed-files-row"]
 
 [[state]]
 name = "history-minimap"
@@ -190,7 +190,7 @@ description = "Three finished turns: the minimap in the timeline's side gutter."
 nsh = ["send [immediate] 一つ目を確認します", "expect \"シミュレータで完了しました。\" 30000", "send [immediate] 二つ目を確認します", "expect \"二つ目を確認します\" 30000", "wait 2500", "send [immediate] 三つ目を確認します", "expect \"三つ目を確認します\" 30000", "wait 2500"]
 t3 = [{ send = "[immediate] 一つ目を確認します" }, { waitText = "シミュレータで完了しました。" }, { send = "[immediate] 二つ目を確認します" }, { waitMs = 2500 }, { send = "[immediate] 三つ目を確認します" }, { waitMs = 2500 }]
 column = "composer"
-elements = ["composer", "minimap", "minimap-strip", "user-bubble", "timeline-gutter-text"]
+elements = ["composer", "composer-overlay", "minimap", "minimap-strip", "user-bubble", "timeline-gutter-text"]
 
 # ── Sidebar (compared with the GPUI client) ─────────────────────────────────
 
@@ -214,6 +214,15 @@ t3 = "[data-chat-composer-surface]"
 # The surface filled behind the field and its footer, whose access mode control
 # every state shows (a question takes the attach button away).
 nsh = { text = "Change approval mode", up = "background" }
+
+[[element]]
+id = "composer-overlay"
+what = "Composer overlay (what lies over the timeline's end)"
+kind = "box"
+group = "composer"
+t3 = "[data-chat-composer-overlay=true]"
+# The view over the timeline holding the composer and what stands on it.
+nsh = { text = "Change approval mode", up = 8 }
 
 [[element]]
 id = "composer-placeholder"
@@ -654,7 +663,8 @@ id = "approval-command"
 what = "Approval: the request's reason (or command)"
 kind = "text"
 t3 = "code[aria-label=Command]"
-nsh = { text = "結合テストの承認確認", role = "AXStaticText" }
+# After the timeline's live row, which names the same reason.
+nsh = { text = "結合テストの承認確認", role = "AXStaticText", nth = 1 }
 anchor = "composer"
 
 [[element]]
@@ -762,20 +772,22 @@ what = "Markdown code block: copy"
 kind = "icon"
 t3 = "button[aria-label='Copy code']"
 nsh = { text = "Copy code" }
+# At the code block's end, which ends the lane.
+from_end = true
 
 [[element]]
 id = "markdown-image-error"
 what = "Markdown image that cannot load"
 kind = "text"
 t3 = "[data-message-role=assistant] .chat-markdown span.inline-flex.items-center:not(.chat-markdown-codeblock *)"
-nsh = { text = "The file or folder could not be found." }
+nsh = { contains = "Image unavailable" }
 
 [[element]]
 id = "markdown-table"
 what = "Markdown table"
 kind = "box"
 t3 = "[data-message-role=assistant] .chat-markdown table"
-nsh = { text = "構成", role = "AXTextArea", up = 8 }
+nsh = { text = "構成", role = "AXTextArea", up = 9 }
 
 [[element]]
 id = "markdown-table-header"
@@ -918,8 +930,8 @@ by = "the user"
 # strongest colour measured.
 [[approved]]
 group = "live"
-metrics = ["animation", "text or glyph colour"]
-reason = "a measurement artefact: the same band swept on a timer, not a layer animation, its colour at capture set by the band's phase"
+metrics = ["animation", "text or glyph colour", "size"]
+reason = "a measurement artefact: the same band swept on a timer, not a layer animation, its colour at capture set by the band's phase (where it hides the ink, only the boxes compare)"
 approved = "2026-11-09"
 by = "the coordinator"
 
@@ -932,14 +944,64 @@ reason = "Bex's changed-files card: a Bex-only feature, which the never-drop rul
 approved = "2026-11-09"
 by = "the coordinator"
 
-# T3 Code counts the provider's attempts in brackets ("Retrying provider
-# (1)"); Bex's Host reports that it retries, not which attempt.
+# What the timeline shows scrolled to its end stands where the composer's
+# overlay does: Bex's composer and its changed-files card (both kept by the
+# user's decisions) stand taller than T3 Code's composer, and what moves with
+# them is approved in every state by this cause.
 [[approved]]
-element = "retry-notice"
-metrics = ["text extent (drawn)"]
-reason = "Bex's Host reports no attempt count for T3 Code's bracketed attempt"
+follows = "composer-overlay"
+reason = "the timeline's end sits above the composer and Bex's changed-files card, which keep Bex's design and stand taller than T3 Code's composer: what is scrolled to the end moves with them"
 approved = "2026-11-09"
-by = "the map (a protocol difference)"
+by = "the coordinator"
+
+[[approved]]
+element = "markdown-body"
+metrics = ["size"]
+reason = "as wide as the lane, which the sidebar's 272-point width (T3's 256) narrows"
+approved = "2026-11-09"
+by = "the coordinator (follows the user's sidebar decision)"
+
+[[approved]]
+element = "markdown-code"
+metrics = ["size"]
+reason = "as wide as the lane, which the sidebar's 272-point width (T3's 256) narrows"
+approved = "2026-11-09"
+by = "the coordinator (follows the user's sidebar decision)"
+
+[[approved]]
+element = "timeline-gutter-text"
+metrics = ["size"]
+reason = "as wide as the lane, which the sidebar's 272-point width (T3's 256) narrows"
+approved = "2026-11-09"
+by = "the coordinator (follows the user's sidebar decision)"
+
+[[approved]]
+element = "markdown-table"
+metrics = ["size"]
+reason = "each column is as wide as its widest text, which AppKit sets a few points wider than Chromium (Codex／Claude Codeを並列接続: 180 against 175)"
+approved = "2026-11-09"
+by = "the coordinator (a platform difference)"
+
+[[approved]]
+element = "assistant-image"
+metrics = ["position"]
+reason = "Bex loads the answer's inline image, which T3 Code shows as unavailable: the answer runs an image longer below the one measured, and its end lifts it"
+approved = "2026-11-09"
+by = "the coordinator (a Bex capability the never-drop rule keeps)"
+
+[[approved]]
+element = "markdown-image-error"
+metrics = ["text position (drawn)", "text extent (drawn)"]
+reason = "keeps Bex's reason and retry: the Host's reason stands in T3 Code's alt text, and Retry below the chip"
+approved = "2026-11-09"
+by = "the coordinator"
+
+[[approved]]
+element = "markdown-table-header"
+metrics = ["text or glyph colour"]
+reason = "the Japanese header falls back to another font in each: AppKit's semibold draws lighter ink than Chromium's (the declared colour and weight match)"
+approved = "2026-11-09"
+by = "the coordinator (a platform difference)"
 
 [[approved]]
 element = "question-submit"

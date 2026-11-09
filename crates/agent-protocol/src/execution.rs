@@ -80,10 +80,37 @@ pub struct ExecutionError {
     pub retry: Option<RetryEvidence>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RetryEvidence {
     pub retrying: bool,
+    /// Which attempt this retry is, from 1: as the provider reports it, or,
+    /// when it does not, counted from the turn's previous retry.
+    pub attempt: Option<u32>,
+    /// How many attempts the provider makes, when it says.
+    pub max_attempts: Option<u32>,
+}
+
+impl RetryEvidence {
+    /// A retry the provider reports as attempt `attempt` of `max_attempts`
+    /// when it says which, else counted by the turn it retries.
+    pub fn new(attempt: Option<u32>, max_attempts: Option<u32>) -> Self {
+        Self {
+            retrying: true,
+            attempt: attempt.filter(|attempt| *attempt > 0),
+            max_attempts: max_attempts.filter(|max| *max > 0),
+        }
+    }
+
+    /// The retry `next` reports after this one: its own attempt, else the
+    /// one after this.
+    pub fn followed_by(&self, next: &Self) -> Self {
+        Self {
+            attempt: next.attempt.or(Some(self.attempt.unwrap_or(0) + 1)),
+            max_attempts: next.max_attempts.or(self.max_attempts),
+            ..next.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

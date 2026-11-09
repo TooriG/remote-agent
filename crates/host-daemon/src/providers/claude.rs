@@ -1861,7 +1861,11 @@ fn execution_error(message: &Value, retrying: bool) -> ExecutionError {
         category,
         message: text,
         provider_code: code.map(str::to_owned),
-        retry: retrying.then_some(RetryEvidence { retrying }),
+        // `api_retry` numbers its attempt of `max_retries`.
+        retry: retrying.then(|| {
+            let number = |field: &str| message[field].as_u64().and_then(|n| u32::try_from(n).ok());
+            RetryEvidence::new(number("attempt"), number("max_retries"))
+        }),
         ..Default::default()
     }
 }
@@ -3748,7 +3752,12 @@ for await (const line of createInterface({input: process.stdin})) {
         }
         let retry = execution_error(&json!({"error":"overloaded","error_status":503}), true);
         assert_eq!(retry.category, ErrorCategory::Overloaded);
-        assert_eq!(retry.retry, Some(RetryEvidence { retrying: true }));
+        assert_eq!(retry.retry, Some(RetryEvidence::new(None, None)));
+        let numbered = execution_error(
+            &json!({"type":"system","subtype":"api_retry","attempt":2,"max_retries":10,"error_status":529}),
+            true,
+        );
+        assert_eq!(numbered.retry, Some(RetryEvidence::new(Some(2), Some(10))));
         for status in ["allowed", "allowed_warning"] {
             assert!(
                 usage_limit_error(

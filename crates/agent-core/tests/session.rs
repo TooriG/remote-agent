@@ -58,7 +58,12 @@ fn session_error_survives_binary_transport_and_updates_the_turn() {
             category: ErrorCategory::RateLimited,
             message: "provider failed".into(),
             details: Some("Retry after 1 second".into()),
-            retry: Some(RetryEvidence { retrying }),
+            retry: Some(RetryEvidence {
+                retrying,
+                // A numbered retry keeps its numbers.
+                attempt: retrying.then_some(2),
+                max_attempts: retrying.then_some(5),
+            }),
             ..Default::default()
         };
         let change = SessionChange::Error {
@@ -206,7 +211,7 @@ fn completion_preserves_tool_relationships_and_missing_timing_fields() {
     turn.started_at = Some(123.);
     turn.error = Some(ExecutionError {
         message: "retrying".into(),
-        retry: Some(RetryEvidence { retrying: true }),
+        retry: Some(RetryEvidence::new(None, None)),
         ..Default::default()
     });
     turn.items.as_mut().unwrap().push(Arc::new(serde_json::from_value(json!({"id":"tool","status":"unknown","clientInputId":null,"body":{"inline":{"body":{"toolCall":{"kind":"mcp","tool":"","server":null,"namespace":null,"arguments":null,"result":{"content":[{"type":"image","data":"fixture"}]},"error":null,"content":[],"success":null,"durationMs":null}}}}})).unwrap()));

@@ -159,7 +159,11 @@ struct MessageMenuTitles: Decodable, Equatable {
             // view moves them up by half of it (`halfLeading`).
             paragraph.minimumLineHeight = lineHeight(block, size: size)
             paragraph.maximumLineHeight = lineHeight(block, size: size)
-            let item = block.marker != nil && !last && blocks[index + 1].marker != nil
+            // Items of one list: a numbered list next to a bulleted one is
+            // another list, a paragraph's spacing apart.
+            let numbered = { (marker: String?) in marker.map { $0.hasSuffix(".") } }
+            let item = block.marker != nil && !last
+                && numbered(block.marker) == numbered(blocks[index + 1].marker)
             paragraph.paragraphSpacing = last || block.code ? 0 : item ? 4 : 10.4
             paragraph.paragraphSpacingBefore = block.header != nil && index > 0 ? 9.6 : 0
         #else

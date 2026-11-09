@@ -251,16 +251,13 @@ async fn terminal_capacity_failures_continue_the_same_thread_five_times_without_
         let id = format!("turn-{}", index + 1);
         fixture.fail(&id, "serverOverloaded").await;
         assert_eq!(fixture.turn(&id).status, TurnStatus::Running);
-        assert!(
-            fixture
-                .turn(&id)
-                .error
-                .as_ref()
-                .unwrap()
-                .retry
-                .as_ref()
-                .unwrap()
-                .retrying
+        // Each continuation is numbered of the Host's budget.
+        assert_eq!(
+            fixture.turn(&id).error.as_ref().unwrap().retry,
+            Some(agent_protocol::execution::RetryEvidence::new(
+                Some(index as u32 + 1),
+                Some(5)
+            ))
         );
         // Duplicate completion must neither spend another attempt nor send twice.
         fixture.fail(&id, "serverOverloaded").await;

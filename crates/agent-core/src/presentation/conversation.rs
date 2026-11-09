@@ -1654,17 +1654,28 @@ fn shows_actions(status: models::TurnStatus, kind: &str, terminal: bool) -> bool
 /// A turn's error, titled as T3 Code's work log titles a provider's error:
 /// its retry, a usage limit, or a provider error, which the message explains.
 fn turn_error(language: UiLanguage, error: &models::ExecutionError) -> TurnErrorPresentation {
-    let retrying = error.retry.as_ref().is_some_and(|retry| retry.retrying);
+    let retry = error.retry.as_ref().filter(|retry| retry.retrying);
+    let retrying = retry.is_some();
     let is_usage_limit = !retrying && error.category == models::ErrorCategory::UsageLimit;
-    let title = if retrying {
-        "プロバイダーを再試行しています"
-    } else if is_usage_limit {
-        "利用上限に達しました"
-    } else {
-        "プロバイダーエラー"
+    // T3 Code's progress: the attempt, of how many when the provider says.
+    let progress = retry.and_then(|retry| {
+        let attempt = retry.attempt?;
+        Some(
+            retry
+                .max_attempts
+                .map_or_else(|| attempt.to_string(), |max| format!("{attempt}/{max}")),
+        )
+    });
+    let title = match progress {
+        Some(progress) => {
+            localized_ui_format(language, "error.retrying.progress".into(), vec![progress])
+        }
+        None if retrying => language.text("プロバイダーを再試行しています").into(),
+        None if is_usage_limit => language.text("利用上限に達しました").into(),
+        None => language.text("プロバイダーエラー").into(),
     };
     TurnErrorPresentation {
-        title: language.text(title).into(),
+        title,
         message: language.text(&error.message).into(),
         details: error.details.clone(),
         is_reconnecting: retrying,
@@ -3723,27 +3734,36 @@ mod tests {
     }
     #[test]
     fn errors_are_titled_as_t3_codes_provider_errors() {
-        let error = |category, retrying: bool| {
+        let error = |category, retry: Option<models::RetryEvidence>| {
             turn_error(
                 UiLanguage::English,
                 &models::ExecutionError {
                     category,
                     message: "retry".into(),
-                    retry: retrying.then_some(models::RetryEvidence { retrying }),
+                    retry,
                     ..Default::default()
                 },
             )
         };
-        let retry = error(models::ErrorCategory::UsageLimit, true);
+        let retrying = |attempt, max| Some(models::RetryEvidence::new(attempt, max));
+        let retry = error(models::ErrorCategory::UsageLimit, retrying(None, None));
         assert_eq!(retry.title, "Retrying provider");
         assert!(retry.is_reconnecting);
         assert_eq!(retry.message, "retry");
         assert_eq!(
-            error(models::ErrorCategory::UsageLimit, false).title,
+            error(models::ErrorCategory::Other, retrying(Some(1), None)).title,
+            "Retrying provider (1)"
+        );
+        assert_eq!(
+            error(models::ErrorCategory::Other, retrying(Some(2), Some(5))).title,
+            "Retrying provider (2/5)"
+        );
+        assert_eq!(
+            error(models::ErrorCategory::UsageLimit, None).title,
             "Usage limit reached"
         );
         assert_eq!(
-            error(models::ErrorCategory::ContextLimit, false).title,
+            error(models::ErrorCategory::ContextLimit, None).title,
             "Provider error"
         );
     }
@@ -3772,7 +3792,7 @@ mod tests {
             UiLanguage::Japanese,
             &models::ExecutionError {
                 category: models::ErrorCategory::UsageLimit,
-                retry: Some(models::RetryEvidence { retrying: true }),
+                retry: Some(models::RetryEvidence::new(None, None)),
                 ..Default::default()
             },
         );

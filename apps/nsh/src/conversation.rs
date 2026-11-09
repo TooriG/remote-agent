@@ -593,6 +593,8 @@ fn list(timeline: Timeline) -> impl IntoElement {
             });
         }
     });
+    // T3 Code's thread error banner over the timeline's top.
+    let banner = computed(move || connection.context.with(|p| p.thread_error().is_some()));
     // A conversation still opening says why itself, retry included.
     let history = computed(move || {
         connection
@@ -765,14 +767,21 @@ fn list(timeline: Timeline) -> impl IntoElement {
                             .items_center()
                             .px(move || px(padding()))
                             .pt(move || {
-                                // T3 Code's spacer above the first row.
-                                px(if at.index() == 0 { 24.0 } else { 0.0 })
+                                // T3 Code's spacer above the first row: the
+                                // top bar's fade, or less under the error
+                                // banner, which takes the fade's place.
+                                px(match at.index() {
+                                    0 if banner.get() => 16.0,
+                                    0 => 24.0,
+                                    _ => 0.0,
+                                })
                             })
                             .pb(move || {
-                                // The last row ends clear of what lies over the end.
+                                // The last row ends clear of what lies over the
+                                // end, and T3 Code's footer (`sm:h-4`) below it.
                                 let last = at.index() + 1 == rows.with(|rows| rows.len());
                                 px(row.with(|row| row.as_ref().map_or(0.0, |row| row.gap))
-                                    + if last { inset.get() } else { 0.0 })
+                                    + if last { inset.get() + 16.0 } else { 0.0 })
                             })
                             .child(
                                 view()

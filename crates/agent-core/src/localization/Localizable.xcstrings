@@ -10188,7 +10188,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Could not display image"
+            "value": "Image unavailable"
           }
         }
       }
@@ -18573,6 +18573,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Run interrupted by user"
+          }
+        }
+      }
+    },
+    "error.retrying.progress": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロバイダーを再試行しています（{0}）"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retrying provider ({0})"
           }
         }
       }

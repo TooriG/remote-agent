@@ -128,7 +128,11 @@ fn section(map: &Map, outcome: &Outcome) -> String {
 }
 
 fn approval<'a>(map: &'a Map, difference: &Difference) -> Option<&'a Approval> {
-    map.approval(&difference.element, difference.metric)
+    map.approval(
+        &difference.element,
+        difference.metric,
+        difference.follows.as_deref(),
+    )
 }
 
 /// A difference's cells up to its NSH value, with the trailing separator.
@@ -211,12 +215,14 @@ gpui = { height = 1, source = "sidebar.rs" }
             metric: "present",
             reference: "shown".into(),
             nsh: "missing".into(),
+            follows: None,
         };
         let moved = Difference {
             element: "search".into(),
             metric: "glyph centre from its container's centre",
             reference: "0.0, 0.0".into(),
             nsh: "0.0, 1.5".into(),
+            follows: None,
         };
         let outcomes = [
             Outcome {
@@ -259,6 +265,7 @@ gpui = { height = 1, source = "sidebar.rs" }
             metric,
             reference: "0.0, 5.0".into(),
             nsh: "9.0, 5.0".into(),
+            follows: None,
         };
         // A group's approval covers every metric of its elements.
         let glyph = Difference {
@@ -287,5 +294,30 @@ gpui = { height = 1, source = "sidebar.rs" }
             assert!(text.contains(line), "{line}\n{text}");
         }
         assert!(!text.contains("| position | 0.0, 5.0 | 9.0, 5.0 |\n"));
+    }
+
+    #[test]
+    fn a_cause_approves_only_the_positions_that_follow_it() {
+        let map = Map::parse(&format!(
+            "{MAP}\n[[approved]]\nfollows = \"search\"\nreason = \"moves with the search field\"\napproved = \"2026-11-09\"\nby = \"the coordinator\"\n"
+        ))
+        .unwrap();
+        let moved = |follows: Option<&str>| Difference {
+            element: "row".into(),
+            metric: "position",
+            reference: "0.0, 5.0".into(),
+            nsh: "0.0, 40.0".into(),
+            follows: follows.map(str::to_owned),
+        };
+        let outcomes = [Outcome {
+            state: &map.states[0],
+            result: Ok(vec![moved(Some("search")), moved(None)]),
+        }];
+        let text = render("run-1", &map, &outcomes);
+        assert!(
+            text.contains("| Conversation | 1 | 0 | 1 | 0 | 1 |"),
+            "{text}"
+        );
+        assert!(text.contains("| moves with the search field | 2026-11-09 by the coordinator |"));
     }
 }

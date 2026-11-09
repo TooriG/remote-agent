@@ -89,8 +89,12 @@ pub async fn run(arguments: &[String]) -> Result<()> {
         .filter_map(|outcome| outcome.result.as_ref().ok())
         .flatten()
         .filter(|difference| {
-            map.approval(&difference.element, difference.metric)
-                .is_none()
+            map.approval(
+                &difference.element,
+                difference.metric,
+                difference.follows.as_deref(),
+            )
+            .is_none()
         })
         .count();
     let failed = outcomes
@@ -256,8 +260,12 @@ fn compare_state(
     let unapproved: Vec<Difference> = differences
         .iter()
         .filter(|difference| {
-            map.approval(&difference.element, difference.metric)
-                .is_none()
+            map.approval(
+                &difference.element,
+                difference.metric,
+                difference.follows.as_deref(),
+            )
+            .is_none()
         })
         .cloned()
         .collect();

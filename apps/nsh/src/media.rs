@@ -754,13 +754,16 @@ fn loaded_image(
                         .bg(look::CODE)
                         .text_color(look::MUTED)
                         .child(crate::ui::icon(crate::ui::Icon::WARNING, 14.0))
+                        // T3 Code's title, then the Host's reason in place
+                        // of its alt text.
                         .child(
                             text(move || {
-                                loaded
+                                let reason = loaded
                                     .error()
                                     .or_else(|| decode_error.get())
                                     .map(localized)
-                                    .unwrap_or_default()
+                                    .unwrap_or_default();
+                                format!("{} · {reason}", tr("画像を表示できません"))
                             })
                             .text_size(px(12.0))
                             .line_height(px(16.0)),

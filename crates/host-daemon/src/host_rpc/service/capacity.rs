@@ -191,7 +191,11 @@ impl HostRpcService {
                 turn.completed_at_ms = None;
                 turn.duration_ms = None;
                 if let Some(error) = &mut turn.error {
-                    error.retry = Some(RetryEvidence { retrying: true });
+                    // The Host's own continuation, numbered by its budget.
+                    error.retry = Some(RetryEvidence::new(
+                        u32::try_from(run.attempts).ok(),
+                        u32::try_from(DELAYS.len()).ok(),
+                    ));
                 }
                 *completed = false;
                 if !scheduled {

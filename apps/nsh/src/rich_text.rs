@@ -12,10 +12,15 @@ use agent_core::{
 };
 use nsh_core::{element::ImageSrc, prelude::*};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 /// How far a code block keeps its code from its edges, as T3 Code's `pre`
 /// (`0.8rem 0.9rem`) inside its 1 point border.
 const CODE_INSET: f32 = 15.0;
+/// A table cell's sides, T3 Code's `0.75rem` each.
+const CELL_INSET: f32 = 24.0;
+/// The widest a table cell grows before its text wraps, T3 Code's `24rem`.
+const CELL_MAX: f32 = 384.0;
 
 #[derive(Clone, PartialEq)]
 enum Part {
@@ -394,8 +399,9 @@ fn view_parts(
     let Surroundings {
         connection, files, ..
     } = surroundings;
+    let parts = computed(parts);
     view().w_full().gap_3().child(each(
-        move || parts().into_iter().enumerate().collect::<Vec<_>>(),
+        move || parts.get().into_iter().enumerate().collect::<Vec<_>>(),
         |(index, part): &(usize, Part)| (*index, std::mem::discriminant(part)),
         move |part, _| match part.with_untracked(|(_, part)| part.clone()) {
             Part::Rule => view()
@@ -470,7 +476,18 @@ fn view_parts(
                 );
             })
             .into_element(),
-            Part::Table { .. } => table(surroundings, part, target, kind, max_width).into_element(),
+            // T3 Code's table keeps its `0.65rem` margins at the answer's
+            // start and end too, where a paragraph's fall away.
+            Part::Table { .. } => view()
+                .w_full()
+                .pt(move || px(if part.with(|(index, _)| *index == 0) { 10.4 } else { 0.0 }))
+                .pb(move || {
+                    let last = part.with(|(index, _)| *index + 1)
+                        == parts.with(Vec::len);
+                    px(if last { 10.4 } else { 0.0 })
+                })
+                .child(table(surroundings, part, target, kind, max_width))
+                .into_element(),
         },
     ))
 }
@@ -698,10 +715,24 @@ fn table(
     };
     let compact = signal(false);
     // T3 Code's table: rows ruled below, no frame, the header row's cells a
-    // little taller.
+    // little taller. As its `min-width: max-content` table, each column is as
+    // wide as its widest cell, a cell's text wrapping past 24rem (unless the
+    // cells are compact), the columns sharing what the lane has left over and
+    // the table scrolling sideways past the lane.
     let rule = crate::conversation::look::RULE;
+    // The text's width in each cell, by row and column, as laid out.
+    let measured = signal(HashMap::<(usize, usize), f32>::new());
+    let column = move |index: usize| {
+        measured.with(|measured| {
+            measured
+                .iter()
+                .filter(|((_, column), _)| *column == index)
+                .map(|(_, width)| *width + CELL_INSET)
+                .reduce(f32::max)
+        })
+    };
     let frame = move || {
-        view().w_full().child(each(
+        view().min_w(move || px(max_width.get())).child(each(
             move || {
                 part.with(|(_, part)| {
                     if let Part::Table { rows, .. } = part {
@@ -713,7 +744,7 @@ fn table(
             },
             |(index, _): &(usize, Vec<Vec<Part>>)| *index,
             move |row, _| {
-                let header = row.with_untracked(|(index, _)| *index == 0);
+                let (at, header) = row.with_untracked(|(index, _)| (*index, *index == 0));
                 view()
                     .flex_row()
                     .items_stretch()
@@ -727,27 +758,50 @@ fn table(
                         },
                         |(index, _): &(usize, Vec<Part>)| *index,
                         move |cell, _| {
+                            let index = cell.with_untracked(|(index, _)| *index);
+                            let width = move || column(index);
+                            // Wrapping past 24rem, or not at all.
+                            let cap = move || {
+                                if compact.get() {
+                                    1_000_000.0
+                                } else {
+                                    CELL_MAX - CELL_INSET
+                                }
+                            };
                             view()
-                                .flex_1()
-                                .min_w_0()
+                                .flex_none()
+                                .items_start()
+                                .style_when(
+                                    move || width().is_some(),
+                                    move |s| {
+                                        s.w(move || px(width().unwrap_or_default())).flex_grow(1.0)
+                                    },
+                                )
                                 .px_3()
                                 .py(px(if header { 9.0 } else { 7.0 }))
-                                .child(view_parts(
-                                    surroundings,
-                                    move || cell.with(|(_, parts)| parts.clone()),
-                                    target,
-                                    kind,
-                                    computed(move || {
-                                        let columns =
-                                            row.with(|(_, cells)| cells.len()).max(1) as f32;
-                                        if compact.get() {
-                                            1_000_000.0
-                                        } else {
-                                            (max_width.get() / columns - 24.0).max(0.0)
-                                        }
-                                    }),
-                                    Some(if header { "header" } else { "body" }),
-                                ))
+                                .child(
+                                    view()
+                                        .flex_none()
+                                        .max_w(move || px(cap()))
+                                        .on_layout(move |bounds: &Bounds<Points>| {
+                                            let laid = bounds.size.width.0;
+                                            if measured.with_untracked(|measured| {
+                                                measured.get(&(at, index)) != Some(&laid)
+                                            }) {
+                                                measured.update(|measured| {
+                                                    measured.insert((at, index), laid);
+                                                });
+                                            }
+                                        })
+                                        .child(view_parts(
+                                            surroundings,
+                                            move || cell.with(|(_, parts)| parts.clone()),
+                                            target,
+                                            kind,
+                                            computed(cap),
+                                            Some(if header { "header" } else { "body" }),
+                                        )),
+                                )
                         },
                     ))
             },
@@ -755,11 +809,7 @@ fn table(
     };
     view()
         .w_full()
-        .child(when(move || !compact.get(), frame))
-        .child(when(
-            move || compact.get(),
-            move || scroll().horizontal().w_full().child(frame()),
-        ))
+        .child(scroll().horizontal().w_full().child(frame()))
         // T3 Code's table actions below it: the cells' wrapping at its start,
         // copying as Markdown or CSV from a menu at its end.
         .child(

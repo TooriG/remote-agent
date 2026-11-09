@@ -88,6 +88,9 @@ pub struct Difference {
     pub metric: &'static str,
     pub reference: String,
     pub nsh: String,
+    /// The element whose vertical offset explains a position's difference:
+    /// measured from its top on each side, the position matches.
+    pub follows: Option<String>,
 }
 
 /// The reference's elements of a state: from T3's capture, or GPUI's layout.
@@ -370,6 +373,19 @@ impl Frames<'_> {
         })
     }
 
+    /// The causes approvals name (`follows`) that this state measures, each
+    /// with its top on the reference side and NSH's.
+    fn causes(&self) -> impl Iterator<Item = (&str, [f64; 2])> {
+        self.map
+            .approvals
+            .iter()
+            .filter_map(|approval| approval.follows.as_deref())
+            .filter_map(|cause| {
+                let top = |side: &BTreeMap<String, Measure>| Some(side.get(cause)?.frame[1]);
+                Some((cause, [top(self.reference)?, top(self.nsh)?]))
+            })
+    }
+
     /// What the glyph is centred in: a box's frame, or a text's drawn line
     /// (a field's icon sits on its text's centre line).
     fn container(&self) -> [Option<Rect>; 2] {
@@ -440,7 +456,21 @@ fn compare(
     ];
     for (metric, theirs, ours, limit) in pairs {
         if exceeds(theirs, ours, limit) {
-            out.push(difference(element, metric, points(theirs), points(ours)));
+            let mut found = difference(element, metric, points(theirs), points(ours));
+            // A position that matches measured from a cause's top follows it.
+            if metric == position {
+                found.follows = frames
+                    .causes()
+                    .find(|(_, [from_ref, from_nsh])| {
+                        !exceeds(
+                            place(reference, [origin_ref[0], *from_ref]),
+                            place(nsh, [origin_nsh[0], *from_nsh]),
+                            limit,
+                        )
+                    })
+                    .map(|(cause, _)| cause.to_owned());
+            }
+            out.push(found);
         }
     }
     if let (Some(theirs), Some(ours)) = (reference.radius, nsh.radius)
@@ -595,6 +625,7 @@ fn difference(
         metric,
         reference,
         nsh,
+        follows: None,
     }
 }
 
@@ -979,6 +1010,41 @@ gpui = { x = 14, y = 14, width = 16, height = 16, glyph_dx = -20, glyph_dy = 0, 
         assert_eq!(
             positions([30.0, 5.0, 30.0, 10.0]),
             [("position", "0.0, 5.0".into(), "10.0, 5.0".into())]
+        );
+    }
+
+    #[test]
+    fn a_position_that_moves_with_a_cause_follows_it() {
+        let caused = format!(
+            "{MAP}\n[[approved]]\nfollows = \"column\"\nreason = \"r\"\napproved = \"2026-11-09\"\nby = \"b\"\n"
+        );
+        let map = Map::parse(&caused).unwrap();
+        let state = &map.states[0];
+        let follows = |nsh_row: Rect| {
+            let reference = BTreeMap::from([
+                ("column".to_owned(), measure([20.0, 30.0, 60.0, 18.0])),
+                ("row".to_owned(), measure([20.0, 5.0, 60.0, 10.0])),
+            ]);
+            // The column stands 40 points higher.
+            let nsh = BTreeMap::from([
+                ("column".to_owned(), measure([20.0, -10.0, 60.0, 18.0])),
+                ("row".to_owned(), measure(nsh_row)),
+            ]);
+            differences(&map, state, &reference, &nsh)
+                .into_iter()
+                .filter(|difference| difference.element == "row")
+                .map(|difference| (difference.metric, difference.follows))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            follows([20.0, -35.0, 60.0, 10.0]),
+            [("position", Some("column".to_owned()))],
+            "moved with the column"
+        );
+        assert_eq!(
+            follows([20.0, -20.0, 60.0, 10.0]),
+            [("position", None)],
+            "moved otherwise"
         );
     }
 

@@ -170,6 +170,25 @@ final class MessageTests: XCTestCase {
             }
         }
 
+        @MainActor func testItemsOfOneListSitCloserThanTwoLists() throws {
+            let item = { (marker: String, text: String) in
+                MessageParagraph(header: nil, marker: marker, code: false, quoted: false, depth: 1,
+                                 alignment: "left",
+                                 runs: [MessageRun(text: text, strong: false, emphasis: false, strikethrough: false,
+                                                   code: false, link: nil, darkColor: nil, lightColor: nil)])
+            }
+            let blocks = [item("1.", "first"), item("2.", "second"), item("•", "bullet")]
+            let text = MessageAttributes.text(blocks, secondary: false, dark: true)
+            let spacing = { (word: String) -> CGFloat in
+                let at = (text.string as NSString).range(of: word).location
+                let style = text.attribute(.paragraphStyle, at: at, effectiveRange: nil) as? NSParagraphStyle
+                return style?.paragraphSpacing ?? -1
+            }
+            // T3 Code's `li` 0.25rem apart; its lists 0.65rem.
+            XCTAssertEqual(spacing("first"), 4)
+            XCTAssertEqual(spacing("second"), 10.4, accuracy: 0.01)
+        }
+
         @MainActor func testTableCellsUseT3CodesSmallerTextTheirHeaderSemibold() throws {
             let run = MessageRun(text: "構成", strong: false, emphasis: false, strikethrough: false, code: false,
                                  link: nil, darkColor: nil, lightColor: nil)

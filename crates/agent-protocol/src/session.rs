@@ -524,7 +524,19 @@ impl SessionChange {
                     {
                         return Ok(());
                     }
-                    turn.error = Some(error.clone());
+                    let mut error = error.clone();
+                    // A retry the provider does not number is the one after
+                    // the turn's previous retry.
+                    if let Some(retry) = error.retry.as_mut().filter(|retry| retry.retrying) {
+                        let previous = turn
+                            .error
+                            .as_ref()
+                            .and_then(|error| error.retry.clone())
+                            .filter(|retry| retry.retrying)
+                            .unwrap_or_default();
+                        *retry = previous.followed_by(retry);
+                    }
+                    turn.error = Some(error);
                 }
                 Self::Workspace { .. }
                 | Self::Preparation { .. }
@@ -646,6 +658,50 @@ mod update_tests {
             .unwrap();
         assert!(cleared.background.is_empty());
         assert_eq!(cleared.active_turn_id(), None);
+    }
+
+    #[test]
+    fn retries_keep_the_providers_attempt_or_count_from_the_turns_last_retry() {
+        let running = SessionChange::Turn {
+            turn: Turn {
+                id: "turn".into(),
+                status: TurnStatus::Running,
+                ..Default::default()
+            },
+            completed: false,
+        }
+        .apply(&Thread::default())
+        .unwrap();
+        let retry = |thread: &Thread, attempt, max| {
+            let next = SessionChange::Error {
+                turn_id: "turn".into(),
+                error: ExecutionError {
+                    retry: Some(RetryEvidence::new(attempt, max)),
+                    ..Default::default()
+                },
+            }
+            .apply(thread)
+            .unwrap();
+            let retry = next.turns.as_ref().unwrap()[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .retry
+                .clone()
+                .unwrap();
+            (next, (retry.attempt, retry.max_attempts))
+        };
+        let (first, numbered) = retry(&running, None, None);
+        assert_eq!(numbered, (Some(1), None), "the first retry is attempt 1");
+        let (second, numbered) = retry(&first, None, None);
+        assert_eq!(
+            numbered,
+            (Some(2), None),
+            "an unnumbered retry follows the last"
+        );
+        let (reported, numbered) = retry(&second, Some(4), Some(5));
+        assert_eq!(numbered, (Some(4), Some(5)), "the provider's numbers win");
+        assert_eq!(retry(&reported, None, None).1, (Some(5), Some(5)));
     }
 
     #[test]
@@ -1046,7 +1102,10 @@ mod update_tests {
             let previous = Turn {
                 error: Some(ExecutionError {
                     message: "retry failed".into(),
-                    retry: Some(RetryEvidence { retrying }),
+                    retry: Some(RetryEvidence {
+                        retrying,
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 }),
                 ..Default::default()
