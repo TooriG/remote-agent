@@ -652,6 +652,11 @@ fn response_content<'a>(
         let path = home.join(format!("icon-options-{suffix}.html"));
         visualization = Some(path.clone());
         format!("visualize{}", json!({"path": path}))
+    } else if prompt.contains("[find-overflow]") {
+        format!(
+            "| One | Two | Three | Four | Five | Six | Seven | Last |\n|---|---|---|---|---|---|---|---|\n| wide-column-one | wide-column-two | wide-column-three | wide-column-four | wide-column-five | wide-column-six | wide-column-seven | table-overflow-target |\n\n```text\n{}code-overflow-target\n```",
+            "0123456789".repeat(60)
+        )
     } else if prompt.contains("[markdown-table]") {
         include_str!("../../../agent-core/tests/fixtures/markdown/table.md").to_owned()
     } else if prompt.contains("[markdown-document]") {

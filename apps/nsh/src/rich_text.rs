@@ -118,6 +118,7 @@ pub(crate) struct Surroundings {
     pub workspace: crate::workbench::Workbench,
     pub find: crate::find::Find,
     pub find_row: Option<Memo<String>>,
+    pub find_scroll: crate::find::Viewports,
     /// The bar of actions on the text selected in the list's messages.
     #[cfg(desktop)]
     pub selection: crate::selection_bar::SelectionBar,
@@ -133,6 +134,7 @@ impl Surroundings {
             workspace: use_context::<crate::workbench::Workbench>().unwrap(),
             find: use_context::<crate::find::Find>().unwrap(),
             find_row: None,
+            find_scroll: None,
             #[cfg(desktop)]
             selection: crate::selection_bar::SelectionBar::new(),
         }
@@ -380,19 +382,24 @@ fn action(surroundings: Surroundings, data: &Value) {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn native_bounds(data: &Value) -> Option<Bounds<Points>> {
+    let [x, y, width, height]: [f32; 4] = serde_json::from_value(data.clone()).ok()?;
+    Some(Bounds::new(
+        point(px(x), px(y)),
+        size(px(width), px(height)),
+    ))
+}
+
 /// A selection TextKit reported (`"selection"`): its text, its message's
 /// target, and its box in the window's content; nothing once it is empty.
 #[cfg(target_os = "macos")]
 fn selected(data: &Value) -> Option<crate::selection_bar::Selected> {
     let text = data["text"].as_str().filter(|text| !text.is_empty())?;
-    let frame: Vec<f32> = serde_json::from_value(data["bounds"].clone()).ok()?;
-    let [x, y, width, height] = frame[..] else {
-        return None;
-    };
     Some(crate::selection_bar::Selected {
         text: text.into(),
         target: data["target"].as_str()?.into(),
-        bounds: Bounds::new(point(px(x), px(y)), size(px(width), px(height))),
+        bounds: native_bounds(&data["bounds"])?,
         side_chat: data["sideChat"].as_bool().unwrap_or(false),
     })
 }
@@ -434,8 +441,7 @@ fn view_parts(
                 // Reused cells lay text out to the lane, not a width measured
                 // for another row; unwrapped code keeps its lines.
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
-                let message = move |wrap: Signal<bool>| {
-                    let reference = element_ref();
+                let message = move |wrap: Option<Signal<bool>>, scrolls: crate::find::Viewports, reference: ElementRef| {
                     native("bex.messageText")
                         .element_ref(&reference)
                         .prop("data", move || {
@@ -457,18 +463,14 @@ fn view_parts(
                                     .find_row
                                     .map(|row| row.get())
                                     .unwrap_or_default();
-                                let document = blocks
-                                    .first()
-                                    .and_then(|block| block["findDocument"].as_u64())
-                                    .unwrap_or_default()
-                                    as usize;
+                                let document = search::document(blocks);
                                 let query = if row.is_empty() {
                                     String::new()
                                 } else {
                                     surroundings.find.highlighted()
                                 };
                                 let active = surroundings.find.active(&row, document);
-                                let width = if code && !wrap.get() {
+                                let width = if code && wrap.is_some_and(|wrap| !wrap.get()) {
                                     1_000_000.0
                                 } else {
                                     (width - if code { 2.0 * CODE_INSET } else { 0.0 }).max(0.0)
@@ -495,26 +497,39 @@ fn view_parts(
                             })
                         })
                         .on_native_event(move |event: &NativeEvent| {
-                            if let Some(y) = event.data["findY"].as_f64()
-                                && let Some(key) = event.data["findKey"].as_str() {
-                                surroundings.find.reveal(reference, y as f32, key.to_owned());
+                            if let Some(rect) = native_bounds(&event.data["findBounds"]) && let Some(key) = event.data["findKey"].as_str() {
+                                surroundings.find.reveal(reference, rect, key.to_owned(), scrolls);
                             } else {
                                 action(surroundings, &event.data)
                             }
                         })
                         .min_h(px(20.0))
+                        .w_full().into_element()
                 };
                 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-                let message = move |_: Signal<bool>| {
+                let message = move |_: Option<Signal<bool>>, scrolls: crate::find::Viewports, reference: ElementRef| {
                     drawn::message(
                         part,
                         move || kind() == Kind::Activity,
                         target,
-                        surroundings,
+                        Surroundings { find_scroll: scrolls, ..surroundings },
                         cell,
-                    )
+                    ).element_ref(&reference).w_full().into_element()
                 };
-                frame(part, move |wrap| message(wrap).w_full().into_element())
+                if matches!(value, Part::Code { .. }) {
+                    let selected = computed(move || {
+                        let row = surroundings.find_row?.get();
+                        let document = part.with(|(_, part)| match part {
+                            Part::Code { blocks, .. } => search::document(blocks),
+                            _ => 0,
+                        });
+                        surroundings.find.active(&row, document)?;
+                        surroundings.find.key()
+                    });
+                    frame(part, surroundings.find_scroll, selected, message)
+                } else {
+                    message(None, surroundings.find_scroll, element_ref())
+                }
             }
             Part::Image(_) => crate::media::image_view(
                 surroundings.connection,
@@ -621,15 +636,18 @@ fn view_parts(
     content
 }
 
-/// Text as it is, or a code block in the desktop client's frame: its language
+/// A code block in the desktop client's frame: its language
 /// and actions at its top right, its lines wrapped or scrolled sideways. A
 /// Mermaid block shows its drawing, at most its own size, until its source is
 /// asked for; the drawing enlarges and its source copies.
 fn frame(
     part: ReadSignal<(usize, Part)>,
-    message: impl Fn(Signal<bool>) -> AnyElement + Copy + 'static,
+    scrolls: crate::find::Viewports,
+    selected: Memo<Option<String>>,
+    message: impl Fn(Option<Signal<bool>>, crate::find::Viewports, ElementRef) -> AnyElement
+    + Copy
+    + 'static,
 ) -> AnyElement {
-    let code = move || part.with(|(_, part)| matches!(part, Part::Code { .. }));
     let diagram = computed(move || {
         part.with(|(_, part)| match part {
             Part::Code { diagram, .. } => diagram.clone(),
@@ -641,40 +659,44 @@ fn frame(
     let source_shown = signal(false);
     let large = signal(false);
     let drawn = move || diagram.with(Option::is_some) && !source_shown.get();
-    let shown_code = move || code() && !drawn();
+    // Find opens a diagram's source just as it opens folded message text.
+    // A fresh navigation can reveal it again after the reader hides it.
+    effect(move || {
+        if selected.get().is_some() {
+            source_shown.set(true);
+        }
+    });
     // T3 Code's `pre`: 14 points around the code, inside the block's border.
     let inset = move |content: AnyElement| {
         view()
             .w_full()
-            .style_when(code, |s| {
-                s.px(px(CODE_INSET))
-                    .pt(px(CODE_INSET - 1.0))
-                    .pb(px(CODE_INSET))
-            })
+            .px(px(CODE_INSET))
+            .pt(px(CODE_INSET - 1.0))
+            .pb(px(CODE_INSET))
             .child(content)
     };
     view()
         .w_full()
-        .style_when(code, |s| {
-            s.rounded(px(8.0))
-                .overflow_hidden()
-                .bg(crate::conversation::look::CODE)
-        })
-        .child(when(code, move || {
-            code_header(part, diagram, wrap, source_shown, large)
-        }))
+        .rounded(px(8.0))
+        .overflow_hidden()
+        .bg(crate::conversation::look::CODE)
+        .child(code_header(part, diagram, wrap, source_shown, large))
         .child(when(
-            move || !code() || (shown_code() && wrap.get()),
-            move || inset(message(wrap)),
+            move || !drawn() && wrap.get(),
+            move || inset(message(Some(wrap), scrolls, element_ref())),
         ))
         .child(when(
-            move || shown_code() && !wrap.get(),
+            move || !drawn() && !wrap.get(),
             move || {
+                let viewport = element_ref();
+                let content = element_ref();
+                let parents = crate::find::enclosing(scrolls, viewport, content);
                 inset(
                     scroll()
                         .horizontal()
+                        .element_ref(&viewport)
                         .w_full()
-                        .child(message(wrap))
+                        .child(message(Some(wrap), parents, content))
                         .into_element(),
                 )
             },
@@ -831,6 +853,12 @@ fn table(
     kind: impl Fn() -> Kind + Copy + 'static,
     max_width: Memo<f32>,
 ) -> impl IntoElement {
+    let viewport = element_ref();
+    let content = element_ref();
+    let surroundings = Surroundings {
+        find_scroll: crate::find::enclosing(surroundings.find_scroll, viewport, content),
+        ..surroundings
+    };
     let copy = move |markdown: bool| {
         part.with_untracked(|(_, part)| {
             if let Part::Table { source, csv, .. } = part {
@@ -860,77 +888,87 @@ fn table(
         })
     };
     let frame = move || {
-        view().min_w(move || px(max_width.get())).child(each(
-            move || {
-                part.with(|(_, part)| {
-                    if let Part::Table { rows, .. } = part {
-                        rows.clone().into_iter().enumerate().collect()
-                    } else {
-                        Vec::new()
-                    }
-                })
-            },
-            |(index, _): &(usize, Vec<Vec<Part>>)| *index,
-            move |row, _| {
-                let (at, header) = row.with_untracked(|(index, _)| (*index, *index == 0));
-                view()
-                    .flex_row()
-                    .items_stretch()
-                    .border_b_1()
-                    .border_b_color(rule)
-                    .child(each(
-                        move || {
-                            row.with(|(_, row)| {
-                                row.clone().into_iter().enumerate().collect::<Vec<_>>()
-                            })
-                        },
-                        |(index, _): &(usize, Vec<Part>)| *index,
-                        move |cell, _| {
-                            let index = cell.with_untracked(|(index, _)| *index);
-                            let width = move || column(index);
-                            let cap = CELL_MAX - CELL_INSET;
-                            view()
-                                .flex_none()
-                                .items_start()
-                                .style_when(
-                                    move || width().is_some(),
-                                    move |s| {
-                                        s.w(move || px(width().unwrap_or_default())).flex_grow(1.0)
-                                    },
-                                )
-                                .px_3()
-                                .py(px(if header { 9.0 } else { 7.0 }))
-                                .child(
-                                    view()
-                                        .flex_none()
-                                        .max_w(px(cap))
-                                        .on_layout(move |bounds: &Bounds<Points>| {
-                                            let laid = bounds.size.width.0;
-                                            if measured.with_untracked(|measured| {
-                                                measured.get(&(at, index)) != Some(&laid)
-                                            }) {
-                                                measured.update(|measured| {
-                                                    measured.insert((at, index), laid);
-                                                });
-                                            }
-                                        })
-                                        .child(view_parts(
-                                            surroundings,
-                                            move || cell.with(|(_, parts)| parts.clone()),
-                                            target,
-                                            kind,
-                                            computed(move || cap),
-                                            Some(if header { "header" } else { "body" }),
-                                        )),
-                                )
-                        },
-                    ))
-            },
-        ))
+        view()
+            .element_ref(&content)
+            .min_w(move || px(max_width.get()))
+            .child(each(
+                move || {
+                    part.with(|(_, part)| {
+                        if let Part::Table { rows, .. } = part {
+                            rows.clone().into_iter().enumerate().collect()
+                        } else {
+                            Vec::new()
+                        }
+                    })
+                },
+                |(index, _): &(usize, Vec<Vec<Part>>)| *index,
+                move |row, _| {
+                    let (at, header) = row.with_untracked(|(index, _)| (*index, *index == 0));
+                    view()
+                        .flex_row()
+                        .items_stretch()
+                        .border_b_1()
+                        .border_b_color(rule)
+                        .child(each(
+                            move || {
+                                row.with(|(_, row)| {
+                                    row.clone().into_iter().enumerate().collect::<Vec<_>>()
+                                })
+                            },
+                            |(index, _): &(usize, Vec<Part>)| *index,
+                            move |cell, _| {
+                                let index = cell.with_untracked(|(index, _)| *index);
+                                let width = move || column(index);
+                                let cap = CELL_MAX - CELL_INSET;
+                                view()
+                                    .flex_none()
+                                    .items_start()
+                                    .style_when(
+                                        move || width().is_some(),
+                                        move |s| {
+                                            s.w(move || px(width().unwrap_or_default()))
+                                                .flex_grow(1.0)
+                                        },
+                                    )
+                                    .px_3()
+                                    .py(px(if header { 9.0 } else { 7.0 }))
+                                    .child(
+                                        view()
+                                            .flex_none()
+                                            .max_w(px(cap))
+                                            .on_layout(move |bounds: &Bounds<Points>| {
+                                                let laid = bounds.size.width.0;
+                                                if measured.with_untracked(|measured| {
+                                                    measured.get(&(at, index)) != Some(&laid)
+                                                }) {
+                                                    measured.update(|measured| {
+                                                        measured.insert((at, index), laid);
+                                                    });
+                                                }
+                                            })
+                                            .child(view_parts(
+                                                surroundings,
+                                                move || cell.with(|(_, parts)| parts.clone()),
+                                                target,
+                                                kind,
+                                                computed(move || cap),
+                                                Some(if header { "header" } else { "body" }),
+                                            )),
+                                    )
+                            },
+                        ))
+                },
+            ))
     };
     view()
         .w_full()
-        .child(scroll().horizontal().w_full().child(frame()))
+        .child(
+            scroll()
+                .horizontal()
+                .element_ref(&viewport)
+                .w_full()
+                .child(frame()),
+        )
         // T3 Code's table action below it: copying as Markdown or CSV from a menu.
         .child(
             view().mt(px(2.0)).flex_row().justify_end().child(
@@ -1007,10 +1045,7 @@ mod drawn {
                             .find_row
                             .map(|row| row.get())
                             .unwrap_or_default();
-                        let document = blocks
-                            .first()
-                            .and_then(|block| block["findDocument"].as_u64())
-                            .unwrap_or_default() as usize;
+                        let document = super::search::document(blocks);
                         let query = if row.is_empty() {
                             String::new()
                         } else {
@@ -1023,12 +1058,20 @@ mod drawn {
                         )
                         .into_iter()
                         .enumerate()
+                        .map(|(index, block)| {
+                            let navigation = super::search::reveals(&block)
+                                .then(|| surroundings.find.key())
+                                .flatten();
+                            (index, block, navigation)
+                        })
                         .collect()
                     }
                     _ => Vec::new(),
                 })
             },
-            |(index, block): &(usize, Value)| (*index, block.to_string()),
+            |(index, block, navigation): &(usize, Value, Option<String>)| {
+                (*index, block.to_string(), navigation.clone())
+            },
             move |block, _| {
                 paragraph(
                     block.get_untracked().1,
@@ -1036,6 +1079,7 @@ mod drawn {
                     links,
                     cell,
                     surroundings.find,
+                    surroundings.find_scroll,
                 )
             },
         ))
@@ -1115,6 +1159,7 @@ mod drawn {
         links: Links<O, C>,
         cell: Option<&'static str>,
         find: crate::find::Find,
+        scrolls: crate::find::Viewports,
     ) -> View
     where
         O: Fn(String, bool) + Copy + 'static,
@@ -1147,10 +1192,10 @@ mod drawn {
         };
         if let Some(marker) = block["marker"].as_str() {
             let marker = serde_json::json!({"text": format!("{marker} "), "highlights": block["markerHighlights"]});
-            line = line.child(highlighted_run(&marker, find).text_color(colors::muted()));
+            line = line.child(highlighted_run(&marker, find, scrolls).text_color(colors::muted()));
         }
         for run in block["runs"].as_array().into_iter().flatten() {
-            let mut span = highlighted_run(run, find);
+            let mut span = highlighted_run(run, find, scrolls);
             if run["strong"].as_bool().unwrap_or(false) {
                 span = span.font_weight(FontWeight::BOLD);
             }
@@ -1197,7 +1242,11 @@ mod drawn {
             .child(line)
     }
 
-    fn highlighted_run(run: &Value, find: crate::find::Find) -> Text {
+    fn highlighted_run(
+        run: &Value,
+        find: crate::find::Find,
+        scrolls: crate::find::Viewports,
+    ) -> Text {
         if run["highlights"].as_array().is_none_or(Vec::is_empty) {
             return text(run["text"].as_str().unwrap_or_default().to_owned());
         }
@@ -1226,7 +1275,12 @@ mod drawn {
                         .h(px(1.0))
                         .on_layout(move |_: &Bounds<Points>| {
                             if let Some(key) = key.clone() {
-                                find.reveal(reference, 0.0, key);
+                                find.reveal(
+                                    reference,
+                                    Bounds::new(point(px(0.0), px(0.0)), size(px(0.0), px(1.0))),
+                                    key,
+                                    scrolls,
+                                );
                             }
                         }),
                 );

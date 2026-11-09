@@ -480,7 +480,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let glyphs = manager.glyphRange(forCharacterRange: selected, actualCharacterRange: nil)
             let bounds = manager.boundingRect(forGlyphRange: glyphs, in: container)
             revealedFind = key
-            send?(["findY": bounds.minY, "findKey": key])
+            send?(["findBounds": [bounds.minX, bounds.minY, bounds.width, bounds.height], "findKey": key])
         }
     }
 #else

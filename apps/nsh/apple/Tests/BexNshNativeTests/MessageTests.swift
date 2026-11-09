@@ -24,6 +24,43 @@ final class MessageTests: XCTestCase {
             XCTAssertTrue(NSFontManager.shared.traits(of: font).contains(.boldFontMask))
         }
 
+        @MainActor func testFindReportsTheBoundsOfAnOffscreenUnwrappedMatch() throws {
+            let prefix = String(repeating: "0123456789", count: 60)
+            let needle = "code-overflow-target"
+            var run = MessageRun(text: prefix + needle, strong: false, emphasis: false,
+                                 strikethrough: false, code: false, link: nil, darkColor: nil, lightColor: nil)
+            run.highlights = [MessageHighlight(start: prefix.utf8.count,
+                                               end: (prefix + needle).utf8.count, active: true)]
+            let block = MessageParagraph(header: nil, marker: nil, code: true, quoted: false,
+                                         depth: 0, alignment: "left", runs: [run])
+            var document = MessageDocument(blocks: [block], secondary: false, role: "assistant",
+                                           target: "fixture", sideChat: false, maxWidth: 1_000_000,
+                                           menu: MessageMenuTitles(quote: "", sideChat: ""))
+            document.findKey = "overflow"
+            let view = MessageTextContainer()
+            var reports: [[CGFloat]] = []
+            view.send = {
+                if let key = $0["findKey"] as? String, key.hasPrefix("overflow"),
+                   let bounds = $0["findBounds"] as? [CGFloat] {
+                    reports.append(bounds)
+                }
+            }
+            view.update(document)
+            view.frame = NSRect(x: 0, y: 0, width: 200, height: 100)
+            view.layout()
+            let bounds = try XCTUnwrap(reports.last)
+            XCTAssertEqual(bounds.count, 4)
+            XCTAssertGreaterThan(bounds[0], 200, "the match starts beyond the visible code viewport")
+            XCTAssertGreaterThan(bounds[2], 0)
+            XCTAssertGreaterThan(bounds[3], 0)
+            view.layout()
+            XCTAssertEqual(reports.count, 1, "one geometry report per selected occurrence")
+            document.findKey = "overflow-next"
+            view.update(document)
+            view.layout()
+            XCTAssertEqual(reports.count, 2, "navigating to the same match requests fresh geometry")
+        }
+
         @MainActor func testTextKitVisibilityFollowsLayerScrollingBeforeAppKitBoundsCommit() {
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 200),
                                   styleMask: [], backing: .buffered, defer: false)

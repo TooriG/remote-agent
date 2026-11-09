@@ -53,6 +53,13 @@ pub(super) fn indexed(mut parts: Vec<Part>) -> Vec<Part> {
     parts
 }
 
+pub(super) fn document(blocks: &[Value]) -> usize {
+    blocks
+        .first()
+        .and_then(|block| block["findDocument"].as_u64())
+        .unwrap_or_default() as usize
+}
+
 fn text(blocks: &[Value]) -> String {
     blocks
         .iter()
@@ -107,6 +114,21 @@ pub(super) fn decorate(
         offset += 1; // the paragraph separator both renderers draw
     }
     blocks
+}
+
+/// Only the paragraph carrying the selected start needs a new drawn anchor.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+pub(super) fn reveals(block: &Value) -> bool {
+    std::iter::once(&block["markerHighlights"])
+        .chain(
+            block["runs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|run| &run["highlights"]),
+        )
+        .flat_map(|highlights| highlights.as_array().into_iter().flatten())
+        .any(|highlight| highlight["reveal"] == true)
 }
 
 /// Styled fragments of one run, in UTF-8 bytes; native views convert to UTF-16.
