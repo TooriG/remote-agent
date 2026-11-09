@@ -179,6 +179,55 @@ const MINIMAP_STRIP_SPACING: f32 = 8.;
 
 /// How tall T3 Code's rail is for `count` strips: 8 points apart, at most
 /// `max_height` (the window's height less 18rem).
+/// T3 Code's `shouldCollapseUserMessage`: a sent message folds past eight
+/// lines or 600 characters of what it reads as, its links by their labels.
+pub fn should_collapse_user_message(text: &str) -> bool {
+    let visible = link_labels(text);
+    !visible.trim().is_empty()
+        && (visible.encode_utf16().count() > 600 || visible.split('\n').count() > 8)
+}
+
+/// For each case-insensitive occurrence of `query`, the index of the text it
+/// is in: T3 Code's find in thread counts occurrences, not messages.
+pub fn find_occurrences<'a>(texts: impl Iterator<Item = &'a str>, query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    texts
+        .enumerate()
+        .flat_map(|(index, text)| {
+            let count = text.to_lowercase().matches(query.as_str()).count();
+            std::iter::repeat_n(index, count)
+        })
+        .collect()
+}
+
+/// `text` with each Markdown link `[label](target)` as its label.
+fn link_labels(text: &str) -> String {
+    let mut visible = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let (before, candidate) = rest.split_at(open);
+        visible.push_str(before);
+        let link = candidate[1..].split_once("](").and_then(|(label, after)| {
+            let (_, tail) = after.split_once(')')?;
+            (!label.is_empty() && !label.contains(']')).then_some((label, tail))
+        });
+        match link {
+            Some((label, tail)) => {
+                visible.push_str(label);
+                rest = tail;
+            }
+            None => {
+                visible.push('[');
+                rest = &candidate[1..];
+            }
+        }
+    }
+    visible + rest
+}
+
 pub fn minimap_rail_height(count: usize, max_height: f32) -> f32 {
     (count.saturating_sub(1) as f32 * MINIMAP_STRIP_SPACING)
         .max(1.)
@@ -1709,6 +1758,37 @@ pub struct Request {
     pub can_respond: bool,
     pub details: String,
     pub request_body: agent_protocol::requests::RequestBody,
+}
+
+#[cfg(test)]
+mod message_text_tests {
+    use super::should_collapse_user_message as collapses;
+
+    #[test]
+    fn a_message_folds_past_eight_lines_or_600_characters() {
+        assert!(!collapses(&["a"; 8].join("\n")));
+        assert!(collapses(&["a"; 9].join("\n")));
+        assert!(!collapses(&"あ".repeat(600)));
+        assert!(collapses(&"あ".repeat(601)));
+        assert!(!collapses("   \n  "));
+    }
+
+    #[test]
+    fn find_counts_each_occurrence_with_its_message_ignoring_case() {
+        use super::find_occurrences as find;
+        let texts = ["Alpha alpha", "beta", "ALPHA"];
+        assert_eq!(find(texts.into_iter(), "alpha"), [0, 0, 2]);
+        assert_eq!(find(texts.into_iter(), "  "), Vec::<usize>::new());
+        assert_eq!(find(texts.into_iter(), "gamma"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn links_count_as_their_labels() {
+        let long_target = format!("[file.rs](/{})", "a".repeat(700));
+        assert!(!collapses(&long_target));
+        let brackets = format!("[not a link] {}", "a".repeat(601));
+        assert!(collapses(&brackets));
+    }
 }
 
 #[cfg(test)]

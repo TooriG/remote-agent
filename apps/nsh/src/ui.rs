@@ -9,23 +9,77 @@ use serde_json::Value;
 
 pub(crate) mod colors {
     use super::{Rgba, rgb, rgba};
+    use agent_core::presentation::appearance::{DEFAULT_CONTRAST, contrast_border, contrast_text};
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     pub(crate) const BACKGROUND: Rgba = rgb(0x080808);
     pub(crate) const SIDEBAR: Rgba = rgb(0x000000);
     pub(crate) const SURFACE: Rgba = rgb(0x0f0f0f);
     pub(crate) const RAISED: Rgba = rgb(0x141414);
     pub(crate) const SELECTED: Rgba = rgb(0x282828);
-    pub(crate) const BORDER: Rgba = rgb(0x303030);
-    pub(crate) const FOREGROUND: Rgba = rgb(0xe6e6e6);
-    pub(crate) const MUTED: Rgba = rgb(0xa6a6a6);
+    /// The device's interface contrast, read when views are made: the root
+    /// is made again for each, as for a language.
+    static CONTRAST: AtomicU32 = AtomicU32::new(DEFAULT_CONTRAST);
+
+    pub(crate) fn set_contrast(contrast: u32) {
+        CONTRAST.store(contrast, Ordering::Relaxed);
+    }
+
+    pub(crate) fn contrast() -> u32 {
+        CONTRAST.load(Ordering::Relaxed)
+    }
+
+    fn channels(hex: u32) -> [u8; 3] {
+        [(hex >> 16) as u8, (hex >> 8) as u8, hex as u8]
+    }
+
+    fn hex([r, g, b]: [u8; 3]) -> u32 {
+        u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
+    }
+
+    /// `base` at the device's contrast, as T3 Code's `--contrast-*` text.
+    pub(crate) fn contrasted(base: u32) -> u32 {
+        hex(contrast_text(channels(base), [0, 0, 0], contrast()))
+    }
+
+    pub(crate) fn text(base: u32) -> Rgba {
+        rgb(contrasted(base))
+    }
+
+    pub(crate) fn line(base: u32) -> Rgba {
+        rgb(hex(contrast_border(
+            channels(base),
+            [0, 0, 0],
+            [0xf5, 0xf5, 0xf5],
+            contrast(),
+        )))
+    }
+
+    pub(crate) fn border() -> Rgba {
+        line(0x303030)
+    }
+
+    pub(crate) fn foreground() -> Rgba {
+        text(0xe6e6e6)
+    }
+
+    pub(crate) fn muted() -> Rgba {
+        text(0xa6a6a6)
+    }
     /// T3 Code's `--primary`.
     pub(crate) const ACCENT: Rgba = rgb(0x346bf1);
     // T3 Code's dark theme, for the conversation's header and the banners
     // over its timeline and composer.
     /// `--foreground` (neutral-100).
-    pub(crate) const T3_FOREGROUND: Rgba = rgb(0xf5f5f5);
-    /// `--muted-foreground`: neutral-500 with a tenth of white.
-    pub(crate) const T3_MUTED: Rgba = rgb(0x818181);
+    pub(crate) fn t3_foreground() -> Rgba {
+        text(0xf5f5f5)
+    }
+
+    /// `--muted-foreground` (neutral-400).
+    pub(crate) fn t3_muted() -> Rgba {
+        text(0xa1a1a1)
+    }
+
     /// `--accent`: a pressed or hovered ghost control, white at 4%.
     #[cfg(desktop)]
     pub(crate) const T3_ACCENT: Rgba = rgba(0xffffff0a);
@@ -74,6 +128,7 @@ impl Icon {
     pub(crate) const CHEVRON_RIGHT: Self = icon!(ChevronRight);
     pub(crate) const CHEVRON_UP: Self = icon!(ChevronUp);
     pub(crate) const CLOSE: Self = icon!(X);
+    pub(crate) const CIRCLE_STOP: Self = icon!(CircleStop);
     pub(crate) const COPY: Self = icon!(Copy);
     #[cfg(desktop)]
     pub(crate) const DETAILS: Self = icon!(SquareMenu);
@@ -179,6 +234,7 @@ impl Icon {
             "fileChange" => Self::NEW_CHAT,
             "mixed" => Self::HAMMER,
             "reasoning" => Self::BRAIN,
+            "webSearch" => Self::GLOBE,
             _ => Self::WRENCH,
         }
     }
@@ -198,13 +254,13 @@ pub(crate) fn card(rows: Vec<View>) -> View {
         view()
             .rounded(px(12.0))
             .border_1()
-            .border_color(colors::BORDER)
+            .border_color(colors::border())
             .bg(colors::SURFACE),
         |group, (index, row)| {
             group.child(if index == 0 {
                 row
             } else {
-                row.border_t_1().border_t_color(colors::BORDER)
+                row.border_t_1().border_t_color(colors::border())
             })
         },
     )
@@ -222,7 +278,7 @@ pub(crate) fn field() -> nsh_core::element::Input {
         .px_3()
         .rounded(px(RADIUS))
         .border_1()
-        .border_color(colors::BORDER)
+        .border_color(colors::border())
 }
 
 /// A labeled action in T3 Code's button tones: the primary fill, an outline,
@@ -236,9 +292,9 @@ pub(crate) fn action_button(
         ActionTone::Primary => (rgb(0xf5f5f5), rgb(0x0f0f0f), rgb(0xd4d4d4), rgb(0xf5f5f5)),
         ActionTone::Secondary => (
             rgba(0x00000000),
-            colors::FOREGROUND,
+            colors::foreground(),
             colors::GHOST_HOVER,
-            colors::BORDER,
+            colors::border(),
         ),
         ActionTone::Danger => (rgb(0x301214), rgb(0xff6467), rgb(0x3d171a), rgb(0x301214)),
     };
@@ -292,7 +348,7 @@ pub(crate) fn setting(
                 .child(
                     text(description)
                         .text_size(px(13.0))
-                        .text_color(colors::MUTED)
+                        .text_color(colors::muted())
                         .selectable(true),
                 ),
         )
@@ -345,7 +401,7 @@ pub(crate) fn toggle(
         .w(px(28.0))
         .h(px(28.0))
         .rounded(px(10.0))
-        .text_color(colors::T3_FOREGROUND.opacity(0.8))
+        .text_color(colors::t3_foreground().opacity(0.8))
         .hover(|s| s.bg(colors::T3_ACCENT))
         .selected(pressed)
         .selected_style(|s| s.bg(colors::T3_ACCENT))
@@ -365,7 +421,7 @@ fn ghost(label: impl IntoReactive<SharedString>, content: View) -> nsh_base::But
         .justify_center()
         .gap_2()
         .rounded(px(RADIUS))
-        .text_color(colors::FOREGROUND)
+        .text_color(colors::foreground())
         .hover(|s| s.bg(colors::GHOST_HOVER))
         .active(|s| s.bg(colors::SELECTED))
         .disabled_style(|s| s.opacity(0.5))
@@ -419,11 +475,11 @@ pub(crate) fn tooltip(label: impl IntoReactive<SharedString>) -> AnyElement {
         .rounded(px(RADIUS))
         .bg(colors::SURFACE)
         .border_1()
-        .border_color(colors::BORDER)
+        .border_color(colors::border())
         .child(
             text(label)
                 .text_size(px(12.0))
-                .text_color(colors::FOREGROUND),
+                .text_color(colors::foreground()),
         )
         .into_element()
 }
@@ -646,7 +702,7 @@ pub(crate) fn switch(
                     .h(px(20.0))
                     .p(px(2.0))
                     .rounded_full()
-                    .bg(colors::BORDER)
+                    .bg(colors::border())
                     .checked(|s| s.bg(colors::ACCENT))
             })
             .thumb_style(|s| {
@@ -710,7 +766,7 @@ pub(crate) fn search(query: Signal<String>, placeholder: &'static str) -> View {
         .gap_2()
         .h(px(24.0))
         .px_2()
-        .text_color(colors::MUTED)
+        .text_color(colors::muted())
         .child(icon(Icon::SEARCH, 14.0))
         .child(
             nsh_core::element::input()
@@ -721,8 +777,8 @@ pub(crate) fn search(query: Signal<String>, placeholder: &'static str) -> View {
                 .value(move || query.get())
                 .on_change(move |text: &str| query.set(text.to_owned()))
                 .text_size(px(14.0))
-                .text_color(colors::FOREGROUND)
-                .placeholder_color(colors::MUTED)
+                .text_color(colors::foreground())
+                .placeholder_color(colors::muted())
                 .flex_1()
                 .min_w_0(),
         )
@@ -741,8 +797,8 @@ pub(crate) fn progress(value: impl Fn() -> f64 + 'static) -> AnyElement {
     nsh_base::progress()
         .value(nsh_core::element::Prop::bind(move || value() as f32))
         .w_full()
-        .track_style(|s| s.w_full().h(px(8.0)).rounded_full().bg(colors::BORDER))
-        .indicator_style(|s| s.h_full().rounded_full().bg(colors::FOREGROUND))
+        .track_style(|s| s.w_full().h(px(8.0)).rounded_full().bg(colors::border()))
+        .indicator_style(|s| s.h_full().rounded_full().bg(colors::foreground()))
         .into_element()
 }
 

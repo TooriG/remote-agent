@@ -37,7 +37,7 @@ pub(crate) fn sidebar(
         .flex_shrink_0()
         .bg(colors::SIDEBAR)
         .border_r_1()
-        .border_r_color(colors::BORDER)
+        .border_r_color(colors::border())
         .child(header(true, move || {
             navigate(Navigation::ToggleSidebar(window().width.0))
         }))
@@ -325,8 +325,8 @@ pub(crate) fn breadcrumb(
                     )
                     .min_w_0()
                     .gap(px(6.0))
-                    .text_color(ui::colors::T3_MUTED)
-                    .hover(|s| s.text_color(ui::colors::T3_FOREGROUND))
+                    .text_color(ui::colors::t3_muted())
+                    .hover(|s| s.text_color(ui::colors::t3_foreground()))
                     .child(dynamic(move || {
                         project.with(|project| {
                             project.as_ref().map(|project| {
@@ -349,14 +349,14 @@ pub(crate) fn breadcrumb(
                 view()
                     .flex_shrink_0()
                     .accessibility_elements_hidden(true)
-                    .child(crumb(text("/")).text_color(ui::colors::T3_MUTED))
+                    .child(crumb(text("/")).text_color(ui::colors::t3_muted()))
             },
         ))
         .child(
             crumb(text(move || title.get()))
                 .flex_1()
                 .min_w_0()
-                .text_color(ui::colors::T3_FOREGROUND),
+                .text_color(ui::colors::t3_foreground()),
         )
 }
 
@@ -400,7 +400,7 @@ fn connection_menu(hosts: Memo<Vec<Host>>) -> impl IntoElement {
         .h(px(32.0))
         .px_3()
         .rounded(px(ui::RADIUS))
-        .text_color(colors::FOREGROUND)
+        .text_color(colors::foreground())
         .role(AccessibilityRole::Button)
         .label(tr("接続先"))
         .hover(|s| s.bg(colors::GHOST_HOVER))

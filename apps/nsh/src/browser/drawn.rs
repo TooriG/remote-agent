@@ -77,7 +77,7 @@ pub(super) fn page(
                     .child(text(tr("プレビューはまだありません")).text_size(px(15.0)))
                     .child(
                         text(tr("URLを入力するか、AIにブラウザ操作を依頼してください。"))
-                            .text_color(ui::colors::MUTED),
+                            .text_color(ui::colors::muted()),
                     )
             },
         ))
@@ -231,7 +231,7 @@ fn dialog_card(
         .p_4()
         .rounded(px(12.0))
         .border_1()
-        .border_color(ui::colors::BORDER)
+        .border_color(ui::colors::border())
         .bg(ui::colors::BACKGROUND)
         .child(
             text(move || {
@@ -283,7 +283,7 @@ fn data_panel(
         accounts,
         password_error,
     } = data;
-    let note = |copy: String| view().p_3().child(text(copy).text_color(colors::MUTED));
+    let note = |copy: String| view().p_3().child(text(copy).text_color(colors::muted()));
     let button = move |title: String, tone, action: BrowserAction| {
         ui::action_button(title, tone, move || {
             send(action.clone());
@@ -332,7 +332,7 @@ fn data_panel(
                 view().gap_1().p_3().child(text(error.browser)).child(
                     text(localized(error.message))
                         .text_size(px(12.0))
-                        .text_color(colors::MUTED)
+                        .text_color(colors::muted())
                         .selectable(true),
                 )
             })
@@ -392,7 +392,7 @@ fn data_panel(
                 .flex_shrink_0()
                 .px_3()
                 .border_b_1()
-                .border_b_color(colors::BORDER)
+                .border_b_color(colors::border())
                 .child(
                     text(tr("ブラウザデータ"))
                         .font_weight(FontWeight::SEMIBOLD)
@@ -407,7 +407,7 @@ fn data_panel(
                     content.child(
                         view()
                             .gap_2()
-                            .child(text(title).text_size(px(12.0)).text_color(colors::MUTED))
+                            .child(text(title).text_size(px(12.0)).text_color(colors::muted()))
                             .child(ui::card(rows)),
                     )
                 },

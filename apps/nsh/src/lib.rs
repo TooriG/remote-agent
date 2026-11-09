@@ -24,6 +24,7 @@ mod environment;
 #[cfg(desktop)]
 mod file_actions;
 mod files;
+mod find;
 mod invocations;
 mod l10n;
 mod media;
@@ -195,7 +196,7 @@ pub(crate) enum Area {
     Shell,
 }
 
-/// The application's views, made again in each language it selects.
+/// The application's views, made again in each language and contrast it selects.
 fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
     let mut updates = service.subscribe();
     let state = signal(Shared(updates.borrow_and_update().clone()));
@@ -211,9 +212,10 @@ fn app_view(service: Arc<application::Application>, area: Area) -> AnyElement {
         language.get();
         nsh_core::element::desktop::set_menu_labels(desktop::menu_labels());
     });
+    let contrast = computed(move || state.with(|state| state.contrast));
     each(
-        move || vec![language.get()],
-        |language| language.code(),
+        move || vec![(language.get(), contrast.get())],
+        |(language, contrast)| (language.code(), *contrast),
         move |_, _| app_content(service.clone(), state.read_only(), area),
     )
 }
@@ -250,6 +252,7 @@ fn app_content(
     let files = files::Browser::new(preview);
     provide_context(files);
     provide_context(terminal::Focus::new());
+    provide_context(find::Find::new());
     let failure = computed(move || state.with(|state| state.failure.clone().map(l10n::localized)));
     let routes = signal(vec![0_u8]);
     let settings = computed(move || state.with(|state| state.settings));
@@ -355,6 +358,10 @@ fn app_content(
                 move || !welcome.get(),
                 move || timeline.minimap(canvas),
             ))
+            .child(when(
+                move || is_desktop() && !welcome.get(),
+                move || find::bar(use_context::<find::Find>().unwrap(), timeline),
+            ))
             .child(
                 view()
                     .style_when(
@@ -451,12 +458,17 @@ fn app_content(
                                         .flex_1()
                                         .min_h_0()
                                         .flex_row()
-                                        .child(content())
+                                        .child(
+                                            view()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .child(content())
+                                                .child(notices::thread_error()),
+                                        )
                                         .child(when(
                                             move || details.get() && details_inline(),
                                             desktop_workspace::card,
-                                        ))
-                                        .child(notices::thread_error()),
+                                        )),
                                 )
                         },
                     ))
@@ -467,7 +479,7 @@ fn app_content(
                                 |s| {
                                     s.w(px(540.0))
                                         .border_l_1()
-                                        .border_l_color(ui::colors::BORDER)
+                                        .border_l_color(ui::colors::border())
                                 },
                             )
                             .style_when(
@@ -475,7 +487,7 @@ fn app_content(
                                 |s| {
                                     s.h(px(360.0))
                                         .border_t_1()
-                                        .border_t_color(ui::colors::BORDER)
+                                        .border_t_color(ui::colors::border())
                                 },
                             )
                             .style_when(
@@ -503,7 +515,7 @@ fn app_content(
                 .flex_1()
                 .flex_row()
                 .bg(ui::colors::BACKGROUND)
-                .text_color(ui::colors::FOREGROUND)
+                .text_color(ui::colors::foreground())
                 .child(media::preview())
                 .child(browser::host())
                 .child(

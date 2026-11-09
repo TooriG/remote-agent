@@ -9,6 +9,7 @@
 //! and identities instead of independently guessing finality or grouping.
 
 pub mod agents;
+pub mod appearance;
 pub mod background_work;
 pub mod connection_list;
 pub mod connections;
@@ -507,6 +508,7 @@ pub fn item_presentation(
             Some(language.text("コンテキストを圧縮中…").into()),
             true,
         ),
+        ItemBody::WebSearch { .. } => ("webSearch", Some(tool_title(language, item.body())), true),
         _ => ("unknown", Some(tool_title(language, item.body())), true),
     };
     ItemPresentation {

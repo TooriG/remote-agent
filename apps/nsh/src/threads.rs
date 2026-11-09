@@ -1,5 +1,5 @@
 use crate::application::{ListRequest, ListScope, ListSource};
-use crate::l10n::{tr, tr_format};
+use crate::l10n::{localized, tr, tr_format};
 use crate::shared::Shared;
 use crate::{Connection, native};
 use agent_core::{
@@ -98,12 +98,14 @@ fn thread_row(thread: &ThreadSummary, level: u32, project: Option<&str>, scope: 
     Row {
         level,
         menu: copy_menu(&thread.copy_items),
-        indicators: (activity.is_some() || thread.has_changes == Some(true)).then_some(
-            native::RowIndicators {
-                activity,
-                changes: thread.has_changes == Some(true),
-            },
-        ),
+        indicators: (activity.is_some()
+            || thread.attention.is_some()
+            || thread.has_changes == Some(true))
+        .then_some(native::RowIndicators {
+            activity,
+            attention: thread.attention,
+            changes: thread.has_changes == Some(true),
+        }),
         ..Row::new(
             thread.title.clone(),
             Action::Open {
@@ -571,7 +573,7 @@ fn desktop_row(
             .pt_3()
             .pb_1()
             .text_size(px(12.0))
-            .text_color(colors::MUTED)
+            .text_color(colors::muted())
             .into_element(),
         Action::Notice(_) => text(row.title.clone())
             .px_3()
@@ -611,7 +613,7 @@ fn desktop_row(
                         .flex_row()
                         .items_center()
                         .rounded(px(ui::RADIUS))
-                        .text_color(colors::FOREGROUND)
+                        .text_color(colors::foreground())
                         .hover(|s| s.bg(colors::GHOST_HOVER))
                         .active(|s| s.bg(colors::SELECTED))
                         .on_press(move || activate("expand", &toggle, None))
@@ -643,7 +645,7 @@ fn desktop_row(
             let item = menu_row()
                 .style_when(active, |s| {
                     s.bg(colors::SELECTED)
-                        .text_color(colors::FOREGROUND)
+                        .text_color(colors::foreground())
                         .font_weight(FontWeight::MEDIUM)
                 })
                 .child((row.level > 0).then(|| view().w(px(16.0)).h(px(16.0))))
@@ -671,7 +673,7 @@ fn section(title: String) -> View {
         text(title)
             .flex_1()
             .text_size(px(12.0))
-            .text_color(crate::ui::colors::MUTED),
+            .text_color(crate::ui::colors::muted()),
     )
 }
 
@@ -685,7 +687,7 @@ fn menu_row() -> nsh_base::ButtonElement {
         .h(px(28.0))
         .px_2()
         .rounded(px(ui::RADIUS))
-        .text_color(colors::FOREGROUND)
+        .text_color(colors::foreground())
         .hover(|s| s.bg(colors::ROW_HOVER))
         .disabled_style(|s| s.opacity(0.5))
 }
@@ -742,17 +744,48 @@ pub(crate) fn project_icon(
         .into_element()
 }
 
-/// A chat's state after its title: running, waiting, unread, a worktree to merge or merged.
+/// T3 Code's list badge: what the conversation holds for its user.
+fn attention_badge(
+    attention: agent_core::presentation::thread_status::ThreadAttention,
+) -> impl IntoElement {
+    use crate::ui::{self, Icon};
+    use agent_core::presentation::thread_status::ThreadAttention;
+    let (icon, color) = match attention {
+        ThreadAttention::Approval => (Icon::SHIELD, 0xfbbf24),
+        ThreadAttention::Input => (Icon::QUESTION, 0x60a5fa),
+        ThreadAttention::Failed => (Icon::ALERT, 0xf87171),
+    };
+    let title =
+        localized(agent_core::presentation::thread_status::thread_attention_label(attention));
+    view()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .text_color(nsh_core::element::rgb(color))
+        .child(ui::icon(icon, 14.0))
+        .child(
+            text(title)
+                .text_size(px(12.0))
+                .font_weight(FontWeight::MEDIUM),
+        )
+}
+
+/// A chat's state after its title: what it holds for, running, waiting, unread,
+/// a worktree to merge or merged.
 fn indicators(indicators: native::RowIndicators) -> impl IntoElement {
     use crate::ui::{self, Icon};
     use agent_core::presentation::thread_status::ThreadActivity;
     let label = indicators.label();
+    let badged = indicators.attention.is_some();
     view()
         .flex_row()
         .items_center()
         .gap_2()
         .label(label)
+        .child(indicators.attention.map(attention_badge))
         .child(match indicators.activity {
+            // A badge says what a waiting chat waits for.
+            Some(ThreadActivity::Waiting) if badged => None,
             Some(ThreadActivity::Running | ThreadActivity::Waiting) => {
                 Some(ui::spinner().into_element())
             }
@@ -770,7 +803,7 @@ fn indicators(indicators: native::RowIndicators) -> impl IntoElement {
                     .w(px(8.0))
                     .h(px(8.0))
                     .rounded_full()
-                    .bg(crate::ui::colors::MUTED)
+                    .bg(crate::ui::colors::muted())
                     .into_element(),
             ),
             None => None,
@@ -866,6 +899,7 @@ mod tests {
 
     fn fixture_list() -> ThreadList {
         let thread = ThreadSummary {
+            attention: None,
             host_id: "host".into(),
             id: serde_json::from_value(json!({"provider": "codex", "id": "chat"})).unwrap(),
             title: "選択中の会話".into(),
@@ -1109,6 +1143,7 @@ mod tests {
     fn conversation_row_preserves_activity_and_changes_independently() {
         use agent_core::presentation::thread_status::ThreadActivity;
         let mut thread = ThreadSummary {
+            attention: None,
             host_id: "host".into(),
             id: serde_json::from_value(json!({"provider": "codex", "id": "chat"})).unwrap(),
             title: "会話".into(),
@@ -1188,6 +1223,7 @@ mod tests {
             cwd: "/project".into(),
         });
         let thread = ThreadSummary {
+            attention: None,
             host_id: "host".into(),
             id: serde_json::from_value(json!({"provider":"codex","id":"chat"})).unwrap(),
             title: "会話 👋".into(),

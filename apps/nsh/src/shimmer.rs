@@ -154,11 +154,11 @@ pub(crate) fn line<I: IntoElement>(
     let slice = BAND / SLICES as f32;
     let spans = (0..SLICES + 2).fold(text(""), |line, part| {
         let color = match part {
-            0 => look::MUTED,
-            part if part == SLICES + 1 => look::MUTED,
+            0 => look::muted(),
+            part if part == SLICES + 1 => look::muted(),
             part => blend(
-                look::MUTED,
-                look::FOREGROUND,
+                look::muted(),
+                look::foreground(),
                 sweep.opacity((part as f32 - 0.5) * slice),
             ),
         };
@@ -183,10 +183,10 @@ pub(crate) fn line<I: IntoElement>(
                 // T3 Code's `live-tool-shine` sweeps the label alone; its
                 // focus overlay takes the icon too.
                 .text_color(move || match sweep {
-                    Sweep::Shine => look::ICON,
+                    Sweep::Shine => look::icon(),
                     Sweep::Focus => blend(
-                        look::ICON,
-                        look::FOREGROUND,
+                        look::icon(),
+                        look::foreground(),
                         sweep.opacity(look::ICON_BOX / 2.0 - left.get()),
                     ),
                 })
@@ -264,7 +264,10 @@ mod tests {
 
     #[test]
     fn blending_runs_from_the_muted_color_to_the_foreground() {
-        assert_eq!(blend(look::MUTED, look::FOREGROUND, 0.0), look::MUTED);
-        assert_eq!(blend(look::MUTED, look::FOREGROUND, 1.0), look::FOREGROUND);
+        assert_eq!(blend(look::muted(), look::foreground(), 0.0), look::muted());
+        assert_eq!(
+            blend(look::muted(), look::foreground(), 1.0),
+            look::foreground()
+        );
     }
 }

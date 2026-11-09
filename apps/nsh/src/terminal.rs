@@ -109,8 +109,8 @@ pub(crate) fn screen(surface: PanelSurface, host: String) -> impl IntoElement {
                 .flex_shrink_0()
                 .px_3()
                 .border_b_1()
-                .border_b_color(colors::BORDER)
-                .text_color(colors::MUTED)
+                .border_b_color(colors::border())
+                .text_color(colors::muted())
                 .child(ui::icon(Icon::TERMINAL, 14.0))
                 .child(
                     text(move || cwd.get())

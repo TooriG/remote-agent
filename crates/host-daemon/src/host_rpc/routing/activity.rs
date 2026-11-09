@@ -53,7 +53,13 @@ pub(super) fn task_activity_state(
         .filter_map(|(session, task)| Some((session.clone(), task.facts?.background?)))
         .collect();
     background.sort();
+    let mut attention: Vec<_> = tasks
+        .iter()
+        .filter_map(|(session, task)| Some((session.clone(), task.facts?.attention()?)))
+        .collect();
+    attention.sort_by(|left, right| left.0.cmp(&right.0));
     agent_protocol::live_activity::TaskActivityState {
+        attention,
         revision,
         display: task_display(tasks, &unread),
         statuses: statuses.into_iter().collect(),
@@ -84,6 +90,24 @@ fn background_wait(tasks: &[agent_protocol::execution::BackgroundTask]) -> Optio
     (!tasks.is_empty()).then(|| agent_protocol::execution::background_holds_completion(tasks))
 }
 
+/// Whether a request awaiting its answer passes `kind`.
+fn awaits<K>(
+    requests: &std::collections::BTreeMap<K, std::sync::Arc<agent_protocol::requests::Request>>,
+    kind: impl Fn(&agent_protocol::requests::Request) -> bool,
+) -> bool {
+    requests.values().any(|request| {
+        request.delivery == agent_protocol::session::RequestDelivery::Awaiting && kind(request)
+    })
+}
+
+fn asks_permission(request: &agent_protocol::requests::Request) -> bool {
+    use agent_protocol::requests::RequestBody;
+    matches!(
+        request.body,
+        RequestBody::Approval { .. } | RequestBody::Permission { .. }
+    )
+}
+
 /// Record a conversation's latest execution facts. Unknown facts never replace
 /// a known phase that has not finished. Returns connections that failed delivery.
 pub(super) fn record_task_facts(
@@ -106,10 +130,8 @@ pub(super) fn record_task_facts(
         } else {
             previous.map(|task| task.status).unwrap_or_default()
         },
-        waiting: timeline
-            .requests
-            .values()
-            .any(|request| request.delivery == agent_protocol::session::RequestDelivery::Awaiting),
+        waiting: awaits(&timeline.requests, |_| true),
+        approval: awaits(&timeline.requests, asks_permission),
         background: background_wait(&timeline.background),
         latest: timeline
             .turns
@@ -178,9 +200,8 @@ impl SessionRouter {
                     let thread = owned.overlay(thread);
                     Some(TaskState {
                         status: thread.status,
-                        waiting: thread.requests.values().any(|request| {
-                            request.delivery == agent_protocol::session::RequestDelivery::Awaiting
-                        }),
+                        waiting: awaits(&thread.requests, |_| true),
+                        approval: awaits(&thread.requests, asks_permission),
                         background: background_wait(&thread.background),
                         latest: thread
                             .turns

@@ -14,30 +14,47 @@ use std::collections::{HashMap, HashSet};
 
 /// T3 Code's timeline as its dark theme draws it.
 pub(crate) mod look {
+    use crate::ui::colors;
     use nsh_core::element::{Rgba, rgb};
 
     /// `--muted-foreground` and `--secondary-label`: work rows, headers, times.
-    pub(crate) const MUTED: Rgba = rgb(0x888888);
+    pub(crate) fn muted() -> Rgba {
+        colors::text(0xaaaaaa)
+    }
     /// `--icon-muted`: a tool's icon.
-    pub(crate) const ICON: Rgba = rgb(0x6a6a6a);
+    pub(crate) fn icon() -> Rgba {
+        colors::text(0x7e7e7e)
+    }
     /// `--foreground`: the shimmer's band, a hovered header.
-    pub(crate) const FOREGROUND: Rgba = rgb(0xe6e6e6);
+    pub(crate) fn foreground() -> Rgba {
+        colors::text(0xe6e6e6)
+    }
+    /// `max-h-44`: a long message's folded height.
+    pub(crate) const FOLDED_MESSAGE: f32 = 176.0;
     /// `bg-message`: the user's bubble.
     pub(crate) const BUBBLE: Rgba = rgb(0x141414);
     /// `border-border/60`: the rule under a turn's header.
-    pub(crate) const RULE: Rgba = rgb(0x161616);
+    pub(crate) fn rule() -> Rgba {
+        colors::line(0x161616)
+    }
     /// `text-foreground/80`: an error's message.
-    pub(crate) const MESSAGE: Rgba = rgb(0xc4c4c4);
+    pub(crate) fn message() -> Rgba {
+        colors::text(0xc4c4c4)
+    }
     /// `bg-input/32`: a code block.
     pub(crate) const CODE: Rgba = rgb(0x111111);
     /// `--destructive`.
     pub(crate) const DESTRUCTIVE: Rgba = rgb(0xfb414a);
     /// `border-border/80` around a card (a proposed plan) and an avatar.
-    pub(crate) const CARD_BORDER: Rgba = rgb(0x1b1b1b);
+    pub(crate) fn card_border() -> Rgba {
+        colors::line(0x1b1b1b)
+    }
     /// `--secondary` and an outlined control's fill: a badge, a menu button.
     pub(crate) const CONTROL: Rgba = rgb(0x161616);
     /// `--input`: an outlined control's edge.
-    pub(crate) const CONTROL_BORDER: Rgba = rgb(0x292929);
+    pub(crate) fn control_border() -> Rgba {
+        colors::line(0x292929)
+    }
     /// A subagent's avatar.
     pub(crate) const AVATAR: Rgba = rgb(0x121212);
     /// `--success`: a subagent that finished.
@@ -469,7 +486,7 @@ fn notification_row(row: Memo<Option<Row>>) -> impl IntoElement {
         .flex_row()
         .items_center()
         .gap_2()
-        .text_color(colors::MUTED)
+        .text_color(colors::muted())
         .child(icon.map(|icon| ui::icon(icon, 14.0).into_element()))
         .child(
             text(move || {
@@ -503,6 +520,26 @@ pub(crate) struct Timeline {
 }
 
 impl Timeline {
+    /// The loaded messages' texts, each with its row's place in the list.
+    pub(crate) fn message_texts<T>(self, read: impl FnOnce(&[(usize, String)]) -> T) -> T {
+        let texts: Vec<_> = self.rows.with(|rows| {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, row)| {
+                    matches!(row.kind, Kind::User | Kind::Response)
+                        && matches!(row.shape, Shape::Message | Shape::Commentary)
+                })
+                .map(|(index, row)| (index, row.body.to_string()))
+                .collect()
+        });
+        read(&texts)
+    }
+
+    /// Brings a row into view.
+    pub(crate) fn reveal(self, row: usize) {
+        reveal_row(self.list, row as u32);
+    }
+
     pub(crate) fn new(following: Signal<bool>) -> Self {
         let connection = use_context::<Connection>().unwrap();
         let expanded = signal(HashMap::<String, String>::new());
@@ -576,6 +613,8 @@ fn list(timeline: Timeline) -> impl IntoElement {
     let surroundings = crate::rich_text::Surroundings::current();
     let connection = surroundings.connection;
     let expanded_items = signal(HashSet::<String>::new());
+    // Long messages the reader unfolded, as T3 Code's per-row Show full message.
+    let unfolded = signal(HashSet::<String>::new());
     // Where the list was last scrolled to, for Core's follow rule.
     let scrolled = stored(None::<agent_core::presentation::conversation::ScrollPosition>);
     let scroll_pending = stored(false);
@@ -621,6 +660,7 @@ fn list(timeline: Timeline) -> impl IntoElement {
         expanded.set(HashMap::new());
         groups.set(HashSet::new());
         expanded_items.set(HashSet::new());
+        unfolded.set(HashSet::new());
         // A reservation held for another conversation's draft is not this one's.
         inset.set(covered.get());
     });
@@ -766,6 +806,24 @@ fn list(timeline: Timeline) -> impl IntoElement {
                             move || row.with(|r| r.as_ref().is_some_and(|r| r.kind == Kind::User));
                         let kind =
                             move || row.with(|r| r.as_ref().map_or(Kind::Response, |r| r.kind));
+                        let collapsible = computed(move || {
+                            row.with(|r| {
+                                r.as_ref().is_some_and(|r| {
+                                    r.kind == Kind::User
+                                        && agent_core::presentation::conversation::should_collapse_user_message(&r.body)
+                                })
+                            })
+                        });
+                        // As T3 Code's, finding opens what it searches.
+                        let folded = move || {
+                            collapsible.get()
+                                && surroundings.find.highlighted().is_empty()
+                                && row.with(|r| {
+                                    r.as_ref().is_some_and(|r| {
+                                        !unfolded.with(|all| all.contains(r.id.as_str()))
+                                    })
+                                })
+                        };
                         let detail = computed(move || {
                             row.with(|r| r.as_ref().and_then(|r| r.detail.clone()))
                         });
@@ -1012,21 +1070,52 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                                 move || !user(),
                                                 |s| s.w_full().px(px(4.0)).py(px(2.0)),
                                             )
-                                            .child(crate::rich_text::message(
-                                                surroundings,
-                                                move || label().map(|text| text.to_string()),
-                                                kind,
+                                            .child(
+                                                view()
+                                                    .style_when(folded, |s| {
+                                                        s.max_h(px(look::FOLDED_MESSAGE))
+                                                            .overflow_hidden()
+                                                    })
+                                                    .child(crate::rich_text::message(
+                                                        surroundings,
+                                                        move || {
+                                                            label().map(|text| text.to_string())
+                                                        },
+                                                        kind,
+                                                        move || {
+                                                            if user() {
+                                                                (column_width
+                                                                    .try_get()
+                                                                    .unwrap_or_default()
+                                                                    * 0.8
+                                                                    - 24.0)
+                                                                    .max(0.0)
+                                                            } else {
+                                                                (column_width
+                                                                    .try_get()
+                                                                    .unwrap_or_default()
+                                                                    - 8.0)
+                                                                    .max(0.0)
+                                                            }
+                                                        },
+                                                    ))
+                                                    .child(when(folded, message_fade)),
+                                            )
+                                            .child(when(
+                                                move || collapsible.get(),
                                                 move || {
-                                                    if user() {
-                                                        (column_width.try_get().unwrap_or_default()
-                                                            * 0.8
-                                                            - 24.0)
-                                                            .max(0.0)
-                                                    } else {
-                                                        (column_width.try_get().unwrap_or_default()
-                                                            - 8.0)
-                                                            .max(0.0)
-                                                    }
+                                                    fold_toggle(folded, move || {
+                                                        let Some(id) = row.with_untracked(|row| {
+                                                            row.as_ref().map(|row| row.id.to_string())
+                                                        }) else {
+                                                            return;
+                                                        };
+                                                        unfolded.update(|all| {
+                                                            if !all.remove(&id) {
+                                                                all.insert(id);
+                                                            }
+                                                        });
+                                                    })
                                                 },
                                             ))
                                     }))
@@ -1156,8 +1245,8 @@ fn list(timeline: Timeline) -> impl IntoElement {
                     .rounded_full()
                     .bg(crate::ui::colors::RAISED)
                     .border_1()
-                    .border_color(crate::ui::colors::BORDER)
-                    .text_color(look::FOREGROUND)
+                    .border_color(crate::ui::colors::border())
+                    .text_color(look::foreground())
                     .hover(|s| s.bg(crate::ui::colors::SELECTED))
                     .on_press(move || {
                         following.set(true);
@@ -1324,12 +1413,12 @@ fn strip(
                         .bg(move || {
                             if marker.with(|m| m.in_view) {
                                 // `bg-foreground/90`.
-                                look::FOREGROUND.alpha(0.9)
+                                look::foreground().alpha(0.9)
                             } else if hovered() {
                                 // `bg-muted-foreground/75`.
-                                look::MUTED.alpha(0.75)
+                                look::muted().alpha(0.75)
                             } else {
-                                look::MUTED.alpha(0.35)
+                                look::muted().alpha(0.35)
                             }
                         }),
                 ),
@@ -1346,7 +1435,7 @@ fn strip(
                 .rounded(px(12.0))
                 .bg(colors::RAISED)
                 .border_1()
-                .border_color(colors::BORDER)
+                .border_color(colors::border())
                 .child(
                     text(user)
                         .text_size(px(look::TEXT))
@@ -1356,7 +1445,7 @@ fn strip(
                 .child(
                     text(answer.unwrap_or_default())
                         .text_size(px(look::TEXT))
-                        .text_color(look::MUTED)
+                        .text_color(look::muted())
                         .number_of_lines(3),
                 )
         }))
@@ -1381,7 +1470,7 @@ fn fold_row(
         .pb_2()
         .pr(px(2.0))
         .border_b_1()
-        .border_b_color(look::RULE)
+        .border_b_color(look::rule())
         .child(
             nsh_base::button()
                 .flex_row()
@@ -1389,8 +1478,8 @@ fn fold_row(
                 .gap_1()
                 .px_1()
                 .rounded(px(6.0))
-                .text_color(look::MUTED)
-                .hover(|s| s.text_color(look::FOREGROUND))
+                .text_color(look::muted())
+                .hover(|s| s.text_color(look::foreground()))
                 .on_press(toggle)
                 .child(
                     text(label)
@@ -1411,13 +1500,13 @@ fn working_row(label: impl Fn() -> String + 'static) -> View {
         .pt_1()
         .pb_2()
         .border_b_1()
-        .border_b_color(look::RULE)
+        .border_b_color(look::rule())
         .child(
             view().h(px(24.0)).px_1().flex_row().items_center().child(
                 text(label)
                     .text_size(px(look::TEXT))
                     .line_height(px(look::LINE))
-                    .text_color(look::MUTED),
+                    .text_color(look::muted()),
             ),
         )
 }
@@ -1456,7 +1545,7 @@ fn group_row(
         .rounded(px(6.0))
         .on_press(toggle)
         .child(crate::activity::line(
-            view().text_color(look::ICON).child(each(
+            view().text_color(look::icon()).child(each(
                 kind,
                 |kind: &String| kind.clone(),
                 |kind, _| {
@@ -1472,7 +1561,7 @@ fn group_row(
                 .number_of_lines(1)
                 .text_size(px(look::TEXT))
                 .line_height(px(look::LINE))
-                .text_color(look::MUTED),
+                .text_color(look::muted()),
         ))
         .child(hover_time(time))
 }
@@ -1483,11 +1572,41 @@ fn hover_time(time: impl Fn() -> String + 'static) -> View {
     view()
         .opacity(0.0)
         .group_hover(|s| s.opacity(1.0))
-        .child(text(time).text_size(px(12.0)).text_color(look::MUTED))
+        .child(text(time).text_size(px(12.0)).text_color(look::muted()))
 }
 
-/// T3 Code's divider for an interrupted run: its mark and label in the
-/// destructive color between rules.
+/// The foot of a folded message, faded into its bubble as T3 Code's mask.
+fn message_fade() -> View {
+    view()
+        .absolute()
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
+        .h(px(28.0))
+        .pointer_events(PointerEvents::None)
+        .bg_linear_to_b()
+        .gradient_to(look::BUBBLE)
+}
+
+/// T3 Code's Show full message and Show less under a long message.
+fn fold_toggle(folded: impl Fn() -> bool + Copy + 'static, toggle: impl Fn() + 'static) -> View {
+    let title = move || {
+        if folded() {
+            tr("全文を表示")
+        } else {
+            tr("折りたたむ")
+        }
+    };
+    view().mt(px(6.0)).flex_row().justify_end().child(
+        crate::ui::bare_button(move || SharedString::from(title()), toggle)
+            .h(px(24.0))
+            .px(px(8.0))
+            .rounded(px(6.0))
+            .text_color(look::muted())
+            .child(text(title).text_size(px(12.0))),
+    )
+}
+
 /// A proposed plan, as T3 Code's plan card: the Plan badge and its title over
 /// its Markdown, its actions behind the menu at the end.
 fn plan_card(
@@ -1505,7 +1624,7 @@ fn plan_card(
             .w_full()
             .rounded(px(24.0))
             .border_1()
-            .border_color(look::CARD_BORDER)
+            .border_color(look::card_border())
             .bg(colors::SURFACE)
             .p(px(20.0))
             .child(
@@ -1528,20 +1647,20 @@ fn plan_card(
                                     .justify_center()
                                     .rounded(px(4.0))
                                     .border_1()
-                                    .border_color(look::CARD_BORDER)
+                                    .border_color(look::card_border())
                                     .bg(look::CONTROL)
                                     .child(
                                         text(tr("計画"))
                                             .text_size(px(12.0))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(look::FOREGROUND),
+                                            .text_color(look::foreground()),
                                     ),
                             )
                             .child(
                                 text(read(|row| row.body.clone()))
                                     .text_size(px(look::TEXT))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(look::FOREGROUND),
+                                    .text_color(look::foreground()),
                             ),
                     )
                     .child(
@@ -1560,7 +1679,7 @@ fn plan_card(
                         )
                         .rounded(px(6.0))
                         .border_1()
-                        .border_color(look::CONTROL_BORDER)
+                        .border_color(look::control_border())
                         .bg(look::CONTROL),
                     ),
             )
@@ -1596,9 +1715,9 @@ fn subagent_row(row: Memo<Option<Row>>) -> View {
                 .justify_center()
                 .rounded_full()
                 .border_1()
-                .border_color(look::CARD_BORDER)
+                .border_color(look::card_border())
                 .bg(look::AVATAR)
-                .text_color(look::MUTED)
+                .text_color(look::muted())
                 .child(crate::ui::icon(Icon::BOT, 14.0))
                 .child(
                     view()
@@ -1622,27 +1741,27 @@ fn subagent_row(row: Memo<Option<Row>>) -> View {
                         .text_size(px(12.0))
                         .line_height(px(16.0))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(look::FOREGROUND),
+                        .text_color(look::foreground()),
                 )
                 .child(
                     text(read(|row| row.note.clone()))
                         .text_size(px(11.0))
                         .line_height(px(18.0))
-                        .text_color(look::MUTED),
+                        .text_color(look::muted()),
                 ),
         )
 }
 
 /// A divider across the work, as T3 Code's context compaction.
 fn divider_row(label: impl Fn() -> String + 'static) -> View {
-    let rule = || view().flex_1().h(px(1.0)).bg(look::RULE);
+    let rule = || view().flex_1().h(px(1.0)).bg(look::rule());
     view()
         .w_full()
         .flex_row()
         .items_center()
         .gap_3()
         .py_1()
-        .text_color(look::MUTED)
+        .text_color(look::muted())
         .child(rule())
         .child(
             view()
@@ -1655,8 +1774,10 @@ fn divider_row(label: impl Fn() -> String + 'static) -> View {
         .child(rule())
 }
 
+/// T3 Code's divider for an interrupted run (`V2LifecycleRow`): its stop mark
+/// and label, muted, between rules.
 fn interrupted_row(label: impl Fn() -> String + 'static) -> View {
-    let rule = || view().flex_1().h(px(1.0)).bg(look::RULE);
+    let rule = || view().flex_1().h(px(1.0)).bg(look::rule());
     view()
         .w_full()
         .flex_row()
@@ -1671,8 +1792,8 @@ fn interrupted_row(label: impl Fn() -> String + 'static) -> View {
                 .gap(px(6.0))
                 .px_2()
                 .py_1()
-                .text_color(look::DESTRUCTIVE)
-                .child(crate::ui::icon(crate::ui::Icon::CLOSE, 12.0))
+                .text_color(look::muted())
+                .child(crate::ui::icon(crate::ui::Icon::CIRCLE_STOP, 12.0))
                 .child(
                     text(label)
                         .text_size(px(11.0))
@@ -1756,7 +1877,7 @@ fn opening(connection: Connection) -> View {
                     .items_center()
                     .gap_2()
                     .py_8()
-                    .text_color(colors::MUTED)
+                    .text_color(colors::muted())
                     .child(ui::spinner())
                     .child(text(tr("会話を読み込み中…")).text_size(px(14.0)))
             },
@@ -1849,7 +1970,7 @@ fn error_row(
                     text(time)
                         .ml_2()
                         .text_size(px(12.0))
-                        .text_color(look::MUTED),
+                        .text_color(look::muted()),
                 ),
         )
         .child(
@@ -1859,7 +1980,7 @@ fn error_row(
                 .py_1()
                 .text_size(px(look::TEXT))
                 .line_height(px(look::LINE))
-                .text_color(look::MESSAGE),
+                .text_color(look::message()),
         )
         .child(when(
             move || !details().is_empty(),
@@ -1869,7 +1990,7 @@ fn error_row(
                     .ml(px(28.0))
                     .number_of_lines(3)
                     .text_size(px(12.0))
-                    .text_color(look::MUTED)
+                    .text_color(look::muted())
             },
         ))
 }
@@ -1881,7 +2002,7 @@ fn queued_marker() -> View {
     view()
         .mr_1()
         .mb_1()
-        .text_color(colors::MUTED)
+        .text_color(colors::muted())
         .label(tr("実行中の作業の後に送信しました"))
         .child(text(tr("キューから送信")).text_size(px(12.0)))
 }
@@ -1895,7 +2016,7 @@ fn steer_marker() -> View {
         .gap_1()
         .mr_1()
         .mb_1()
-        .text_color(colors::MUTED)
+        .text_color(colors::muted())
         .label(tr("実行中の作業に追加で指示しました"))
         .child(ui::icon(Icon::STEER, 12.0))
         .child(text(tr("追加の指示")).text_size(px(12.0)))
@@ -1908,7 +2029,7 @@ fn action(
     press: impl Fn() + 'static,
 ) -> nsh_base::ButtonElement {
     // `ghost-muted`: the muted color, not the foreground.
-    crate::ui::icon_button_sized(icon, tr(label), 24.0, 12.0, press).text_color(look::MUTED)
+    crate::ui::icon_button_sized(icon, tr(label), 24.0, 12.0, press).text_color(look::muted())
 }
 
 /// An answer's actions, as T3 Code's meta row under it while the pointer is
@@ -1963,7 +2084,7 @@ fn response_actions(connection: Connection, row: Memo<Option<Row>>, trailing: bo
         .child(when(forking, || {
             text(tr("分岐を作成中…"))
                 .text_size(px(12.0))
-                .text_color(look::MUTED)
+                .text_color(look::muted())
         }))
         .child(time(row));
     view()
@@ -2058,7 +2179,7 @@ fn time(row: Memo<Option<Row>>) -> Text {
         })
     })
     .text_size(px(12.0))
-    .text_color(look::MUTED)
+    .text_color(look::muted())
 }
 
 #[cfg(test)]

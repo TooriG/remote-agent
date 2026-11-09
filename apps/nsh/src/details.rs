@@ -233,11 +233,11 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
                 .h(px(40.0))
                 .px_3()
                 .border_b_1()
-                .border_b_color(colors::BORDER)
+                .border_b_color(colors::border())
                 .child(
                     text(move || cwd.get())
                         .text_size(px(12.0))
-                        .text_color(colors::MUTED)
+                        .text_color(colors::muted())
                         .truncate()
                         .selectable(true)
                         .flex_1()
@@ -285,7 +285,11 @@ pub(crate) fn diff(cwd: String, host: String) -> impl IntoElement {
                     .justify_center()
                     .px_5()
                     .child(when(move || body.get() == DiffBody::Loading, ui::spinner))
-                    .child(text(message).text_size(px(12.0)).text_color(colors::MUTED))
+                    .child(
+                        text(message)
+                            .text_size(px(12.0))
+                            .text_color(colors::muted()),
+                    )
             },
         ))
         .child(when(
@@ -405,7 +409,7 @@ fn diff_row(row: Memo<Option<DisplayRow>>, toggle: impl Fn(String) + Copy + 'sta
             view()
                 .border_l_1()
                 .border_r_1()
-                .border_color(colors::BORDER)
+                .border_color(colors::border())
                 .bg(colors::SURFACE)
                 .overflow_hidden()
                 .style_when(header, |s| s.border_t_1().rounded_t(px(ui::RADIUS)))
@@ -427,7 +431,7 @@ fn diff_row(row: Memo<Option<DisplayRow>>, toggle: impl Fn(String) + Copy + 'sta
                         .hover(|s| s.bg(colors::SELECTED))
                         .child(
                             view()
-                                .text_color(colors::MUTED)
+                                .text_color(colors::muted())
                                 .child(when(collapsed, || ui::icon(Icon::CHEVRON_RIGHT, 14.0)))
                                 .child(when(
                                     move || !collapsed(),
@@ -464,7 +468,7 @@ fn diff_row(row: Memo<Option<DisplayRow>>, toggle: impl Fn(String) + Copy + 'sta
                             }
                         })
                         .text_size(px(12.0))
-                        .text_color(colors::MUTED)
+                        .text_color(colors::muted())
                         .p_3()
                     },
                 ))
@@ -572,7 +576,7 @@ fn agents_panel(agents: Memo<Shared<Vec<AgentSummary>>>) -> impl IntoElement {
                         tr_format("{0} 件が実行中", [&working])
                     })
                     .text_size(px(13.0))
-                    .text_color(colors::MUTED),
+                    .text_color(colors::muted()),
                 ),
         )
         .child(when(
@@ -580,7 +584,7 @@ fn agents_panel(agents: Memo<Shared<Vec<AgentSummary>>>) -> impl IntoElement {
             || {
                 text(tr("サブエージェントが起動するとここに表示されます。"))
                     .text_size(px(13.0))
-                    .text_color(colors::MUTED)
+                    .text_color(colors::muted())
             },
         ))
         .child(scroll().flex_1().min_h_0().child(view().gap_2().child(each(
@@ -602,7 +606,7 @@ fn agent_row(agent: ReadSignal<AgentSummary>) -> impl IntoElement {
         .p_3()
         .rounded(px(8.0))
         .border_1()
-        .border_color(colors::BORDER)
+        .border_color(colors::border())
         .bg(colors::RAISED)
         .child(
             view()
@@ -625,27 +629,27 @@ fn agent_row(agent: ReadSignal<AgentSummary>) -> impl IntoElement {
                             .w(px(6.0))
                             .h(px(6.0))
                             .rounded(px(3.0))
-                            .bg(colors::FOREGROUND)
+                            .bg(colors::foreground())
                     },
                 ))
                 .child(
                     text(move || agent.with(|a| a.status.clone()))
                         .text_size(px(12.0))
-                        .text_color(colors::MUTED),
+                        .text_color(colors::muted()),
                 ),
         )
         .child(
             text(field(|a| a.detail.clone().map(localized)))
                 .h(px(20.0))
                 .text_size(px(13.0))
-                .text_color(colors::MUTED)
+                .text_color(colors::muted())
                 .number_of_lines(1),
         )
         .child(
             text(field(|a| a.model.clone()))
                 .h(px(16.0))
                 .text_size(px(12.0))
-                .text_color(colors::MUTED)
+                .text_color(colors::muted())
                 .number_of_lines(1),
         )
 }

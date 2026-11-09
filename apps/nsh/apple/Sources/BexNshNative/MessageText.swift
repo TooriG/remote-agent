@@ -397,7 +397,7 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
             let content = MessageAttributes.text(document.blocks, secondary: document.secondary,
                                                  dark: effectiveAppearance
                                                      .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
-                                                 answer: document.role == "assistant", cell: document.cell)
+                                                 answer: document.role == "assistant", cell: document.cell, foreground: document.foreground, find: document.find)
             let range = text.selectedRange()
             let keep = range.length > 0 && NSMaxRange(range) <= content.length && NSMaxRange(range) <= text.string.utf16
                 .count
@@ -527,7 +527,8 @@ typealias MessageCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoin
         private func refresh() {
             let document = text.document
             let content = MessageAttributes.text(document.blocks, secondary: document.secondary,
-                                                 dark: traitCollection.userInterfaceStyle == .dark)
+                                                 dark: traitCollection.userInterfaceStyle == .dark,
+                                                 foreground: document.foreground, find: document.find)
             let range = text.selectedRange
             let keep = range.length > 0 && NSMaxRange(range) <= content.length && NSMaxRange(range) <= text
                 .attributedText.length

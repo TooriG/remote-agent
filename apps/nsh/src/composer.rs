@@ -91,11 +91,13 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
     let stopping = move || {
         idle_input() && controls.with(|c| c.running_turn.is_some() && c.background.is_none())
     };
-    // A stop or failure held the queue: the send button resumes it.
+    // A stop or failure held the queue, or stopped the latest turn: the send
+    // button resumes it, as T3 Code's Resume.
+    let holding = move || follow_up.with(|f| f.held && !f.queue.is_empty());
     let resuming = move || {
         idle_input()
             && controls.with(|c| c.running_turn.is_none())
-            && follow_up.with(|f| f.held && !f.queue.is_empty())
+            && (holding() || follow_up.with(|f| f.resumable))
     };
     // What a send does while a turn runs: queue or steer, as T3 Code labels it.
     let action = move || {
@@ -228,8 +230,23 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             });
         } else if stopping() {
             interrupt();
-        } else if resuming() {
+        } else if resuming() && holding() {
             queue(QueueAction::Resume);
+        } else if resuming() {
+            following.set(true);
+            let thread_id = controls.with_untracked(|c| c.navigation.thread_id.clone());
+            let draft_key = controls.with_untracked(|c| c.navigation.draft_key.clone());
+            let text = agent_core::presentation::composer::RESUME_PROMPT.to_owned();
+            connection.dispatch(Intent::EditComposer {
+                thread_id: draft_key,
+                cursor: text.len() as u32,
+                text,
+            });
+            connection.dispatch(Intent::Submit {
+                thread_id,
+                client_user_message_id: uuid::Uuid::new_v4().to_string().into(),
+                alternate: false,
+            });
         } else if composition.with_untracked(Option::is_some) {
             // Japanese live conversion keeps a whole message marked until
             // return. Commit it, as a click outside a browser's field does,
@@ -663,7 +680,7 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
             .rounded(px(22.0))
             .bg(colors::SURFACE)
             .border_1()
-            .border_color(colors::BORDER)
+            .border_color(colors::border())
             .child(
                 view()
                     .px_2()
@@ -709,14 +726,14 @@ pub(crate) fn composer(following: Signal<bool>) -> impl IntoElement {
                                         .label(move || primary_label.get())
                                         .bg(move || {
                                             if inactive() {
-                                                colors::BORDER
+                                                colors::border()
                                             } else {
                                                 rgb(0xffffff)
                                             }
                                         })
                                         .text_color(move || {
                                             if inactive() {
-                                                colors::MUTED
+                                                colors::muted()
                                             } else {
                                                 colors::SIDEBAR
                                             }
@@ -1045,7 +1062,7 @@ fn attachment(
     view()
         .rounded(px(ui::RADIUS))
         .border_1()
-        .border_color(colors::BORDER)
+        .border_color(colors::border())
         .bg(colors::RAISED)
         .overflow_hidden()
         .child(when(

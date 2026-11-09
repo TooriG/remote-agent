@@ -122,7 +122,7 @@ pub(crate) fn control(natural: Signal<f32>, look: impl Fn() -> Look + Copy + 'st
             if full_access() {
                 FULL_ACCESS
             } else {
-                colors::FOREGROUND
+                colors::foreground()
             }
         })
         .hover(|s| s.bg(colors::GHOST_HOVER))
@@ -165,12 +165,12 @@ fn menu(
         .w(px(430.0))
         .p_3()
         .gap_1()
-        .text_color(colors::FOREGROUND)
+        .text_color(colors::foreground())
         .child(
             text(move || tr(permissions.with(|p| p.title)).to_owned())
                 .pb_2()
                 .text_size(px(12.0))
-                .text_color(colors::MUTED),
+                .text_color(colors::muted()),
         );
     PERMISSION_CHOICES
         .into_iter()
@@ -189,7 +189,7 @@ fn menu(
             || {
                 text(tr("読み込み中…"))
                     .text_size(px(12.0))
-                    .text_color(colors::MUTED)
+                    .text_color(colors::muted())
             },
         ))
         .child(when(
@@ -233,7 +233,7 @@ fn choice(
             if mode == PermissionMode::FullAccess && current() {
                 FULL_ACCESS
             } else {
-                colors::FOREGROUND
+                colors::foreground()
             }
         })
         .hover(|s| s.bg(colors::GHOST_HOVER))
@@ -253,7 +253,7 @@ fn choice(
                 .child(
                     text(tr(description))
                         .text_size(px(12.0))
-                        .text_color(colors::MUTED),
+                        .text_color(colors::muted()),
                 ),
         )
         .child(when(current, || ui::icon(Icon::CHECK, 14.0)))

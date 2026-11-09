@@ -113,6 +113,7 @@ pub(crate) struct Surroundings {
     pub files: crate::files::Browser,
     pub preview: crate::media::Preview,
     pub workspace: crate::workbench::Workbench,
+    pub find: crate::find::Find,
     /// The bar of actions on the text selected in the list's messages.
     #[cfg(desktop)]
     pub selection: crate::selection_bar::SelectionBar,
@@ -126,6 +127,7 @@ impl Surroundings {
             files: use_context::<crate::files::Browser>().unwrap(),
             preview: use_context::<crate::media::Preview>().unwrap(),
             workspace: use_context::<crate::workbench::Workbench>().unwrap(),
+            find: use_context::<crate::find::Find>().unwrap(),
             #[cfg(desktop)]
             selection: crate::selection_bar::SelectionBar::new(),
         }
@@ -407,7 +409,7 @@ fn view_parts(
             Part::Rule => view()
                 .w_full()
                 .h(px(1.0))
-                .bg(crate::ui::colors::BORDER)
+                .bg(crate::ui::colors::border())
                 .into_element(),
             Part::Text(_) | Part::Code { .. } => {
                 // Reused cells lay text out to the lane, not a width measured
@@ -421,7 +423,11 @@ fn view_parts(
                                 let (Part::Text(blocks) | Part::Code { blocks, .. }) = part else {
                                     return Value::Null;
                                 };
-                                json!({"blocks": blocks, "secondary": kind() == Kind::Activity,
+                                json!({"find": surroundings.find.highlighted(), "foreground": crate::ui::colors::contrasted(match kind() {
+                            Kind::Activity => 0x8c8c8c,
+                            Kind::User => 0xdadada,
+                            _ => 0xd4d4d4,
+                        }), "blocks": blocks, "secondary": kind() == Kind::Activity,
                         "role": if kind() == Kind::User { "user" } else { "assistant" },
                         "target": target.get(), "sideChat": connection.pane.is_none(), "cell": cell,
                         "maxWidth": if is_code() && !wrap.get() { 1_000_000.0 } else { (max_width.get() - if is_code() { 2.0 * CODE_INSET } else { 0.0 }).max(0.0) },
@@ -614,14 +620,14 @@ fn code_header(
             .number_of_lines(1)
             .font_family(SharedString::from("monospace"))
             .text_size(px(11.0))
-            .text_color(look::FOREGROUND.alpha(0.72)),
+            .text_color(look::foreground().alpha(0.72)),
         )
         .child(
             view()
                 .flex_row()
                 .items_center()
                 .gap(px(2.0))
-                .text_color(look::MUTED)
+                .text_color(look::muted())
                 .child(when(mermaid, move || {
                     crate::ui::row_text_button(
                         move || {
@@ -665,7 +671,7 @@ fn code_header(
                             12.0,
                             toggle(wrap),
                         )
-                        .text_color(look::MUTED)
+                        .text_color(look::muted())
                     },
                 ))
                 .child(
@@ -688,7 +694,7 @@ fn code_header(
                             })
                         },
                     )
-                    .text_color(look::MUTED),
+                    .text_color(look::muted()),
                 ),
         )
 }
@@ -719,7 +725,7 @@ fn table(
     // wide as its widest cell, a cell's text wrapping past 24rem (unless the
     // cells are compact), the columns sharing what the lane has left over and
     // the table scrolling sideways past the lane.
-    let rule = crate::conversation::look::RULE;
+    let rule = crate::conversation::look::rule();
     // The text's width in each cell, by row and column, as laid out.
     let measured = signal(HashMap::<(usize, usize), f32>::new());
     let column = move |index: usize| {
@@ -837,7 +843,7 @@ fn table(
                             12.0,
                             move || compact.update(|compact| *compact = !*compact),
                         )
-                        .text_color(crate::conversation::look::MUTED);
+                        .text_color(crate::conversation::look::muted());
                         // Wrapped cells are T3 Code's pressed, `secondary` state.
                         if compact_now {
                             button
@@ -862,7 +868,7 @@ fn table(
                             )
                         },
                     )
-                    .text_color(crate::conversation::look::MUTED),
+                    .text_color(crate::conversation::look::muted()),
                 ),
         )
 }
@@ -1016,9 +1022,9 @@ mod drawn {
             _ => 14.0,
         };
         let mut line = text("").text_size(px(size)).text_color(if secondary {
-            colors::MUTED
+            colors::muted()
         } else {
-            colors::FOREGROUND
+            colors::foreground()
         });
         if block["header"].is_u64() || cell == Some("header") {
             line = line.font_weight(FontWeight::SEMIBOLD);
@@ -1032,7 +1038,7 @@ mod drawn {
             _ => line,
         };
         if let Some(marker) = block["marker"].as_str() {
-            line = line.child(text(format!("{marker} ")).text_color(colors::MUTED));
+            line = line.child(text(format!("{marker} ")).text_color(colors::muted()));
         }
         for run in block["runs"].as_array().into_iter().flatten() {
             let mut span = text(run["text"].as_str().unwrap_or_default().to_owned());
@@ -1077,7 +1083,7 @@ mod drawn {
             .pl(px(depth * 16.0 + if quoted { 12.0 } else { 0.0 }))
             .style_when(
                 move || quoted,
-                |s| s.border_l_1().border_l_color(colors::BORDER),
+                |s| s.border_l_1().border_l_color(colors::border()),
             )
             .child(line)
     }

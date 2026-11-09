@@ -168,7 +168,7 @@ fn summary_card(
                 text(title)
                     .flex_1()
                     .text_size(px(14.0))
-                    .text_color(colors::MUTED),
+                    .text_color(colors::muted()),
             )
             .child(control)
     };
@@ -177,7 +177,7 @@ fn summary_card(
         .p_4()
         .rounded(px(18.0))
         .bg(colors::RAISED)
-        .text_color(colors::FOREGROUND)
+        .text_color(colors::foreground())
         .child(heading(
             tr("ワークスペース"),
             ui::icon_button(Icon::REFRESH, tr("変更を更新"), move || act(Action::Refresh))
@@ -232,7 +232,7 @@ fn summary_card(
                 text(move || summary.with(|s| s.branch.clone()))
                     .pl_2()
                     .text_size(px(14.0))
-                    .text_color(colors::MUTED)
+                    .text_color(colors::muted())
             },
         ))
         .child(
@@ -250,7 +250,7 @@ fn summary_card(
                         .text_color(nsh_core::element::rgb(0xef4444)),
                 ),
         )
-        .child(view().h(px(1.0)).my_2().bg(colors::BORDER))
+        .child(view().h(px(1.0)).my_2().bg(colors::border()))
         .child(heading(
             tr("ソース"),
             ui::icon_button(Icon::PLUS, tr("ソースを追加"), move || act(Action::Attach))
@@ -263,7 +263,7 @@ fn summary_card(
                     .py_2()
                     .text_size(px(14.0))
                     .line_height(px(20.0))
-                    .text_color(colors::MUTED)
+                    .text_color(colors::muted())
             },
         ))
         .child(each(
@@ -340,10 +340,10 @@ pub(crate) fn review_card() -> impl IntoElement {
                 .on_layout(move |bounds: &Bounds<Points>| width.set(Some(bounds.size.width.0)))
                 .rounded(px(12.0))
                 .border_1()
-                .border_color(colors::BORDER)
+                .border_color(colors::border())
                 .overflow_hidden()
                 .bg(colors::RAISED)
-                .text_color(colors::FOREGROUND)
+                .text_color(colors::foreground())
                 .child(review_summary(review, connected, open, labelled))
                 .child(review_files(review, review_file))
                 .child(when(
@@ -375,7 +375,7 @@ fn review_summary(
         .gap_3()
         .p_3()
         .border_b_1()
-        .border_b_color(colors::BORDER)
+        .border_b_color(colors::border())
         .on_press(open)
         .child(view().p_2().child(ui::icon(Icon::REPLACE, 16.0)))
         .child(
@@ -520,7 +520,7 @@ fn counts(
             || {
                 text(tr("バイナリ"))
                     .text_size(px(12.0))
-                    .text_color(colors::MUTED)
+                    .text_color(colors::muted())
             },
         ))
 }
@@ -587,7 +587,7 @@ pub(crate) fn draft_hero() -> View {
             .text_size(px(30.0))
             .line_height(px(36.0))
             .letter_spacing(px(-0.75))
-            .text_color(colors::T3_FOREGROUND)
+            .text_color(colors::t3_foreground())
     };
     view()
         .w_full()
@@ -605,7 +605,7 @@ pub(crate) fn draft_hero() -> View {
                     .justify_center()
                     .max_w(relative(1.0))
                     .child(heading(before.into()))
-                    .child(project_menu(project, 30.0, colors::T3_FOREGROUND, choose))
+                    .child(project_menu(project, 30.0, colors::t3_foreground(), choose))
                     .child(heading(after.into()))
             },
         ))
@@ -615,8 +615,8 @@ pub(crate) fn draft_hero() -> View {
                 view().mt_2().h(px(24.0)).justify_center().child(
                     // T3 Code's `muted` inline button.
                     nsh_base::button()
-                        .text_color(colors::T3_MUTED)
-                        .hover(|s| s.text_color(colors::T3_FOREGROUND))
+                        .text_color(colors::t3_muted())
+                        .hover(|s| s.text_color(colors::t3_foreground()))
                         .on_press(move || {
                             connection.dispatch(Intent::NewChat { cwd: String::new() })
                         })
@@ -635,7 +635,7 @@ pub(crate) fn draft_hero() -> View {
             project_menu(
                 || tr("プロジェクトなし").to_owned(),
                 14.0,
-                colors::T3_MUTED,
+                colors::t3_muted(),
                 choose,
             )
         }))

@@ -244,7 +244,7 @@ fn opened_file(preview: Preview) -> View {
                 .px_3()
                 .py_2()
                 .border_b_1()
-                .border_b_color(colors::BORDER)
+                .border_b_color(colors::border())
                 .child(
                     text(move || {
                         file.with(|file| {
@@ -343,7 +343,7 @@ fn viewer(preview: Preview) -> impl Element {
         .pt(px(top))
         .gap_3()
         .bg(rgba(0x000000e6))
-        .text_color(colors::FOREGROUND)
+        .text_color(colors::foreground())
         .child(
             view()
                 .flex_row()
@@ -354,7 +354,7 @@ fn viewer(preview: Preview) -> impl Element {
                 .child(when(loading, || {
                     text(tr("画像一覧を読み込み中…"))
                         .text_size(px(12.0))
-                        .text_color(colors::MUTED)
+                        .text_color(colors::muted())
                 }))
                 .child(
                     ui::icon_button(
@@ -750,9 +750,9 @@ fn loaded_image(
                         .py_1()
                         .rounded(px(6.0))
                         .border_1()
-                        .border_color(look::RULE)
+                        .border_color(look::rule())
                         .bg(look::CODE)
-                        .text_color(look::MUTED)
+                        .text_color(look::muted())
                         .child(crate::ui::icon(crate::ui::Icon::WARNING, 14.0))
                         // T3 Code's title, then the Host's reason in place
                         // of its alt text.

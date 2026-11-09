@@ -7,15 +7,24 @@ use serde_json::{Value, json};
 #[derive(Clone, PartialEq, serde::Serialize)]
 pub(crate) struct RowIndicators {
     pub activity: Option<agent_core::presentation::thread_status::ThreadActivity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention: Option<agent_core::presentation::thread_status::ThreadAttention>,
     /// Its worktree has changes its source branch lacks.
     pub changes: bool,
 }
 
 impl RowIndicators {
     pub(crate) fn label(&self) -> String {
-        use agent_core::presentation::thread_status::thread_activity_label;
-        self.activity
-            .map(|activity| localized(thread_activity_label(activity)))
+        use agent_core::presentation::thread_status::{
+            thread_activity_label, thread_attention_label,
+        };
+        // A badge says what a waiting chat waits for.
+        self.attention
+            .map(|attention| localized(thread_attention_label(attention)))
+            .or_else(|| {
+                self.activity
+                    .map(|activity| localized(thread_activity_label(activity)))
+            })
             .into_iter()
             .chain(self.changes.then(|| tr("作成元からの変更あり").to_owned()))
             .collect::<Vec<_>>()

@@ -389,10 +389,10 @@ fn tab(workspace: Workbench, surface: ReadSignal<PanelSurface>) -> View {
         .max_w(px(180.0))
         .pr_1()
         .rounded(px(ui::RADIUS))
-        .text_color(colors::MUTED)
-        .hover(|s| s.bg(colors::GHOST_HOVER).text_color(colors::FOREGROUND))
+        .text_color(colors::muted())
+        .hover(|s| s.bg(colors::GHOST_HOVER).text_color(colors::foreground()))
         .style_when(active, |s| {
-            s.bg(colors::SELECTED).text_color(colors::FOREGROUND)
+            s.bg(colors::SELECTED).text_color(colors::foreground())
         })
         .child(
             nsh_base::button()
@@ -498,7 +498,7 @@ fn picker() -> impl IntoElement {
                             .h(px(32.0))
                             .px(px(10.0))
                             .rounded(px(ui::RADIUS))
-                            .text_color(colors::FOREGROUND)
+                            .text_color(colors::foreground())
                             .hover(|s| s.bg(colors::GHOST_HOVER))
                             .disabled_style(|s| s.opacity(0.5))
                             .disabled(move || !tool.with(|t| t.enabled))
@@ -514,7 +514,7 @@ fn picker() -> impl IntoElement {
                             .child(when(is_desktop, move || {
                                 text(shortcut.clone())
                                     .text_size(px(12.0))
-                                    .text_color(colors::MUTED)
+                                    .text_color(colors::muted())
                             }))
                     },
                 )),

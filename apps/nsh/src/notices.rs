@@ -8,8 +8,7 @@ use agent_core::{
 use nsh_core::{element::rgba, prelude::*};
 
 /// T3 Code's thread error banner (`ThreadErrorBanner`): the latest turn's
-/// failure, floated at the top of the timeline and the panel beside it, until
-/// it is dismissed. A dismissal holds for that conversation and message while
+/// failure, floated at the top of the timeline, until it is dismissed. A dismissal holds for that conversation and message while
 /// the app runs, as T3's session-scoped one.
 #[cfg(desktop)]
 pub(crate) fn thread_error() -> impl IntoElement {
@@ -86,7 +85,7 @@ pub(crate) fn thread_error() -> impl IntoElement {
                         .w(px(24.0))
                         .h(px(24.0))
                         .rounded(px(8.0))
-                        .text_color(colors::T3_MUTED)
+                        .text_color(colors::t3_muted())
                         .hover(|s| s.bg(colors::T3_ACCENT))
                         .child(ui::icon(Icon::CLOSE, 14.0)),
                     )
@@ -170,7 +169,7 @@ pub(crate) fn notices(
                     text(move || notice.with(|notice| notice.text.to_string()))
                         .selectable(true)
                         .text_size(px(13.0))
-                        .text_color(colors::MUTED),
+                        .text_color(colors::muted()),
                 )
                 .child(when(
                     move || notice.with(|notice| notice.recovery_label.is_some()),

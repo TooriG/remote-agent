@@ -107,7 +107,7 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
             view()
                 .rounded(px(12.0))
                 .border_1()
-                .border_color(colors::BORDER)
+                .border_color(colors::border())
                 .bg(colors::SURFACE)
                 .child(each(
                     move || hosts.get(),
@@ -147,7 +147,7 @@ pub(crate) fn screen(hosts: Memo<Vec<Host>>) -> impl IntoElement {
                         )
                         .style_when(
                             move || index.get() > 0,
-                            |s| s.border_t_1().border_t_color(colors::BORDER),
+                            |s| s.border_t_1().border_t_color(colors::border()),
                         )
                     },
                 )),
@@ -180,7 +180,7 @@ pub(crate) fn hero() -> impl IntoElement {
                                 "手元のPCでも、クラウドでも。いつもの環境でAIを使えます。",
                             ))
                             .text_size(px(14.0))
-                            .text_color(colors::MUTED),
+                            .text_color(colors::muted()),
                         ),
                 )
                 .child(pairing()),
@@ -212,7 +212,7 @@ pub(crate) fn pairing() -> impl IntoElement {
             .child(
                 text(tr("PCのBexで発行した接続情報を貼り付けてください。"))
                     .text_size(px(13.0))
-                    .text_color(colors::MUTED),
+                    .text_color(colors::muted()),
             )
             .child(
                 ui::field()
@@ -262,7 +262,7 @@ pub(crate) fn pairing() -> impl IntoElement {
                     tr_format("AI処理：{0}", [&recipients])
                 })))
                 .child(text(confirmed(|value| value.transcription_recipient.as_ref().map(|recipient| tr_format("音声入力：{0}（文字起こし）", [recipient])).unwrap_or_default())))
-                .child(text(tr("共有PCでは、管理者などが内容を閲覧できる場合があります。")).text_size(px(13.0)).text_color(colors::MUTED))
+                .child(text(tr("共有PCでは、管理者などが内容を閲覧できる場合があります。")).text_size(px(13.0)).text_color(colors::muted()))
                 .child(view().flex_row().justify_end().gap_2()
                     .child(ui::text_button(tr("変更"), move || {
                         confirmation.set(None); invitation.set(String::new());
@@ -348,7 +348,7 @@ fn ssh_or_paste(
                             "SSHの鍵で接続でき、Bexのホストを起動済みのサーバーにつなぎます。",
                         ))
                         .text_size(px(13.0))
-                        .text_color(colors::MUTED),
+                        .text_color(colors::muted()),
                     )
                     .child(text(tr("SSH接続先")).text_size(px(13.0)))
                     .child(

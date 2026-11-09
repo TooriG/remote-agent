@@ -113,7 +113,7 @@ pub(crate) fn controls(
             .flex_row()
             .items_center()
             .rounded(px(ui::RADIUS))
-            .text_color(colors::FOREGROUND)
+            .text_color(colors::foreground())
             .hover(|s| s.bg(colors::GHOST_HOVER))
             .active(|s| s.bg(colors::SELECTED))
             .disabled_style(|s| s.opacity(0.5))
@@ -254,12 +254,12 @@ fn act(connection: Connection, picker: Signal<Option<Picker>>, action: &str, val
 
 #[cfg(desktop)]
 pub(crate) fn provider_mark(id: &str) -> Option<(&'static str, nsh_core::element::Rgba)> {
-    use crate::ui::colors::FOREGROUND;
+    use crate::ui::colors::foreground;
     use nsh_core::element::rgb;
     Some(match id {
         "codex" => (
             include_str!("../../mobile/iosApp/Bex/Assets.xcassets/openai.imageset/openai.svg"),
-            FOREGROUND,
+            foreground(),
         ),
         "claude" => (
             include_str!("../../mobile/iosApp/Bex/Assets.xcassets/claude.imageset/claude.svg"),
@@ -296,7 +296,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
         .gap_2()
         .pr_2()
         .border_r_1()
-        .border_r_color(colors::BORDER)
+        .border_r_color(colors::border())
         .child(each(
             move || field("providers")().as_array().cloned().unwrap_or_default(),
             |choice: &Value| choice["id"].as_str().unwrap_or_default().to_owned(),
@@ -378,7 +378,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                     .child(
                         text(usage["label"].as_str().unwrap_or_default().to_owned())
                             .text_size(px(12.0))
-                            .text_color(colors::MUTED),
+                            .text_color(colors::muted()),
                     )
                     .child(
                         view()
@@ -394,7 +394,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                                     .bg(if percent <= 20.0 {
                                         nsh_core::element::rgb(0xfb923c)
                                     } else {
-                                        colors::FOREGROUND
+                                        colors::foreground()
                                     }),
                             ),
                     )
@@ -414,7 +414,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                         }
                     })
                     .p_2()
-                    .text_color(colors::MUTED)
+                    .text_color(colors::muted())
                 },
             ))
             .child(each(
@@ -523,7 +523,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                         text(notice["text"].as_str().unwrap_or_default().to_owned())
                             .selectable(true)
                             .text_size(px(12.0))
-                            .text_color(colors::MUTED),
+                            .text_color(colors::muted()),
                     )
                     .child(
                         view()
@@ -579,7 +579,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
                     .gap_3()
                     .pt_2()
                     .border_t_1()
-                    .border_t_color(colors::BORDER)
+                    .border_t_color(colors::border())
                     .child(when(
                         move || {
                             field("quick")()["efforts"]
@@ -604,7 +604,7 @@ fn panel(data: Memo<Option<Value>>, act: impl Fn(&str, &str) + Copy + 'static) -
         .flex_row()
         .items_stretch()
         .gap_3()
-        .text_color(colors::FOREGROUND)
+        .text_color(colors::foreground())
         .child(agents)
         .child(body)
 }

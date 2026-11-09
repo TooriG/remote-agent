@@ -462,11 +462,11 @@ fn tree(owner: String, root: Memo<Option<String>>) -> impl Element {
                 .h(px(40.0))
                 .px_3()
                 .border_b_1()
-                .border_b_color(colors::BORDER)
+                .border_b_color(colors::border())
                 .child(
                     text(move || key.with(|key| key.root.clone()))
                         .text_size(px(12.0))
-                        .text_color(colors::MUTED)
+                        .text_color(colors::muted())
                         .truncate()
                         .selectable(true)
                         .flex_1()
@@ -625,7 +625,7 @@ pub(crate) fn notice(message: impl IntoReactive<SharedString>) -> impl IntoEleme
         .px_3()
         .py_1()
         .text_size(px(12.0))
-        .text_color(colors::MUTED)
+        .text_color(colors::muted())
 }
 
 /// A row of the tree, as the desktop client's: a folder's chevron (a spinner while
@@ -688,7 +688,7 @@ fn tree_row(
                 .justify_center()
                 .text_color(move || {
                     if selected() {
-                        colors::FOREGROUND
+                        colors::foreground()
                     } else {
                         GLYPH
                     }
@@ -728,7 +728,7 @@ fn tree_row(
                     if ignored() {
                         IGNORED
                     } else {
-                        colors::FOREGROUND
+                        colors::foreground()
                     }
                 })
                 .style_when(

@@ -924,6 +924,7 @@ mod tests {
         let id = SessionRef::new(provider, "task".into()).unwrap();
         let activity = |revision, turn: Option<&str>| Notification::TaskActivity {
             state: agent_protocol::live_activity::TaskActivityState {
+                attention: Vec::new(),
                 revision,
                 waiting: Vec::new(),
                 display: agent_protocol::live_activity::TaskActivitySummary::default().display(),
@@ -1036,6 +1037,7 @@ mod tests {
 
     fn host_unread(state: &mut Snapshot, id: &SessionRef, unread: bool) {
         let _ = state.accept_task_activity(agent_protocol::live_activity::TaskActivityState {
+            attention: Vec::new(),
             waiting: Vec::new(),
             revision: state
                 .lists
@@ -1648,6 +1650,7 @@ mod tests {
                     &state,
                     Notification::TaskActivity {
                         state: TaskActivityState {
+                            attention: Vec::new(),
                             revision: 1,
                             waiting: vec![],
                             background: Vec::new(),
@@ -1684,6 +1687,7 @@ mod tests {
             &state,
             Notification::TaskActivity {
                 state: TaskActivityState {
+                    attention: Vec::new(),
                     revision: 1,
                     waiting: vec![],
                     background: Vec::new(),
@@ -1743,6 +1747,7 @@ mod tests {
                 ..Default::default()
             };
             let incoming = TaskActivityState {
+                attention: Vec::new(),
                 revision: 1,
                 waiting: vec![],
                 display: TaskActivitySummary::default().display(),
@@ -1819,6 +1824,7 @@ mod tests {
                 &next,
                 Notification::TaskActivity {
                     state: TaskActivityState {
+                        attention: Vec::new(),
                         revision: 2,
                         ..incoming
                     },
@@ -1834,6 +1840,7 @@ mod tests {
                 &next.lists.project_threads
             ));
             let empty = TaskActivityState {
+                attention: Vec::new(),
                 revision: 3,
                 waiting: vec![],
                 display: TaskActivitySummary {

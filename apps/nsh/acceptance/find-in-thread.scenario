@@ -1,0 +1,12 @@
+# ⌘F counts what the conversation says and closes with Escape.
+expect "検証プロジェクト" 30000
+press このプロジェクトで新しいチャット
+type "AI に依頼する" "[immediate] 検索の確認です"
+press 送信
+expect "シミュレータで完了しました。" 30000
+key cmd+f
+type "会話内を検索" "確認"
+expect "1/1" 5000
+screenshot found
+key escape
+expect_absent "前の一致" 5000

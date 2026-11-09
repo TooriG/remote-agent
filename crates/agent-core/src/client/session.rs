@@ -659,7 +659,9 @@ mod tests {
             Ok(match key {
                 PreferenceKey::Models => self.model_preferences.lock().unwrap().clone(),
                 PreferenceKey::Editor => self.editor_preferences.lock().unwrap().clone(),
-                PreferenceKey::Language => self.language.lock().unwrap().clone(),
+                PreferenceKey::Language | PreferenceKey::Contrast => {
+                    self.language.lock().unwrap().clone()
+                }
                 PreferenceKey::Composer => Vec::new(),
             })
         }
@@ -677,7 +679,7 @@ mod tests {
                 PreferenceKey::Composer => {
                     serde_json::from_slice::<crate::state::ComposerPreferences>(&bytes).unwrap();
                 }
-                PreferenceKey::Language => {
+                PreferenceKey::Language | PreferenceKey::Contrast => {
                     serde_json::from_slice::<crate::localization::UiLanguage>(&bytes).unwrap();
                     *self.language.lock().unwrap() = bytes;
                 }

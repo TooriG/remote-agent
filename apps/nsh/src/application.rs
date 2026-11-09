@@ -79,6 +79,7 @@ pub(crate) struct State {
     pub browser_renderer: String,
     pub worktrees: Option<WorktreeEditor>,
     pub language: UiLanguage,
+    pub contrast: u32,
     /// The width the user gave the file list beside an open file.
     #[cfg(any(desktop, test))]
     pub explorer_width: f32,
@@ -113,6 +114,7 @@ impl Default for State {
             browser_renderer: String::new(),
             worktrees: None,
             language: UiLanguage::default(),
+            contrast: agent_core::presentation::appearance::DEFAULT_CONTRAST,
             #[cfg(any(desktop, test))]
             explorer_width: agent_core::presentation::files::EXPLORER_DEFAULT_WIDTH,
             #[cfg(desktop)]
@@ -281,6 +283,8 @@ impl Application {
         // choice is the default, as on a first launch.
         let language = client.device.language();
         crate::l10n::set(language);
+        let contrast = client.device.contrast();
+        crate::ui::colors::set_contrast(contrast);
         #[cfg(desktop)]
         let updater = scope.map(|scope| {
             agent_core::updates::Updater::start(
@@ -293,6 +297,7 @@ impl Application {
             host: selection.host_id.clone().unwrap_or_default(),
             all_hosts: selection.all,
             language,
+            contrast,
             #[cfg(any(desktop, test))]
             explorer_width,
             #[cfg(desktop)]
@@ -450,6 +455,18 @@ impl Application {
         crate::l10n::set(language);
         self.state
             .send_modify(|state| Arc::make_mut(state).language = language);
+    }
+
+    /// Saves the interface contrast, then publishes it so the root is made again.
+    #[cfg(any(desktop, test))]
+    pub fn select_contrast(&self, contrast: u32) {
+        if let Err(reason) = self.client.device.select_contrast(contrast) {
+            self.fail(reason.to_string());
+            return;
+        }
+        crate::ui::colors::set_contrast(contrast);
+        self.state
+            .send_modify(|state| Arc::make_mut(state).contrast = contrast);
     }
 
     /// Shows `reason` as the application's failure until it is dismissed.
