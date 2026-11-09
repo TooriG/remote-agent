@@ -219,22 +219,25 @@ private fun AccountSettings(
     // An ended login has no form left to show why it ended.
     settings.accountLoginError(provider)?.let { ErrorTextView(it) }
     signingOut?.let { account ->
-        AlertDialog(
-            onDismissRequest = { signingOut = null },
-            title = { Text(language.text("サインアウトしますか？")) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        signingOut = null
-                        perform(Intent.LogoutAccount(LogoutAccount(provider, account.id))) {}
-                    }
-                ) {
-                    Text(language.text("サインアウト"))
-                }
+        SignOutConfirmation(
+            onDismiss = { signingOut = null },
+            onConfirm = {
+                signingOut = null
+                perform(Intent.LogoutAccount(LogoutAccount(provider, account.id))) {}
             },
-            dismissButton = { TextButton(onClick = { signingOut = null }) { Text(language.text("キャンセル")) } },
         )
     }
+}
+
+@Composable
+private fun SignOutConfirmation(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val language = LocalUiLanguage.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(language.text("サインアウトしますか？")) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(language.text("サインアウト")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(language.text("キャンセル")) } },
+    )
 }
 
 @Composable
