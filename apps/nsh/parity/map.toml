@@ -132,9 +132,9 @@ elements = ["composer", "composer-overlay", "working-header", "retry-notice"]
 [[state]]
 name = "approval"
 screen = "Conversation"
-description = "A command waiting for approval: the request above the composer."
+description = "A command waiting for approval: T3 Code asks in the work row, Bex above the composer."
 nsh = ["send [approval] 承認を確認します", "expect \"結合テストの承認確認\" 20000"]
-t3 = [{ send = "[approval] 承認を確認します" }, { waitText = "Command approval" }]
+t3 = [{ send = "[approval] 承認を確認します" }, { waitText = "Waiting for approval" }]
 column = "composer"
 elements = ["composer", "composer-overlay", "approval-panel", "approval-title", "approval-command", "approval-accept", "approval-decline", "working-header", "approval-live-row"]
 
@@ -648,7 +648,7 @@ nsh = { contains = "Retrying provider" }
 id = "approval-panel"
 what = "Approval request panel"
 kind = "box"
-t3 = "[data-slot=composer-banner]"
+t3 = "[data-v2-item-type=approval_request]"
 nsh = { text = "Command approval", up = 3 }
 # The banners attach to the composer's top edge: measured from it.
 anchor = "composer"
@@ -657,7 +657,7 @@ anchor = "composer"
 id = "approval-title"
 what = "Approval: title"
 kind = "text"
-t3 = "[data-slot=composer-banner] .text-warning"
+t3 = "[data-v2-item-type=approval_request] .text-warning"
 nsh = { text = "Command approval" }
 anchor = "composer"
 
@@ -674,7 +674,7 @@ anchor = "composer"
 id = "approval-accept"
 what = "Approval: approve button"
 kind = "text"
-t3 = "[data-slot=composer-banner] button:has(span.max-w-40)"
+t3 = "[data-v2-item-type=approval_request] button:has(span.whitespace-normal)"
 nsh = { text = "Approve", role = "AXButton" }
 t3_nth = 1
 anchor = "composer"
@@ -683,7 +683,7 @@ anchor = "composer"
 id = "approval-decline"
 what = "Approval: decline button"
 kind = "text"
-t3 = "[data-slot=composer-banner] button:has(span.max-w-40)"
+t3 = "[data-v2-item-type=approval_request] button:has(span.whitespace-normal)"
 nsh = { text = "Decline", role = "AXButton" }
 anchor = "composer"
 
@@ -1088,39 +1088,11 @@ approved = "2026-11-09"
 by = "the map (a fixture artefact)"
 
 [[approved]]
-element = "approval-panel"
-metrics = ["size"]
-reason = "as wide as the composer less T3's inset on each side; the composer's width keeps Bex's design (the heights match)"
-approved = "2026-11-09"
-by = "the map (follows the user's composer decision)"
-
-[[approved]]
 element = "question-panel"
 metrics = ["size"]
 reason = "as wide as the composer less T3's inset on each side; the composer's width keeps Bex's design (the heights match)"
 approved = "2026-11-09"
 by = "the map (follows the user's composer decision)"
-
-[[approved]]
-element = "approval-accept"
-metrics = ["text position (drawn)"]
-reason = "the decisions end the banner, as wide as the composer, whose width keeps Bex's design (the heights match)"
-approved = "2026-11-09"
-by = "the map (follows the user's composer decision)"
-
-[[approved]]
-element = "approval-decline"
-metrics = ["text position (drawn)"]
-reason = "the decisions end the banner, as wide as the composer, whose width keeps Bex's design (the heights match)"
-approved = "2026-11-09"
-by = "the map (follows the user's composer decision)"
-
-[[approved]]
-element = "approval-accept"
-metrics = ["text extent (drawn)", "text line height (drawn)"]
-reason = "T3's side measures the filled button's fill (60 by 20 of its 64 by 24) as its text"
-approved = "2026-11-09"
-by = "the map (a measurement artefact)"
 
 [[approved]]
 element = "question-text"

@@ -111,7 +111,7 @@ reason). Reasons recur:
 | Compact controls menu (narrow composer) | `CompactComposerControlsMenu.tsx` | not yet: needs a narrower viewport |
 | Slash command, @mention and $skill menus | `ComposerCommandMenu.tsx` | not yet: not mapped |
 | Attachments: image thumbnails, files, video, upload failure | `ComposerImageThumbnail.tsx`, `ComposerFileAttachment` | not yet: not mapped (NSH `attachments` scenario attaches through the open panel) |
-| Pending approval panel and its actions | `ComposerPendingApprovalPanel.tsx`, `ComposerPendingApprovalActions.tsx` | covered: `approval` |
+| Pending approval in its work row and its actions | `TimelinePendingApprovalRow.tsx`, `ComposerPendingApprovalActions.tsx` | covered: `approval` |
 | Pending question panel, options, custom answer, skip | `ComposerPendingUserInputPanel.tsx` | covered: `question` |
 | Terminal contexts attached | `ComposerPendingTerminalContexts.tsx` | not yet: service (terminal) |
 | Stash badge and menu, tasks badge and drawer, context window meter, prompt length warning | `ComposerStashBadge.tsx`, `ComposerTasksBadge.tsx`, `ContextWindowMeter.tsx`, `ComposerPromptLengthValidation.tsx` | not yet: not mapped |
