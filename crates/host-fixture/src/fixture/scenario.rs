@@ -173,6 +173,11 @@ fn stream_whole(context: &Context, thread_id: &str, turn: &Turn, item: Value) ->
     complete(context, thread_id, turn, index)
 }
 
+/// The subagent thread the `[items]` turn with `suffix` spawns.
+pub(super) fn subagent_thread(suffix: &str) -> String {
+    format!("fixture-subagent-thread-{suffix}")
+}
+
 pub(super) struct ScenarioTurn {
     pub context: Rc<Context>,
     pub thread: SharedThread,
@@ -320,19 +325,26 @@ impl ScenarioTurn {
             RequestOutcome::Failed(error) => return context.finish(thread, turn, "failed", Some(error)),
         },
         "items" => {
+            // As Codex's, each item completes; the spawn names its parent and
+            // the thread it started (which the fixture serves), and the
+            // subagent's activity that thread.
+            let child = subagent_thread(suffix);
             for item in [
                 json!({"id":format!("fixture-plan-{suffix}"),"type":"plan","text":"確認計画"}),
                 json!({"id":format!("fixture-mcp-{suffix}"),"type":"mcpToolCall","server":"fixture","tool":"lookup","status":"completed","result":{"content":[{"type":"text","text":"Fixture lookup result"}]}}),
-                json!({"id":format!("fixture-dynamic-{suffix}"),"type":"dynamicToolCall","tool":"fixture","status":"inProgress"}),
-                json!({"id":format!("fixture-collab-{suffix}"),"type":"collabAgentToolCall","tool":"spawn_agent","status":"inProgress"}),
-                json!({"id":format!("fixture-subagent-{suffix}"),"type":"subAgentActivity","status":"running"}),
+                json!({"id":format!("fixture-dynamic-{suffix}"),"type":"dynamicToolCall","tool":"fixture","status":"completed","success":true}),
+                json!({"id":format!("fixture-collab-{suffix}"),"type":"collabAgentToolCall","tool":"spawnAgent","status":"completed",
+                    "prompt":"Review the change","senderThreadId":thread_id,"receiverThreadIds":[child],
+                    "agentsStates":{child.clone():{"status":"completed","message":"Reviewed."}}}),
+                json!({"id":format!("fixture-subagent-{suffix}"),"type":"subAgentActivity","status":"completed",
+                    "kind":"started","agentThreadId":child,"agentPath":"reviewer"}),
                 json!({"id":format!("fixture-web-{suffix}"),"type":"webSearch","query":"Codex"}),
                 json!({"id":format!("fixture-image-{suffix}"),"type":"imageView","path":"/tmp/fixture.png"}),
                 json!({"id":format!("fixture-sleep-{suffix}"),"type":"sleep"}),
                 json!({"id":format!("fixture-review-in-{suffix}"),"type":"enteredReviewMode"}),
                 json!({"id":format!("fixture-review-out-{suffix}"),"type":"exitedReviewMode"}),
                 json!({"id":format!("fixture-compaction-{suffix}"),"type":"contextCompaction"}),
-            ] { context.stream_item(&thread_id, turn, item)?; }
+            ] { stream_whole(context, &thread_id, turn, item)?; }
         }
         _ => (),
     }

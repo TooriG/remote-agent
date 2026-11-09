@@ -44,9 +44,6 @@ pub(crate) fn details(
     surroundings: crate::rich_text::Surroundings,
     item: Memo<Option<Item>>,
     expanded: Signal<HashSet<String>>,
-    list: ElementRef,
-    at: Position,
-    following: Signal<bool>,
     column_width: Memo<f32>,
 ) -> impl Element {
     let connection = surroundings.connection;
@@ -93,8 +90,8 @@ pub(crate) fn details(
         let Some(item) = item.get_untracked() else {
             return;
         };
+        // As T3 Code's, the reader stays where they were.
         let opening = !open();
-        following.set(false);
         expanded.update(|all| {
             if opening {
                 all.insert(item.source.data.id.clone());
@@ -104,9 +101,6 @@ pub(crate) fn details(
         });
         if opening && item.source.data.deferred {
             load();
-        }
-        if opening {
-            crate::conversation::reveal_row(list, at.index() as u32);
         }
     };
     let label = computed(move || {

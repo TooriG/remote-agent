@@ -103,6 +103,9 @@ fn names(rows: &[TurnRow]) -> Vec<String> {
             TurnRow::Thinking => "thinking".into(),
             TurnRow::Requested { label, approval } => format!("requested {label} {approval}"),
             TurnRow::Retrying { label } => format!("retrying {label}"),
+            TurnRow::Plan { title, text, .. } => format!("plan {title}: {text}"),
+            TurnRow::Subagent { name, message, .. } => format!("subagent {name}: {message}"),
+            TurnRow::Divider { label, .. } => format!("divider {label}"),
             TurnRow::Actions(row) => match &row.content {
                 ConversationRowContent::Response { item, .. } => {
                     format!("actions {}", item.data.body.clone().unwrap_or_default())
@@ -352,6 +355,51 @@ fn groups_name_their_tools_as_t3_code_does() {
     assert_eq!(
         summary(English, vec![reasoning("a"), reasoning("b")]),
         "group Thought (×2) false"
+    );
+}
+
+#[test]
+fn plans_subagents_and_compaction_stand_apart_and_neutral_work_hides() {
+    let body = |id: &str, body: Value| item(id, "completed", body);
+    let mcp = json!({"toolCall":{"kind":"mcp","tool":"lookup","server":"fixture","namespace":null,
+        "arguments":{},"result":null,"error":null,"content":[],"success":true,"durationMs":null}});
+    let subagent = |message: Value| {
+        json!({"subagent":{"tool":"spawnAgent","prompt":null,"model":null,"effort":null,"sender":null,
+            "receivers":[],"states":[{"session":{"provider":"codex","id":"child"},"status":"completed",
+            "message":message}],"agentId":null,"result":null}})
+    };
+    let turn = turn(
+        UiLanguage::English,
+        "interrupted",
+        vec![
+            user("u"),
+            reasoning("checking"),
+            command("./gradlew test", "completed"),
+            body("plan", json!({"plan":{"text":"# Ship it\nsteps"}})),
+            body("mcp", mcp),
+            tool("t"),
+            body("spawn", subagent(json!("Reviewed."))),
+            body("activity", subagent(Value::Null)),
+            body("web", json!({"webSearch":{"query":"Codex","action":null}})),
+            body("image", json!({"imageView":{"path":"/tmp/a.png"}})),
+            body("sleep", json!({"sleep":{}})),
+            body("review", json!({"review":{"entering":true,"text":""}})),
+            body("compaction", json!({"compaction":{}})),
+        ],
+        None,
+    );
+    assert_eq!(
+        names(&turn_rows(&turn, &HashMap::new(), &HashSet::new())),
+        [
+            "user u",
+            "group Ran 1 command false",
+            "plan Ship it: # Ship it\nsteps",
+            "group Used fixture integration and used 1 tool false",
+            "subagent Subagent: Reviewed.",
+            "work Web search",
+            "divider Context compacted",
+            "interrupted"
+        ]
     );
 }
 

@@ -47,6 +47,22 @@ pub enum TurnRow {
     /// The provider stream dropped and is being retried, which the error's
     /// title says.
     Retrying { label: String },
+    /// A plan the agent proposed, as T3 Code's plan card: its title (the
+    /// plan's first heading, else Proposed plan) over its Markdown.
+    Plan {
+        id: String,
+        title: String,
+        text: String,
+    },
+    /// A subagent the turn started, as T3 Code's subagent row: its name and
+    /// its latest word.
+    Subagent {
+        id: String,
+        name: String,
+        message: String,
+    },
+    /// A divider across the work, as T3 Code's context compaction.
+    Divider { id: String, label: String },
     /// The actions (fork, copy, time) of the settled turn's last answer when
     /// work ends the turn below it: as T3 Code's, they follow that work and
     /// stay in view.
@@ -112,11 +128,20 @@ pub fn turn_rows(
                     out.push(TurnRow::Commentary(item.clone()));
                 }
             }
-            ConversationRowContent::Activity { .. } => {
-                if !hidden {
-                    work.push(row);
+            ConversationRowContent::Activity { item, .. } => match place(language, item) {
+                Place::Work if !hidden => work.push(row),
+                Place::Alone(alone) => {
+                    let alone = *alone;
+                    flush(&mut work, &mut out, false);
+                    // A subagent's later activity is the row it already has.
+                    let repeated = matches!(alone, TurnRow::Subagent { .. })
+                        && matches!(out.last(), Some(TurnRow::Subagent { .. }));
+                    if !hidden && !repeated {
+                        out.push(alone);
+                    }
                 }
-            }
+                Place::Work | Place::Hidden => {}
+            },
             ConversationRowContent::InProgress { .. } => {
                 flush(&mut work, &mut out, true);
                 if live == Some(LiveActivity::Thinking) {
@@ -232,6 +257,59 @@ fn request_label(language: UiLanguage, request: &super::Request) -> String {
     }
 }
 
+/// Where T3 Code's timeline shows a work item.
+enum Place {
+    /// Among the work, in its group or alone.
+    Work,
+    /// Apart from the work, which it ends: a plan, a subagent, a divider.
+    Alone(Box<TurnRow>),
+    /// Not at all: work without an outcome to show (an image looked at, a
+    /// sleep, review mode entered or left).
+    Hidden,
+}
+
+fn place(language: UiLanguage, item: &RenderedItem) -> Place {
+    let ItemSource::Native(native) = &item.source else {
+        return Place::Work;
+    };
+    match native.body() {
+        ItemBody::Plan { text } => Place::Alone(Box::new(TurnRow::Plan {
+            id: item.data.id.clone(),
+            title: plan_title(text).unwrap_or_else(|| language.text("work.plan.proposed").into()),
+            text: text.clone(),
+        })),
+        ItemBody::Subagent { states, .. } => Place::Alone(Box::new(TurnRow::Subagent {
+            id: item.data.id.clone(),
+            name: language.text("work.subagent").into(),
+            message: states
+                .iter()
+                .rev()
+                .find_map(|state| state.message.clone())
+                .unwrap_or_default(),
+        })),
+        ItemBody::Compaction {} => Place::Alone(Box::new(TurnRow::Divider {
+            id: item.data.id.clone(),
+            label: language
+                .text(if native.status == crate::models::ItemStatus::Running {
+                    "work.compaction.running"
+                } else {
+                    "work.compaction.done"
+                })
+                .into(),
+        })),
+        ItemBody::ImageView { .. } | ItemBody::Sleep {} | ItemBody::Review { .. } => Place::Hidden,
+        _ => Place::Work,
+    }
+}
+
+/// A plan's title, as T3 Code's: its first heading.
+fn plan_title(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim_start().strip_prefix('#'))
+        .map(|heading| heading.trim_start_matches('#').trim().to_owned())
+        .filter(|heading| !heading.is_empty())
+}
+
 fn activity_item(row: &ConversationRow) -> Option<&Arc<RenderedItem>> {
     match &row.content {
         ConversationRowContent::Activity { item, .. } => Some(item),
@@ -269,7 +347,7 @@ fn pieces(
         .collect();
     let work = |row: &ConversationRow| TurnRow::Work {
         row: row.clone(),
-        label: activity_item(row).map_or_else(String::new, |item| work_label(item)),
+        label: activity_item(row).map_or_else(String::new, |item| work_label(language, item)),
     };
     match rows.as_slice() {
         [] => {}
@@ -294,13 +372,16 @@ fn pieces(
     }
 }
 
-/// What a tool did, as T3 Code's work row names it: a command as it ran,
-/// reasoning by its trace, other work by its title.
-fn work_label(item: &RenderedItem) -> String {
-    if let ItemSource::Native(native) = &item.source
-        && let ItemBody::CommandExecution { command, .. } = native.body()
-    {
-        return command.trim().to_owned();
+/// What a tool did, as T3 Code's work row names it: a command as it ran, a
+/// web search by its heading (its query is its detail), reasoning by its
+/// trace, other work by its title.
+fn work_label(language: UiLanguage, item: &RenderedItem) -> String {
+    if let ItemSource::Native(native) = &item.source {
+        match native.body() {
+            ItemBody::CommandExecution { command, .. } => return command.trim().to_owned(),
+            ItemBody::WebSearch { .. } => return language.text("work.web_search").into(),
+            _ => {}
+        }
     }
     let label = item.work_row_label(false);
     label.preview.unwrap_or(label.heading)
@@ -395,6 +476,21 @@ pub fn group_summary(language: UiLanguage, items: &[&Arc<RenderedItem>]) -> Stri
             ),
         };
     }
+    // As T3 Code, an MCP server's tools are named by their integration,
+    // apart from the actions counted.
+    let mut sources: Vec<&str> = Vec::new();
+    let tools: Vec<_> = tools
+        .into_iter()
+        .filter(|item| match integration(item) {
+            Some(server) => {
+                if !sources.contains(&server) {
+                    sources.push(server);
+                }
+                false
+            }
+            None => true,
+        })
+        .collect();
     let mut actions: Vec<(Action, usize)> = Vec::new();
     for item in &tools {
         let action = Action::of(item);
@@ -412,6 +508,22 @@ pub fn group_summary(language: UiLanguage, items: &[&Arc<RenderedItem>]) -> Stri
         .iter()
         .map(|(_, (action, count))| counted(language, action.keys(), *count))
         .collect();
+    if !sources.is_empty() {
+        let names = sources.iter().map(|name| (*name).to_owned()).collect();
+        labels.insert(
+            0,
+            localized_ui_format(
+                language,
+                if sources.len() == 1 {
+                    "work.group.integration"
+                } else {
+                    "work.group.integrations"
+                }
+                .into(),
+                vec![listed(language, names)],
+            ),
+        );
+    }
     if rest > 0 {
         labels.push(counted(
             language,
@@ -455,10 +567,34 @@ fn sentence(language: UiLanguage, labels: Vec<String>) -> String {
                 .unwrap_or_default()
         })
         .collect();
-    match labels.as_slice() {
+    listed(language, labels)
+}
+
+/// Items as one list: T3 Code's "a and b", "a, b, and c".
+fn listed(language: UiLanguage, items: Vec<String>) -> String {
+    if language == UiLanguage::Japanese {
+        return items.join("、");
+    }
+    match items.as_slice() {
         [first, second] => format!("{first} and {second}"),
         [init @ .., last] if !init.is_empty() => format!("{}, and {last}", init.join(", ")),
-        _ => labels.concat(),
+        _ => items.concat(),
+    }
+}
+
+/// The MCP server whose tool `item` called, which T3 Code names as its
+/// integration.
+fn integration(item: &RenderedItem) -> Option<&str> {
+    let ItemSource::Native(native) = &item.source else {
+        return None;
+    };
+    match native.body() {
+        ItemBody::ToolCall {
+            kind: crate::models::ToolKind::Mcp,
+            server: Some(server),
+            ..
+        } if !server.is_empty() => Some(server),
+        _ => None,
     }
 }
 

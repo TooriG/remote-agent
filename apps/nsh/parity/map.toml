@@ -325,7 +325,8 @@ id = "draft-hero"
 what = "New chat heading"
 kind = "text"
 t3 = "main h1"
-nsh = { contains = "What should", role = "AXStaticText" }
+# The whole heading, its project choice included, as T3 Code's `h1`.
+nsh = { contains = "What should", role = "AXStaticText", up = 1 }
 
 [[element]]
 id = "draft-hero-project"
@@ -339,7 +340,7 @@ id = "draft-without-project"
 what = "Start without a project"
 kind = "text"
 t3 = "main h1 + p button"
-nsh = { text = "Start without a project" }
+nsh = { text = "or start without a project" }
 
 # What the window's own edges place (the header's toggles at its end) is
 # measured from the window.
@@ -570,15 +571,17 @@ nsh = { text = "./gradlew test", role = "AXButton", down = [0, 0, 0] }
 id = "web-search-row"
 what = "Web search row"
 kind = "text"
-t3 = "[data-v2-item-type=web_search]"
-nsh = { contains = "Codex", role = "AXStaticText" }
+t3 = "[data-v2-item-type=web_search] .truncate span"
+# A lone web search keeps its heading; its query is its detail.
+nsh = { text = "Web search", role = "AXStaticText" }
 
 [[element]]
 id = "plan-row"
 what = "Plan row"
 kind = "text"
-t3 = "[data-v2-item-type=plan], [data-v2-item-type=todo_list]"
-nsh = { contains = "確認計画" }
+# The proposed plan card's Markdown.
+t3 = "[data-timeline-row-kind=proposed-plan] .chat-markdown p"
+nsh = { text = "確認計画", role = "AXTextArea" }
 
 [[element]]
 id = "commentary-text"
@@ -974,6 +977,34 @@ metrics = ["size"]
 reason = "as wide as the lane, which the sidebar's 272-point width (T3's 256) narrows"
 approved = "2026-11-09"
 by = "the coordinator (follows the user's sidebar decision)"
+
+[[approved]]
+element = "draft-hero"
+metrics = ["text position (drawn)", "text extent (drawn)", "text line height (drawn)"]
+reason = "the heading names the fixture's project, 検証プロジェクト for Bex and project for T3 Code, and stands centred over the composer, whose stack (the folder row above it) keeps Bex's design"
+approved = "2026-11-09"
+by = "the coordinator (a fixture artefact and the user's composer decision)"
+
+[[approved]]
+element = "draft-hero-project"
+metrics = ["text position (drawn)", "text extent (drawn)"]
+reason = "the fixture names the project 検証プロジェクト for Bex and project for T3 Code, in a heading centred over the composer, which keeps Bex's design"
+approved = "2026-11-09"
+by = "the coordinator (a fixture artefact and the user's composer decision)"
+
+[[approved]]
+element = "draft-without-project"
+metrics = ["text position (drawn)"]
+reason = "under a heading centred over the composer, whose stack (the folder row above it) keeps Bex's design"
+approved = "2026-11-09"
+by = "the coordinator (follows the user's composer decision)"
+
+[[approved]]
+element = "work-toggle"
+metrics = ["text extent (drawn)", "size"]
+reason = "the fold names the time the turn took, which T3 Code times from its own run and Bex from the provider's turn; the fixture's immediate turn takes a millisecond, T3 Code's run of it a fifth of a second"
+approved = "2026-11-09"
+by = "the coordinator (a measurement artefact)"
 
 [[approved]]
 element = "markdown-table"

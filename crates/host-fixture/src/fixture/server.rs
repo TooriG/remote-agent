@@ -27,6 +27,15 @@ pub(super) struct Thread {
     pub turns: Vec<Turn>,
 }
 
+/// The wall clock in milliseconds, as Codex stamps a turn.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
 impl Thread {
     fn new(id: String, cwd: Value) -> Self {
         let Value::Object(metadata) = json!({"id":id,"cwd":cwd,"name":"Simulator conversation","preview":"",
@@ -200,7 +209,11 @@ impl Context {
         let mut turn = turn.borrow_mut();
         turn["status"] = status.into();
         turn["completedAt"] = 4.into();
-        turn["durationMs"] = 3000.into();
+        // As Codex, the time the turn took, when it started here.
+        turn["durationMs"] = turn["startedAtMs"]
+            .as_u64()
+            .map_or(3000, |started| now_ms().saturating_sub(started))
+            .into();
         if let Some(error) = error {
             turn["error"] = error;
         }
@@ -433,12 +446,6 @@ impl Threads {
                         .contains(&term)
             })
             .filter(|thread| {
-                let Some(kinds) = params["sourceKinds"]
-                    .as_array()
-                    .filter(|kinds| !kinds.is_empty())
-                else {
-                    return true;
-                };
                 let kind = if thread
                     .metadata
                     .get("parentThreadId")
@@ -448,7 +455,13 @@ impl Threads {
                 } else {
                     "cli"
                 };
-                kinds.iter().any(|value| value.as_str() == Some(kind))
+                // As Codex, interactive threads unless the kinds are named.
+                params["sourceKinds"]
+                    .as_array()
+                    .filter(|kinds| !kinds.is_empty())
+                    .map_or(kind == "cli", |kinds| {
+                        kinds.iter().any(|value| value.as_str() == Some(kind))
+                    })
             })
             .filter(|thread| {
                 let Some(ancestor) = params["ancestorThreadId"].as_str() else {
@@ -693,11 +706,10 @@ impl Threads {
         let suffix = self.turn_suffix(thread_id, observed_turns);
         let turn_id = format!("fixture-turn-{suffix}");
         // A turn starts now, so clients show its real elapsed time.
-        let started_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(1, |elapsed| elapsed.as_secs());
+        let started_at_ms = now_ms();
         let turn = Rc::new(RefCell::new(
-            json!({"id":turn_id,"status":"inProgress","items":[],"startedAt":started_at}),
+            json!({"id":turn_id,"status":"inProgress","items":[],
+            "startedAt":started_at_ms / 1000,"startedAtMs":started_at_ms}),
         ));
         thread.borrow_mut().turns.push(turn.clone());
         thread
@@ -719,6 +731,9 @@ impl Threads {
                 .any(|tag| prompt.contains(tag))
         {
             remove_if_present(&context.home.join("release-inputs"))?;
+        }
+        if prompt.contains("[items]") {
+            self.spawn_subagent(thread_id, &suffix);
         }
         let stop = CancellationToken::new();
         self.controls.insert(
@@ -754,6 +769,26 @@ impl Threads {
             }
         });
         Ok(())
+    }
+
+    /// The subagent thread the `[items]` turn spawns, as Codex keeps one: a
+    /// child of `parent` that has answered, which clients can read and resume.
+    fn spawn_subagent(&mut self, parent: &str, suffix: &str) {
+        let id = scenario::subagent_thread(suffix);
+        let mut thread = Thread::new(id.clone(), Value::Null);
+        thread
+            .metadata
+            .insert("parentThreadId".into(), parent.into());
+        thread
+            .metadata
+            .insert("name".into(), "Fixture reviewer".into());
+        thread
+            .metadata
+            .insert("preview".into(), "Review the change".into());
+        thread.turns.push(Rc::new(RefCell::new(json!({"id":format!("turn-{id}"),"status":"completed","items":[
+            {"id":format!("prompt-{id}"),"type":"userMessage","content":[{"type":"text","text":"Review the change"}]},
+            {"id":format!("answer-{id}"),"type":"agentMessage","phase":"final_answer","text":"Reviewed."}]}))));
+        self.by_id.insert(id, Rc::new(RefCell::new(thread)));
     }
 
     /// Codex ends the command in a background terminal; nothing left to end

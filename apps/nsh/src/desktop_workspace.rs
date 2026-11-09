@@ -580,11 +580,19 @@ pub(crate) fn draft_hero() -> View {
         });
     };
     let chat = move || directory.with(String::is_empty);
+    // T3 Code's `h1`: `sm:text-3xl` (30 on 36), `tracking-tight`, the
+    // foreground; the line under it `mt-2 h-6 text-sm`.
+    let heading = |label: SharedString| {
+        text(label)
+            .text_size(px(30.0))
+            .line_height(px(36.0))
+            .letter_spacing(px(-0.75))
+            .text_color(colors::T3_FOREGROUND)
+    };
     view()
         .w_full()
         .items_center()
         .pb_4()
-        .gap_2()
         .child(when(
             move || !chat(),
             move || {
@@ -593,63 +601,69 @@ pub(crate) fn draft_hero() -> View {
                 let (before, after) = headline.split_once("{0}").unwrap_or((headline, ""));
                 view()
                     .flex_row()
-                    .items_center()
+                    .items_baseline()
                     .justify_center()
                     .max_w(relative(1.0))
-                    .child(text(before).text_size(px(30.0)))
-                    .child(project_menu(project, 30.0, colors::FOREGROUND, choose))
-                    .child(text(after).text_size(px(30.0)))
+                    .child(heading(before.into()))
+                    .child(project_menu(project, 30.0, colors::T3_FOREGROUND, choose))
+                    .child(heading(after.into()))
             },
         ))
         .child(when(
             move || !chat(),
             move || {
-                nsh_base::button()
-                    .px_1()
-                    .text_color(colors::MUTED)
-                    .hover(|s| s.text_color(colors::FOREGROUND))
-                    .on_press(move || connection.dispatch(Intent::NewChat { cwd: String::new() }))
-                    .child(text(tr("プロジェクトなしで始める")).text_size(px(14.0)))
+                view().mt_2().h(px(24.0)).justify_center().child(
+                    // T3 Code's `muted` inline button.
+                    nsh_base::button()
+                        .text_color(colors::T3_MUTED)
+                        .hover(|s| s.text_color(colors::T3_FOREGROUND))
+                        .on_press(move || {
+                            connection.dispatch(Intent::NewChat { cwd: String::new() })
+                        })
+                        .child(
+                            text(tr("プロジェクトなしで始める"))
+                                .text_size(px(14.0))
+                                .font_weight(FontWeight::MEDIUM),
+                        ),
+                )
             },
         ))
-        .child(when(chat, || {
-            text(tr("何に取り組みますか？")).text_size(px(30.0))
+        .child(when(chat, move || {
+            heading(tr("何に取り組みますか？").into())
         }))
         .child(when(chat, move || {
             project_menu(
                 || tr("プロジェクトなし").to_owned(),
                 14.0,
-                colors::MUTED,
+                colors::T3_MUTED,
                 choose,
             )
         }))
 }
 
-/// The draft's project, as a menu button in the headline's type.
+/// The draft's project, as T3 Code's `picker` inline button in the
+/// headline's type: a choice marked by its dotted underline, at most 16rem.
 fn project_menu(
     label: impl Fn() -> String + Copy + 'static,
     size: f32,
     color: Rgba,
     choose: impl Fn() + 'static,
 ) -> nsh_base::ButtonElement {
-    use crate::ui::{self, Icon, colors};
     nsh_base::button()
-        .flex_row()
-        .items_center()
-        .gap_1()
         .min_w_0()
-        .px_1()
-        .rounded(px(ui::RADIUS))
+        .max_w(px(256.0))
         .text_color(color)
-        .hover(|s| s.bg(colors::GHOST_HOVER))
         .accessibility_label(Some(SharedString::from(tr("プロジェクトを選択"))))
         .on_press(choose)
         .child(
             text(label)
                 .text_size(px(size))
                 .font_weight(FontWeight::MEDIUM)
+                .letter_spacing(px(-0.025 * size))
+                .underline()
+                .text_decoration_dotted()
+                .text_decoration_color(color.alpha(0.3))
                 .number_of_lines(1)
                 .min_w_0(),
         )
-        .child(ui::icon(Icon::CHEVRON_DOWN, (size * 0.5).max(12.0)))
 }

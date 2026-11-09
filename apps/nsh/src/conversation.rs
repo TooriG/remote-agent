@@ -32,6 +32,16 @@ pub(crate) mod look {
     pub(crate) const CODE: Rgba = rgb(0x111111);
     /// `--destructive`.
     pub(crate) const DESTRUCTIVE: Rgba = rgb(0xfb414a);
+    /// `border-border/80` around a card (a proposed plan) and an avatar.
+    pub(crate) const CARD_BORDER: Rgba = rgb(0x1b1b1b);
+    /// `--secondary` and an outlined control's fill: a badge, a menu button.
+    pub(crate) const CONTROL: Rgba = rgb(0x161616);
+    /// `--input`: an outlined control's edge.
+    pub(crate) const CONTROL_BORDER: Rgba = rgb(0x292929);
+    /// A subagent's avatar.
+    pub(crate) const AVATAR: Rgba = rgb(0x121212);
+    /// `--success`: a subagent that finished.
+    pub(crate) const SUCCESS: Rgba = rgb(0x01b276);
     /// `text-sm leading-relaxed`, in rows that are not Markdown.
     pub(crate) const TEXT: f32 = 14.0;
     pub(crate) const LINE: f32 = 22.75;
@@ -75,6 +85,12 @@ enum Shape {
     Live,
     /// The turn's error.
     Error,
+    /// A plan the agent proposed: its card.
+    Plan,
+    /// A subagent the turn started: its row.
+    Subagent,
+    /// A divider across the work (context compacted).
+    Divider,
     /// The settled turn's answer's actions, below the work that ends it.
     Actions,
     /// The turn was interrupted.
@@ -116,6 +132,8 @@ struct Row {
     steer: bool,
     /// The message waited in the queue, then started its turn.
     queued: bool,
+    /// A plan's Markdown, a subagent's latest word.
+    note: SharedString,
     /// A notification row's icon.
     notification: Option<crate::ui::Icon>,
     error: Option<TurnErrorPresentation>,
@@ -145,6 +163,7 @@ impl Row {
             steer: false,
             queued: false,
             notification: None,
+            note: SharedString::default(),
             error: None,
             unresolved: None,
         }
@@ -224,6 +243,7 @@ fn gap(kind: Kind, shape: Shape, actions: bool, next: Option<Shape>) -> f32 {
             }
         }
         Shape::Commentary | Shape::Interrupted => 8.0,
+        Shape::Subagent => 0.0,
         Shape::Message if kind == Kind::Response && !actions => 8.0,
         _ => 16.0,
     }
@@ -321,6 +341,27 @@ fn turn_row(row: TurnRow, key: &str, turn: &RenderedTurn) -> Option<Row> {
             shown.images.clear();
             shown
         }
+        TurnRow::Plan { id, title, text } => {
+            let mut row = Row::new(format!("plan:{id}"), Kind::Activity, Shape::Plan, title);
+            row.note = text.into();
+            row
+        }
+        TurnRow::Subagent { id, name, message } => {
+            let mut row = Row::new(
+                format!("subagent:{id}"),
+                Kind::Activity,
+                Shape::Subagent,
+                name,
+            );
+            row.note = message.into();
+            row
+        }
+        TurnRow::Divider { id, label } => Row::new(
+            format!("divider:{id}"),
+            Kind::Activity,
+            Shape::Divider,
+            label,
+        ),
         TurnRow::Interrupted => Row::new(
             format!("interrupted:{key}"),
             Kind::Activity,
@@ -836,8 +877,10 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                                                 })
                                                             })
                                                         {
+                                                            // As T3 Code's, the reader stays
+                                                            // where they were: at the end if
+                                                            // they followed it.
                                                             let opening = !untracked(open);
-                                                            following.set(false);
                                                             expanded.update(|all| {
                                                                 if opening {
                                                                     all.insert(
@@ -855,9 +898,6 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                                                 connection.dispatch(
                                                                     Intent::LoadTurnItems(load),
                                                                 );
-                                                            }
-                                                            if opening {
-                                                                reveal_row(list, at.index() as u32);
                                                             }
                                                         }
                                                     },
@@ -882,7 +922,6 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                                 }) else {
                                                     return;
                                                 };
-                                                following.set(false);
                                                 groups.update(|groups| {
                                                     if !groups.remove(&id) {
                                                         groups.insert(id);
@@ -909,9 +948,6 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                                     surroundings,
                                                     detail,
                                                     expanded_items,
-                                                    list,
-                                                    at,
-                                                    following,
                                                     column_width,
                                                 ))
                                         },
@@ -920,6 +956,22 @@ fn list(timeline: Timeline) -> impl IntoElement {
                                         move || status.get().is_some(),
                                         move || {
                                             crate::activity::status(status, move || {
+                                                label().unwrap_or_default().to_string()
+                                            })
+                                        },
+                                    ))
+                                    .child(when(
+                                        move || shape() == Some(Shape::Plan),
+                                        move || plan_card(surroundings, row, column_width),
+                                    ))
+                                    .child(when(
+                                        move || shape() == Some(Shape::Subagent),
+                                        move || subagent_row(row),
+                                    ))
+                                    .child(when(
+                                        move || shape() == Some(Shape::Divider),
+                                        move || {
+                                            divider_row(move || {
                                                 label().unwrap_or_default().to_string()
                                             })
                                         },
@@ -1422,6 +1474,173 @@ fn hover_time(time: impl Fn() -> String + 'static) -> View {
 
 /// T3 Code's divider for an interrupted run: its mark and label in the
 /// destructive color between rules.
+/// A proposed plan, as T3 Code's plan card: the Plan badge and its title over
+/// its Markdown, its actions behind the menu at the end.
+fn plan_card(
+    surroundings: crate::rich_text::Surroundings,
+    row: Memo<Option<Row>>,
+    column_width: Memo<f32>,
+) -> View {
+    use crate::ui::{Icon, colors};
+    let read = move |read: fn(&Row) -> SharedString| {
+        move || row.with(|row| row.as_ref().map(read).unwrap_or_default())
+    };
+    let note = read(|row| row.note.clone());
+    view().w_full().px(px(4.0)).py(px(2.0)).child(
+        view()
+            .w_full()
+            .rounded(px(24.0))
+            .border_1()
+            .border_color(look::CARD_BORDER)
+            .bg(colors::SURFACE)
+            .p(px(20.0))
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .min_w_0()
+                            .child(
+                                // T3 Code's `secondary` badge.
+                                view()
+                                    .h(px(18.0))
+                                    .px(px(5.0))
+                                    .justify_center()
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .border_color(look::CARD_BORDER)
+                                    .bg(look::CONTROL)
+                                    .child(
+                                        text(tr("計画"))
+                                            .text_size(px(12.0))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(look::FOREGROUND),
+                                    ),
+                            )
+                            .child(
+                                text(read(|row| row.body.clone()))
+                                    .text_size(px(look::TEXT))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(look::FOREGROUND),
+                            ),
+                    )
+                    .child(
+                        crate::ui::icon_button_sized(
+                            Icon::ELLIPSIS,
+                            tr("計画の操作"),
+                            24.0,
+                            16.0,
+                            move || {
+                                let plan = untracked(note).to_string();
+                                crate::ui::popup(
+                                    &serde_json::json!([{"id": "copy", "title": tr("クリップボードにコピー")}]),
+                                    move |_| set_clipboard(plan.clone()),
+                                )
+                            },
+                        )
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_color(look::CONTROL_BORDER)
+                        .bg(look::CONTROL),
+                    ),
+            )
+            .child(view().mt(px(16.0)).child(crate::rich_text::message(
+                surroundings,
+                move || Some(note().to_string()),
+                || Kind::Response,
+                move || (column_width.get() - 8.0 - 42.0).max(0.0),
+            ))),
+    )
+}
+
+/// A subagent the turn started, as T3 Code's subagent row: its avatar, its
+/// name over its latest word.
+fn subagent_row(row: Memo<Option<Row>>) -> View {
+    use crate::ui::{Icon, colors};
+    let read = move |read: fn(&Row) -> SharedString| {
+        move || row.with(|row| row.as_ref().map(read).unwrap_or_default())
+    };
+    view()
+        .w_full()
+        .flex_row()
+        .items_center()
+        .gap(px(10.0))
+        .px(px(8.0))
+        .py(px(6.0))
+        .child(
+            view()
+                .w(px(24.0))
+                .h(px(24.0))
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .border_1()
+                .border_color(look::CARD_BORDER)
+                .bg(look::AVATAR)
+                .text_color(look::MUTED)
+                .child(crate::ui::icon(Icon::BOT, 14.0))
+                .child(
+                    view()
+                        .absolute()
+                        .right(px(-1.0))
+                        .bottom(px(-1.0))
+                        .w(px(8.0))
+                        .h(px(8.0))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(colors::BACKGROUND)
+                        .bg(look::SUCCESS),
+                ),
+        )
+        .child(
+            view()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    text(read(|row| row.body.clone()))
+                        .text_size(px(12.0))
+                        .line_height(px(16.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(look::FOREGROUND),
+                )
+                .child(
+                    text(read(|row| row.note.clone()))
+                        .text_size(px(11.0))
+                        .line_height(px(18.0))
+                        .text_color(look::MUTED),
+                ),
+        )
+}
+
+/// A divider across the work, as T3 Code's context compaction.
+fn divider_row(label: impl Fn() -> String + 'static) -> View {
+    let rule = || view().flex_1().h(px(1.0)).bg(look::RULE);
+    view()
+        .w_full()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .py_1()
+        .text_color(look::MUTED)
+        .child(rule())
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .child(crate::ui::icon(crate::ui::Icon::MINIMIZE, 12.0))
+                .child(text(label).text_size(px(12.0)).line_height(px(16.0))),
+        )
+        .child(rule())
+}
+
 fn interrupted_row(label: impl Fn() -> String + 'static) -> View {
     let rule = || view().flex_1().h(px(1.0)).bg(look::RULE);
     view()
