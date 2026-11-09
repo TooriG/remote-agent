@@ -997,7 +997,7 @@ async fn rewind_publication_failure_leaves_the_conversation_unchanged() {
         &host,
         client.id(),
         &root,
-        ProviderKind::Codex,
+        ProviderKind::Claude,
         "two",
         "second",
     )
