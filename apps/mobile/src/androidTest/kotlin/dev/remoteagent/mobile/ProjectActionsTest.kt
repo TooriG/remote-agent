@@ -27,8 +27,8 @@ class ProjectActionsTest {
         val project = project()
         val intents = mutableListOf<Intent>()
         compose.setContent { MaterialTheme { ProjectActions(project, intents::add) } }
-        compose.onNodeWithContentDescription("Alphaã®æ“ä½œ").assertIsDisplayed().performClick()
-        compose.onNodeWithText("ä¸€è¦§ã‹ã‚‰å‰Šé™¤").performClick()
+        compose.onNodeWithContentDescription("Alpha‚Ì‘€ì").assertIsDisplayed().performClick()
+        compose.onNodeWithText("ˆê——‚©‚çíœ").performClick()
         compose.runOnIdle { assertEquals(listOf(Intent.SetProjectHidden("a", true)), intents) }
     }
 
@@ -37,11 +37,11 @@ class ProjectActionsTest {
         var project by mutableStateOf(project())
         val intents = mutableListOf<Intent>()
         compose.setContent { MaterialTheme { ProjectActions(project, intents::add) } }
-        compose.onNodeWithContentDescription("Alphaã®æ“ä½œ").performClick()
-        compose.onNodeWithText("ãƒ”ãƒ³ç•™ã‚").performClick()
+        compose.onNodeWithContentDescription("Alpha‚Ì‘€ì").performClick()
+        compose.onNodeWithText("ƒsƒ“—¯‚ß").performClick()
         compose.runOnIdle { project = project.copy(pinned = true) }
-        compose.onNodeWithContentDescription("Alphaã®æ“ä½œ").performClick()
-        compose.onNodeWithText("ãƒ”ãƒ³ç•™ã‚ã‚’è§£é™¤").performClick()
+        compose.onNodeWithContentDescription("Alpha‚Ì‘€ì").performClick()
+        compose.onNodeWithText("ƒsƒ“—¯‚ß‚ğ‰ğœ").performClick()
         compose.runOnIdle {
             assertEquals(
                 listOf(Intent.SetProjectPinned("a", true), Intent.SetProjectPinned("a", false)),
@@ -55,19 +55,19 @@ class ProjectActionsTest {
         val project = project().copy(section = "Work")
         val intents = mutableListOf<Intent>()
         compose.setContent { MaterialTheme { ProjectActions(project, intents::add) } }
-        compose.onNodeWithContentDescription("Alphaã®æ“ä½œ").performClick()
-        compose.onNodeWithText("åå‰ã‚’å¤‰æ›´").performClick()
-        val field = compose.onNodeWithText("ãƒ—ãƒ­ã‚¸ã‚§ã‚¯ãƒˆå")
+        compose.onNodeWithContentDescription("Alpha‚Ì‘€ì").performClick()
+        compose.onNodeWithText("–¼‘O‚ğ•ÏX").performClick()
+        val field = compose.onNodeWithText("ƒvƒƒWƒFƒNƒg–¼")
         field.performTextReplacement("   ")
-        compose.onNodeWithText("ä¿å­˜").assertIsNotEnabled()
+        compose.onNodeWithText("•Û‘¶").assertIsNotEnabled()
         field.performTextReplacement("a".repeat(101))
-        compose.onNodeWithText("ä¿å­˜").assertIsNotEnabled()
-        val name = "ğŸŒ¸".repeat(100)
+        compose.onNodeWithText("•Û‘¶").assertIsNotEnabled()
+        val name = "?".repeat(100)
         field.performTextReplacement(" $name ")
-        compose.onNodeWithText("ä¿å­˜").performClick()
-        compose.onNodeWithContentDescription("Alphaã®æ“ä½œ").performClick()
-        compose.onNodeWithText("åå‰ã‚’å¤‰æ›´").performClick()
-        compose.onNodeWithText("ã‚­ãƒ£ãƒ³ã‚»ãƒ«").performClick()
+        compose.onNodeWithText("•Û‘¶").performClick()
+        compose.onNodeWithContentDescription("Alpha‚Ì‘€ì").performClick()
+        compose.onNodeWithText("–¼‘O‚ğ•ÏX").performClick()
+        compose.onNodeWithText("ƒLƒƒƒ“ƒZƒ‹").performClick()
         compose.runOnIdle { assertEquals(listOf(Intent.EditProject("a", name, "Work")), intents) }
     }
 
@@ -75,13 +75,11 @@ class ProjectActionsTest {
     fun removedProjectsCanBeRestoredFromTheList() {
         val project = project()
         val intents = mutableListOf<Intent>()
-        compose.setContent {
-            MaterialTheme { HiddenProjects(listOf(project)) { _, intent -> intents.add(intent) } }
-        }
-        compose.onNodeWithText("Alphaã‚’æˆ»ã™").assertDoesNotExist()
-        compose.onNodeWithText("å‰Šé™¤ã—ãŸãƒ—ãƒ­ã‚¸ã‚§ã‚¯ãƒˆï¼ˆ1ï¼‰").performClick()
-        compose.onNodeWithText("ä¸€è¦§ã‹ã‚‰å‰Šé™¤ã—ã¦ã‚‚ã€ãƒ•ã‚©ãƒ«ãƒ€ã¨ä¼šè©±å±¥æ­´ã¯æ®‹ã‚Šã¾ã™ã€‚").assertIsDisplayed()
-        compose.onNodeWithText("Alphaã‚’æˆ»ã™").performClick()
+        compose.setContent { MaterialTheme { HiddenProjects(listOf(project)) { _, intent -> intents.add(intent) } } }
+        compose.onNodeWithText("Alpha‚ğ–ß‚·").assertDoesNotExist()
+        compose.onNodeWithText("íœ‚µ‚½ƒvƒƒWƒFƒNƒgi1j").performClick()
+        compose.onNodeWithText("ˆê——‚©‚çíœ‚µ‚Ä‚àAƒtƒHƒ‹ƒ_‚Æ‰ï˜b—š—ğ‚Íc‚è‚Ü‚·B").assertIsDisplayed()
+        compose.onNodeWithText("Alpha‚ğ–ß‚·").performClick()
         compose.runOnIdle { assertEquals(listOf(Intent.SetProjectHidden("a", false)), intents) }
     }
 
@@ -95,8 +93,6 @@ class ProjectActionsTest {
                         "hasMore":false,"hasMoreProjects":false,"limit":5,"projectPages":{}}"""
                     ),
                 )
-        return Snapshot.restore(persisted.toString().encodeToByteArray()).use {
-            it.threadList()!!.projects.single()
-        }
+        return Snapshot.restore(persisted.toString().encodeToByteArray()).use { it.threadList()!!.projects.single() }
     }
 }

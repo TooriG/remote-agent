@@ -35,18 +35,18 @@ internal fun ProjectActions(project: ProjectSummary, perform: (Intent) -> Unit) 
     var editing by rememberSaveable(project.id) { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Icon(painterResource(R.drawable.ic_more_vert), "${project.name}ã®æ“ä½œ")
+            Icon(painterResource(R.drawable.ic_more_vert), "${project.name}‚Ì‘€ì")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
-                text = { Text(if (project.pinned) "ãƒ”ãƒ³ç•™ã‚ã‚’è§£é™¤" else "ãƒ”ãƒ³ç•™ã‚") },
+                text = { Text(if (project.pinned) "ƒsƒ“—¯‚ß‚ğ‰ğœ" else "ƒsƒ“—¯‚ß") },
                 onClick = {
                     expanded = false
                     perform(Intent.SetProjectPinned(project.id, !project.pinned))
                 },
             )
             DropdownMenuItem(
-                text = { Text("åå‰ã‚’å¤‰æ›´") },
+                text = { Text("–¼‘O‚ğ•ÏX") },
                 onClick = {
                     expanded = false
                     editing = true
@@ -54,7 +54,7 @@ internal fun ProjectActions(project: ProjectSummary, perform: (Intent) -> Unit) 
             )
             HorizontalDivider()
             DropdownMenuItem(
-                text = { Text("ä¸€è¦§ã‹ã‚‰å‰Šé™¤", color = MaterialTheme.colorScheme.error) },
+                text = { Text("ˆê——‚©‚çíœ", color = MaterialTheme.colorScheme.error) },
                 onClick = {
                     expanded = false
                     perform(Intent.SetProjectHidden(project.id, true))
@@ -76,15 +76,15 @@ private fun ProjectNameDialog(
     val valid = trimmed.isNotEmpty() && trimmed.codePointCount(0, trimmed.length) <= PROJECT_NAME_MAX_LENGTH
     AlertDialog(
         onDismissRequest = dismiss,
-        title = { Text("åå‰ã‚’å¤‰æ›´") },
+        title = { Text("–¼‘O‚ğ•ÏX") },
         text = {
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("ãƒ—ãƒ­ã‚¸ã‚§ã‚¯ãƒˆå") },
+                label = { Text("ƒvƒƒWƒFƒNƒg–¼") },
                 singleLine = true,
                 isError = !valid,
-                supportingText = { Text("1ã€œ100æ–‡å­—ã§å…¥åŠ›ã—ã¦ãã ã•ã„") },
+                supportingText = { Text("1?100•¶š‚Å“ü—Í‚µ‚Ä‚­‚¾‚³‚¢") },
             )
         },
         confirmButton = {
@@ -95,10 +95,10 @@ private fun ProjectNameDialog(
                     dismiss()
                 },
             ) {
-                Text("ä¿å­˜")
+                Text("•Û‘¶")
             }
         },
-        dismissButton = { TextButton(onClick = dismiss) { Text("ã‚­ãƒ£ãƒ³ã‚»ãƒ«") } },
+        dismissButton = { TextButton(onClick = dismiss) { Text("ƒLƒƒƒ“ƒZƒ‹") } },
     )
 }
 
@@ -110,20 +110,18 @@ internal fun HiddenProjects(
     var expanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
         TextButton(onClick = { expanded = !expanded }) {
-            Text(if (expanded) "å‰Šé™¤ã—ãŸãƒ—ãƒ­ã‚¸ã‚§ã‚¯ãƒˆã‚’é–‰ã˜ã‚‹" else "å‰Šé™¤ã—ãŸãƒ—ãƒ­ã‚¸ã‚§ã‚¯ãƒˆï¼ˆ${projects.size}ï¼‰")
+            Text(if (expanded) "íœ‚µ‚½ƒvƒƒWƒFƒNƒg‚ğ•Â‚¶‚é" else "íœ‚µ‚½ƒvƒƒWƒFƒNƒgi${projects.size}j")
         }
         if (expanded) {
             Text(
-                "ä¸€è¦§ã‹ã‚‰å‰Šé™¤ã—ã¦ã‚‚ã€ãƒ•ã‚©ãƒ«ãƒ€ã¨ä¼šè©±å±¥æ­´ã¯æ®‹ã‚Šã¾ã™ã€‚",
+                "ˆê——‚©‚çíœ‚µ‚Ä‚àAƒtƒHƒ‹ƒ_‚Æ‰ï˜b—š—ğ‚Íc‚è‚Ü‚·B",
                 Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             projects.forEach { project ->
-                TextButton(
-                    onClick = { perform(project, Intent.SetProjectHidden(project.id, false)) }
-                ) {
-                    Text("${project.name}ã‚’æˆ»ã™", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                TextButton(onClick = { perform(project, Intent.SetProjectHidden(project.id, false)) }) {
+                    Text("${project.name}‚ğ–ß‚·", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
