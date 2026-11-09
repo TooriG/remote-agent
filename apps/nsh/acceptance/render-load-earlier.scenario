@@ -31,13 +31,14 @@ scroll 会話の履歴 -20
 scroll 会話の履歴 -20
 scroll 会話の履歴 -20
 scroll 会話の履歴 -20
-paint "Render turn 54, paragraph 5." 100
+# These scrolls reach turn 53 in the timeline that runs on under the composer.
+paint "Render turn 53, paragraph 3." 100
 screenshot scrolled
 
 # Each history page is loaded only by its manual button.
 press 以前のターンを読み込む
-paint_rows 40 "Render turn 54, paragraph 5." 100
+paint_rows 40 "Render turn 53, paragraph 3." 100
 screenshot retained-first
 press 以前のターンを読み込む
-paint_rows 60 "Render turn 54, paragraph 5." 100
+paint_rows 60 "Render turn 53, paragraph 3." 100
 screenshot retained-second
