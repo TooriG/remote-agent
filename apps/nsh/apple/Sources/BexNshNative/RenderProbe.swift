@@ -19,13 +19,21 @@
             }
 
             mutating func record(_ text: String, at: TimeInterval) {
-                guard !entries.contains(where: { $0.text == text }) else { return }
                 if entries.count == 64 { entries.removeFirst() }
                 entries.append((text, at))
             }
 
-            func first(for text: String) -> TimeInterval? {
-                entries.first { $0.text.contains(text) }?.at
+            func first(for text: String, since: TimeInterval = -.infinity) -> TimeInterval? {
+                entries.first { $0.at >= since && $0.text.contains(text) }?.at
+            }
+
+            /// A large wheel can cross rows whose heights are still estimates.
+            /// Resolve an actual visible paragraph, not an assumed row number
+            /// or a paint of some other paragraph with the same prefix.
+            func firstVisible(prefix: String, in visible: String) -> TimeInterval? {
+                guard let start = visible.range(of: prefix) else { return nil }
+                let paragraph = String(visible[start.lowerBound...].prefix { $0 != "." && $0 != "\n" })
+                return first(for: paragraph)
             }
         }
 

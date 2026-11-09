@@ -82,8 +82,11 @@ mod tests {
         assert!(follows_end(true, Some(at(1500., 2000.)), at(1900., 2400.)));
         // A fold closing near the end pulls the offset back with the content.
         assert!(follows_end(true, Some(at(1900., 2400.)), at(1500., 2000.)));
-        // Content shorter than the viewport cannot leave the end.
-        assert!(follows_end(true, Some(at(10., 300.)), at(0., 300.)));
+        // Content that fits the viewport cannot leave the end, including
+        // the boundary where its height equals the viewport.
+        for content in [300., 500.] {
+            assert!(follows_end(true, Some(at(10., content)), at(0., content)));
+        }
     }
 
     #[test]
@@ -116,15 +119,13 @@ mod tests {
             let now = at(offset.min(content - 500.).max(0.), content);
             let gap = now.content - now.offset - now.viewport;
             let below = at(now.offset + delta, content);
-            // A following conversation was at its end: any scroll above it,
-            // even within the band, leaves it.
-            let left = following && now.offset < now.content - now.viewport - 0.5;
-            if gap <= FOLLOW_REARM_DISTANCE && !left {
-                proptest::prop_assert!(follows_end(following, None, now));
-            } else {
-                // Away from the end, the reader left it.
-                proptest::prop_assert!(!follows_end(following, None, now));
-            }
+            let end = at(content - 500., content);
+            proptest::prop_assert!(follows_end(following, None, end));
+            proptest::prop_assert_eq!(follows_end(false, None, now), gap <= FOLLOW_REARM_DISTANCE);
+            // No previous event while following means it opened at the end.
+            // Even within the re-arm band, the first upward scroll leaves it.
+            let first_up = at((end.offset - delta).max(0.), content);
+            proptest::prop_assert!(!follows_end(true, None, first_up));
             proptest::prop_assert!(!follows_end(following, Some(below), now));
         }
     }

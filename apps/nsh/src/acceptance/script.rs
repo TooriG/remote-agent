@@ -66,6 +66,11 @@
 //!   points.
 //! - `paint <text> <budget-ms>`: verifies that visible TextKit glyphs completed
 //!   drawing within the budget after the last press, scroll or fixture action.
+//! - `paint_rows <count> <text> <budget-ms>`: after that many fixture rows
+//!   become available, checks the visible text's first native draw
+//!   after the page arrived (an older cached paint does not qualify).
+//! - `paint_visible <prefix> <budget-ms>`: checks the actual visible paragraph
+//!   starting with that prefix, without assuming an unmeasured row's height.
 //! - `paint_stream <text> <budget-ms>`: native drawing measured from the
 //!   timestamp sent with a `[render-stream]` fixture delta.
 //! - `drag_by <label> <points> [after <anchor>] [timeout-ms]`: drags that
@@ -164,6 +169,10 @@ pub(crate) enum Step {
     DragBy(Find, i32),
     /// TextKit drew the text within the budget after the last action.
     Paint(String, Duration),
+    /// Paint the actual visible paragraph that starts with this prefix.
+    PaintVisible(String, Duration),
+    /// After the fixture row count changed, its retained text still has pixels.
+    PaintRows(usize, String, Duration),
     /// TextKit drew a streamed delta within the budget after its emission.
     PaintStream(String, Duration),
     Select(Find, String),
@@ -350,6 +359,16 @@ fn step(words: &[String]) -> Result<Step, String> {
         ("unmark", [target, rest @ ..]) => Step::Compose(find(target, rest)?, Composition::Unmark),
         ("window", [width, height]) => Step::Window(points(width)?, points(height)?),
         ("scroll", [target, lines, rest @ ..]) => wheel(target, lines, rest)?,
+        ("paint_rows", [count, text, budget]) => Step::PaintRows(
+            count
+                .parse()
+                .map_err(|_| format!("{count:?} is not a row count"))?,
+            (*text).to_owned(),
+            milliseconds(budget)?,
+        ),
+        ("paint_visible", [text, budget]) => {
+            Step::PaintVisible((*text).to_owned(), milliseconds(budget)?)
+        }
         ("paint", [text, budget]) => Step::Paint((*text).to_owned(), milliseconds(budget)?),
         ("paint_stream", [text, budget]) => {
             Step::PaintStream((*text).to_owned(), milliseconds(budget)?)
@@ -595,6 +614,20 @@ fn named(name: &str) -> Option<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_and_visible_paint_parse_their_targets() {
+        let lines = parse("paint_rows 40 \"retained paragraph\" 100\n").unwrap();
+        assert_eq!(
+            lines[0].step,
+            Step::PaintRows(40, "retained paragraph".into(), Duration::from_millis(100))
+        );
+        assert!(parse("paint_rows nope text 100").is_err());
+        assert_eq!(
+            parse("paint_visible \"Render turn\" 100").unwrap()[0].step,
+            Step::PaintVisible("Render turn".into(), Duration::from_millis(100))
+        );
+    }
 
     #[test]
     fn steps_take_quoted_labels_and_optional_timeouts() {

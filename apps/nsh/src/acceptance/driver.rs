@@ -218,10 +218,37 @@ fn tick(driver: &Rc<RefCell<Driver>>, mtm: MainThreadMarker) {
     };
     let started = NSDate::timeIntervalSinceReferenceDate_class();
     let result = match &step {
-        Step::Paint(text, budget) => {
-            painted(&Tree::read(mtm, &menus), text, *budget, Some(action_at))
-        }
-        Step::PaintStream(text, budget) => painted(&Tree::read(mtm, &menus), text, *budget, None),
+        Step::Paint(text, budget) => painted(
+            &Tree::read(mtm, &menus),
+            text,
+            *budget,
+            Some(action_at),
+            PaintCheck::Existing,
+        ),
+        Step::PaintVisible(text, budget) => painted(
+            &Tree::read(mtm, &menus),
+            text,
+            *budget,
+            Some(action_at),
+            PaintCheck::VisiblePrefix,
+        ),
+        Step::PaintRows(count, text, budget) => match super::rows_available(*count) {
+            Some(at) => painted(
+                &Tree::read(mtm, &menus),
+                text,
+                *budget,
+                Some(at),
+                PaintCheck::AfterPage,
+            ),
+            None => Attempt::Pending(format!("waiting for {count} fixture rows")),
+        },
+        Step::PaintStream(text, budget) => painted(
+            &Tree::read(mtm, &menus),
+            text,
+            *budget,
+            None,
+            PaintCheck::Existing,
+        ),
         _ => attempt(&step, elapsed, &menus, &output, fixture, mtm),
     };
     if matches!(&result, Attempt::Passed(..) | Attempt::Press(..))
@@ -404,7 +431,7 @@ fn attempt(
         Step::Activate => activate(mtm),
         Step::DenyMicrophone => done(deny_microphone()),
         Step::Relaunch => Attempt::Relaunch,
-        Step::Paint(..) | Step::PaintStream(..) => {
+        Step::Paint(..) | Step::PaintVisible(..) | Step::PaintRows(..) | Step::PaintStream(..) => {
             unreachable!("paint uses the driver's last action time")
         }
         Step::Expect(_)
@@ -466,12 +493,24 @@ fn expectation(step: &Step, menus: &[Retained<NSMenu>], mtm: MainThreadMarker) -
     })
 }
 
-fn painted(tree: &Tree, expected: &str, budget: Duration, action_at: Option<f64>) -> Attempt {
+enum PaintCheck {
+    Existing,
+    AfterPage,
+    VisiblePrefix,
+}
+
+fn painted(
+    tree: &Tree,
+    expected: &str,
+    budget: Duration,
+    action_at: Option<f64>,
+    check: PaintCheck,
+) -> Attempt {
     for node in &tree.nodes {
         let Target::Element(object) = &node.target else {
             continue;
         };
-        if !responds(object, sel!(bexPaintedAtForText:)) {
+        if !responds(object, sel!(bexPaintedAtForText:since:visiblePrefix:)) {
             continue;
         }
         let Some(text) = text(object, sel!(string)).filter(|text| text.contains(expected)) else {
@@ -497,9 +536,18 @@ fn painted(tree: &Tree, expected: &str, budget: Duration, action_at: Option<f64>
         let Some(source) = source else {
             return Attempt::Failed("stream fixture has no emission timestamp".into());
         };
-        let at: f64 =
-            unsafe { msg_send![&**object, bexPaintedAtForText: &*NSString::from_str(expected)] };
+        let at: f64 = unsafe {
+            msg_send![&**object, bexPaintedAtForText: &*NSString::from_str(expected), since: if matches!(check, PaintCheck::AfterPage) { source } else { f64::NEG_INFINITY }, visiblePrefix: matches!(check, PaintCheck::VisiblePrefix)]
+        };
         if at == 0.0 {
+            if matches!(check, PaintCheck::AfterPage)
+                && NSDate::timeIntervalSinceReferenceDate_class() - source > budget.as_secs_f64()
+            {
+                return Attempt::Failed(format!(
+                    "no native draw of {expected:?} within {} ms after the fixture page became available",
+                    budget.as_millis()
+                ));
+            }
             continue;
         }
         let elapsed = (at - source).max(0.0);
