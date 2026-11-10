@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/public/download.generated.js', 'utf8');
 const download = 'https://github.com/ttizze/remote-agent/releases/download/prd-75/bex-windows-x86_64-setup.exe';
-const pinnedWindows = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261110-venice-main-b75c4e48/bex-windows-x86_64-setup.exe';
+const pinnedWindows = 'https://github.com/TooriG/remote-agent/releases/download/windows-preview-20261110-venice-main-6cd2c1db/bex-windows-x86_64-setup.exe';
 
 async function renderDownloads({ language = 'en', platform = 'Win32', userAgent, assets = [], release = { tag_name: 'prd-75', assets }, ok = true, fail = false } = {}) {
   const element = () => ({ classList: { toggle() {} }, innerHTML: '', href: '' });
