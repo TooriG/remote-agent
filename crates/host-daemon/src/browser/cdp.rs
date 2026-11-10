@@ -152,8 +152,12 @@ impl Chrome {
         }
         let started = Instant::now();
         tracing::info!(target: "agent", operation = "browser.launch", message = "Chrome starting");
-        let mut child = agent_process::command(executable)
-            .map_err(|e| e.to_string())?
+        let mut command = agent_process::command(executable).map_err(|e| e.to_string())?;
+        // Windows can attach DetectorsAppHealth to the Host after a crash.
+        // Chromium exits immediately when that compatibility layer is inherited.
+        #[cfg(windows)]
+        command.env_remove("__COMPAT_LAYER");
+        let mut child = command
             .arg(format!("--user-data-dir={}", profile.display()))
             .args([
                 "--remote-debugging-address=127.0.0.1",
