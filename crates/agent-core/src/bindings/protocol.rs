@@ -907,6 +907,7 @@ enum KeyProvider {
     Groq,
     Mistral,
     Xai,
+    Venice,
 }
 #[uniffi::remote(Record)]
 struct ReadCredentials {}
