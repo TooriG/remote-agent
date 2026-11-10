@@ -56,6 +56,14 @@ pub(super) fn provider_profile(provider: KeyProvider) -> Value {
                 "input":["text"]
             },
             {
+                "id":"olafangensan-glm-4.7-flash-heretic",
+                "name":"GLM 4.7 Flash Heretic",
+                "contextWindow":200000,
+                "maxTokens":24000,
+                "input":["text"],
+                "reasoningEfforts":{"off":"none","low":"low","medium":"medium","high":"high"}
+            },
+            {
                 "id":"venice-uncensored-1-2",
                 "name":"Venice Uncensored 1.2",
                 "contextWindow":128000,
@@ -90,6 +98,10 @@ pub(super) fn provider_profile(provider: KeyProvider) -> Value {
                 "maxTokens":32768,
                 "input":["text","image"],
                 "reasoningEfforts":{"low":"low","high":"high","max":"max"}
+            },
+            {
+                "id":"z-ai/glm-5.3-flash-uncensored",
+                "name":"GLM 5.3 Flash Uncensored"
             }
         ]);
     }
